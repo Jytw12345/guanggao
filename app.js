@@ -1658,10 +1658,12 @@ function renderCalendar() {
       `<div class="cal-ev"><span class="dot ${STATUS_DOT[p.status] || ""}"></span>${esc(p.name)}</div>`).join("");
     const more = items.length > 3 ? `<div class="cal-more">+${items.length - 3} 更多</div>` : "";
     const countBadge = items.length ? `<span class="cal-count">${items.length}</span>` : "";
+    const totalHours = items.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+    const hoursHtml = totalHours > 0 ? `<div class="cal-hours">${totalHours}h</div>` : "";
     cells += `
       <div class="cal-cell ${items.length ? "has" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""}" onclick="selectCalDay('${ds}')">
         <div class="cal-daynum">${day}${countBadge}</div>
-        ${evHtml}${more}
+        ${evHtml}${more}${hoursHtml}
       </div>`;
   }
 
@@ -1692,6 +1694,15 @@ function renderCalDay() {
     box.innerHTML = `<div class="detail-block"><h3>📅 ${esc(calSelectedDate)}</h3><p class="hint" style="margin:0">当天暂无预约。</p></div>`;
     return;
   }
+  const totalEst = items.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+  const totalAct = items.reduce((sum, p) => sum + (p.actualHours || 0), 0);
+  const workerHours = {};
+  items.forEach((p) => {
+    (p.workLogs || []).forEach((log) => {
+      const name = log.workerName || "未知";
+      workerHours[name] = (workerHours[name] || 0) + (log.hours || 0);
+    });
+  });
   const rows = items.map((p) => {
     const workers = (p.assignedWorkerIds || []).map((wid) => {
       const w = getWorker(wid);
@@ -1711,9 +1722,11 @@ function renderCalDay() {
         <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
       </div>`;
   }).join("");
+  const workerStatsText = Object.keys(workerHours).length > 0 ? ` · 👷 ${Object.entries(workerHours).map(([name, hours]) => `${esc(name)}${hours}h`).join("、")}` : "";
   box.innerHTML = `
     <div class="detail-block">
       <h3>📅 ${esc(calSelectedDate)}（当天 ${items.length} 个预约）</h3>
+      <div class="cal-summary-bar">总预计工时 ${totalEst}h / 总实际工时 ${totalAct > 0 ? totalAct + 'h' : '—'}${workerStatsText}</div>
       <div class="cal-detail-list">${rows}</div>
     </div>`;
 }
