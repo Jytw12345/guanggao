@@ -1145,22 +1145,109 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   font-weight: 500;
 }
 
-.daily-hours-table {
-  margin-top: 10px;
-  padding-top: 10px;
+.worker-cal-container {
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
 }
 
-.daily-hours-table .data th {
-  background: var(--primary-light);
-  color: var(--primary);
-  font-size: 12px;
-  padding: 6px 10px;
+.worker-cal-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
 }
 
-.daily-hours-table .data td {
-  font-size: 13px;
+.worker-cal {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.worker-cal-header {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.worker-cal-header > div {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  padding: 2px 0;
+}
+
+.worker-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.worker-cal-cell {
+  height: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: #f1f5f9;
+  font-size: 11px;
+}
+
+.worker-cal-cell.empty {
+  background: transparent;
+}
+
+.worker-cal-cell.other-month {
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 10px;
+}
+
+.worker-cal-cell.has-hours {
+  background: var(--primary-light);
+}
+
+.worker-cal-cell .day-num {
+  color: #64748b;
+}
+
+.worker-cal-cell.has-hours .day-num {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.worker-cal-cell .day-hours {
+  font-size: 9px;
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.daily-hours-list {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.daily-item {
+  display: flex;
+  justify-content: space-between;
   padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.daily-item:nth-child(odd) {
+  background: #f8fafc;
+}
+
+.daily-date {
+  color: var(--text);
+}
+
+.daily-hours {
+  color: var(--primary);
+  font-weight: 600;
 }
 
 .dot {

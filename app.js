@@ -1172,18 +1172,53 @@ function renderStats() {
   const workerTable = rows.length === 0
     ? `<div class="empty">所选月份暂无施工工时记录。</div>`
     : rows.map((r) => {
-        const dailyRows = Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, hours]) => `
-          <tr>
-            <td>${esc(date)}</td>
-            <td><b>${hours}</b>h</td>
-          </tr>`).join("");
-        const dailyTable = Object.keys(r.daily).length > 0 ? `
-          <div class="daily-hours-table">
-            <table class="data">
-              <thead><tr><th>日期</th><th>工时</th></tr></thead>
-              <tbody>${dailyRows}</tbody>
-            </table>
-          </div>` : "";
+        const monthVal = document.getElementById("statsMonth").value;
+        let calGrid = "";
+        if (monthVal) {
+          const [year, month] = monthVal.split("-").map(Number);
+          const startWeekday = new Date(year, month - 1, 1).getDay();
+          const daysInMonth = new Date(year, month, 0).getDate();
+          const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+          
+          calGrid = `
+            <div class="worker-cal-header">${weekdays.map((w) => `<div>${w}</div>`).join("")}</div>
+            <div class="worker-cal-grid">`;
+          
+          const daysInPrevMonth = new Date(year, month - 1, 0).getDate();
+          for (let i = startWeekday - 1; i >= 0; i--) {
+            const day = daysInPrevMonth - i;
+            calGrid += `<div class="worker-cal-cell other-month">${day}</div>`;
+          }
+          
+          for (let day = 1; day <= daysInMonth; day++) {
+            const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+            const hours = r.daily[dateKey];
+            calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""}">
+              <div class="day-num">${day}</div>
+              ${hours ? `<div class="day-hours">${hours}h</div>` : ""}
+            </div>`;
+          }
+          
+          let totalCells = startWeekday + daysInMonth;
+          const remainingCells = (Math.ceil(totalCells / 7) * 7) - totalCells;
+          for (let i = 1; i <= remainingCells; i++) {
+            calGrid += `<div class="worker-cal-cell other-month">${i}</div>`;
+          }
+          
+          calGrid += `</div>`;
+        }
+        
+        const dailyTable = monthVal ? `
+          <div class="worker-cal-container">
+            <div class="worker-cal-label">📅 本月工时日历</div>
+            <div class="worker-cal">${calGrid}</div>
+          </div>` : `
+          <div class="daily-hours-list">
+            ${Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, hours]) => 
+              `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${hours}h</span></div>`
+            ).join("")}
+          </div>`;
+          
         return `
         <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
           <table class="data">
