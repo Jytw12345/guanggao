@@ -4,7 +4,7 @@
  *       同时后台更新）；第三方请求(Supabase / CDN)一律走网络不缓存。
  * 每次改动前端资源时，把 CACHE 版本号 +1 即可让旧缓存失效。
  * ============================================================ */
-const CACHE = "ad-install-v1";
+const CACHE = "ad-install-v2";
 
 /* 需要预缓存的应用外壳资源（相对路径，兼容子目录部署，如 GitHub Pages） */
 const ASSETS = [
@@ -19,9 +19,10 @@ const ASSETS = [
 ];
 
 self.addEventListener("install", (e) => {
+  // 逐个缓存并容错：即使个别资源 404 也不影响 SW 安装（不再用 addAll 的“全有或全无”）
   e.waitUntil(
     caches.open(CACHE)
-      .then((c) => c.addAll(ASSETS))
+      .then((c) => Promise.all(ASSETS.map((url) => c.add(url).catch((err) => console.warn("预缓存失败:", url, err)))))
       .then(() => self.skipWaiting())
   );
 });
