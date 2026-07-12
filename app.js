@@ -12,6 +12,7 @@ const STATUS = {
   WORKING: "施工中",
   DONE: "已完工",
   ACCEPTED: "已验收",
+  REVIEWED: "已审核",
 };
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
@@ -53,6 +54,7 @@ const CAP = {
   VIEW_STORE_STATS: "view_store_stats",
   MANAGE_STORES: "manage_stores",
   MANAGE_WORKERS: "manage_workers",
+  REVIEW_PROJECT: "review_project",
 };
 
 /* 权限项的中文说明（角色权限配置页逐行展示，顺序即展示顺序） */
@@ -66,6 +68,7 @@ const CAP_LABEL = {
   view_store_stats: "查看店面统计",
   manage_workers: "管理施工人员名册",
   manage_stores: "管理门店",
+  review_project: "审核项目（审核后不可编辑）",
 };
 
 /* 默认权限模板（与 SQL seed 一致）；云端会用 role_permissions 表覆盖 */
@@ -74,11 +77,13 @@ const DEFAULT_ROLE_PERMS = {
     project_create: true, project_edit: true, project_delete: true,
     assign_worker: false, construction: false, view_stats: false,
     view_store_stats: false, manage_stores: false, manage_workers: false,
+    review_project: true,
   },
   worker: {
     project_create: false, project_edit: false, project_delete: false,
     assign_worker: true, construction: true, view_stats: false,
     view_store_stats: false, manage_stores: false, manage_workers: false,
+    review_project: false,
   },
 };
 
@@ -95,16 +100,38 @@ function can(cap) {
 
 const perm = {
   createProject: () => can(CAP.PROJECT_CREATE),
-  editProject: (p) => can(CAP.PROJECT_EDIT) && (isManager() || (p && p.storeId === myStore())),
-  deleteProject: (p) => can(CAP.PROJECT_DELETE) && (isManager() || (p && p.storeId === myStore())),
-  doConstruction: () => can(CAP.CONSTRUCTION),
-  assignWorker: () => can(CAP.ASSIGN_WORKER),
+  editProject: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT) && (isManager() || (p && p.storeId === myStore())),
+  deleteProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELETE) && (isManager() || (p && p.storeId === myStore())),
+  doConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION),
+  assignWorker: (p) => !isReviewed(p) && can(CAP.ASSIGN_WORKER),
   viewStats: () => can(CAP.VIEW_STATS),
   viewStoreStats: () => can(CAP.VIEW_STORE_STATS),
   manageStores: () => can(CAP.MANAGE_STORES),
   manageWorkers: () => can(CAP.MANAGE_WORKERS),
-  manageAccounts: () => isManager(),   // 账号与角色权限配置锁死总经理，防店长自我提权
+  manageAccounts: () => isManager(),
+  reviewProject: (p) => can(CAP.REVIEW_PROJECT) && (isManager() || (p && p.storeId === myStore())),
 };
+
+function isReviewed(p) {
+  return p && p.status === STATUS.REVIEWED;
+}
+
+function getProjectDisplayWorkers(p) {
+  if (p.status === STATUS.BOOKED) {
+    return (p.assignedWorkerIds || []).map((wid) => {
+      const w = getWorker(wid);
+      return w ? w.name : null;
+    }).filter(Boolean);
+  }
+  if (p.status === STATUS.DONE || p.status === STATUS.REVIEWED || p.status === STATUS.ACCEPTED) {
+    const workerNames = new Set();
+    (p.workLogs || []).forEach((l) => {
+      if (l.workerName) workerNames.add(l.workerName);
+    });
+    return Array.from(workerNames);
+  }
+  return [];
+}
 
 function cloudConfigured() {
   return !!(window.APP_CONFIG && window.APP_CONFIG.SUPABASE_URL && window.APP_CONFIG.SUPABASE_ANON_KEY);
@@ -674,6 +701,8 @@ function renderProjects() {
     const { est, act, hasActual } = hoursDiff(p);
     const canEdit = perm.editProject(p);
     const canDelete = perm.deleteProject(p);
+    const canReview = perm.reviewProject(p);
+    const reviewed = isReviewed(p);
     return `
       <div class="card">
         <div class="card-title">
@@ -682,6 +711,7 @@ function renderProjects() {
         </div>
         <div class="card-row"><span>预约门店</span><b>${esc(storeName(p.storeId))}</b></div>
         <div class="card-row"><span>客户</span><b>${esc(p.customer || "—")}</b></div>
+        <div class="card-row"><span>联系电话</span><b>${p.phone ? `<a href="tel:${esc(p.phone)}" style="color:var(--info)">${esc(p.phone)}</a>` : "—"}</b></div>
         <div class="card-row"><span>安装地址</span><b>${esc(p.address || "—")}</b></div>
         <div class="card-row"><span>预约时段</span><b>${fmtTimeRange(p)}</b></div>
         <div class="card-row"><span>预计 / 实际工时</span><b>${est} / ${hasActual ? act : "—"} 小时</b></div>
@@ -694,6 +724,7 @@ function renderProjects() {
           <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
           ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">编辑</button>` : ""}
           ${canDelete ? `<button class="btn small danger" onclick="deleteProject('${p.id}')">删除</button>` : ""}
+          ${canReview && !reviewed ? `<button class="btn small" onclick="reviewProject('${p.id}')">审核</button>` : ""}
         </div>
       </div>`;
   }).join("");
@@ -780,6 +811,10 @@ function newProject() { modal.open("新建项目预约", projectForm({ status: S
 function editProject(id) { modal.open("编辑项目", projectForm(getProject(id))); updateSpanHint(); }
 
 async function saveProject(id) {
+  if (id && isReviewed(getProject(id))) {
+    toast("已审核的项目无法编辑");
+    return;
+  }
   const name = document.getElementById("pName").value.trim();
   const time = document.getElementById("pTime").value;
   const end = document.getElementById("pEnd").value;
@@ -852,8 +887,10 @@ function renderConstruction() {
     return;
   }
   const totalHours = sumHours(p);
-  const canEdit = perm.doConstruction();
-  const canAssign = perm.assignWorker();
+  const reviewed = isReviewed(p);
+  const canEdit = perm.doConstruction(p);
+  const canAssign = perm.assignWorker(p);
+  const canReview = perm.reviewProject(p);
   const logsRows = (p.workLogs || []).length
     ? p.workLogs.map((l) => `
         <tr>
@@ -902,11 +939,13 @@ function renderConstruction() {
   box.innerHTML = `
     <div class="detail-block">
       <h3>📋 项目信息 <span class="badge ${p.status}">${p.status}</span></h3>
-      ${canEdit ? "" : `<p class="hint" style="margin:0 0 10px">当前角色为只读，施工工时与验收由施工人员/总经理填写。</p>`}
+      ${reviewed ? `<p class="hint" style="margin:0 0 10px;color:var(--warn)">⚠️ 该项目已审核，信息不可更改。</p>` : ""}
+      ${canEdit || reviewed ? "" : `<p class="hint" style="margin:0 0 10px">当前角色为只读，施工工时与验收由施工人员/总经理填写。</p>`}
       <div class="info-grid">
         <div class="info-item"><div class="k">项目名称</div><div class="v">${esc(p.name)}</div></div>
         <div class="info-item"><div class="k">预约门店</div><div class="v">${esc(storeName(p.storeId))}</div></div>
         <div class="info-item"><div class="k">客户</div><div class="v">${esc(p.customer || "—")}</div></div>
+        <div class="info-item"><div class="k">联系电话</div><div class="v">${p.phone ? `<a href="tel:${esc(p.phone)}" style="color:var(--info)">${esc(p.phone)}</a>` : "—"}</div></div>
         <div class="info-item"><div class="k">安装地址</div><div class="v">${esc(p.address || "—")}</div></div>
         <div class="info-item"><div class="k">预约时段</div><div class="v">${fmtTimeRange(p)}</div></div>
         <div class="info-item"><div class="k">预计工时</div><div class="v">${p.estimatedHours || 0} 小时</div></div>
@@ -932,6 +971,10 @@ function renderConstruction() {
             <button class="btn primary" onclick="saveActualHours('${p.id}')">保存</button>
           </div>
         </div>
+      </div>` : ""}
+      ${canReview && !reviewed ? `
+      <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+        <button class="btn primary" onclick="reviewProject('${p.id}')">✅ 审核项目</button>
       </div>` : ""}
     </div>
 
@@ -1045,6 +1088,14 @@ async function updateProjectStatus(id, status) {
   await repo.loadAll();
   renderAll();
   toast("状态已更新");
+}
+
+async function reviewProject(id) {
+  if (!confirm("确定审核该项目？审核后项目信息将无法更改。")) return;
+  await repo.patchProject(id, { status: STATUS.REVIEWED });
+  await repo.loadAll();
+  renderAll();
+  toast("已审核");
 }
 
 async function saveActualHours(id) {
@@ -1171,11 +1222,23 @@ function collectStats() {
 /* 按预约时间归月的项目工时差异统计 */
 function collectProjectStats() {
   const month = document.getElementById("statsMonth").value;
+  const workerFilter = document.getElementById("statsWorker").value;
   return cache.projects
     .filter((p) => !month || monthKey(p.appointmentTime) === month)
     .map((p) => {
       const { est, act, diff, hasActual } = hoursDiff(p);
-      return { id: p.id, name: p.name, status: p.status, est, act, diff, hasActual };
+      // 按施工人员汇总工时
+      const workerMap = {};
+      (p.workLogs || []).forEach((l) => {
+        if (workerFilter && l.workerId !== workerFilter) return;
+        const nm = l.workerName || "未知";
+        if (!workerMap[nm]) workerMap[nm] = 0;
+        workerMap[nm] += Number(l.hours) || 0;
+      });
+      const workerHours = Object.entries(workerMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, hours]) => ({ name, hours }));
+      return { id: p.id, name: p.name, status: p.status, est, act, diff, hasActual, workerHours };
     })
     .sort((a, b) => b.diff - a.diff);
 }
@@ -1281,20 +1344,26 @@ function renderStats() {
     <div class="detail-block" style="padding:0;overflow:hidden">
       <table class="data">
         <thead>
-          <tr><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异(实际−预计)</th></tr>
+          <tr><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异(实际−预计)</th><th>施工人员工时</th></tr>
         </thead>
         <tbody>
-          ${projRows.map((r) => `
+          ${projRows.map((r) => {
+            const workerText = r.workerHours.length
+              ? r.workerHours.map((w) => `${esc(w.name)} ${w.hours}h`).join("、")
+              : `<span style="color:var(--muted)">—</span>`;
+            return `
             <tr>
               <td>${esc(r.name)}</td>
               <td><span class="badge ${r.status}">${r.status}</span></td>
               <td>${r.est}</td>
               <td>${r.hasActual ? r.act : "—"}</td>
               <td style="color:${r.hasActual ? diffColor(r.diff) : "var(--muted)"};font-weight:600">${r.hasActual ? fmtSignedDiff(r.diff) : "未登记"}</td>
-            </tr>`).join("")}
+              <td style="white-space:normal;max-width:280px">${workerText}</td>
+            </tr>`;
+          }).join("")}
         </tbody>
         <tfoot>
-          <tr><td colspan="2">合计（已登记实际）</td><td>${totalEst}</td><td>${totalAct}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td></tr>
+          <tr><td colspan="2">合计（已登记实际）</td><td>${totalEst}</td><td>${totalAct}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td><td></td></tr>
         </tfoot>
       </table>
     </div>`;
@@ -1328,16 +1397,22 @@ function exportStats() {
   const recorded = projRows.filter((r) => r.hasActual);
   const totalEst = recorded.reduce((s, r) => s + r.est, 0);
   const totalAct = recorded.reduce((s, r) => s + r.act, 0);
-  const projHeader = ["项目", "状态", "预计工时", "实际工时", "差异(实际-预计)"];
+  const projHeader = ["项目", "状态", "预计工时", "实际工时", "差异(实际-预计)", "施工人员工时"];
   const projLines = ["\n【项目工时差异】", projHeader.join(",")].concat(
-    projRows.map((r) => [
-      `"${String(r.name).replace(/"/g, '""')}"`,
-      r.status,
-      r.est,
-      r.hasActual ? r.act : "",
-      r.hasActual ? fmtSignedDiff(r.diff) : "未登记",
-    ].join(","))
-  ).concat(["合计(已登记实际),," + totalEst + "," + totalAct + "," + fmtSignedDiff(totalAct - totalEst)]);
+    projRows.map((r) => {
+      const workerText = r.workerHours.length
+        ? r.workerHours.map((w) => `${w.name} ${w.hours}h`).join("、")
+        : "";
+      return [
+        `"${String(r.name).replace(/"/g, '""')}"`,
+        r.status,
+        r.est,
+        r.hasActual ? r.act : "",
+        r.hasActual ? fmtSignedDiff(r.diff) : "未登记",
+        `"${workerText.replace(/"/g, '""')}"`,
+      ].join(",");
+    })
+  ).concat(["合计(已登记实际),,," + totalEst + "," + totalAct + "," + fmtSignedDiff(totalAct - totalEst) + ","]);
 
   const csv = "\ufeff" + workerLines.join("\n") + dailyLines.join("\n") + projLines.join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -1721,6 +1796,7 @@ const STATUS_DOT = {
   "施工中": "working",
   "已完工": "done",
   "已验收": "accepted",
+  "已审核": "reviewed",
 };
 
 function renderCalendar() {
@@ -1802,12 +1878,25 @@ function renderCalDay() {
     });
   });
   const rows = items.map((p) => {
-    const workers = (p.assignedWorkerIds || []).map((wid) => {
-      const w = getWorker(wid);
-      const nm = w ? w.name : "(已删除)";
-      const conf = assignConflicts(p, wid).length;
-      return `<span class="assign-chip ${conf ? "conflict" : ""}">${conf ? "⚠ " : ""}${esc(nm)}</span>`;
-    }).join("") || `<span class="hint" style="margin:0">未分配</span>`;
+    const isDoneOrReviewed = (p.status === STATUS.DONE || p.status === STATUS.REVIEWED || p.status === STATUS.ACCEPTED);
+    let workersHtml;
+    if (isDoneOrReviewed) {
+      const actualWorkers = new Set();
+      (p.workLogs || []).forEach((l) => {
+        if (l.workerName) actualWorkers.add(l.workerName);
+      });
+      workersHtml = actualWorkers.size
+        ? Array.from(actualWorkers).map((nm) => `<span class="assign-chip">${esc(nm)}</span>`).join("")
+        : `<span class="hint" style="margin:0">暂无施工记录</span>`;
+    } else {
+      workersHtml = (p.assignedWorkerIds || []).map((wid) => {
+        const w = getWorker(wid);
+        const nm = w ? w.name : "(已删除)";
+        const conf = assignConflicts(p, wid).length;
+        return `<span class="assign-chip ${conf ? "conflict" : ""}">${conf ? "⚠ " : ""}${esc(nm)}</span>`;
+      }).join("") || `<span class="hint" style="margin:0">未分配</span>`;
+    }
+    const workerLabel = isDoneOrReviewed ? "施工人员" : "安装人员";
     const { est, act, hasActual } = hoursDiff(p);
     return `
       <div class="cal-detail-item">
@@ -1815,7 +1904,7 @@ function renderCalDay() {
         <div class="cal-detail-main">
           <div class="cal-detail-title"><b>${esc(p.name)}</b> <span class="badge ${p.status}">${p.status}</span></div>
           <div class="cal-detail-sub">${esc(storeName(p.storeId))} · 客户 ${esc(p.customer || "—")} · 预计 ${est} / 实际 ${hasActual ? act : "—"} 小时</div>
-          <div class="cal-detail-workers">安装人员：${workers}</div>
+          <div class="cal-detail-workers">${workerLabel}：${workersHtml}</div>
         </div>
         <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
       </div>`;

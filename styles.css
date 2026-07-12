@@ -347,6 +347,7 @@ body {
 .badge.施工中 { background: #fef3c7; color: var(--warn); }
 .badge.已完工 { background: #dcfce7; color: var(--success); }
 .badge.已验收 { background: #ede9fe; color: #7c3aed; }
+.badge.已审核 { background: #cffafe; color: #0e7490; }
 
 .empty {
   text-align: center;
@@ -1262,6 +1263,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 .dot.working { background: var(--warn); }
 .dot.done { background: var(--success); }
 .dot.accepted { background: #7c3aed; }
+.dot.reviewed { background: #0e7490; }
 
 .cal-day-detail { margin-top: 18px; }
 .cal-detail-list { display: flex; flex-direction: column; gap: 10px; }
