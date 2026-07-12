@@ -1146,9 +1146,9 @@ function renderStats() {
   summary.innerHTML = `
     <div class="stat-card"><div class="num">${rows.length}</div><div class="lbl">参与施工人数</div></div>
     <div class="stat-card"><div class="num">${totalHours}</div><div class="lbl">合计安装工时(小时)</div></div>
-    <div class="stat-card"><div class="num">${totalEst}</div><div class="lbl">合计预计工时·已登记(小时)</div></div>
-    <div class="stat-card"><div class="num">${totalAct}</div><div class="lbl">合计实际工时·已登记(小时)</div></div>
-    <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异(实际−预计)</div></div>
+    <div class="stat-card"><div class="num">${totalEst}</div><div class="lbl">预计工时(小时)</div></div>
+    <div class="stat-card"><div class="num">${totalAct}</div><div class="lbl">实际工时(小时)</div></div>
+    <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
   `;
 
   const workerTable = rows.length === 0
@@ -1254,6 +1254,8 @@ function collectStoreStats() {
     }
     return buckets[id];
   };
+  cache.stores.forEach((s) => ensure(s.id));
+  ensure("");
   cache.projects
     .filter((p) => !month || monthKey(p.appointmentTime) === month)
     .forEach((p) => {
@@ -1270,7 +1272,7 @@ function renderStoreStats() {
   const box = document.getElementById("storeStatsTable");
   if (!box) return;
   const rows = collectStoreStats();
-  if (rows.length === 0) { box.innerHTML = `<div class="empty">所选月份暂无预约。</div>`; return; }
+  if (rows.length === 0) { box.innerHTML = `<div class="empty">暂无门店数据。</div>`; return; }
   const statuses = Object.values(STATUS);
   const tot = { count: 0, est: 0, act: 0, diff: 0, byStatus: {} };
   rows.forEach((r) => {
@@ -1281,7 +1283,7 @@ function renderStoreStats() {
     <div class="detail-block" style="padding:0;overflow:hidden">
       <table class="data">
         <thead>
-          <tr><th>门店</th><th>预约数</th>${statuses.map((s) => `<th>${s}</th>`).join("")}<th>合计预计·已登记</th><th>合计实际·已登记</th><th>差异</th></tr>
+          <tr><th>门店</th><th>预约数</th>${statuses.map((s) => `<th>${s}</th>`).join("")}<th>预计工时</th><th>实际工时</th><th>差异</th></tr>
         </thead>
         <tbody>
           ${rows.map((r) => `
@@ -1544,8 +1546,8 @@ function applyPermissions() {
     projects: role != null,
     calendar: role != null,
     construction: role != null,
-    workers: perm.manageWorkers(),
-    stores: perm.manageStores(),
+    stats: perm.viewStats(),
+    storeStats: perm.viewStoreStats(),
   };
   document.querySelectorAll(".bottom-nav-item").forEach((b) => {
     const tab = b.dataset.tab;
