@@ -283,10 +283,15 @@ body {
 
 .btn.primary:hover { background: var(--primary-dark); }
 
-.btn.danger { color: var(--danger); border-color: #fca5a5; }
-.btn.danger:hover { background: #fef2f2; }
+.btn.danger {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+}
 
-.btn.small { padding: 5px 10px; font-size: 13px; }
+.btn.danger:hover { background: #dc2626; }
+
+.btn-small { padding: 5px 10px; font-size: 13px; }
 
 .card-grid {
   display: grid;
@@ -538,7 +543,6 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   right: 0;
   background: #fff;
   border-top: 1px solid var(--border);
-  display: flex;
   justify-content: space-around;
   align-items: center;
   padding: 8px 0;

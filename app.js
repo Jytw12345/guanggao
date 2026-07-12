@@ -24,6 +24,7 @@ const ROLE_LABEL = { manager: "总经理", store_manager: "店长", worker: "施
 /* 运行时状态 */
 let MODE = "local";        // 'cloud' | 'local'
 let sb = null;             // supabase client
+let sbAdmin = null;        // supabase admin client (for deleteUser)
 let currentUser = null;    // 云端登录用户
 let currentProfile = { role: null, storeId: null }; // 当前用户角色与门店
 let reloadTimer = null;    // 实时刷新去抖
@@ -352,15 +353,26 @@ const repo = {
     if (MODE !== "cloud") return [];
     const { data, error } = await sb.from("profiles").select("*").order("email");
     if (error) { fail(error); return []; }
-    return (data || []).map((r) => ({ id: r.id, email: r.email, role: r.role, storeId: r.store_id || "" }));
+    return (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "" }));
   },
   async setProfile(userId, patch) {
     if (MODE !== "cloud") return;
     const row = {};
     if ("role" in patch) row.role = patch.role || null;
     if ("storeId" in patch) row.store_id = patch.storeId || null;
+    if ("name" in patch) row.name = patch.name || null;
     const { error } = await sb.from("profiles").update(row).eq("id", userId);
     if (error) return fail(error);
+  },
+  async deleteAccount(userId) {
+    if (MODE !== "cloud") return;
+    const { error } = await sb.from("profiles").delete().eq("id", userId);
+    if (error) return fail(error);
+    if (sbAdmin) {
+      await sbAdmin.auth.admin.deleteUser(userId);
+    } else {
+      fail("未配置服务端密钥，无法删除认证账号");
+    }
   },
 
   /* ---- 角色权限模板（总经理配置每个角色可做的操作） ---- */
@@ -1406,17 +1418,24 @@ async function renderAccounts() {
   box.innerHTML = `
     <div class="detail-block" style="padding:0;overflow:hidden">
       <table class="data">
-        <thead><tr><th>邮箱</th><th>角色</th><th>所属门店（仅店长需要）</th></tr></thead>
+        <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>所属门店</th><th>操作</th></tr></thead>
         <tbody>
           ${accounts.map((a) => `
             <tr>
               <td>${esc(a.email || a.id)}</td>
+              <td><input type="text" class="input" value="${esc(a.name)}" placeholder="请输入姓名" onchange="changeAccountName('${a.id}', this.value)" /></td>
               <td><select class="input" onchange="changeAccountRole('${a.id}', this.value)">${roleOpts(a.role)}</select></td>
               <td><select class="input" onchange="changeAccountStore('${a.id}', this.value)">${storeOpts(a.storeId)}</select></td>
+              <td><button class="btn btn-danger btn-small" onclick="deleteAccount('${a.id}', '${esc(a.email || a.id)}')">删除</button></td>
             </tr>`).join("")}
         </tbody>
       </table>
     </div>`;
+}
+
+async function changeAccountName(id, name) {
+  await repo.setProfile(id, { name });
+  toast("姓名已更新");
 }
 
 async function changeAccountRole(id, role) {
@@ -1428,6 +1447,13 @@ async function changeAccountRole(id, role) {
 async function changeAccountStore(id, storeId) {
   await repo.setProfile(id, { storeId });
   toast("门店已更新");
+}
+
+async function deleteAccount(id, email) {
+  if (!confirm(`确定要删除账号 ${email} 吗？此操作不可撤销。`)) return;
+  await repo.deleteAccount(id);
+  toast("账号已删除");
+  renderAccounts();
 }
 
 /* ============================================================
@@ -1953,6 +1979,9 @@ async function init() {
   if (cloudConfigured()) {
     MODE = "cloud";
     sb = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
+    if (window.APP_CONFIG.SUPABASE_SERVICE_KEY) {
+      sbAdmin = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_SERVICE_KEY);
+    }
     await startCloudSession();
   } else {
     MODE = "local";
