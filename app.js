@@ -703,6 +703,7 @@ function renderProjects() {
     const canDelete = perm.deleteProject(p);
     const canReview = perm.reviewProject(p);
     const reviewed = isReviewed(p);
+    const canUnreview = reviewed && isManager();
     return `
       <div class="card">
         <div class="card-title">
@@ -725,6 +726,7 @@ function renderProjects() {
           ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">编辑</button>` : ""}
           ${canDelete ? `<button class="btn small danger" onclick="deleteProject('${p.id}')">删除</button>` : ""}
           ${canReview && !reviewed ? `<button class="btn small" onclick="reviewProject('${p.id}')">审核</button>` : ""}
+          ${canUnreview ? `<button class="btn small" onclick="unreviewProject('${p.id}')">反审核</button>` : ""}
         </div>
       </div>`;
   }).join("");
@@ -976,6 +978,10 @@ function renderConstruction() {
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn primary" onclick="reviewProject('${p.id}')">✅ 审核项目</button>
       </div>` : ""}
+      ${reviewed && isManager() ? `
+      <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+        <button class="btn" onclick="unreviewProject('${p.id}')" style="color:var(--warn)">↩ 反审核</button>
+      </div>` : ""}
     </div>
 
     ${assignBlock}
@@ -1096,6 +1102,14 @@ async function reviewProject(id) {
   await repo.loadAll();
   renderAll();
   toast("已审核");
+}
+
+async function unreviewProject(id) {
+  if (!confirm("确定取消审核？取消后项目将恢复为「已完工」状态，可继续编辑。")) return;
+  await repo.patchProject(id, { status: STATUS.DONE });
+  await repo.loadAll();
+  renderAll();
+  toast("已取消审核");
 }
 
 async function saveActualHours(id) {
