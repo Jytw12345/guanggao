@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>广告安装施工预约管理系统</title>
+  <meta name="description" content="广告安装施工预约、施工工时与门店统计管理系统" />
+  <!-- PWA：可安装到桌面/主屏、离线可用 -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#2f6fed" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="施工预约" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <span class="logo">🏗️</span>
+      <h1>广告安装施工预约管理系统</h1>
+      <div class="header-right">
+        <span id="syncStatus" class="sync-status" title="同步状态">● 本地模式</span>
+        <span id="userInfo" class="user-info hidden"></span>
+        <span id="roleInfo" class="role-info hidden"></span>
+        <button id="btnMigrate" class="btn small hidden">导入本地数据</button>
+        <button id="btnLogout" class="btn small hidden">登出</button>
+      </div>
+    </div>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="projects">项目预约</button>
+      <button class="tab-btn" data-tab="calendar">日历</button>
+      <button class="tab-btn" data-tab="construction">施工管理</button>
+      <button class="tab-btn" data-tab="stats">工时统计</button>
+      <button class="tab-btn" data-tab="storeStats">店面统计</button>
+      <button class="tab-btn" data-tab="workers">施工人员</button>
+      <button class="tab-btn" data-tab="stores">门店管理</button>
+      <button class="tab-btn" data-tab="accounts">账号管理</button>
+      <button class="tab-btn" data-tab="rolePerms">角色权限</button>
+    </nav>
+  </header>
+
+  <main class="container">
+    <!-- 项目预约 -->
+    <section id="projects" class="tab-panel active">
+      <div class="section-head">
+        <h2>项目预约</h2>
+        <button class="btn primary" id="btnNewProject">+ 新建预约</button>
+      </div>
+      <div class="toolbar">
+        <input type="text" id="projectSearch" class="input" placeholder="搜索项目名称 / 客户 / 地址" />
+        <select id="projectStatusFilter" class="input">
+          <option value="">全部状态</option>
+          <option value="预约中">预约中</option>
+          <option value="施工中">施工中</option>
+          <option value="已完工">已完工</option>
+          <option value="已验收">已验收</option>
+        </select>
+        <select id="projectStoreFilter" class="input">
+          <option value="">全部门店</option>
+        </select>
+      </div>
+      <div id="projectList" class="card-grid"></div>
+    </section>
+
+    <!-- 日历统计视图 -->
+    <section id="calendar" class="tab-panel">
+      <div class="section-head">
+        <h2>预约日历</h2>
+      </div>
+      <p class="hint">按月总览每天的预约与项目进度，点击某一天可查看当天各时间段的具体安排与安装人员。</p>
+      <div class="cal-toolbar">
+        <button class="btn small" id="calPrev">◀ 上月</button>
+        <span id="calLabel" class="cal-label"></span>
+        <button class="btn small" id="calNext">下月 ▶</button>
+        <button class="btn small" id="calToday">今天</button>
+        <span class="cal-legend">
+          <span><span class="dot booked"></span>预约中</span>
+          <span><span class="dot working"></span>施工中</span>
+          <span><span class="dot done"></span>已完工</span>
+          <span><span class="dot accepted"></span>已验收</span>
+        </span>
+      </div>
+      <div id="calGrid" class="cal-grid"></div>
+      <div id="calDayDetail" class="cal-day-detail"></div>
+    </section>
+
+    <!-- 施工管理 -->
+    <section id="construction" class="tab-panel">
+      <div class="section-head">
+        <h2>施工管理</h2>
+      </div>
+      <p class="hint">选择一个进入施工阶段的项目，为其分配施工人员、分人填写施工工时，并登记工程实际用的工时与验收信息。</p>
+      <div class="toolbar">
+        <select id="constructionProjectSelect" class="input wide"></select>
+      </div>
+      <div id="constructionDetail" class="construction-detail"></div>
+    </section>
+
+    <!-- 工时统计 -->
+    <section id="stats" class="tab-panel">
+      <div class="section-head">
+        <h2>月底工时统计</h2>
+      </div>
+      <div class="toolbar">
+        <input type="month" id="statsMonth" class="input" />
+        <select id="statsWorker" class="input">
+          <option value="">全部人员</option>
+        </select>
+        <button class="btn" id="btnExportStats">导出 CSV</button>
+      </div>
+      <div id="statsSummary" class="stats-summary"></div>
+      <div id="statsTable"></div>
+    </section>
+
+    <!-- 店面统计（总经理） -->
+    <section id="storeStats" class="tab-panel">
+      <div class="section-head">
+        <h2>店面预约统计</h2>
+      </div>
+      <div class="toolbar">
+        <input type="month" id="storeStatsMonth" class="input" />
+        <button class="btn" id="btnExportStoreStats">导出 CSV</button>
+      </div>
+      <div id="storeStatsTable"></div>
+    </section>
+
+    <!-- 施工人员 -->
+    <section id="workers" class="tab-panel">
+      <div class="section-head">
+        <h2>施工人员</h2>
+        <button class="btn primary" id="btnNewWorker">+ 添加人员</button>
+      </div>
+      <div id="workerList" class="card-grid"></div>
+    </section>
+
+    <!-- 门店管理（总经理） -->
+    <section id="stores" class="tab-panel">
+      <div class="section-head">
+        <h2>门店管理</h2>
+        <button class="btn primary" id="btnNewStore">+ 添加门店</button>
+      </div>
+      <div id="storeList" class="card-grid"></div>
+    </section>
+
+    <!-- 账号管理（总经理，仅云端） -->
+    <section id="accounts" class="tab-panel">
+      <div class="section-head">
+        <h2>账号与权限管理</h2>
+      </div>
+      <p class="hint">为注册账号分配角色与门店。新注册账号默认无权限，需在此指定后方可使用系统。</p>
+      <div id="accountList"></div>
+    </section>
+
+    <!-- 角色权限配置（总经理，仅云端） -->
+    <section id="rolePerms" class="tab-panel">
+      <div class="section-head">
+        <h2>角色权限配置</h2>
+      </div>
+      <p class="hint">按角色勾选可执行的操作，保存后同角色的所有账号立即生效（总经理恒拥有全部权限，无需配置）。“编辑/删除预约”对店长仍限本门店范围。</p>
+      <div id="rolePermList"></div>
+    </section>
+  </main>
+
+  <!-- 通用弹窗 -->
+  <div id="modal" class="modal-mask hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="modalTitle">标题</h3>
+        <button class="modal-close" id="modalClose">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- 账号待授权提示（云端模式，注册后尚未分配角色时） -->
+  <div id="noAccessScreen" class="auth-mask hidden">
+    <div class="auth-box">
+      <div class="auth-logo">🔒</div>
+      <h2>账号待授权</h2>
+      <p class="auth-sub">你的账号（<span id="noAccessEmail"></span>）尚未分配角色权限，<br />请联系总经理在「账号管理」中为你分配角色后再使用。</p>
+      <div class="auth-actions">
+        <button class="btn" id="btnLogout2">登出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 登录面板（云端模式且未登录时显示） -->
+  <div id="authScreen" class="auth-mask hidden">
+    <div class="auth-box">
+      <div class="auth-logo">🏗️</div>
+      <h2>广告安装施工预约管理系统</h2>
+      <p class="auth-sub">请登录以进行多人协同</p>
+      <div class="form-row">
+        <label>邮箱</label>
+        <input class="input" id="authEmail" type="email" placeholder="you@example.com" autocomplete="username" />
+      </div>
+      <div class="form-row">
+        <label>密码</label>
+        <input class="input" id="authPassword" type="password" placeholder="密码" autocomplete="current-password" />
+      </div>
+      <div id="authError" class="auth-error hidden"></div>
+      <div class="auth-actions">
+        <button class="btn primary" id="btnLogin">登录</button>
+        <button class="btn" id="btnSignup">注册新账号</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
