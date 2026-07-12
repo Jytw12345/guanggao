@@ -1488,11 +1488,14 @@ const modal = {
 
 function switchTab(name) {
   const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
-  if (btn && btn.classList.contains("hidden")) return; // 无权限的 Tab 不可切入
+  if (btn && btn.classList.contains("hidden")) return;
   document.querySelectorAll(".tab-btn").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab-panel").forEach((s) =>
     s.classList.toggle("active", s.id === name));
+  document.querySelectorAll(".bottom-nav-item").forEach((b) =>
+    b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelector(".tabs").classList.remove("open");
 }
 
 /* 头部角色标签 */
@@ -1537,7 +1540,18 @@ function applyPermissions() {
   setHidden("btnNewWorker", !perm.manageWorkers());
   setHidden("btnNewStore", !perm.manageStores());
 
-  // 若当前激活 Tab 已隐藏，切到第一个可见 Tab
+  const bottomNavVisible = {
+    projects: role != null,
+    calendar: role != null,
+    construction: role != null,
+    workers: perm.manageWorkers(),
+    stores: perm.manageStores(),
+  };
+  document.querySelectorAll(".bottom-nav-item").forEach((b) => {
+    const tab = b.dataset.tab;
+    b.classList.toggle("hidden", !bottomNavVisible[tab]);
+  });
+
   const activeBtn = document.querySelector(".tab-btn.active");
   if (!activeBtn || activeBtn.classList.contains("hidden")) {
     const firstVisible = Array.from(document.querySelectorAll(".tab-btn"))
@@ -1585,19 +1599,27 @@ const STATUS_DOT = {
 
 function renderCalendar() {
   const grid = document.getElementById("calGrid");
-  if (!grid) return;
+  const weekdaysEl = document.getElementById("calWeekdays");
+  if (!grid || !weekdaysEl) return;
   const label = document.getElementById("calLabel");
   const year = calMonth.getFullYear();
   const month = calMonth.getMonth();
   if (label) label.textContent = `${year} 年 ${month + 1} 月`;
 
-  const startWeekday = new Date(year, month, 1).getDay(); // 0=周日
+  const startWeekday = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const todayKey = dateKey(new Date());
 
   const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
-  let cells = weekdays.map((w) => `<div class="cal-wd">${w}</div>`).join("");
-  for (let i = 0; i < startWeekday; i++) cells += `<div class="cal-cell empty"></div>`;
+  weekdaysEl.innerHTML = weekdays.map((w) => `<div class="cal-wd">${w}</div>`).join("");
+
+  let cells = "";
+
+  const daysInPrevMonth = new Date(year, month, 0).getDate();
+  for (let i = startWeekday - 1; i >= 0; i--) {
+    const day = daysInPrevMonth - i;
+    cells += `<div class="cal-cell other-month">${day}</div>`;
+  }
 
   for (let day = 1; day <= daysInMonth; day++) {
     const ds = dateKey(new Date(year, month, day));
@@ -1614,6 +1636,13 @@ function renderCalendar() {
         ${evHtml}${more}
       </div>`;
   }
+
+  const totalCells = cells.split("</div>").filter(Boolean).length;
+  const remainingCells = (Math.ceil(totalCells / 7) * 7) - totalCells;
+  for (let i = 1; i <= remainingCells; i++) {
+    cells += `<div class="cal-cell other-month">${i}</div>`;
+  }
+
   grid.innerHTML = cells;
   renderCalDay();
 }
@@ -1682,10 +1711,20 @@ function showAuthError(msg) {
 async function doLogin() {
   const email = document.getElementById("authEmail").value.trim();
   const password = document.getElementById("authPassword").value;
+  const remember = document.getElementById("authRemember").checked;
   if (!email || !password) { showAuthError("请输入邮箱和密码"); return; }
   const { error } = await sb.auth.signInWithPassword({ email, password });
   if (error) { showAuthError("登录失败：" + error.message); return; }
   showAuthError("");
+  if (remember) {
+    localStorage.setItem("auth_email", email);
+    localStorage.setItem("auth_password", password);
+    localStorage.setItem("auth_remember", "true");
+  } else {
+    localStorage.removeItem("auth_email");
+    localStorage.removeItem("auth_password");
+    localStorage.removeItem("auth_remember");
+  }
   await startCloudSession();
 }
 
@@ -1707,7 +1746,24 @@ async function doLogout() {
 async function startCloudSession() {
   const { data } = await sb.auth.getSession();
   if (!data.session) {
+    const remember = localStorage.getItem("auth_remember");
+    const savedEmail = localStorage.getItem("auth_email");
+    const savedPassword = localStorage.getItem("auth_password");
+    if (remember === "true" && savedEmail && savedPassword) {
+      document.getElementById("authEmail").value = savedEmail;
+      document.getElementById("authPassword").value = savedPassword;
+      document.getElementById("authRemember").checked = true;
+      const { error } = await sb.auth.signInWithPassword({ email: savedEmail, password: savedPassword });
+      if (!error) {
+        await startCloudSession();
+        return;
+      }
+    }
     document.getElementById("authScreen").classList.remove("hidden");
+    if (savedEmail) {
+      document.getElementById("authEmail").value = savedEmail;
+      document.getElementById("authRemember").checked = true;
+    }
     return;
   }
   currentUser = data.session.user;
@@ -1718,11 +1774,24 @@ async function startCloudSession() {
   userInfo.classList.remove("hidden");
   document.getElementById("btnLogout").classList.remove("hidden");
   document.getElementById("btnMigrate").classList.remove("hidden");
+  document.getElementById("userMenu").classList.remove("hidden");
   setSyncStatus("online", "● 连接中…");
 
   // 载入当前用户的角色 / 门店
   const { data: prof } = await sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
   currentProfile = { role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null };
+
+  document.getElementById("dropdownEmail").textContent = currentUser.email;
+  document.getElementById("dropdownRole").textContent = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
+
+  document.getElementById("btnMigrateMenu").addEventListener("click", () => {
+    document.getElementById("userDropdown").classList.add("hidden");
+    migrateLocalToCloud();
+  });
+  document.getElementById("btnLogoutMenu").addEventListener("click", () => {
+    document.getElementById("userDropdown").classList.add("hidden");
+    doLogout();
+  });
 
   // 未分配角色：显示提示并停止后续加载
   if (!currentProfile.role) {
@@ -1798,6 +1867,21 @@ function bindEvents() {
   document.querySelectorAll(".tab-btn").forEach((b) =>
     b.addEventListener("click", () => switchTab(b.dataset.tab)));
 
+  document.querySelectorAll(".bottom-nav-item").forEach((b) =>
+    b.addEventListener("click", () => switchTab(b.dataset.tab)));
+
+  const menuToggle = document.getElementById("menuToggle");
+  const tabs = document.querySelector(".tabs");
+  menuToggle.addEventListener("click", () => {
+    tabs.classList.toggle("open");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!tabs.contains(e.target) && !menuToggle.contains(e.target)) {
+      tabs.classList.remove("open");
+    }
+  });
+
   document.getElementById("modalClose").addEventListener("click", () => modal.close());
   const modalMask = document.getElementById("modal");
   let maskMouseDown = false;
@@ -1841,6 +1925,21 @@ function bindEvents() {
   document.getElementById("btnLogout").addEventListener("click", doLogout);
   document.getElementById("btnLogout2").addEventListener("click", doLogout);
   document.getElementById("btnMigrate").addEventListener("click", migrateLocalToCloud);
+
+  document.getElementById("userMenu").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const menu = document.getElementById("userDropdown");
+    if (menu) {
+      menu.classList.toggle("hidden");
+    }
+  });
+
+  document.addEventListener("click", () => {
+    const menu = document.getElementById("userDropdown");
+    if (menu && !menu.classList.contains("hidden")) {
+      menu.classList.add("hidden");
+    }
+  });
   document.getElementById("authPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doLogin();
   });

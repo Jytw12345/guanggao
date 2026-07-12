@@ -19,14 +19,29 @@
 <body>
   <header class="app-header">
     <div class="brand">
+      <button class="menu-toggle" id="menuToggle" aria-label="菜单">☰</button>
       <span class="logo">🏗️</span>
       <h1>广告安装施工预约管理系统</h1>
       <div class="header-right">
         <span id="syncStatus" class="sync-status" title="同步状态">● 本地模式</span>
+        <button id="userMenu" class="user-menu-btn hidden" aria-label="用户菜单">👤</button>
         <span id="userInfo" class="user-info hidden"></span>
         <span id="roleInfo" class="role-info hidden"></span>
         <button id="btnMigrate" class="btn small hidden">导入本地数据</button>
         <button id="btnLogout" class="btn small hidden">登出</button>
+      </div>
+      <div id="userDropdown" class="user-dropdown hidden">
+        <div class="dropdown-item">
+          <span class="dropdown-label">邮箱</span>
+          <span id="dropdownEmail" class="dropdown-value"></span>
+        </div>
+        <div class="dropdown-item">
+          <span class="dropdown-label">角色</span>
+          <span id="dropdownRole" class="dropdown-value"></span>
+        </div>
+        <div class="dropdown-divider"></div>
+        <button class="dropdown-item btn-link" id="btnMigrateMenu">导入本地数据</button>
+        <button class="dropdown-item btn-link" id="btnLogoutMenu">登出</button>
       </div>
     </div>
     <nav class="tabs">
@@ -41,6 +56,14 @@
       <button class="tab-btn" data-tab="rolePerms">角色权限</button>
     </nav>
   </header>
+
+  <nav class="bottom-nav">
+    <button class="bottom-nav-item active" data-tab="projects" title="项目预约">📋</button>
+    <button class="bottom-nav-item" data-tab="calendar" title="日历">📅</button>
+    <button class="bottom-nav-item" data-tab="construction" title="施工管理">🏗️</button>
+    <button class="bottom-nav-item" data-tab="workers" title="施工人员">👷</button>
+    <button class="bottom-nav-item" data-tab="stores" title="门店管理">🏪</button>
+  </nav>
 
   <main class="container">
     <!-- 项目预约 -->
@@ -83,6 +106,7 @@
           <span><span class="dot accepted"></span>已验收</span>
         </span>
       </div>
+      <div id="calWeekdays" class="cal-weekdays"></div>
       <div id="calGrid" class="cal-grid"></div>
       <div id="calDayDetail" class="cal-day-detail"></div>
     </section>
@@ -202,6 +226,12 @@
       <div class="form-row">
         <label>密码</label>
         <input class="input" id="authPassword" type="password" placeholder="密码" autocomplete="current-password" />
+      </div>
+      <div class="form-row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="authRemember" />
+          <span>记住我，下次自动登录</span>
+        </label>
       </div>
       <div id="authError" class="auth-error hidden"></div>
       <div class="auth-actions">
