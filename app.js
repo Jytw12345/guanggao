@@ -217,6 +217,19 @@ function fmtSignedDiff(diff) {
   return diff > 0 ? `+${diff}` : `${diff}`;
 }
 
+function calcDuration(start, end) {
+  const s = new Date(start);
+  const e = new Date(end);
+  if (isNaN(s) || isNaN(e)) return "—";
+  const diffMs = e.getTime() - s.getTime();
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+  if (days > 0) return `${days}天 ${hours}小时 ${mins}分钟`;
+  if (hours > 0) return `${hours}小时 ${mins}分钟`;
+  return `${mins}分钟`;
+}
+
 /* 项目工时差异的展示标签（含颜色），未登记实际工时时给出提示 */
 function diffLabel(project) {
   const { diff, hasActual } = hoursDiff(project);
@@ -253,6 +266,8 @@ const mapProject = (r) => ({
   storeId: r.store_id || "",
   createdBy: r.created_by || null,
   assignedWorkerIds: Array.isArray(r.assigned_workers) ? r.assigned_workers : [],
+  started_at: r.started_at || "",
+  finished_at: r.finished_at || "",
   createdAt: r.created_at,
   workLogs: [],
 });
@@ -272,6 +287,8 @@ const projectToRow = (p) => ({
   acceptance: p.acceptance || null,
   store_id: p.storeId || null,
   assigned_workers: p.assignedWorkerIds || [],
+  started_at: p.started_at || null,
+  finished_at: p.finished_at || null,
   updated_at: new Date().toISOString(),
 });
 
@@ -670,6 +687,9 @@ function renderProjects() {
         <div class="card-row"><span>预计 / 实际工时</span><b>${est} / ${hasActual ? act : "—"} 小时</b></div>
         <div class="card-row"><span>工时差异</span><b>${diffLabel(p)}</b></div>
         <div class="card-row"><span>已填施工工时</span><b>${done} 小时</b></div>
+        ${p.started_at ? `<div class="card-row"><span>开始施工</span><b>${esc(fmtDateTime(p.started_at))}</b></div>` : ""}
+        ${p.finished_at ? `<div class="card-row"><span>完工时间</span><b>${esc(fmtDateTime(p.finished_at))}</b></div>` : ""}
+        ${p.started_at && p.finished_at ? `<div class="card-row"><span>施工时长</span><b>${esc(calcDuration(p.started_at, p.finished_at))}</b></div>` : ""}
         <div class="card-actions">
           <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
           ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">编辑</button>` : ""}
@@ -892,6 +912,9 @@ function renderConstruction() {
         <div class="info-item"><div class="k">预计工时</div><div class="v">${p.estimatedHours || 0} 小时</div></div>
         <div class="info-item"><div class="k">工程实际用工时</div><div class="v">${p.actualHours || 0} 小时</div></div>
         <div class="info-item"><div class="k">工时差异（实际−预计）</div><div class="v">${diffLabel(p)}</div></div>
+        ${p.started_at ? `<div class="info-item"><div class="k">⏰ 开始施工时间</div><div class="v">${esc(fmtDateTime(p.started_at))}</div></div>` : ""}
+        ${p.finished_at ? `<div class="info-item"><div class="k">✅ 完工时间</div><div class="v">${esc(fmtDateTime(p.finished_at))}</div></div>` : ""}
+        ${p.started_at && p.finished_at ? `<div class="info-item"><div class="k">⏱️ 实际施工时长</div><div class="v"><b>${esc(calcDuration(p.started_at, p.finished_at))}</b></div></div>` : ""}
       </div>
       ${canEdit ? `
       <div class="form-grid" style="margin-top:14px">
@@ -1011,7 +1034,14 @@ async function unassignWorker(pid, wid) {
 }
 
 async function updateProjectStatus(id, status) {
-  await repo.patchProject(id, { status });
+  const patch = { status };
+  const now = new Date().toISOString();
+  if (status === STATUS.WORKING) {
+    patch.started_at = now;
+  } else if (status === STATUS.DONE) {
+    patch.finished_at = now;
+  }
+  await repo.patchProject(id, patch);
   await repo.loadAll();
   renderAll();
   toast("状态已更新");
@@ -1036,7 +1066,7 @@ async function addWorkLog(id) {
   if (!date) { toast("请选择施工日期"); return; }
   const worker = getWorker(workerId);
   await repo.addWorkLog(id, { workerId, workerName: worker.name, hours, date, note });
-  if (p.status === STATUS.BOOKED) await repo.patchProject(id, { status: STATUS.WORKING });
+  if (p.status === STATUS.BOOKED) await repo.patchProject(id, { status: STATUS.WORKING, started_at: new Date().toISOString() });
   await repo.loadAll();
   renderAll();
   toast("已添加施工工时");
