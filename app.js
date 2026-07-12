@@ -1117,11 +1117,16 @@ function collectStats() {
       if (month && monthKey(l.date) !== month) return;
       if (workerFilter && l.workerId !== workerFilter) return;
       if (!rows[l.workerId]) {
-        rows[l.workerId] = { name: l.workerName, hours: 0, days: new Set(), projects: new Set() };
+        rows[l.workerId] = { name: l.workerName, hours: 0, days: new Set(), projects: new Set(), daily: {} };
       }
       rows[l.workerId].hours += Number(l.hours) || 0;
       rows[l.workerId].days.add(fmtDate(l.date));
       rows[l.workerId].projects.add(p.name);
+      const dayKey = l.date;
+      if (!rows[l.workerId].daily[dayKey]) {
+        rows[l.workerId].daily[dayKey] = 0;
+      }
+      rows[l.workerId].daily[dayKey] += Number(l.hours) || 0;
     });
   });
   return Object.values(rows).map((r) => ({
@@ -1129,6 +1134,7 @@ function collectStats() {
     hours: r.hours,
     days: r.days.size,
     projects: r.projects.size,
+    daily: r.daily,
   })).sort((a, b) => b.hours - a.hours);
 }
 
@@ -1165,26 +1171,44 @@ function renderStats() {
 
   const workerTable = rows.length === 0
     ? `<div class="empty">所选月份暂无施工工时记录。</div>`
-    : `
-    <div class="detail-block" style="padding:0;overflow:hidden">
-      <table class="data">
-        <thead>
-          <tr><th>施工人员</th><th>安装工时(小时)</th><th>施工天数</th><th>参与项目数</th></tr>
-        </thead>
-        <tbody>
-          ${rows.map((r) => `
-            <tr>
-              <td>${esc(r.name)}</td>
-              <td><b>${r.hours}</b></td>
-              <td>${r.days}</td>
-              <td>${r.projects}</td>
-            </tr>`).join("")}
-        </tbody>
-        <tfoot>
-          <tr><td>合计</td><td>${totalHours}</td><td colspan="2"></td></tr>
-        </tfoot>
-      </table>
-    </div>`;
+    : rows.map((r) => {
+        const dailyRows = Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, hours]) => `
+          <tr>
+            <td>${esc(date)}</td>
+            <td><b>${hours}</b>h</td>
+          </tr>`).join("");
+        const dailyTable = Object.keys(r.daily).length > 0 ? `
+          <div class="daily-hours-table">
+            <table class="data">
+              <thead><tr><th>日期</th><th>工时</th></tr></thead>
+              <tbody>${dailyRows}</tbody>
+            </table>
+          </div>` : "";
+        return `
+        <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
+          <table class="data">
+            <thead>
+              <tr><th>施工人员</th><th>安装工时(小时)</th><th>施工天数</th><th>参与项目数</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>${esc(r.name)}</td>
+                <td><b>${r.hours}</b></td>
+                <td>${r.days}</td>
+                <td>${r.projects}</td>
+              </tr>
+            </tbody>
+          </table>
+          ${dailyTable}
+        </div>`;
+      }).join("") + `
+      <div class="detail-block" style="padding:0;overflow:hidden">
+        <table class="data">
+          <tbody>
+            <tr><td><b>合计</b></td><td><b>${totalHours}</b></td><td colspan="2"></td></tr>
+          </tbody>
+        </table>
+      </div>`;
 
   const projectTable = projRows.length === 0
     ? `<div class="empty">所选月份暂无项目。</div>`
@@ -1227,11 +1251,20 @@ function exportStats() {
   const workerLines = ["【人员安装工时】", workerHeader.join(",")].concat(
     rows.map((r) => [r.name, r.hours, r.days, r.projects].join(",")));
 
+  const dailyHeader = ["施工人员", "日期", "工时(小时)"];
+  const dailyLines = ["\n【每日工时明细】", dailyHeader.join(",")].concat(
+    rows.flatMap((r) => 
+      Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, hours]) => 
+        [r.name, date, hours].join(",")
+      )
+    )
+  );
+
   const recorded = projRows.filter((r) => r.hasActual);
   const totalEst = recorded.reduce((s, r) => s + r.est, 0);
   const totalAct = recorded.reduce((s, r) => s + r.act, 0);
   const projHeader = ["项目", "状态", "预计工时", "实际工时", "差异(实际-预计)"];
-  const projLines = ["【项目工时差异】", projHeader.join(",")].concat(
+  const projLines = ["\n【项目工时差异】", projHeader.join(",")].concat(
     projRows.map((r) => [
       `"${String(r.name).replace(/"/g, '""')}"`,
       r.status,
@@ -1241,7 +1274,7 @@ function exportStats() {
     ].join(","))
   ).concat(["合计(已登记实际),," + totalEst + "," + totalAct + "," + fmtSignedDiff(totalAct - totalEst)]);
 
-  const csv = "\ufeff" + workerLines.join("\n") + "\n\n" + projLines.join("\n");
+  const csv = "\ufeff" + workerLines.join("\n") + dailyLines.join("\n") + projLines.join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);

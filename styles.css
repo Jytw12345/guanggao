@@ -1145,6 +1145,24 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   font-weight: 500;
 }
 
+.daily-hours-table {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.daily-hours-table .data th {
+  background: var(--primary-light);
+  color: var(--primary);
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.daily-hours-table .data td {
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
 .dot {
   display: inline-block;
   width: 8px;
