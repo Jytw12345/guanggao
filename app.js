@@ -274,59 +274,6 @@ function toast(msg) {
   el._t = setTimeout(() => el.classList.add("hidden"), 2000);
 }
 
-/* ============================================================
- * 推送通知功能
- * ============================================================ */
-let notificationPermissionGranted = false;
-let lastNotificationTime = {};
-
-async function requestNotificationPermission() {
-  if ("Notification" in window && !notificationPermissionGranted) {
-    const permission = await Notification.requestPermission();
-    notificationPermissionGranted = permission === "granted";
-    if (notificationPermissionGranted) {
-      toast("通知权限已开启");
-    }
-  }
-}
-
-function showPushNotification(title, body, icon = "icons/icon-192.png", data = {}) {
-  if (!("Notification" in window)) return;
-
-  const key = title + body;
-  const now = Date.now();
-  if (lastNotificationTime[key] && now - lastNotificationTime[key] < 30000) {
-    return;
-  }
-  lastNotificationTime[key] = now;
-
-  if (!notificationPermissionGranted) {
-    requestNotificationPermission();
-    return;
-  }
-
-  try {
-    const notification = new Notification(title, {
-      body,
-      icon,
-      data,
-      badge: "icons/icon-192.png",
-      requireInteraction: false,
-      timestamp: now,
-    });
-
-    notification.onclick = () => {
-      window.focus();
-      notification.close();
-      if (data.projectId) {
-        openProjectDetail(data.projectId);
-      }
-    };
-  } catch (e) {
-    console.error("推送通知失败", e);
-  }
-}
-
 function showNotificationAlert(msg) {
   const alertEl = document.createElement("div");
   alertEl.className = "notification-alert";
@@ -346,48 +293,18 @@ function sendNotificationForProjectChange(eventType, project) {
 
   switch (eventType) {
     case "new":
-      showPushNotification(
-        "📋 新预约提醒",
-        `门店「${storeName}」新增项目：${project.name}`,
-        "icons/icon-192.png",
-        { projectId: project.id }
-      );
       showNotificationAlert(`📋 新预约：${project.name}（${storeName}）`);
       break;
     case "start":
-      showPushNotification(
-        "🏗️ 施工开始提醒",
-        `项目「${project.name}」已开始施工`,
-        "icons/icon-192.png",
-        { projectId: project.id }
-      );
       showNotificationAlert(`🏗️ 施工开始：${project.name}`);
       break;
     case "done":
-      showPushNotification(
-        "✅ 施工完成提醒",
-        `项目「${project.name}」已完工，请安排验收`,
-        "icons/icon-192.png",
-        { projectId: project.id }
-      );
       showNotificationAlert(`✅ 施工完成：${project.name}`);
       break;
     case "accepted":
-      showPushNotification(
-        "🎉 验收通过提醒",
-        `项目「${project.name}」已验收通过`,
-        "icons/icon-192.png",
-        { projectId: project.id }
-      );
       showNotificationAlert(`🎉 验收通过：${project.name}`);
       break;
     case "update":
-      showPushNotification(
-        "📝 项目更新提醒",
-        `项目「${project.name}」信息已更新`,
-        "icons/icon-192.png",
-        { projectId: project.id }
-      );
       showNotificationAlert(`📝 项目更新：${project.name}`);
       break;
   }
@@ -397,6 +314,7 @@ function sendNotificationForProjectChange(eventType, project) {
  * 字段映射（云端 snake_case <-> 前端 camelCase）
  * ============================================================ */
 let modifiedProjectIds = new Set();
+let projectTimeFilterDays = 7;
 
 const mapProject = (r) => ({
   id: r.id,
@@ -613,6 +531,10 @@ const repo = {
   async patchProject(id, patch) {
     if (MODE === "cloud") {
       const row = { ...patch, updated_at: new Date().toISOString() };
+      if (row.repairOrder) {
+        row.repair_order = JSON.stringify(row.repairOrder);
+        delete row.repairOrder;
+      }
       const { error } = await sb.from("projects").update(row).eq("id", id);
       if (error) return fail(error);
     } else {
@@ -761,13 +683,26 @@ function renderWorkers() {
     return;
   }
   
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const dayAfterTomorrow = new Date();
+  dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+  
+  const tomorrowStr = fmtDate(tomorrow);
+  const dayAfterStr = fmtDate(dayAfterTomorrow);
+  
   const timelineHtml = renderWorkerScheduleHtml(today);
   
   list.innerHTML = `
     <div id="workerScheduleSection" style="margin-bottom: 24px;">
-      <div class="section-head" style="margin-bottom: 12px;">
-        <h3 style="margin:0; font-size:16px;">📅 今日施工时间安排</h3>
-        <button class="btn small primary" onclick="renderWorkers()">🔄 刷新</button>
+      <div class="section-head" style="margin-bottom: 12px; display:flex; align-items:center; justify-content:space-between;">
+        <h3 style="margin:0; font-size:16px;">📅 施工时间安排</h3>
+        <div style="display:flex; gap:4px;">
+          <button class="btn small primary" onclick="renderWorkers()">今天</button>
+          <button class="btn small" onclick="renderWorkersWithDate('${tomorrowStr}')">明天</button>
+          <button class="btn small" onclick="renderWorkersWithDate('${dayAfterStr}')">后天</button>
+          <button class="btn small" onclick="renderWorkers()">🔄 刷新</button>
+        </div>
       </div>
       <div id="workerScheduleView">${timelineHtml}</div>
     </div>
@@ -791,6 +726,64 @@ function renderWorkers() {
             <button class="btn small" onclick="editWorker('${w.id}')">编辑</button>
             <button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>
             <button class="btn small" onclick="renderWorkerSchedule('${today}', '${w.id}')">查看安排</button>
+          </div>
+        </div>`;
+    }).join("")}
+    </div>`;
+}
+
+function renderWorkersWithDate(dateStr) {
+  const list = document.getElementById("workerList");
+  if (!list) return;
+  
+  const today = fmtDate(new Date());
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const dayAfterTomorrow = new Date();
+  dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+  
+  const tomorrowStr = fmtDate(tomorrow);
+  const dayAfterStr = fmtDate(dayAfterTomorrow);
+  
+  const isToday = dateStr === today;
+  const isTomorrow = dateStr === tomorrowStr;
+  const isDayAfter = dateStr === dayAfterStr;
+  
+  const timelineHtml = renderWorkerScheduleHtml(dateStr);
+  
+  list.innerHTML = `
+    <div id="workerScheduleSection" style="margin-bottom: 24px;">
+      <div class="section-head" style="margin-bottom: 12px; display:flex; align-items:center; justify-content:space-between;">
+        <h3 style="margin:0; font-size:16px;">📅 施工时间安排</h3>
+        <div style="display:flex; gap:4px;">
+          <button class="btn small ${isToday ? 'primary' : ''}" onclick="renderWorkers()">今天</button>
+          <button class="btn small ${isTomorrow ? 'primary' : ''}" onclick="renderWorkersWithDate('${tomorrowStr}')">明天</button>
+          <button class="btn small ${isDayAfter ? 'primary' : ''}" onclick="renderWorkersWithDate('${dayAfterStr}')">后天</button>
+          <button class="btn small" onclick="renderWorkers()">🔄 刷新</button>
+        </div>
+      </div>
+      <div id="workerScheduleView">${timelineHtml}</div>
+    </div>
+    <div class="section-head" style="margin-bottom: 12px;">
+      <h3 style="margin:0; font-size:16px;">👷 施工人员列表</h3>
+    </div>
+    <div class="card-grid" style="margin-top:0;">
+    ${cache.workers.map((w) => {
+      const totalHours = cache.projects.reduce((s, p) =>
+        s + (p.workLogs || []).filter((l) => l.workerId === w.id)
+          .reduce((a, l) => a + (Number(l.hours) || 0), 0), 0);
+      return `
+        <div class="card">
+          <div class="card-title">
+            <h3>${esc(w.name)}</h3>
+            <span class="badge 已完工">${esc(w.role || "施工")}</span>
+          </div>
+          <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
+          <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
+          <div class="card-actions">
+            <button class="btn small" onclick="editWorker('${w.id}')">编辑</button>
+            <button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>
+            <button class="btn small" onclick="renderWorkerSchedule('${dateStr}', '${w.id}')">查看安排</button>
           </div>
         </div>`;
     }).join("")}
@@ -891,9 +884,30 @@ function renderWorkerScheduleForWorker(dateStr) {
   
   document.body.classList.add("timeline-view");
   
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const dayAfterTomorrow = new Date(today);
+  dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+  
+  const todayStr = fmtDate(today);
+  const tomorrowStr = fmtDate(tomorrow);
+  const dayAfterStr = fmtDate(dayAfterTomorrow);
+  
+  const isToday = dateStr === todayStr;
+  const isTomorrow = dateStr === tomorrowStr;
+  const isDayAfter = dateStr === dayAfterStr;
+  
   list.innerHTML = `
     <div id="workerScheduleSection" style="margin-bottom: 16px;">
-      <p class="hint" style="font-size:12px;">📅 ${dateStr} 施工人员时间安排</p>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+        <p class="hint" style="font-size:12px; margin:0;">📅 ${dateStr} 施工人员时间安排</p>
+        <div style="display:flex; gap:4px;">
+          <button class="btn small ${isToday ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${todayStr}')">今天</button>
+          <button class="btn small ${isTomorrow ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${tomorrowStr}')">明天</button>
+          <button class="btn small ${isDayAfter ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${dayAfterStr}')">后天</button>
+        </div>
+      </div>
     </div>
     <div id="workerScheduleView"></div>`;
   
@@ -978,6 +992,17 @@ function renderProjects() {
   let items = cache.projects.slice().sort((a, b) =>
     new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0));
 
+  if (!kw && projectTimeFilterDays > 0) {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const endDate = new Date(now);
+    endDate.setDate(endDate.getDate() + projectTimeFilterDays);
+    items = items.filter((p) => {
+      const aptTime = new Date(p.appointmentTime);
+      return !isNaN(aptTime.getTime()) && aptTime >= now && aptTime <= endDate;
+    });
+  }
+
   if (kw) {
     items = items.filter((p) =>
       [p.name, p.customer, p.address].some((f) => (f || "").toLowerCase().includes(kw)));
@@ -1042,6 +1067,16 @@ function refreshProjectStoreFilter() {
   sel.innerHTML = `<option value="">全部门店</option>` +
     cache.stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
   if (prev && cache.stores.some((s) => s.id === prev)) sel.value = prev;
+}
+
+function setProjectTimeFilter(days) {
+  projectTimeFilterDays = days;
+  
+  document.getElementById("timeFilter7").classList.toggle("primary", days === 7);
+  document.getElementById("timeFilter15").classList.toggle("primary", days === 15);
+  document.getElementById("timeFilter30").classList.toggle("primary", days === 30);
+  
+  renderProjects();
 }
 
 function projectForm(p = {}) {
@@ -1238,13 +1273,13 @@ async function submitRepairOrder(projectId) {
 async function completeRepair(projectId) {
   if (!confirm("确认维修已完成？")) return;
   
-  await repo.saveProject({ 
+  await repo.patchProject(projectId, { 
     repairOrder: { 
       ...getProject(projectId).repairOrder, 
       status: "已完成",
       completedAt: new Date().toISOString()
     } 
-  }, projectId);
+  });
   await repo.loadAll();
   openProjectDetail(projectId);
   toast("维修已完成");
@@ -1420,7 +1455,7 @@ function renderConstruction() {
         <div class="info-item"><div class="k">预约维修时间</div><div class="v">${p.repairOrder.appointmentTime ? fmtDateTime(p.repairOrder.appointmentTime) : "—"}</div></div>
         <div class="info-item"><div class="k">维修状态</div><div class="v">${p.repairOrder.status || "待维修"}</div></div>
       </div>
-      ${isManager() && p.repairOrder.status === "待维修" ? `
+      ${((isManager() || isWorker()) && p.repairOrder.status === "待维修") ? `
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn primary" onclick="completeRepair('${p.id}')">✅ 完成维修</button>
       </div>` : ""}
@@ -3012,6 +3047,7 @@ function openTimelineActionMenu(taskEl, projectId) {
     </div>` : `<div class="tl-menu-info"><div><span>人员</span><b>${esc(workers)}</b></div></div>`}
     <div class="tl-menu-actions">
       <button class="btn small primary" onclick="closeTimelineActionMenu(); gotoConstruction('${p.id}')">施工管理</button>
+      ${p.repairOrder && p.repairOrder.status === "待维修" && (isManager() || isWorker()) ? `<button class="btn small" onclick="closeTimelineActionMenu(); completeRepair('${p.id}')">✅ 完成维修</button>` : ""}
       ${perm.editProject(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); editProject('${p.id}')">编辑</button>` : ""}
       ${perm.reviewProject(p) && !isReviewed(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); reviewProject('${p.id}')">审核</button>` : ""}
       ${perm.deleteProject(p) ? `<button class="btn small danger" onclick="closeTimelineActionMenu(); deleteProject('${p.id}')">删除</button>` : ""}
@@ -3708,10 +3744,7 @@ async function startCloudSession() {
     doLogout();
   });
 
-  document.getElementById("btnNotifyToggle").addEventListener("click", () => {
-    document.getElementById("userDropdown").classList.add("hidden");
-    requestNotificationPermission();
-  });
+  
 
   // 未分配角色：显示提示并停止后续加载
   if (!currentProfile.role) {
@@ -3888,8 +3921,6 @@ async function init() {
     applyPermissions();
     renderAll();
   }
-  
-  requestNotificationPermission();
 }
 
 document.addEventListener("DOMContentLoaded", init);

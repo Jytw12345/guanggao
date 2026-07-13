@@ -254,6 +254,12 @@ body.timeline-view .container {
   flex-wrap: wrap;
 }
 
+.toolbar-time-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .input {
   padding: 8px 12px;
   border: 1px solid var(--border);
