@@ -208,10 +208,11 @@ function fmtTimeRange(p) {
 function updateSpanHint() {
   const el = document.getElementById("pSpanHint");
   if (!el) return;
+  const date = document.getElementById("pDate").value;
   const start = document.getElementById("pTime").value;
   const end = document.getElementById("pEnd").value;
-  if (!start || !end) { el.textContent = ""; return; }
-  const s = new Date(start), e = new Date(end);
+  if (!date || !start || !end) { el.textContent = ""; return; }
+  const s = new Date(`${date}T${start}`), e = new Date(`${date}T${end}`);
   if (isNaN(s) || isNaN(e)) { el.textContent = ""; return; }
   if (e <= s) {
     el.innerHTML = `<span style="color:var(--danger)">结束时间需晚于开始时间</span>`;
@@ -327,6 +328,7 @@ const mapProject = (r) => ({
   endTime: r.end_time || "",
   estimatedHours: Number(r.estimated_hours) || 0,
   outsourcedHours: Number(r.outsourced_hours) || 0,
+  workerCount: Number(r.worker_count) || 1,
   actualHours: Number(r.actual_hours) || 0,
   outsourcedHoursFromLogs: 0,
   status: r.status,
@@ -354,6 +356,7 @@ const projectToRow = (p) => ({
   end_time: p.endTime || null,
   estimated_hours: p.estimatedHours || 0,
   outsourced_hours: p.outsourcedHours || 0,
+  worker_count: p.workerCount || 1,
   actual_hours: p.actualHours || 0,
   status: p.status,
   note: p.note || null,
@@ -516,7 +519,11 @@ const repo = {
       const base = id ? { ...getProject(id), ...project } : { id: uid(), actualHours: 0, ...project };
       const row = projectToRow(base);
       if (!id && currentUser) row.created_by = currentUser.id;
-      const { error } = await sb.from("projects").upsert(row);
+      let { error } = await sb.from("projects").upsert(row);
+      if (error && error.message && error.message.includes("worker_count")) {
+        delete row.worker_count;
+        ({ error } = await sb.from("projects").upsert(row));
+      }
       if (error) return fail(error);
     } else {
       if (id) {
@@ -759,36 +766,11 @@ function renderWorkers() {
           </div>
           <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
           <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
-          ${(() => {
-            const today = fmtDate(new Date());
-            const currentLeave = isWorkerOnLeave(w.id, today);
-            if (currentLeave) {
-              return `<div class="card-row" style="color:#ef4444"><span>🏥 当前请假</span><b>${formatLeaveTime(currentLeave)}${currentLeave.reason ? " · " + esc(currentLeave.reason) : ""}</b></div>`;
-            }
-            return "";
-          })()}
           <div class="card-actions">
-            <button class="btn small" onclick="editWorker('${w.id}')">编辑</button>
-            <button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>
+            ${isManager() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
             <button class="btn small" onclick="renderWorkerSchedule('${today}', '${w.id}')">查看安排</button>
             <button class="btn small" onclick="openLeaveForm('${w.id}')" style="background:#ef4444;color:#fff">请假</button>
           </div>
-          ${(() => {
-            const leaveRecords = getWorkerLeaveRecords(w.id);
-            if (leaveRecords.length === 0) return "";
-            return `
-              <div style="padding:12px;border-top:1px solid var(--border);background:#fef2f2">
-                <div style="font-weight:600;color:#dc2626;margin-bottom:8px">🏥 请假记录</div>
-                <div style="display:flex;flex-direction:column;gap:4px">
-                  ${leaveRecords.map((lr) => `
-                    <div style="font-size:13px;display:flex;justify-content:space-between;align-items:center">
-                      <span>${formatLeaveTime(lr)}${lr.reason ? ` · ${esc(lr.reason)}` : ""}</span>
-                      <button class="btn small danger" onclick="deleteLeaveRecord('${lr.id}')" style="padding:2px 6px;font-size:12px">删除</button>
-                    </div>
-                  `).join("")}
-                </div>
-              </div>`;
-          })()}
         </div>`;
     }).join("")}
     </div>`;
@@ -842,36 +824,11 @@ function renderWorkersWithDate(dateStr) {
           </div>
           <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
           <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
-          ${(() => {
-            const today = fmtDate(new Date());
-            const currentLeave = isWorkerOnLeave(w.id, today);
-            if (currentLeave) {
-              return `<div class="card-row" style="color:#ef4444"><span>🏥 当前请假</span><b>${formatLeaveTime(currentLeave)}${currentLeave.reason ? " · " + esc(currentLeave.reason) : ""}</b></div>`;
-            }
-            return "";
-          })()}
           <div class="card-actions">
-            <button class="btn small" onclick="editWorker('${w.id}')">编辑</button>
-            <button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>
+            ${isManager() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
             <button class="btn small" onclick="renderWorkerSchedule('${dateStr}', '${w.id}')">查看安排</button>
             <button class="btn small" onclick="openLeaveForm('${w.id}')" style="background:#ef4444;color:#fff">请假</button>
           </div>
-          ${(() => {
-            const leaveRecords = getWorkerLeaveRecords(w.id);
-            if (leaveRecords.length === 0) return "";
-            return `
-              <div style="padding:12px;border-top:1px solid var(--border);background:#fef2f2">
-                <div style="font-weight:600;color:#dc2626;margin-bottom:8px">🏥 请假记录</div>
-                <div style="display:flex;flex-direction:column;gap:4px">
-                  ${leaveRecords.map((lr) => `
-                    <div style="font-size:13px;display:flex;justify-content:space-between;align-items:center">
-                      <span>${formatLeaveTime(lr)}${lr.reason ? ` · ${esc(lr.reason)}` : ""}</span>
-                      <button class="btn small danger" onclick="deleteLeaveRecord('${lr.id}')" style="padding:2px 6px;font-size:12px">删除</button>
-                    </div>
-                  `).join("")}
-                </div>
-              </div>`;
-          })()}
         </div>`;
     }).join("")}
     </div>`;
@@ -914,6 +871,42 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   workers.forEach((w) => {
     const workerProjects = items.filter(p => p.assignedWorkerIds.includes(w.id));
     
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const workerLeaves = cache.leaveRecords.filter((lr) => {
+      if (lr.workerId !== w.id) return false;
+      const sd = new Date(lr.startDate);
+      sd.setHours(0, 0, 0, 0);
+      const ed = new Date(lr.endDate);
+      ed.setHours(0, 0, 0, 0);
+      return today >= sd && today <= ed;
+    });
+    
+    let leaveBg = "";
+    workerLeaves.forEach((lr) => {
+      let leaveLeft = 0, leaveWidth = 0;
+      if (lr.startType === "all") {
+        leaveLeft = 0;
+        leaveWidth = totalWidth;
+      } else if (lr.startType === "morning") {
+        leaveLeft = (8 - 6) * hourWidth;
+        leaveWidth = 4 * hourWidth;
+      } else if (lr.startType === "afternoon") {
+        leaveLeft = (13 - 6) * hourWidth;
+        leaveWidth = 5 * hourWidth;
+      } else if (lr.startTime) {
+        const [sh, sm] = lr.startTime.split(":").map(Number);
+        leaveLeft = ((sh + sm / 60) - 6) * hourWidth;
+        if (lr.endTime) {
+          const [eh, em] = lr.endTime.split(":").map(Number);
+          leaveWidth = ((eh + em / 60) - (sh + sm / 60)) * hourWidth;
+        } else {
+          leaveWidth = totalWidth - leaveLeft;
+        }
+      }
+      leaveBg += `<div class="tl-bg-leave" style="left:${leaveLeft}px; width:${Math.max(10, leaveWidth)}px; height:100%;"></div>`;
+    });
+    
     let tasksHtml = "";
     workerProjects.forEach(p => {
       const start = projectStart(p);
@@ -931,27 +924,57 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       const timeStr = `${pad(start.getHours())}:${pad(start.getMinutes())} ~ ${pad(end.getHours())}:${pad(end.getMinutes())}`;
       
       tasksHtml += `
-        <div class="timeline-task ${statusClass}" style="left:${left}px; width:${width}px; height:40px;">
+        <div class="timeline-task ${statusClass}" style="left:${left}px; width:${width}px; height:48px;">
           <div class="timeline-task-header">
             <span class="timeline-task-name" style="font-size:11px;">${esc(p.name)}</span>
           </div>
           <div class="timeline-task-body" style="font-size:9px;">
-            ${esc(storeName(p.storeId))} · ${timeStr}
+            ${esc(storeName(p.storeId))} · ${timeStr} · 需${p.workerCount || 1}人
           </div>
         </div>`;
     });
     
+    const leaveBadge = workerLeaves.length > 0 ? `<span class="tl-lane-leave-badge">🏥</span>` : "";
+    
     lanesHtml += `
-      <div class="tl-lane" style="height:50px; border-bottom:1px solid #eee; display:flex;">
-        <div class="tl-lane-label" style="width:60px; flex-shrink:0; padding:5px; font-size:12px; font-weight:bold;">${esc(w.name)}</div>
-        <div class="tl-lane-body" style="flex:1; position:relative; height:50px;">
+      <div class="tl-lane" style="height:58px; border-bottom:1px solid #eee; display:flex;">
+        <div class="tl-lane-label" style="width:60px; flex-shrink:0; padding:5px; font-size:12px; font-weight:bold;">${esc(w.name)}${leaveBadge}</div>
+        <div class="tl-lane-body" style="flex:1; position:relative; height:58px;">
           <div class="tl-bg-work" style="left:${workBgLeft}px; width:${workBgWidth}px; height:100%;"></div>
           <div class="tl-bg-overtime" style="width:${workBgLeft}px; height:100%;"></div>
           <div class="tl-bg-overtime" style="left:${workBgLeft + workBgWidth}px; width:${totalWidth - workBgLeft - workBgWidth}px; height:100%;"></div>
+          ${leaveBg}
           <div class="tl-tasks">${tasksHtml}</div>
         </div>
       </div>`;
   });
+  
+  const dateFilter = new Date(dateStr);
+  dateFilter.setHours(0, 0, 0, 0);
+  const dayLeaveRecords = cache.leaveRecords.filter((lr) => {
+    const sd = new Date(lr.startDate);
+    sd.setHours(0, 0, 0, 0);
+    const ed = new Date(lr.endDate);
+    ed.setHours(0, 0, 0, 0);
+    return dateFilter >= sd && dateFilter <= ed;
+  });
+  
+  let leaveSection = "";
+  if (dayLeaveRecords.length > 0) {
+    leaveSection = `
+      <div class="tl-leave-section" style="margin-top:16px; padding:12px; background:#fef2f2; border-radius:8px; border-left:4px solid #ef4444;">
+        <div style="font-weight:600; color:#dc2626; margin-bottom:8px;">🏥 ${dateStr} 请假人员</div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          ${dayLeaveRecords.map((lr) => {
+            const w = getWorker(lr.workerId);
+            return `<div style="font-size:13px; display:flex; justify-content:space-between; align-items:center;">
+              <span>${esc(w ? w.name : lr.workerName || "未知")} · ${formatLeaveTime(lr)}${lr.reason ? ` · ${esc(lr.reason)}` : ""}</span>
+              <button class="btn small danger" onclick="deleteLeaveRecord('${lr.id}')" style="padding:2px 6px; font-size:12px;">删除</button>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>`;
+  }
   
   return `
     <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">绿色区域为工作时间(8:00-18:00)，橙色区域为加班时间</div>
@@ -962,7 +985,8 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
           ${lanesHtml}
         </div>
       </div>
-    </div>`;
+    </div>
+    ${leaveSection}`;
 }
 
 function renderWorkerScheduleForWorker(dateStr) {
@@ -1040,8 +1064,14 @@ function workerForm(w = {}) {
     </div>`;
 }
 
-function newWorker() { modal.open("添加施工人员", workerForm()); }
-function editWorker(id) { modal.open("编辑施工人员", workerForm(getWorker(id))); }
+function newWorker() { 
+  if (!isManager()) { toast("权限不足"); return; }
+  modal.open("添加施工人员", workerForm()); 
+}
+function editWorker(id) { 
+  if (!isManager()) { toast("权限不足"); return; }
+  modal.open("编辑施工人员", workerForm(getWorker(id))); 
+}
 
 async function saveWorker(id) {
   const name = document.getElementById("wName").value.trim();
@@ -1059,6 +1089,7 @@ async function saveWorker(id) {
 }
 
 async function deleteWorker(id) {
+  if (!isManager()) { toast("权限不足"); return; }
   const used = cache.projects.some((p) => (p.workLogs || []).some((l) => l.workerId === id));
   if (used && !confirm("该人员已有施工工时记录，删除不会移除历史记录。确定删除该人员？")) return;
   if (!used && !confirm("确定删除该人员？")) return;
@@ -1186,6 +1217,76 @@ async function deleteLeaveRecord(id) {
   await repo.loadAll();
   renderAll();
   toast("请假记录已删除");
+}
+
+/* 项目预约时间选择辅助函数 */
+function setPTimeRange(type) {
+  const date = document.getElementById("pDate").value;
+  if (!date) {
+    toast("请先选择预约日期");
+    return;
+  }
+  const timeSel = document.getElementById("pTime");
+  const endSel = document.getElementById("pEnd");
+  if (type === "morning") {
+    timeSel.value = "08:00";
+    endSel.value = "12:00";
+  } else if (type === "afternoon") {
+    timeSel.value = "13:00";
+    endSel.value = "18:00";
+  } else if (type === "full") {
+    timeSel.value = "08:00";
+    endSel.value = "18:00";
+  }
+  updateSpanHint();
+}
+
+function updatePTimeOptions() {
+}
+
+function autoCalcEndTime() {
+  const date = document.getElementById("pDate").value;
+  const time = document.getElementById("pTime").value;
+  const estHours = Number(document.getElementById("pEst").value) || 0;
+  const workerCount = Number(document.getElementById("pWorkers").value) || 1;
+  
+  if (!date || !time) {
+    toast("请先选择日期和开始时间");
+    return;
+  }
+  
+  if (estHours <= 0) {
+    toast("请先填写预计工时");
+    return;
+  }
+  
+  const hoursNeeded = Math.ceil(estHours / workerCount * 2) / 2;
+  const [h, m] = time.split(":").map(Number);
+  const startTime = new Date(`${date}T${time}`);
+  const endTime = new Date(startTime.getTime() + hoursNeeded * 60 * 60 * 1000);
+  
+  const endH = String(endTime.getHours()).padStart(2, "0");
+  const endM = String(endTime.getMinutes()).padStart(2, "0");
+  const endStr = `${endH}:${endM}`;
+  
+  const endSel = document.getElementById("pEnd");
+  const options = Array.from(endSel.options).map(o => o.value);
+  if (options.includes(endStr)) {
+    endSel.value = endStr;
+  } else {
+    let closest = options[0];
+    let minDiff = Infinity;
+    options.forEach(o => {
+      const [oh, om] = o.split(":").map(Number);
+      const diff = Math.abs((oh * 60 + om) - (endTime.getHours() * 60 + endTime.getMinutes()));
+      if (diff < minDiff) {
+        minDiff = diff;
+        closest = o;
+      }
+    });
+    endSel.value = closest;
+  }
+  updateSpanHint();
 }
 
 /* ============================================================
@@ -1318,15 +1419,51 @@ function projectForm(p = {}) {
       <label>安装地址</label>
       <input class="input" id="pAddress" value="${esc(p.address || "")}" placeholder="施工现场地址" />
     </div>
+    <div class="form-row">
+      <label>预约日期 *</label>
+      <input class="input" type="date" id="pDate" value="${p.appointmentTime ? new Date(p.appointmentTime).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)}" onchange="updatePTimeOptions()" />
+    </div>
+    <div class="form-row">
+      <label>快捷时段</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn small" onclick="setPTimeRange('morning')">🌅 上午 08:00-12:00</button>
+        <button class="btn small" onclick="setPTimeRange('afternoon')">☀️ 下午 13:00-18:00</button>
+        <button class="btn small" onclick="setPTimeRange('full')">📅 全天 08:00-18:00</button>
+      </div>
+    </div>
     <div class="form-grid">
       <div class="form-row">
         <label>开始时间 *</label>
-        <input class="input" type="datetime-local" id="pTime" value="${esc(p.appointmentTime || "")}" oninput="updateSpanHint()" />
+        <select class="input" id="pTime" onchange="updateSpanHint()">
+          ${(() => {
+            const times = ['08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00'];
+            const current = p.appointmentTime ? new Date(p.appointmentTime) : null;
+            const curTime = current ? `${String(current.getHours()).padStart(2, '0')}:${String(current.getMinutes()).padStart(2, '0')}` : '09:00';
+            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
+          })()}
+        </select>
       </div>
       <div class="form-row">
         <label>结束时间 *</label>
-        <input class="input" type="datetime-local" id="pEnd" value="${esc(p.endTime || "")}" oninput="updateSpanHint()" />
+        <select class="input" id="pEnd" onchange="updateSpanHint()">
+          ${(() => {
+            const times = ['08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00'];
+            const current = p.endTime ? new Date(p.endTime) : null;
+            const curTime = current ? `${String(current.getHours()).padStart(2, '0')}:${String(current.getMinutes()).padStart(2, '0')}` : '12:00';
+            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
+          })()}
+        </select>
       </div>
+    </div>
+    <div class="form-row">
+      <label>施工人数</label>
+      <select class="input" id="pWorkers" onchange="autoCalcEndTime()">
+        <option value="1" ${(p.workerCount === 1 || (!p.workerCount && (!p.assignedWorkerIds || p.assignedWorkerIds.length === 1))) ? 'selected' : ''}>1 人</option>
+        <option value="2" ${(p.workerCount === 2 || (p.assignedWorkerIds && p.assignedWorkerIds.length === 2)) ? 'selected' : ''}>2 人</option>
+        <option value="3" ${(p.workerCount === 3 || (p.assignedWorkerIds && p.assignedWorkerIds.length === 3)) ? 'selected' : ''}>3 人</option>
+        <option value="4" ${(p.workerCount >= 4 || (p.assignedWorkerIds && p.assignedWorkerIds.length >= 4)) ? 'selected' : ''}>4 人以上</option>
+      </select>
+      <button class="btn small" onclick="autoCalcEndTime()" style="margin-left:8px">⏱️ 自动计算结束时间</button>
     </div>
     <div class="form-row" style="margin-top:-6px">
       <small class="hint" id="pSpanHint" style="margin:0"></small>
@@ -1367,24 +1504,30 @@ async function saveProject(id) {
     return;
   }
   const name = document.getElementById("pName").value.trim();
+  const date = document.getElementById("pDate").value;
   const time = document.getElementById("pTime").value;
   const end = document.getElementById("pEnd").value;
   if (!name) { toast("请填写项目名称"); return; }
+  if (!date) { toast("请选择预约日期"); return; }
   if (!time) { toast("请选择开始时间"); return; }
   if (!end) { toast("请选择结束时间"); return; }
-  if (new Date(end) <= new Date(time)) { toast("结束时间需晚于开始时间"); return; }
+  const fullTime = `${date}T${time}`;
+  const fullEnd = `${date}T${end}`;
+  if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
   const storeEl = document.getElementById("pStore");
   let storeId = storeEl ? storeEl.value : "";
   if (isStoreManager()) storeId = myStore();          // 店长强制本门店
+  const workerCount = Number(document.getElementById("pWorkers").value) || 1;
   const payload = {
     name,
     customer: document.getElementById("pCustomer").value.trim(),
     phone: document.getElementById("pPhone").value.trim(),
     address: document.getElementById("pAddress").value.trim(),
-    appointmentTime: time,
-    endTime: end,
+    appointmentTime: fullTime,
+    endTime: fullEnd,
     estimatedHours: Number(document.getElementById("pEst").value) || 0,
     outsourcedHours: Number(document.getElementById("pOutsourcedHours").value) || 0,
+    workerCount,
     status: document.getElementById("pStatus").value,
     note: document.getElementById("pNote").value.trim(),
     storeId,
@@ -3063,7 +3206,7 @@ const TL_VIEW_END_HOUR = 22;    /* 时间轴显示终点 */
 const TL_WORK_START_HOUR = 8;   /* 工作时段起点 */
 const TL_WORK_END_HOUR = 18;    /* 工作时段终点 */
 let TL_ACTUAL_HOUR_WIDTH = 90;  /* 实际渲染使用的每小时像素宽度 */
-const TL_LANE_HEIGHT = 75;      /* 每行任务高度 */
+const TL_LANE_HEIGHT = 85;      /* 每行任务高度 */
 
 function renderTimelineInDetail() {
   const grid = document.getElementById("calGrid");
@@ -3210,7 +3353,7 @@ function renderTimelineInDetail() {
              data-start="${start.toISOString()}"
              data-end="${end.toISOString()}"
              data-original-left="${left}"
-             style="left: ${left}px; width: ${width}px; top: ${top}px; height: ${TL_LANE_HEIGHT - 10}px;"
+             style="left: ${left}px; width: ${width}px; top: ${top}px; height: ${TL_LANE_HEIGHT - 8}px;"
              onmousedown="timelineTaskMouseDown(event)"
              ontouchstart="timelineTouchStart(event)"
              ontouchmove="timelineTouchMove(event)"
@@ -3226,12 +3369,12 @@ function renderTimelineInDetail() {
               ${p.timeModified ? `<span class="timeline-task-modified-badge">✏️ 已改点</span>` : ""}
               ${isOvertime ? `<span class="timeline-task-overtime-badge">🌙 加班</span>` : ""}
               ${conflicts >= 1 ? `<span class="timeline-task-conflict-badge">⚠ ${conflicts} 冲突</span>` : ""}
-              ${!canDrag ? `<span class="timeline-task-lock-badge">🔒 不可拖动</span>` : ""}
             </div>
           </div>
           <div class="timeline-task-info">
             <span>⏰ ${timeStr}</span>
             <span>⏱️ ${p.estimatedHours}h</span>
+            <span>👥 需${p.workerCount || 1}人</span>
           </div>
           <div class="timeline-task-workers">👤 ${esc(workers)}</div>
         </div>`;
@@ -3252,7 +3395,6 @@ function renderTimelineInDetail() {
           <span class="tl-legend-item"><span class="tl-legend-box work"></span>工作时间 8:00-18:00</span>
           <span class="tl-legend-item"><span class="tl-legend-box overtime"></span>加班区（需协调）</span>
           <span class="tl-legend-item">💡 仅"预约中"状态可拖动调整时间</span>
-          <span class="tl-legend-item">🔒 施工中/已完工等不可拖动</span>
           <span class="tl-legend-item">🖱️ 点击任务查看详情和操作</span>
         </div>
         <div class="tl-scroll">
@@ -3277,6 +3419,27 @@ function renderTimelineInDetail() {
             <div class="tl-drag-hint" id="tlDragHint" style="display:none;"></div>
           </div>
         </div>
+        ${(() => {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const leaveInfo = [];
+          for (let i = 0; i < 3; i++) {
+            const d = new Date(today.getTime() + i * 24 * 60 * 60 * 1000);
+            const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            const leaves = cache.leaveRecords.filter((lr) => {
+              const sd = new Date(lr.startDate);
+              sd.setHours(0, 0, 0, 0);
+              const ed = new Date(lr.endDate);
+              ed.setHours(0, 0, 0, 0);
+              return d >= sd && d <= ed;
+            });
+            if (leaves.length > 0) {
+              leaveInfo.push(`<div class="tl-leave-item"><span class="tl-leave-date">${dateStr}</span><span class="tl-leave-workers">${leaves.map(l => `${l.workerName} ${formatLeaveTime(l)}`).join("、")}</span></div>`);
+            }
+          }
+          if (leaveInfo.length === 0) return "";
+          return `<div class="tl-leave-section"><div class="tl-leave-header">🏥 近期请假人员</div><div class="tl-leave-list">${leaveInfo.join("")}</div></div>`;
+        })()}
       </div>`;
   }
 
@@ -3288,7 +3451,7 @@ function renderTimelineInDetail() {
 }
 
 let draggedTask = null;
-let timelineMouseDown = { x: 0, y: 0, time: 0 };
+let timelineMouseDown = null;
 
 /* 记录鼠标按下位置，用于区分点击和拖拽 */
 function timelineTaskMouseDown(e) {
@@ -3297,14 +3460,17 @@ function timelineTaskMouseDown(e) {
 
 /* 点击任务卡片：弹出浮动操作菜单 */
 function timelineTaskClick(e, projectId) {
-  if (!timelineMouseDown.x && !timelineMouseDown.y) {
+  if (!timelineMouseDown) {
     openTimelineActionMenu(e.currentTarget, projectId);
+    timelineMouseDown = null;
     return;
   }
   
   const deltaX = Math.abs(e.clientX - timelineMouseDown.x);
   const deltaY = Math.abs(e.clientY - timelineMouseDown.y);
   const timeDiff = Date.now() - timelineMouseDown.time;
+  
+  timelineMouseDown = null;
   
   if (deltaX > 10 || deltaY > 10) return;
   
@@ -3646,8 +3812,10 @@ function timelineTouchMove(e) {
   if (!touchDragStarted) {
     if (Math.abs(deltaX) > DRAG_THRESHOLD) {
       touchDragStarted = true;
+      timelineMouseDown = null;
     } else if (Math.abs(deltaY) > DRAG_THRESHOLD) {
       touchDragTask = null;
+      timelineMouseDown = null;
       return;
     }
     return;
@@ -3708,11 +3876,12 @@ function timelineTouchEnd(e) {
 
   if (!touchDragStarted) {
     touchDragTask = null;
+    timelineMouseDown = null;
     return;
   }
 
   const timelineMain = document.getElementById("timelineMain");
-  if (!timelineMain) { touchDragTask = null; return; }
+  if (!timelineMain) { touchDragTask = null; timelineMouseDown = null; return; }
 
   const newLeft = parseFloat(task.style.left) || originalLeft;
 
@@ -3879,8 +4048,10 @@ function timelineMouseMove(e) {
   if (!mouseDragStarted) {
     if (Math.abs(deltaX) > DRAG_THRESHOLD) {
       mouseDragStarted = true;
+      timelineMouseDown = null;
     } else if (Math.abs(deltaY) > DRAG_THRESHOLD) {
       mouseDragTask = null;
+      timelineMouseDown = null;
       return;
     }
     return;
@@ -3941,11 +4112,12 @@ function timelineMouseUp(e) {
 
   if (!mouseDragStarted) {
     mouseDragTask = null;
+    timelineMouseDown = null;
     return;
   }
 
   const timelineMain = document.getElementById("timelineMain");
-  if (!timelineMain) { mouseDragTask = null; return; }
+  if (!timelineMain) { mouseDragTask = null; timelineMouseDown = null; return; }
 
   const newLeft = parseFloat(task.style.left) || originalLeft;
 

@@ -1754,6 +1754,22 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   min-width: 0;
 }
 
+/* 请假时段背景 */
+.tl-bg-leave {
+  position: absolute;
+  background: rgba(239, 68, 68, 0.15);
+  border-left: 2px solid #ef4444;
+  border-right: 2px solid #ef4444;
+  z-index: 0;
+}
+
+/* 请假徽章 */
+.tl-lane-leave-badge {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 14px;
+}
+
 /* 加班区背景 */
 .tl-bg-overtime {
   position: absolute;
@@ -1768,6 +1784,40 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 }
 .tl-bg-ot-left { left: 0; }
 .tl-bg-ot-right { position: absolute; }
+
+/* 近期请假人员区域 */
+.tl-leave-section {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: #fef2f2;
+}
+.tl-leave-header {
+  font-weight: 600;
+  color: #dc2626;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.tl-leave-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tl-leave-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text);
+}
+.tl-leave-date {
+  font-weight: 500;
+  color: #dc2626;
+  min-width: 80px;
+}
+.tl-leave-workers {
+  flex: 1;
+  color: var(--text-muted);
+}
 
 /* 网格线 */
 .tl-grid-lines {
