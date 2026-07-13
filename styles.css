@@ -1513,7 +1513,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 .timeline-horizontal {
   display: flex;
   flex-direction: column;
-  width: auto;
+  width: 100%;
 }
 
 /* 图例 */
@@ -1567,6 +1567,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 }
 .tl-stat-value.warn { color: var(--warn); }
 .tl-stat-value.danger { color: var(--danger); }
+.tl-stat-value.outsourced { color: #8b5cf6; }
 
 .tl-wrapper {
   overflow-x: auto;
@@ -1611,6 +1612,8 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   height: 32px;
   border-bottom: 2px solid var(--border);
   background: #f8fafc;
+  width: 100%;
+  box-sizing: border-box;
 }
 .tl-hour-mark {
   position: absolute;
@@ -1663,6 +1666,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   flex: 1;
   position: relative;
   height: 50px;
+  width: 100%;
   min-width: 0;
 }
 

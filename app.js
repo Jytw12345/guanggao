@@ -288,7 +288,9 @@ const mapProject = (r) => ({
   appointmentTime: r.appointment_time,
   endTime: r.end_time || "",
   estimatedHours: Number(r.estimated_hours) || 0,
+  outsourcedHours: Number(r.outsourced_hours) || 0,
   actualHours: Number(r.actual_hours) || 0,
+  outsourcedHoursFromLogs: 0,
   status: r.status,
   note: r.note,
   acceptance: r.acceptance || null,
@@ -312,6 +314,7 @@ const projectToRow = (p) => ({
   appointment_time: p.appointmentTime || null,
   end_time: p.endTime || null,
   estimated_hours: p.estimatedHours || 0,
+  outsourced_hours: p.outsourcedHours || 0,
   actual_hours: p.actualHours || 0,
   status: p.status,
   note: p.note || null,
@@ -369,6 +372,10 @@ const repo = {
       cache.projects = (pRes.data || []).map((r) => {
         const p = mapProject(r);
         p.workLogs = logs.filter((l) => l._pid === r.id).map(({ _pid, ...l }) => l);
+        p.outsourcedHoursFromLogs = p.workLogs.reduce((sum, l) => {
+          const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
+          return sum + (isOutsourced ? (Number(l.hours) || 0) : 0);
+        }, 0);
         return p;
       });
     } else {
@@ -556,7 +563,13 @@ function loadLocal() {
     if (raw) {
       const data = JSON.parse(raw);
       cache.workers = data.workers || [];
-      cache.projects = data.projects || [];
+      cache.projects = (data.projects || []).map((p) => {
+        p.outsourcedHoursFromLogs = (p.workLogs || []).reduce((sum, l) => {
+          const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
+          return sum + (isOutsourced ? (Number(l.hours) || 0) : 0);
+        }, 0);
+        return p;
+      });
       cache.stores = data.stores || [];
     }
   } catch (e) {
@@ -678,8 +691,12 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   
   const workers = workerId ? [getWorker(workerId)].filter(Boolean) : cache.workers;
   const totalHours = 16;
-  const availableWidth = window.innerWidth - 64;
-  const containerWidth = Math.max(800, availableWidth);
+  const listEl = document.getElementById('workerList');
+  const scheduleEl = document.getElementById('workerScheduleView');
+  const containerEl = listEl || scheduleEl;
+  const containerWidth = containerEl 
+    ? Math.max(800, containerEl.clientWidth - 32)
+    : Math.max(800, window.innerWidth - 64);
   const hourWidth = Math.max(50, containerWidth / totalHours);
   const totalWidth = containerWidth;
   
@@ -726,7 +743,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     lanesHtml += `
       <div class="tl-lane" style="height:50px; border-bottom:1px solid #eee; display:flex;">
         <div class="tl-lane-label" style="width:60px; flex-shrink:0; padding:5px; font-size:12px; font-weight:bold;">${esc(w.name)}</div>
-        <div class="tl-lane-body" style="flex:1; position:relative; height:50px; width:${totalWidth}px;">
+        <div class="tl-lane-body" style="flex:1; position:relative; height:50px;">
           <div class="tl-bg-work" style="left:${workBgLeft}px; width:${workBgWidth}px; height:100%;"></div>
           <div class="tl-bg-overtime" style="width:${workBgLeft}px; height:100%;"></div>
           <div class="tl-bg-overtime" style="left:${workBgLeft + workBgWidth}px; width:${totalWidth - workBgLeft - workBgWidth}px; height:100%;"></div>
@@ -738,8 +755,8 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   return `
     <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">绿色区域为工作时间(8:00-18:00)，橙色区域为加班时间</div>
     <div class="tl-wrapper" style="width:100%;">
-      <div class="timeline-horizontal" style="width:${totalWidth + 60}px; min-width:100%;">
-        <div class="tl-axis" style="width:${totalWidth}px; margin-left:60px;">${hourMarks.join("")}</div>
+      <div class="timeline-horizontal" style="width:100%; min-width:${totalWidth + 60}px;">
+        <div class="tl-axis" style="width:100%; margin-left:60px;">${hourMarks.join("")}</div>
         <div class="tl-scroll" style="max-height:${workers.length * 50 + 50}px;">
           ${lanesHtml}
         </div>
@@ -952,6 +969,11 @@ function projectForm(p = {}) {
       <small class="hint" style="margin:2px 0 0">按人工总量填写，与现场时长无关。例：6 人·小时的活，2 人同时施工约 3 小时完工。</small>
     </div>
     <div class="form-row">
+      <label>外协工时（人·小时，用于统计）</label>
+      <input class="input" type="number" min="0" step="0.5" id="pOutsourcedHours" value="${esc(p.outsourcedHours ?? "")}" placeholder="0" />
+      <small class="hint" style="margin:2px 0 0">外协人员完成的工时，与预计工时分开统计。</small>
+    </div>
+    <div class="form-row">
       <label>项目状态</label>
       <select class="input" id="pStatus">
         ${Object.values(STATUS).map((s) =>
@@ -994,6 +1016,7 @@ async function saveProject(id) {
     appointmentTime: time,
     endTime: end,
     estimatedHours: Number(document.getElementById("pEst").value) || 0,
+    outsourcedHours: Number(document.getElementById("pOutsourcedHours").value) || 0,
     status: document.getElementById("pStatus").value,
     note: document.getElementById("pNote").value.trim(),
     storeId,
@@ -1053,14 +1076,17 @@ function renderConstruction() {
   const canAssign = perm.assignWorker(p);
   const canReview = perm.reviewProject(p);
   const logsRows = (p.workLogs || []).length
-    ? p.workLogs.map((l) => `
+    ? p.workLogs.map((l) => {
+        const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
+        return `
         <tr>
-          <td>${esc(l.workerName)}</td>
+          <td>${esc(l.workerName)}${isOutsourced ? ` <span style="color:#8b5cf6;font-size:12px">(外协)</span>` : ""}</td>
           <td>${fmtDate(l.date)}</td>
           <td>${l.hours} 小时</td>
           <td>${esc(l.note || "—")}</td>
           <td>${canEdit ? `<button class="btn small danger" onclick="deleteWorkLog('${p.id}','${l.id}')">删除</button>` : ""}</td>
-        </tr>`).join("")
+        </tr>`;
+      }).join("")
     : `<tr><td colspan="5" style="color:var(--muted)">暂无施工工时记录</td></tr>`;
 
   const workerOptions = cache.workers.map((w) =>
@@ -1122,6 +1148,7 @@ function renderConstruction() {
         <div class="info-item"><div class="k">安装地址</div><div class="v">${esc(p.address || "—")}</div></div>
         <div class="info-item"><div class="k">预约时段</div><div class="v">${fmtTimeRange(p)}</div></div>
         <div class="info-item"><div class="k">预计工时</div><div class="v">${p.estimatedHours || 0} 小时</div></div>
+        <div class="info-item"><div class="k">外协工时</div><div class="v" style="color:#8b5cf6;font-weight:600">${Math.max(p.outsourcedHours, p.outsourcedHoursFromLogs) || 0} 小时</div></div>
         <div class="info-item"><div class="k">工程实际用工时</div><div class="v">${p.actualHours || 0} 小时</div></div>
         <div class="info-item"><div class="k">工时差异（实际−预计）</div><div class="v">${diffLabel(p)}</div></div>
         ${p.started_at ? `<div class="info-item"><div class="k">⏰ 开始施工时间</div><div class="v">${esc(fmtDateTime(p.started_at))}</div></div>` : ""}
@@ -1172,10 +1199,21 @@ function renderConstruction() {
       ${canEdit ? `
       <div class="worklog-form">
         <div class="field">
+          <label>人员类型</label>
+          <select class="input" id="logType" onchange="toggleLogWorkerType()">
+            <option value="internal">内部施工人员</option>
+            <option value="outsourced">外协人员</option>
+          </select>
+        </div>
+        <div class="field" id="logInternalWorkerField">
           <label>选择施工人员</label>
           <select class="input" id="logWorker">
             ${workerOptions || `<option value="">请先添加人员</option>`}
           </select>
+        </div>
+        <div class="field" id="logOutsourcedField" style="display:none">
+          <label>外协人员</label>
+          <input class="input" id="logOutsourcedName" placeholder="输入外协人员姓名" />
         </div>
         <div class="field">
           <label>施工日期</label>
@@ -1392,17 +1430,35 @@ async function saveActualHours(id) {
   toast("已保存实际工时");
 }
 
+function toggleLogWorkerType() {
+  const type = document.getElementById("logType").value;
+  document.getElementById("logInternalWorkerField").style.display = type === "internal" ? "block" : "none";
+  document.getElementById("logOutsourcedField").style.display = type === "outsourced" ? "block" : "none";
+}
+
 async function addWorkLog(id) {
   const p = getProject(id);
-  const workerId = document.getElementById("logWorker").value;
+  const type = document.getElementById("logType").value;
   const hours = Number(document.getElementById("logHours").value);
   const date = document.getElementById("logDate").value;
   const note = document.getElementById("logNote").value.trim();
-  if (!workerId) { toast("请先在「施工人员」中添加人员"); return; }
+  
   if (!hours || hours <= 0) { toast("请填写有效工时"); return; }
   if (!date) { toast("请选择施工日期"); return; }
-  const worker = getWorker(workerId);
-  await repo.addWorkLog(id, { workerId, workerName: worker.name, hours, date, note });
+  
+  let workerId, workerName;
+  if (type === "internal") {
+    workerId = document.getElementById("logWorker").value;
+    if (!workerId) { toast("请选择施工人员"); return; }
+    const worker = getWorker(workerId);
+    workerName = worker.name;
+  } else {
+    workerName = document.getElementById("logOutsourcedName").value.trim();
+    if (!workerName) { toast("请输入外协人员姓名"); return; }
+    workerId = "outsourced:" + workerName;
+  }
+  
+  await repo.addWorkLog(id, { workerId, workerName, hours, date, note, isOutsourced: type === "outsourced" });
   if (p.status === STATUS.BOOKED) await repo.patchProject(id, { status: STATUS.WORKING, started_at: new Date().toISOString() });
   await repo.loadAll();
   renderAll();
@@ -1483,8 +1539,9 @@ function collectStats() {
     (p.workLogs || []).forEach((l) => {
       if (month && monthKey(l.date) !== month) return;
       if (workerFilter && l.workerId !== workerFilter) return;
+      const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
       if (!rows[l.workerId]) {
-        rows[l.workerId] = { name: l.workerName, hours: 0, days: new Set(), projects: new Set(), daily: {} };
+        rows[l.workerId] = { name: l.workerName, hours: 0, days: new Set(), projects: new Set(), daily: {}, isOutsourced };
       }
       rows[l.workerId].hours += Number(l.hours) || 0;
       rows[l.workerId].days.add(fmtDate(l.date));
@@ -1502,6 +1559,7 @@ function collectStats() {
     days: r.days.size,
     projects: r.projects.size,
     daily: r.daily,
+    isOutsourced: r.isOutsourced,
   })).sort((a, b) => b.hours - a.hours);
 }
 
@@ -1513,18 +1571,47 @@ function collectProjectStats() {
     .filter((p) => !month || monthKey(p.appointmentTime) === month)
     .map((p) => {
       const { est, act, diff, hasActual } = hoursDiff(p);
-      // 按施工人员汇总工时
+      // 按施工人员汇总工时（区分内部和外协）
       const workerMap = {};
+      const outsourcedWorkerMap = {};
       (p.workLogs || []).forEach((l) => {
         if (workerFilter && l.workerId !== workerFilter) return;
+        const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
         const nm = l.workerName || "未知";
-        if (!workerMap[nm]) workerMap[nm] = 0;
-        workerMap[nm] += Number(l.hours) || 0;
+        if (isOutsourced) {
+          if (!outsourcedWorkerMap[nm]) outsourcedWorkerMap[nm] = 0;
+          outsourcedWorkerMap[nm] += Number(l.hours) || 0;
+        } else {
+          if (!workerMap[nm]) workerMap[nm] = 0;
+          workerMap[nm] += Number(l.hours) || 0;
+        }
       });
       const workerHours = Object.entries(workerMap)
         .sort((a, b) => b[1] - a[1])
-        .map(([name, hours]) => ({ name, hours }));
-      return { id: p.id, name: p.name, status: p.status, est, act, diff, hasActual, workerHours };
+        .map(([name, hours]) => ({ name, hours, isOutsourced: false }));
+      const outsourcedWorkerHours = Object.entries(outsourcedWorkerMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, hours]) => ({ name, hours, isOutsourced: true }));
+      // 外协人员数量
+      const outsourcedCount = (p.outsourcedWorkers || "").split(',').map(w => w.trim()).filter(w => w.length > 0).length;
+      const totalOutsourcedHoursFromLogs = Object.values(outsourcedWorkerMap).reduce((sum, h) => sum + h, 0);
+      return { 
+        id: p.id, 
+        name: p.name, 
+        status: p.status, 
+        est, 
+        act, 
+        diff, 
+        hasActual, 
+        workerHours, 
+        outsourcedWorkerHours,
+        outsourcedCount, 
+        hasOutsourced: outsourcedCount > 0, 
+        outsourcedHours: p.outsourcedHours || 0, 
+        outsourcedHoursFromLogs: Math.max(p.outsourcedHoursFromLogs || 0, totalOutsourcedHoursFromLogs),
+        date: p.appointmentTime,
+        store: storeName(p.storeId)
+      };
     })
     .sort((a, b) => b.diff - a.diff);
 }
@@ -1538,6 +1625,9 @@ function renderStats() {
   const totalEst = recorded.reduce((s, r) => s + r.est, 0);
   const totalAct = recorded.reduce((s, r) => s + r.act, 0);
   const totalDiff = totalAct - totalEst;
+  
+  const totalOutsourcedHours = projRows.reduce((s, r) => s + Math.max(r.outsourcedHours || 0, r.outsourcedHoursFromLogs || 0), 0);
+  const totalOutsourcedWorkers = projRows.reduce((s, r) => s + r.outsourcedWorkerHours.length, 0);
 
   const summary = document.getElementById("statsSummary");
   summary.innerHTML = `
@@ -1545,6 +1635,8 @@ function renderStats() {
     <div class="stat-card"><div class="num">${totalHours}</div><div class="lbl">合计安装工时(小时)</div></div>
     <div class="stat-card"><div class="num">${totalEst}</div><div class="lbl">预计工时(小时)</div></div>
     <div class="stat-card"><div class="num">${totalAct}</div><div class="lbl">实际工时(小时)</div></div>
+    <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedHours}h</div><div class="lbl">外协工时</div></div>
+    <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedWorkers}人</div><div class="lbl">外协人员</div></div>
     <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
   `;
 
@@ -1598,6 +1690,7 @@ function renderStats() {
             ).join("")}
           </div>`;
           
+        const rowColor = r.isOutsourced ? 'color:#8b5cf6' : '';
         return `
         <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
           <table class="data">
@@ -1606,8 +1699,8 @@ function renderStats() {
             </thead>
             <tbody>
               <tr>
-                <td>${esc(r.name)}</td>
-                <td><b>${r.hours}</b></td>
+                <td style="${rowColor}">${esc(r.name)}${r.isOutsourced ? ' (外协)' : ''}</td>
+                <td style="${rowColor}"><b>${r.hours}</b></td>
                 <td>${r.days}</td>
                 <td>${r.projects}</td>
               </tr>
@@ -1630,26 +1723,30 @@ function renderStats() {
     <div class="detail-block" style="padding:0;overflow:hidden">
       <table class="data">
         <thead>
-          <tr><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异(实际−预计)</th><th>施工人员工时</th></tr>
+          <tr><th>日期</th><th>店面</th><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异(实际−预计)</th><th>施工人员工时</th><th style="color:#8b5cf6">外协人数</th></tr>
         </thead>
         <tbody>
           ${projRows.map((r) => {
-            const workerText = r.workerHours.length
-              ? r.workerHours.map((w) => `${esc(w.name)} ${w.hours}h`).join("、")
-              : `<span style="color:var(--muted)">—</span>`;
+            const internalWorkers = r.workerHours.map((w) => `${esc(w.name)} ${w.hours}h`).join("、");
+            const outsourcedWorkers = r.outsourcedWorkerHours.map((w) => `<span style="color:#8b5cf6">${esc(w.name)} ${w.hours}h</span>`).join("、");
+            const workerText = (internalWorkers || "") + (internalWorkers && outsourcedWorkers ? "、" : "") + (outsourcedWorkers || "");
+            const outsourcedCount = r.outsourcedWorkerHours.length;
             return `
             <tr>
+              <td>${r.date ? fmtDate(r.date) : "—"}</td>
+              <td>${esc(r.store || "—")}</td>
               <td>${esc(r.name)}</td>
               <td><span class="badge ${r.status}">${r.status}</span></td>
               <td>${r.est}</td>
               <td>${r.hasActual ? r.act : "—"}</td>
               <td style="color:${r.hasActual ? diffColor(r.diff) : "var(--muted)"};font-weight:600">${r.hasActual ? fmtSignedDiff(r.diff) : "未登记"}</td>
-              <td style="white-space:normal;max-width:280px">${workerText}</td>
+              <td style="white-space:normal;max-width:320px">${workerText || `<span style="color:var(--muted)">—</span>`}</td>
+              <td style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
             </tr>`;
           }).join("")}
         </tbody>
         <tfoot>
-          <tr><td colspan="2">合计（已登记实际）</td><td>${totalEst}</td><td>${totalAct}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td><td></td></tr>
+          <tr><td colspan="4">合计（已登记实际）</td><td>${totalEst}</td><td>${totalAct}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td><td></td><td style="color:#8b5cf6;font-weight:600">${totalOutsourcedWorkers}人</td></tr>
         </tfoot>
       </table>
     </div>`;
@@ -2346,7 +2443,12 @@ function renderTimelineInDetail() {
   const statEstHours = items.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
   const statActHours = items.reduce((sum, p) => sum + (p.actualHours || 0), 0);
   const statInternalHours = items.filter(hasInternalWorker).reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
-  const statOutsourcedHours = items.filter((p) => !hasInternalWorker && hasOutsourced).reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+  const statOutsourcedHours = items.reduce((sum, p) => sum + Math.max(p.outsourcedHours, p.outsourcedHoursFromLogs) || 0, 0);
+  const statOutsourcedWorkers = items.reduce((total, p) => {
+    if (!hasOutsourced(p)) return total;
+    const workers = p.outsourcedWorkers.split(',').map(w => w.trim()).filter(w => w.length > 0);
+    return total + workers.length;
+  }, 0);
   
   const statOvertime = items.filter((p) => {
     const start = projectStart(p);
@@ -2489,7 +2591,8 @@ function renderTimelineInDetail() {
         <div class="tl-stats">
           <span class="tl-stat-item"><span class="tl-stat-label">总预计工时</span><span class="tl-stat-value ${statEstHours > 40 ? 'danger' : statEstHours > 32 ? 'warn' : ''}">${statEstHours}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">施工人员工时</span><span class="tl-stat-value ${statInternalHours > 40 ? 'danger' : statInternalHours > 32 ? 'warn' : ''}">${statInternalHours}h</span></span>
-          <span class="tl-stat-item"><span class="tl-stat-label">外协工时</span><span class="tl-stat-value">${statOutsourcedHours}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">外协工时</span><span class="tl-stat-value outsourced">${statOutsourcedHours}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">外协人员</span><span class="tl-stat-value outsourced">${statOutsourcedWorkers}人</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">实际工时</span><span class="tl-stat-value">${statActHours}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">加班项目</span><span class="tl-stat-value ${statOvertime > 0 ? 'warn' : ''}">${statOvertime}个</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">人员冲突</span><span class="tl-stat-value ${statConflict > 0 ? 'danger' : ''}">${statConflict}个</span></span>
