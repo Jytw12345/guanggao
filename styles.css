@@ -2219,6 +2219,18 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   margin-left: 4px;
 }
 
+.timeline-task-repair-badge {
+  display: inline-block;
+  background: #f59e0b;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 999px;
+  line-height: 1.2;
+  margin-left: 4px;
+}
+
 /* 空状态 */
 .timeline-empty {
   display: flex;

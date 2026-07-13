@@ -1220,7 +1220,10 @@ async function submitRepairOrder(projectId) {
     createdAt: new Date().toISOString(),
   };
   
-  await repo.saveProject({ repairOrder }, projectId);
+  await repo.saveProject({ 
+    repairOrder,
+    appointmentTime: new Date(time).toISOString()
+  }, projectId);
   await repo.loadAll();
   modal.close();
   openProjectDetail(projectId);
@@ -2448,10 +2451,7 @@ function projectsOnDate(ds) {
   return cache.projects
     .filter((p) => { 
       const s = projectStart(p); 
-      const repairDate = p.repairOrder && p.repairOrder.appointmentTime 
-        ? dateKey(new Date(p.repairOrder.appointmentTime)) 
-        : null;
-      return (s && dateKey(s) === ds) || (repairDate === ds);
+      return s && dateKey(s) === ds;
     })
     .sort((a, b) => projectStart(a) - projectStart(b));
 }
@@ -2500,7 +2500,7 @@ function renderCalendar() {
     const isToday = ds === todayKey;
     const isSelected = ds === calSelectedDate;
     const evHtml = items.slice(0, 3).map((p) => {
-      const isRepair = p.repairOrder && p.repairOrder.status === "待维修" && dateKey(new Date(p.repairOrder.appointmentTime)) === ds;
+      const isRepair = p.repairOrder && p.repairOrder.status === "待维修";
       const dotClass = isRepair ? "repair" : (STATUS_DOT[p.status] || "");
       const prefix = isRepair ? "🔧" : "";
       return `<div class="cal-ev"><span class="dot ${dotClass}"></span>${prefix}${esc(p.name)}</div>`;
@@ -2841,6 +2841,7 @@ function renderTimelineInDetail() {
             <span class="timeline-task-name">${esc(p.name)}</span>
             <div class="timeline-task-badges">
               <span class="timeline-task-status">${p.status}</span>
+              ${p.repairOrder && p.repairOrder.status === "待维修" ? `<span class="timeline-task-repair-badge">🔧 维修</span>` : ""}
               ${isOverdue ? `<span class="timeline-task-overdue-badge">🔴 超期</span>` : ""}
               ${hasOutsourced(p) ? `<span class="timeline-task-outsourced-badge">🤝 外协</span>` : ""}
               ${p.timeModified ? `<span class="timeline-task-modified-badge">✏️ 已改点</span>` : ""}
