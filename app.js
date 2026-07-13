@@ -16,7 +16,7 @@ const STATUS = {
 };
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -33,6 +33,7 @@ let reloadTimer = null;    // 实时刷新去抖
 const getWorker = (id) => cache.workers.find((w) => w.id === id);
 const getProject = (id) => cache.projects.find((p) => p.id === id);
 const getStore = (id) => cache.stores.find((s) => s.id === id);
+const getLeaveRecord = (id) => cache.leaveRecords.find((l) => l.id === id);
 const storeName = (id) => (getStore(id) || {}).name || "—";
 
 /* ---------- 权限判断（前端界面控制，服务端另有 RLS 强制） ---------- */
@@ -76,7 +77,7 @@ const DEFAULT_ROLE_PERMS = {
   store_manager: {
     project_create: true, project_edit: true, project_delete: true,
     assign_worker: false, construction: false, view_stats: false,
-    view_store_stats: false, manage_stores: false, manage_workers: false,
+    view_store_stats: false, manage_stores: false, manage_workers: true,
     review_project: true,
   },
   worker: {
@@ -383,12 +384,13 @@ const repo = {
   /* ---- 载入全部数据到 cache ---- */
   async loadAll() {
     if (MODE === "cloud") {
-      const [wRes, pRes, lRes, sRes, rpRes] = await Promise.all([
+      const [wRes, pRes, lRes, sRes, rpRes, lrRes] = await Promise.all([
         sb.from("workers").select("*"),
         sb.from("projects").select("*"),
         sb.from("work_logs").select("*"),
         sb.from("stores").select("*"),
         sb.from("role_permissions").select("*"),
+        sb.from("leave_records").select("*"),
       ]);
       if (wRes.error || pRes.error || lRes.error || sRes.error) {
         console.error(wRes.error || pRes.error || lRes.error || sRes.error);
@@ -417,6 +419,12 @@ const repo = {
         }, 0);
         return p;
       });
+      cache.leaveRecords = (lrRes.data || []).map((r) => ({
+        id: r.id, workerId: r.worker_id, workerName: r.worker_name,
+        startDate: r.start_date, startType: r.start_type || "all", startTime: r.start_time,
+        endDate: r.end_date, endType: r.end_type || "all", endTime: r.end_time,
+        reason: r.reason, status: r.status, createdAt: r.created_at,
+      }));
     } else {
       loadLocal();
     }
@@ -591,6 +599,33 @@ const repo = {
       saveLocal();
     }
   },
+
+  /* ---- 请假记录 ---- */
+  async saveLeaveRecord(leave, id) {
+    if (MODE === "cloud") {
+      const row = {
+        id: id || uid(), worker_id: leave.workerId, worker_name: leave.workerName,
+        start_date: leave.startDate, start_type: leave.startType || "all", start_time: leave.startTime || null,
+        end_date: leave.endDate, end_type: leave.endType || "all", end_time: leave.endTime || null,
+        reason: leave.reason || null, status: leave.status || "approved",
+      };
+      const { error } = await sb.from("leave_records").upsert(row);
+      if (error) return fail(error);
+    } else {
+      if (id) Object.assign(getLeaveRecord(id), leave);
+      else cache.leaveRecords.push({ id: uid(), ...leave });
+      saveLocal();
+    }
+  },
+  async deleteLeaveRecord(id) {
+    if (MODE === "cloud") {
+      const { error } = await sb.from("leave_records").delete().eq("id", id);
+      if (error) return fail(error);
+    } else {
+      cache.leaveRecords = cache.leaveRecords.filter((l) => l.id !== id);
+      saveLocal();
+    }
+  },
 };
 
 function fail(error) {
@@ -614,6 +649,7 @@ function loadLocal() {
         return p;
       });
       cache.stores = data.stores || [];
+      cache.leaveRecords = data.leaveRecords || [];
     }
   } catch (e) {
     console.error("读取本地数据失败", e);
@@ -629,7 +665,7 @@ function loadLocal() {
 }
 
 function saveLocal() {
-  localStorage.setItem(STORE_KEY, JSON.stringify({ workers: cache.workers, projects: cache.projects, stores: cache.stores }));
+  localStorage.setItem(STORE_KEY, JSON.stringify({ workers: cache.workers, projects: cache.projects, stores: cache.stores, leaveRecords: cache.leaveRecords }));
 }
 
 /* ============================================================
@@ -643,6 +679,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "work_logs" }, scheduleReload)
     .on("postgres_changes", { event: "*", schema: "public", table: "stores" }, scheduleReload)
     .on("postgres_changes", { event: "*", schema: "public", table: "role_permissions" }, scheduleReload)
+    .on("postgres_changes", { event: "*", schema: "public", table: "leave_records" }, scheduleReload)
     .subscribe((status) => {
       if (status === "SUBSCRIBED") setSyncStatus("online", "● 实时同步中");
       else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setSyncStatus("offline", "● 同步连接异常");
@@ -722,11 +759,36 @@ function renderWorkers() {
           </div>
           <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
           <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
+          ${(() => {
+            const today = fmtDate(new Date());
+            const currentLeave = isWorkerOnLeave(w.id, today);
+            if (currentLeave) {
+              return `<div class="card-row" style="color:#ef4444"><span>🏥 当前请假</span><b>${formatLeaveTime(currentLeave)}${currentLeave.reason ? " · " + esc(currentLeave.reason) : ""}</b></div>`;
+            }
+            return "";
+          })()}
           <div class="card-actions">
             <button class="btn small" onclick="editWorker('${w.id}')">编辑</button>
             <button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>
             <button class="btn small" onclick="renderWorkerSchedule('${today}', '${w.id}')">查看安排</button>
+            <button class="btn small" onclick="openLeaveForm('${w.id}')" style="background:#ef4444;color:#fff">请假</button>
           </div>
+          ${(() => {
+            const leaveRecords = getWorkerLeaveRecords(w.id);
+            if (leaveRecords.length === 0) return "";
+            return `
+              <div style="padding:12px;border-top:1px solid var(--border);background:#fef2f2">
+                <div style="font-weight:600;color:#dc2626;margin-bottom:8px">🏥 请假记录</div>
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  ${leaveRecords.map((lr) => `
+                    <div style="font-size:13px;display:flex;justify-content:space-between;align-items:center">
+                      <span>${formatLeaveTime(lr)}${lr.reason ? ` · ${esc(lr.reason)}` : ""}</span>
+                      <button class="btn small danger" onclick="deleteLeaveRecord('${lr.id}')" style="padding:2px 6px;font-size:12px">删除</button>
+                    </div>
+                  `).join("")}
+                </div>
+              </div>`;
+          })()}
         </div>`;
     }).join("")}
     </div>`;
@@ -780,11 +842,36 @@ function renderWorkersWithDate(dateStr) {
           </div>
           <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
           <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
+          ${(() => {
+            const today = fmtDate(new Date());
+            const currentLeave = isWorkerOnLeave(w.id, today);
+            if (currentLeave) {
+              return `<div class="card-row" style="color:#ef4444"><span>🏥 当前请假</span><b>${formatLeaveTime(currentLeave)}${currentLeave.reason ? " · " + esc(currentLeave.reason) : ""}</b></div>`;
+            }
+            return "";
+          })()}
           <div class="card-actions">
             <button class="btn small" onclick="editWorker('${w.id}')">编辑</button>
             <button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>
             <button class="btn small" onclick="renderWorkerSchedule('${dateStr}', '${w.id}')">查看安排</button>
+            <button class="btn small" onclick="openLeaveForm('${w.id}')" style="background:#ef4444;color:#fff">请假</button>
           </div>
+          ${(() => {
+            const leaveRecords = getWorkerLeaveRecords(w.id);
+            if (leaveRecords.length === 0) return "";
+            return `
+              <div style="padding:12px;border-top:1px solid var(--border);background:#fef2f2">
+                <div style="font-weight:600;color:#dc2626;margin-bottom:8px">🏥 请假记录</div>
+                <div style="display:flex;flex-direction:column;gap:4px">
+                  ${leaveRecords.map((lr) => `
+                    <div style="font-size:13px;display:flex;justify-content:space-between;align-items:center">
+                      <span>${formatLeaveTime(lr)}${lr.reason ? ` · ${esc(lr.reason)}` : ""}</span>
+                      <button class="btn small danger" onclick="deleteLeaveRecord('${lr.id}')" style="padding:2px 6px;font-size:12px">删除</button>
+                    </div>
+                  `).join("")}
+                </div>
+              </div>`;
+          })()}
         </div>`;
     }).join("")}
     </div>`;
@@ -979,6 +1066,126 @@ async function deleteWorker(id) {
   await repo.loadAll();
   renderAll();
   toast("已删除");
+}
+
+function openLeaveForm(workerId) {
+  const w = getWorker(workerId);
+  if (!w) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const form = `
+    <div class="repair-form">
+      <div class="form-row">
+        <label>施工人员</label>
+        <div class="input" style="background:#f3f4f6;cursor:not-allowed;">${esc(w.name)}</div>
+        <input type="hidden" id="leaveWorkerId" value="${esc(workerId)}" />
+        <input type="hidden" id="leaveWorkerName" value="${esc(w.name)}" />
+      </div>
+      <div class="form-row">
+        <label>请假开始日期 *</label>
+        <input class="input" type="date" id="leaveStartDate" value="${today}" min="${today}" onchange="updateLeaveEndDateMin()" />
+      </div>
+      <div class="form-row">
+        <label>开始时段 *</label>
+        <select class="input" id="leaveStartType">
+          <option value="all">全天</option>
+          <option value="morning">上午（08:00-12:00）</option>
+          <option value="afternoon">下午（13:00-18:00）</option>
+          <option value="custom">自定义时间</option>
+        </select>
+      </div>
+      <div class="form-row" id="leaveStartTimeRow" style="display:none;">
+        <label>开始时间</label>
+        <input class="input" type="time" id="leaveStartTime" value="08:00" />
+      </div>
+      <div class="form-row">
+        <label>请假结束日期 *</label>
+        <input class="input" type="date" id="leaveEndDate" value="${tomorrow}" min="${today}" />
+      </div>
+      <div class="form-row">
+        <label>结束时段 *</label>
+        <select class="input" id="leaveEndType">
+          <option value="all">全天</option>
+          <option value="morning">上午（08:00-12:00）</option>
+          <option value="afternoon">下午（13:00-18:00）</option>
+          <option value="custom">自定义时间</option>
+        </select>
+      </div>
+      <div class="form-row" id="leaveEndTimeRow" style="display:none;">
+        <label>结束时间</label>
+        <input class="input" type="time" id="leaveEndTime" value="18:00" />
+      </div>
+      <div class="form-row">
+        <label>请假原因</label>
+        <textarea class="input" id="leaveReason" placeholder="请填写请假原因"></textarea>
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="modal.close()">取消</button>
+        <button class="btn primary" onclick="submitLeaveForm()">提交请假</button>
+      </div>
+    </div>`;
+  modal.open("📅 请假申请", form);
+  document.getElementById("leaveStartType").addEventListener("change", function() {
+    document.getElementById("leaveStartTimeRow").style.display = this.value === "custom" ? "block" : "none";
+  });
+  document.getElementById("leaveEndType").addEventListener("change", function() {
+    document.getElementById("leaveEndTimeRow").style.display = this.value === "custom" ? "block" : "none";
+  });
+}
+
+function updateLeaveEndDateMin() {
+  const startDate = document.getElementById("leaveStartDate").value;
+  const endDateEl = document.getElementById("leaveEndDate");
+  if (startDate && endDateEl) {
+    endDateEl.min = startDate;
+  }
+}
+
+async function submitLeaveForm() {
+  const workerId = document.getElementById("leaveWorkerId").value;
+  const workerName = document.getElementById("leaveWorkerName").value;
+  const startDate = document.getElementById("leaveStartDate").value;
+  const startType = document.getElementById("leaveStartType").value;
+  const startTime = startType === "custom" ? document.getElementById("leaveStartTime").value : null;
+  const endDate = document.getElementById("leaveEndDate").value;
+  const endType = document.getElementById("leaveEndType").value;
+  const endTime = endType === "custom" ? document.getElementById("leaveEndTime").value : null;
+  const reason = document.getElementById("leaveReason").value.trim();
+  
+  if (!startDate) { toast("请选择开始日期"); return; }
+  if (!endDate) { toast("请选择结束日期"); return; }
+  
+  const startDt = new Date(startDate);
+  const endDt = new Date(endDate);
+  if (endDt < startDt) { toast("结束日期不能早于开始日期"); return; }
+  
+  if (startDt.getTime() === endDt.getTime()) {
+    if (startType === "afternoon" && endType === "morning") {
+      toast("同一天内，结束时段不能早于开始时段");
+      return;
+    }
+    if (startType === "custom" && endType === "custom" && endTime <= startTime) {
+      toast("结束时间不能早于开始时间");
+      return;
+    }
+  }
+  
+  await repo.saveLeaveRecord({
+    workerId, workerName, startDate, startType, startTime,
+    endDate, endType, endTime, reason, status: "approved",
+  });
+  await repo.loadAll();
+  modal.close();
+  renderAll();
+  toast("请假记录已保存");
+}
+
+async function deleteLeaveRecord(id) {
+  if (!confirm("确定删除该请假记录？")) return;
+  await repo.deleteLeaveRecord(id);
+  await repo.loadAll();
+  renderAll();
+  toast("请假记录已删除");
 }
 
 /* ============================================================
@@ -1363,9 +1570,20 @@ function renderConstruction() {
         return `<span class="assign-chip ${conflicts.length ? "conflict" : ""}"${conflictAttr}>${conflicts.length ? "⚠ " : ""}${esc(nm)}${canAssign ? `<button class="chip-x" onclick="unassignWorker('${p.id}','${wid}')" title="移除">✕</button>` : ""}</span>`;
       }).join("")
     : `<span class="hint" style="margin:0">尚未分配安装人员</span>`;
+  const projectStartDate = projectStart(p);
+  const projectEndDate = projectEnd(p);
+  const dateStr = projectStartDate ? `${projectStartDate.getFullYear()}-${String(projectStartDate.getMonth() + 1).padStart(2, "0")}-${String(projectStartDate.getDate()).padStart(2, "0")}` : null;
+  const pad = (n) => String(n).padStart(2, "0");
+  const projStartTime = projectStartDate ? `${pad(projectStartDate.getHours())}:${pad(projectStartDate.getMinutes())}` : null;
+  const projEndTime = projectEndDate ? `${pad(projectEndDate.getHours())}:${pad(projectEndDate.getMinutes())}` : null;
   const assignSelectOpts = cache.workers
     .filter((w) => !assigned.includes(w.id))
-    .map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
+    .map((w) => {
+      const leaveRecord = dateStr && isWorkerOnLeave(w.id, dateStr);
+      const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
+      const disabledAttr = hasLeaveConflict ? ` disabled` : "";
+      return `<option value="${w.id}"${disabledAttr}>${esc(w.name)}${hasLeaveConflict ? " 🏥 请假中" : ""}</option>`;
+    }).join("");
   const assignBlock = `
     <div class="detail-block">
       <h3>🧑‍🔧 安装人员分配</h3>
@@ -1440,7 +1658,7 @@ function renderConstruction() {
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn" onclick="unreviewProject('${p.id}')" style="color:var(--warn)">↩ 反审核</button>
       </div>` : ""}
-      ${(reviewed || p.status === "已验收") && isManager() ? `
+      ${(reviewed || p.status === "已验收") && (isManager() || isStoreManager()) ? `
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn" onclick="openRepairOrderForm('${p.id}')" style="background:#f59e0b;color:#fff">🔧 发起维修单</button>
       </div>` : ""}
@@ -1553,6 +1771,65 @@ function isOutsourced(p) {
   return !hasInternal && hasOutsourced;
 }
 
+/* 检查工人在指定日期是否处于请假状态 */
+function isWorkerOnLeave(workerId, dateStr) {
+  if (!workerId || !dateStr) return null;
+  return cache.leaveRecords.find((l) => {
+    if (l.workerId !== workerId) return false;
+    if (l.status !== "approved") return false;
+    return dateStr >= l.startDate && dateStr <= l.endDate;
+  });
+}
+
+/* 判断请假时段与项目时段是否冲突 */
+function isLeaveConflict(leaveRecord, projectStartTime, projectEndTime) {
+  if (!leaveRecord) return false;
+  
+  const typeTimes = {
+    all: { start: "00:00", end: "23:59" },
+    morning: { start: "08:00", end: "12:00" },
+    afternoon: { start: "13:00", end: "18:00" },
+  };
+  
+  const leaveStart = leaveRecord.startType === "custom" && leaveRecord.startTime
+    ? leaveRecord.startTime
+    : (typeTimes[leaveRecord.startType] || typeTimes.all).start;
+  
+  const leaveEnd = leaveRecord.endType === "custom" && leaveRecord.endTime
+    ? leaveRecord.endTime
+    : (typeTimes[leaveRecord.endType] || typeTimes.all).end;
+  
+  const projStart = projectStartTime || "08:00";
+  const projEnd = projectEndTime || "18:00";
+  
+  return !(leaveEnd <= projStart || leaveStart >= projEnd);
+}
+
+/* 获取工人的所有请假记录 */
+function getWorkerLeaveRecords(workerId) {
+  return cache.leaveRecords.filter((l) => l.workerId === workerId && l.status === "approved");
+}
+
+/* 格式化请假时间显示 */
+function formatLeaveTime(lr) {
+  const typeLabels = { all: "全天", morning: "上午", afternoon: "下午", custom: "" };
+  let startPart = lr.startDate;
+  if (lr.startType && lr.startType !== "all") {
+    startPart += ` ${typeLabels[lr.startType] || ""}`;
+    if (lr.startType === "custom" && lr.startTime) {
+      startPart += ` ${lr.startTime}`;
+    }
+  }
+  let endPart = lr.endDate;
+  if (lr.endType && lr.endType !== "all") {
+    endPart += ` ${typeLabels[lr.endType] || ""}`;
+    if (lr.endType === "custom" && lr.endTime) {
+      endPart += ` ${lr.endTime}`;
+    }
+  }
+  return `${startPart} ~ ${endPart}`;
+}
+
 /* 获取某安装人员在指定日期已分配的项目列表 */
 function getWorkerAssignmentsOnDate(workerId, dateStr) {
   if (!workerId || !dateStr) return [];
@@ -1638,6 +1915,23 @@ async function assignWorker(pid) {
   const p = getProject(pid);
   const cur = p.assignedWorkerIds || [];
   if (cur.includes(wid)) { toast("该人员已分配"); return; }
+  
+  const s = projectStart(p);
+  const e = projectEnd(p);
+  const dateStr = s ? `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, "0")}-${String(s.getDate()).padStart(2, "0")}` : null;
+  const leaveRecord = dateStr ? isWorkerOnLeave(wid, dateStr) : null;
+  
+  const pad = (n) => String(n).padStart(2, "0");
+  const projStartTime = s ? `${pad(s.getHours())}:${pad(s.getMinutes())}` : null;
+  const projEndTime = e ? `${pad(e.getHours())}:${pad(e.getMinutes())}` : null;
+  const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
+  
+  if (hasLeaveConflict) {
+    const w = getWorker(wid);
+    toast(`${w ? w.name : "该人员"} 在此时间段正在请假，无法分配！\n请假时段：${formatLeaveTime(leaveRecord)}`);
+    return;
+  }
+  
   const conflicts = assignConflicts(p, wid);
   if (conflicts.length) {
     const w = getWorker(wid);
@@ -1836,7 +2130,7 @@ function collectStats() {
       if (workerFilter && l.workerId !== workerFilter) return;
       const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
       if (!rows[l.workerId]) {
-        rows[l.workerId] = { name: l.workerName, hours: 0, days: new Set(), projects: new Set(), daily: {}, isOutsourced };
+        rows[l.workerId] = { name: l.workerName, hours: 0, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced };
       }
       rows[l.workerId].hours += Number(l.hours) || 0;
       rows[l.workerId].days.add(fmtDate(l.date));
@@ -1848,12 +2142,34 @@ function collectStats() {
       rows[l.workerId].daily[dayKey] += Number(l.hours) || 0;
     });
   });
+  
+  cache.leaveRecords.forEach((l) => {
+    if (l.status !== "approved") return;
+    if (workerFilter && l.workerId !== workerFilter) return;
+    if (!rows[l.workerId]) {
+      const w = getWorker(l.workerId);
+      rows[l.workerId] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced: false };
+    }
+    const start = new Date(l.startDate);
+    const end = new Date(l.endDate);
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateKey = fmtDate(d);
+      if (month && monthKey(dateKey) !== month) continue;
+      rows[l.workerId].leaveDays.add(dateKey);
+    }
+    if (!month || (monthKey(l.startDate) === month || monthKey(l.endDate) === month)) {
+      rows[l.workerId].leaveRecords.push(l);
+    }
+  });
+  
   return Object.values(rows).map((r) => ({
     name: r.name,
     hours: r.hours,
     days: r.days.size,
     projects: r.projects.size,
     daily: r.daily,
+    leaveDays: r.leaveDays.size,
+    leaveRecords: r.leaveRecords,
     isOutsourced: r.isOutsourced,
   })).sort((a, b) => b.hours - a.hours);
 }
@@ -1959,9 +2275,11 @@ function renderStats() {
           for (let day = 1; day <= daysInMonth; day++) {
             const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
             const hours = r.daily[dateKey];
-            calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""}">
+            const isLeaveDay = r.leaveRecords.some((lr) => dateKey >= lr.startDate && dateKey <= lr.endDate);
+            calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""}">
               <div class="day-num">${day}</div>
               ${hours ? `<div class="day-hours">${hours}h</div>` : ""}
+              ${isLeaveDay ? `<div class="day-leave">🏥</div>` : ""}
             </div>`;
           }
           
@@ -1990,17 +2308,30 @@ function renderStats() {
         <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
           <table class="data">
             <thead>
-              <tr><th>施工人员</th><th>安装工时(小时)</th><th>施工天数</th><th>参与项目数</th></tr>
+              <tr><th>施工人员</th><th>安装工时(小时)</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>
             </thead>
             <tbody>
               <tr>
                 <td style="${rowColor}">${esc(r.name)}${r.isOutsourced ? ' (外协)' : ''}</td>
                 <td style="${rowColor}"><b>${r.hours}</b></td>
                 <td>${r.days}</td>
+                <td>${r.leaveDays > 0 ? `<span style="color:#ef4444;font-weight:600">${r.leaveDays}天</span>` : "0"}</td>
                 <td>${r.projects}</td>
               </tr>
             </tbody>
           </table>
+          ${r.leaveRecords.length > 0 ? `
+            <div style="padding:12px;border-top:1px solid var(--border);background:#fef2f2">
+              <div style="font-weight:600;color:#dc2626;margin-bottom:8px">🏥 本月请假记录</div>
+              <div style="display:flex;flex-direction:column;gap:4px">
+                ${r.leaveRecords.map((lr) => `
+                  <div style="font-size:13px">
+                    <span>${formatLeaveTime(lr)}</span>
+                    ${lr.reason ? `<span style="margin-left:8px;color:var(--muted)">· ${esc(lr.reason)}</span>` : ""}
+                  </div>
+                `).join("")}
+              </div>
+            </div>` : ""}
           ${dailyTable}
         </div>`;
       }).join("") + `
@@ -2059,17 +2390,30 @@ function exportStats() {
   if (rows.length === 0 && projRows.length === 0) { toast("暂无数据可导出"); return; }
   const month = document.getElementById("statsMonth").value || "全部";
 
-  const workerHeader = ["施工人员", "安装工时(小时)", "施工天数", "参与项目数"];
+  const workerHeader = ["施工人员", "安装工时(小时)", "施工天数", "请假天数", "参与项目数"];
   const workerLines = ["【人员安装工时】", workerHeader.join(",")].concat(
-    rows.map((r) => [r.name, r.hours, r.days, r.projects].join(",")));
+    rows.map((r) => [r.name, r.hours, r.days, r.leaveDays || 0, r.projects].join(",")));
 
-  const dailyHeader = ["施工人员", "日期", "工时(小时)"];
+  const dailyHeader = ["施工人员", "日期", "工时(小时)", "是否请假"];
   const dailyLines = ["\n【每日工时明细】", dailyHeader.join(",")].concat(
     rows.flatMap((r) => 
-      Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, hours]) => 
-        [r.name, date, hours].join(",")
-      )
+      Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, hours]) => {
+        const isLeave = r.leaveRecords && r.leaveRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
+        return [r.name, date, hours, isLeave ? "是" : ""].join(",");
+      })
     )
+  );
+
+  const leaveHeader = ["施工人员", "请假时段", "请假原因"];
+  const leaveLines = ["\n【请假记录】", leaveHeader.join(",")].concat(
+    rows.flatMap((r) => {
+      if (!r.leaveRecords || r.leaveRecords.length === 0) return [];
+      return r.leaveRecords.map((lr) => [
+        r.name,
+        `"${formatLeaveTime(lr).replace(/"/g, '""')}"`,
+        `"${(lr.reason || "").replace(/"/g, '""')}"`,
+      ].join(","));
+    })
   );
 
   const recorded = projRows.filter((r) => r.hasActual);
@@ -2092,7 +2436,7 @@ function exportStats() {
     })
   ).concat(["合计(已登记实际),,," + totalEst + "," + totalAct + "," + fmtSignedDiff(totalAct - totalEst) + ","]);
 
-  const csv = "\ufeff" + workerLines.join("\n") + dailyLines.join("\n") + projLines.join("\n");
+  const csv = "\ufeff" + workerLines.join("\n") + dailyLines.join("\n") + leaveLines.join("\n") + projLines.join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -3008,9 +3352,18 @@ function openTimelineActionMenu(taskEl, projectId) {
     : `<span class="tl-menu-assign-empty">未分配人员</span>`;
   
   const availableWorkers = cache.workers.filter((w) => !assigned.includes(w.id));
+  const dateStr = start ? `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}` : null;
+  const projStartTime = start ? `${pad(start.getHours())}:${pad(start.getMinutes())}` : null;
+  const projEndTime = end ? `${pad(end.getHours())}:${pad(end.getMinutes())}` : null;
   const assignOpts = availableWorkers.map((w) => {
     const conflicts = assignConflicts(p, w.id);
-    return `<option value="${w.id}" ${conflicts.length ? 'data-conflict="1"' : ''}>${esc(w.name)}${conflicts.length ? ' ⚠冲突' : ''}</option>`;
+    const leaveRecord = dateStr && isWorkerOnLeave(w.id, dateStr);
+    const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
+    const disabledAttr = hasLeaveConflict ? ' disabled' : '';
+    let label = esc(w.name);
+    if (hasLeaveConflict) label += ' 🏥请假';
+    else if (conflicts.length) label += ' ⚠冲突';
+    return `<option value="${w.id}"${disabledAttr}>${label}</option>`;
   }).join("");
 
   menu.innerHTML = `
@@ -3086,6 +3439,24 @@ async function timelineQuickAssignWorker(pid, wid) {
     document.getElementById("tlMenuAssignSel").value = "";
     return;
   }
+  
+  const s = projectStart(p);
+  const e = projectEnd(p);
+  const dateStr = s ? `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, "0")}-${String(s.getDate()).padStart(2, "0")}` : null;
+  const leaveRecord = dateStr ? isWorkerOnLeave(wid, dateStr) : null;
+  
+  const pad = (n) => String(n).padStart(2, "0");
+  const projStartTime = s ? `${pad(s.getHours())}:${pad(s.getMinutes())}` : null;
+  const projEndTime = e ? `${pad(e.getHours())}:${pad(e.getMinutes())}` : null;
+  const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
+  
+  if (hasLeaveConflict) {
+    const w = getWorker(wid);
+    toast(`${w ? w.name : "该人员"} 在此时间段正在请假，无法分配！`);
+    document.getElementById("tlMenuAssignSel").value = "";
+    return;
+  }
+  
   const conflicts = assignConflicts(p, wid);
   if (conflicts.length) {
     const w = getWorker(wid);

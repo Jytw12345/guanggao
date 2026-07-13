@@ -1493,6 +1493,18 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   font-weight: 600;
 }
 
+.worker-cal-cell.leave-day {
+  background: #fee2e2;
+}
+
+.worker-cal-cell.leave-day .day-num {
+  color: #dc2626;
+}
+
+.worker-cal-cell .day-leave {
+  font-size: 10px;
+}
+
 .daily-hours-list {
   margin-top: 12px;
   padding-top: 12px;
