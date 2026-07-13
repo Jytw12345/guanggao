@@ -291,7 +291,7 @@ async function requestNotificationPermission() {
 }
 
 function showPushNotification(title, body, icon = "icons/icon-192.png", data = {}) {
-  if (!notificationPermissionGranted || !("Notification" in window)) return;
+  if (!("Notification" in window)) return;
 
   const key = title + body;
   const now = Date.now();
@@ -299,6 +299,11 @@ function showPushNotification(title, body, icon = "icons/icon-192.png", data = {
     return;
   }
   lastNotificationTime[key] = now;
+
+  if (!notificationPermissionGranted) {
+    requestNotificationPermission();
+    return;
+  }
 
   try {
     const notification = new Notification(title, {
@@ -417,6 +422,7 @@ const mapProject = (r) => ({
   createdAt: r.created_at,
   workLogs: [],
   timeModified: modifiedProjectIds.has(r.id),
+  repairOrder: r.repair_order ? (typeof r.repair_order === "string" ? JSON.parse(r.repair_order) : r.repair_order) : null,
 });
 
 const projectToRow = (p) => ({
@@ -439,6 +445,7 @@ const projectToRow = (p) => ({
   started_at: p.started_at || null,
   finished_at: p.finished_at || null,
   updated_at: new Date().toISOString(),
+  repair_order: p.repairOrder ? JSON.stringify(p.repairOrder) : null,
 });
 
 const mapLog = (r) => ({
@@ -991,12 +998,17 @@ function renderProjects() {
     const canReview = perm.reviewProject(p);
     const reviewed = isReviewed(p);
     const canUnreview = reviewed && isManager();
+    
+    const end = new Date(p.endTime || p.startTime);
+    const isOverdue = p.status === "预约中" && !p.started_at && new Date() > end;
+    
     return `
-      <div class="card">
+      <div class="card ${isOverdue ? "card-overdue" : ""}">
         <div class="card-title">
           <h3>${esc(p.name)}</h3>
           <div style="display: flex; gap: 4px;">
             <span class="badge ${p.status}">${p.status}</span>
+            ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
             ${p.timeModified ? `<span class="badge modified">✏️ 已改点</span>` : ""}
           </div>
         </div>
@@ -1141,10 +1153,98 @@ async function saveProject(id) {
   renderAll();
   toast("已保存");
   
-  const p = getProject(payload.id || (await repo.getLastProjectId()));
-  if (p) {
-    sendNotificationForProjectChange(id ? "update" : "new", p);
+  if (id) {
+    const p = getProject(id);
+    if (p) {
+      sendNotificationForProjectChange("update", p);
+    }
+  } else {
+    const newProject = cache.projects[cache.projects.length - 1];
+    if (newProject) {
+      sendNotificationForProjectChange("new", newProject);
+    }
   }
+}
+
+function openRepairOrderForm(projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+  
+  const now = new Date();
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const tomorrowStr = tomorrow.toISOString().slice(0, 16);
+  
+  const form = `
+    <div class="repair-form">
+      <div class="form-row">
+        <label>维修项目（必填）</label>
+        <textarea class="input" id="repairItems" placeholder="请填写需要维修的项目，多个项目用换行分隔"></textarea>
+        <small class="hint" style="margin:2px 0 0">例如：灯箱更换、线路检修、支架加固等</small>
+      </div>
+      <div class="form-row">
+        <label>维修原因</label>
+        <textarea class="input" id="repairReason" placeholder="请填写维修原因"></textarea>
+      </div>
+      <div class="form-row">
+        <label>预约维修时间</label>
+        <input class="input" type="datetime-local" id="repairTime" value="${tomorrowStr}" min="${now.toISOString().slice(0, 16)}" />
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="modal.close()">取消</button>
+        <button class="btn primary" onclick="submitRepairOrder('${projectId}')">提交维修单</button>
+      </div>
+    </div>`;
+  
+  modal.open("🔧 发起维修单", form);
+}
+
+async function submitRepairOrder(projectId) {
+  const items = document.getElementById("repairItems").value.trim();
+  const reason = document.getElementById("repairReason").value.trim();
+  const time = document.getElementById("repairTime").value;
+  
+  if (!items) {
+    toast("请填写维修项目");
+    return;
+  }
+  if (!time) {
+    toast("请选择预约维修时间");
+    return;
+  }
+  
+  const repairOrder = {
+    items,
+    reason,
+    appointmentTime: new Date(time).toISOString(),
+    status: "待维修",
+    createdAt: new Date().toISOString(),
+  };
+  
+  await repo.saveProject({ repairOrder }, projectId);
+  await repo.loadAll();
+  modal.close();
+  openProjectDetail(projectId);
+  toast("维修单已提交");
+  
+  const p = getProject(projectId);
+  if (p) {
+    showNotificationAlert(`🔧 维修单已发起：${p.name}`);
+  }
+}
+
+async function completeRepair(projectId) {
+  if (!confirm("确认维修已完成？")) return;
+  
+  await repo.saveProject({ 
+    repairOrder: { 
+      ...getProject(projectId).repairOrder, 
+      status: "已完成",
+      completedAt: new Date().toISOString()
+    } 
+  }, projectId);
+  await repo.loadAll();
+  openProjectDetail(projectId);
+  toast("维修已完成");
 }
 
 async function deleteProject(id) {
@@ -1254,9 +1354,12 @@ function renderConstruction() {
       </div>` : ""}
     </div>`;
 
+  const end = new Date(p.endTime || p.startTime);
+  const isOverdue = p.status === "预约中" && !p.started_at && new Date() > end;
+  
   box.innerHTML = `
     <div class="detail-block">
-      <h3>📋 项目信息 <span class="badge ${p.status}">${p.status}</span></h3>
+      <h3>📋 项目信息 <span class="badge ${p.status}">${p.status}</span>${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}</h3>
       ${reviewed ? `<p class="hint" style="margin:0 0 10px;color:var(--warn)">⚠️ 该项目已审核，信息不可更改。</p>` : ""}
       ${canEdit || reviewed ? "" : `<p class="hint" style="margin:0 0 10px">当前角色为只读，施工工时与验收由施工人员/总经理填写。</p>`}
       <div class="info-grid">
@@ -1299,7 +1402,26 @@ function renderConstruction() {
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn" onclick="unreviewProject('${p.id}')" style="color:var(--warn)">↩ 反审核</button>
       </div>` : ""}
+      ${(reviewed || p.status === "已验收") && isManager() ? `
+      <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+        <button class="btn" onclick="openRepairOrderForm('${p.id}')" style="background:#f59e0b;color:#fff">🔧 发起维修单</button>
+      </div>` : ""}
     </div>
+
+    ${p.repairOrder ? `
+    <div class="detail-block" style="border-left:4px solid #f59e0b">
+      <h3>🔧 维修单信息</h3>
+      <div class="info-grid">
+        <div class="info-item"><div class="k">维修项目</div><div class="v" style="color:#f59e0b">${esc(p.repairOrder.items || "—")}</div></div>
+        <div class="info-item"><div class="k">维修原因</div><div class="v">${esc(p.repairOrder.reason || "—")}</div></div>
+        <div class="info-item"><div class="k">预约维修时间</div><div class="v">${p.repairOrder.appointmentTime ? fmtDateTime(p.repairOrder.appointmentTime) : "—"}</div></div>
+        <div class="info-item"><div class="k">维修状态</div><div class="v">${p.repairOrder.status || "待维修"}</div></div>
+      </div>
+      ${isManager() && p.repairOrder.status === "待维修" ? `
+      <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
+        <button class="btn primary" onclick="completeRepair('${p.id}')">✅ 完成维修</button>
+      </div>` : ""}
+    </div>` : ""}
 
     ${assignBlock}
 
@@ -2324,7 +2446,13 @@ function dateKey(d) {
 /* 某天的预约（按开始时间排序） */
 function projectsOnDate(ds) {
   return cache.projects
-    .filter((p) => { const s = projectStart(p); return s && dateKey(s) === ds; })
+    .filter((p) => { 
+      const s = projectStart(p); 
+      const repairDate = p.repairOrder && p.repairOrder.appointmentTime 
+        ? dateKey(new Date(p.repairOrder.appointmentTime)) 
+        : null;
+      return (s && dateKey(s) === ds) || (repairDate === ds);
+    })
     .sort((a, b) => projectStart(a) - projectStart(b));
 }
 
@@ -2371,8 +2499,12 @@ function renderCalendar() {
     const items = projectsOnDate(ds);
     const isToday = ds === todayKey;
     const isSelected = ds === calSelectedDate;
-    const evHtml = items.slice(0, 3).map((p) =>
-      `<div class="cal-ev"><span class="dot ${STATUS_DOT[p.status] || ""}"></span>${esc(p.name)}</div>`).join("");
+    const evHtml = items.slice(0, 3).map((p) => {
+      const isRepair = p.repairOrder && p.repairOrder.status === "待维修" && dateKey(new Date(p.repairOrder.appointmentTime)) === ds;
+      const dotClass = isRepair ? "repair" : (STATUS_DOT[p.status] || "");
+      const prefix = isRepair ? "🔧" : "";
+      return `<div class="cal-ev"><span class="dot ${dotClass}"></span>${prefix}${esc(p.name)}</div>`;
+    }).join("");
     const more = items.length > 3 ? `<div class="cal-more">+${items.length - 3} 更多</div>` : "";
     const countBadge = items.length ? `<span class="cal-count">${items.length}</span>` : "";
     const totalHours = items.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
@@ -2680,6 +2812,9 @@ function renderTimelineInDetail() {
         ? `draggable="true" ondragstart="timelineDragStart(event)" ondragend="timelineDragEnd(event)" onmousedown="timelineDragMouseDown(event)"`
         : `draggable="false"`;
       const lockClass = canDrag ? "" : "timeline-task-locked";
+      
+      const isOverdue = p.status === "预约中" && !p.started_at && new Date() > end;
+      const overdueClass = isOverdue ? "timeline-task-overdue" : "";
 
       const pad = (n) => String(n).padStart(2, "0");
       const timeStr = `${pad(start.getHours())}:${pad(start.getMinutes())} ~ ${pad(end.getHours())}:${pad(end.getMinutes())}`;
@@ -2690,7 +2825,7 @@ function renderTimelineInDetail() {
       workers = workers || "未分配";
 
       return `
-        <div class="timeline-task ${statusClass} ${conflictClass} ${overtimeClass} ${lockClass}"
+        <div class="timeline-task ${statusClass} ${conflictClass} ${overtimeClass} ${lockClass} ${overdueClass}"
              ${dragAttr}
              data-project-id="${p.id}"
              data-start="${start.toISOString()}"
@@ -2706,6 +2841,7 @@ function renderTimelineInDetail() {
             <span class="timeline-task-name">${esc(p.name)}</span>
             <div class="timeline-task-badges">
               <span class="timeline-task-status">${p.status}</span>
+              ${isOverdue ? `<span class="timeline-task-overdue-badge">🔴 超期</span>` : ""}
               ${hasOutsourced(p) ? `<span class="timeline-task-outsourced-badge">🤝 外协</span>` : ""}
               ${p.timeModified ? `<span class="timeline-task-modified-badge">✏️ 已改点</span>` : ""}
               ${isOvertime ? `<span class="timeline-task-overtime-badge">🌙 加班</span>` : ""}
@@ -2781,12 +2917,19 @@ function timelineTaskMouseDown(e) {
 
 /* 点击任务卡片：弹出浮动操作菜单 */
 function timelineTaskClick(e, projectId) {
-  /* 如果是拖拽结束（鼠标移动超过 5px），不触发点击 */
+  if (!timelineMouseDown.x && !timelineMouseDown.y) {
+    openTimelineActionMenu(e.currentTarget, projectId);
+    return;
+  }
+  
   const deltaX = Math.abs(e.clientX - timelineMouseDown.x);
   const deltaY = Math.abs(e.clientY - timelineMouseDown.y);
-  if (deltaX > 5 || deltaY > 5) return;
+  const timeDiff = Date.now() - timelineMouseDown.time;
+  
+  if (deltaX > 10 || deltaY > 10) return;
+  
+  if (timeDiff > 300 && (deltaX > 5 || deltaY > 5)) return;
 
-  /* 如果点击的是浮动菜单内部，不处理 */
   if (e.target.closest(".tl-action-menu")) return;
 
   openTimelineActionMenu(e.currentTarget, projectId);
