@@ -55,6 +55,7 @@ const CAP = {
   VIEW_STORE_STATS: "view_store_stats",
   MANAGE_STORES: "manage_stores",
   MANAGE_WORKERS: "manage_workers",
+  MANAGE_LEAVES: "manage_leaves",
   REVIEW_PROJECT: "review_project",
 };
 
@@ -68,6 +69,7 @@ const CAP_LABEL = {
   view_stats: "查看工时统计",
   view_store_stats: "查看店面统计",
   manage_workers: "管理施工人员名册",
+  manage_leaves: "管理请假记录",
   manage_stores: "管理门店",
   review_project: "审核项目（审核后不可编辑）",
 };
@@ -77,14 +79,14 @@ const DEFAULT_ROLE_PERMS = {
   store_manager: {
     project_create: true, project_edit: true, project_delete: true,
     assign_worker: false, construction: false, view_stats: false,
-    view_store_stats: false, manage_stores: false, manage_workers: true,
-    review_project: true,
+    view_store_stats: false, manage_stores: false, manage_workers: false,
+    manage_leaves: true, review_project: true,
   },
   worker: {
     project_create: false, project_edit: false, project_delete: false,
     assign_worker: true, construction: true, view_stats: false,
     view_store_stats: false, manage_stores: false, manage_workers: false,
-    review_project: false,
+    manage_leaves: true, review_project: false,
   },
 };
 
@@ -109,6 +111,7 @@ const perm = {
   viewStoreStats: () => can(CAP.VIEW_STORE_STATS),
   manageStores: () => can(CAP.MANAGE_STORES),
   manageWorkers: () => can(CAP.MANAGE_WORKERS),
+  manageLeaves: () => can(CAP.MANAGE_LEAVES),
   manageAccounts: () => isManager(),
   reviewProject: (p) => can(CAP.REVIEW_PROJECT) && (isManager() || (p && p.storeId === myStore())),
 };
@@ -519,10 +522,16 @@ const repo = {
       const base = id ? { ...getProject(id), ...project } : { id: uid(), actualHours: 0, ...project };
       const row = projectToRow(base);
       if (!id && currentUser) row.created_by = currentUser.id;
-      let { error } = await sb.from("projects").upsert(row);
+      
+      let { error } = id 
+        ? await sb.from("projects").update(row).eq("id", id)
+        : await sb.from("projects").insert(row);
+        
       if (error && error.message && error.message.includes("worker_count")) {
         delete row.worker_count;
-        ({ error } = await sb.from("projects").upsert(row));
+        error = id 
+          ? (await sb.from("projects").update(row).eq("id", id)).error
+          : (await sb.from("projects").insert(row)).error;
       }
       if (error) return fail(error);
     } else {
@@ -546,6 +555,14 @@ const repo = {
   async patchProject(id, patch) {
     if (MODE === "cloud") {
       const row = { ...patch, updated_at: new Date().toISOString() };
+      for (const [key, value] of Object.entries(row)) {
+        if (key.includes("_")) continue;
+        const snakeKey = key.replace(/([A-Z])/g, "_$1").toLowerCase();
+        if (snakeKey !== key && !(snakeKey in row)) {
+          row[snakeKey] = value;
+          delete row[key];
+        }
+      }
       if (row.repairOrder) {
         row.repair_order = JSON.stringify(row.repairOrder);
         delete row.repairOrder;
@@ -1009,6 +1026,10 @@ function renderWorkerScheduleForWorker(dateStr) {
   const isTomorrow = dateStr === tomorrowStr;
   const isDayAfter = dateStr === dayAfterStr;
   
+  const currentWorker = cache.workers.find((w) => w.name === currentProfile.name) || 
+                        (currentUser ? cache.workers.find((w) => w.id === currentUser.id) : null);
+  const workerId = currentWorker ? currentWorker.id : null;
+
   list.innerHTML = `
     <div id="workerScheduleSection" style="margin-bottom: 16px;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
@@ -1017,6 +1038,7 @@ function renderWorkerScheduleForWorker(dateStr) {
           <button class="btn small ${isToday ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${todayStr}')">今天</button>
           <button class="btn small ${isTomorrow ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${tomorrowStr}')">明天</button>
           <button class="btn small ${isDayAfter ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${dayAfterStr}')">后天</button>
+          ${workerId ? `<button class="btn small" onclick="openLeaveForm('${workerId}')" style="background:#ef4444;color:#fff">🏥 请假</button>` : ""}
         </div>
       </div>
     </div>
@@ -1212,6 +1234,7 @@ async function submitLeaveForm() {
 }
 
 async function deleteLeaveRecord(id) {
+  if (!perm.manageLeaves()) { toast("权限不足"); return; }
   if (!confirm("确定删除该请假记录？")) return;
   await repo.deleteLeaveRecord(id);
   await repo.loadAll();
@@ -1605,10 +1628,10 @@ async function submitRepairOrder(projectId) {
     createdAt: new Date().toISOString(),
   };
   
-  await repo.saveProject({ 
+  await repo.patchProject(projectId, { 
     repairOrder,
     appointmentTime: new Date(time).toISOString()
-  }, projectId);
+  });
   await repo.loadAll();
   modal.close();
   openProjectDetail(projectId);
@@ -1715,14 +1738,17 @@ function renderConstruction() {
     : `<span class="hint" style="margin:0">尚未分配安装人员</span>`;
   const projectStartDate = projectStart(p);
   const projectEndDate = projectEnd(p);
-  const dateStr = projectStartDate ? `${projectStartDate.getFullYear()}-${String(projectStartDate.getMonth() + 1).padStart(2, "0")}-${String(projectStartDate.getDate()).padStart(2, "0")}` : null;
   const pad = (n) => String(n).padStart(2, "0");
-  const projStartTime = projectStartDate ? `${pad(projectStartDate.getHours())}:${pad(projectStartDate.getMinutes())}` : null;
-  const projEndTime = projectEndDate ? `${pad(projectEndDate.getHours())}:${pad(projectEndDate.getMinutes())}` : null;
+  const projStartTime = projectStartDate ? `${pad(projectStartDate.getHours())}:${pad(projectStartDate.getMinutes())}` : "08:00";
+  const projEndTime = projectEndDate ? `${pad(projectEndDate.getHours())}:${pad(projectEndDate.getMinutes())}` : "18:00";
+  
+  const startDateStr = projectStartDate ? `${projectStartDate.getFullYear()}-${String(projectStartDate.getMonth() + 1).padStart(2, "0")}-${String(projectStartDate.getDate()).padStart(2, "0")}` : null;
+  const endDateStr = projectEndDate ? `${projectEndDate.getFullYear()}-${String(projectEndDate.getMonth() + 1).padStart(2, "0")}-${String(projectEndDate.getDate()).padStart(2, "0")}` : startDateStr;
+  
   const assignSelectOpts = cache.workers
     .filter((w) => !assigned.includes(w.id))
     .map((w) => {
-      const leaveRecord = dateStr && isWorkerOnLeave(w.id, dateStr);
+      const leaveRecord = startDateStr ? getProjectLeaveConflict(w.id, startDateStr, endDateStr || startDateStr) : null;
       const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
       const disabledAttr = hasLeaveConflict ? ` disabled` : "";
       return `<option value="${w.id}"${disabledAttr}>${esc(w.name)}${hasLeaveConflict ? " 🏥 请假中" : ""}</option>`;
@@ -1924,6 +1950,22 @@ function isWorkerOnLeave(workerId, dateStr) {
   });
 }
 
+/* 检查工人在项目时间段内是否有请假冲突 */
+function getProjectLeaveConflict(workerId, projectStartDate, projectEndDate) {
+  if (!workerId || !projectStartDate || !projectEndDate) return null;
+  
+  const start = new Date(projectStartDate);
+  const end = new Date(projectEndDate);
+  
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const dateStr = fmtDate(d);
+    const leaveRecord = isWorkerOnLeave(workerId, dateStr);
+    if (leaveRecord) return leaveRecord;
+  }
+  
+  return null;
+}
+
 /* 判断请假时段与项目时段是否冲突 */
 function isLeaveConflict(leaveRecord, projectStartTime, projectEndTime) {
   if (!leaveRecord) return false;
@@ -2061,12 +2103,15 @@ async function assignWorker(pid) {
   
   const s = projectStart(p);
   const e = projectEnd(p);
-  const dateStr = s ? `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, "0")}-${String(s.getDate()).padStart(2, "0")}` : null;
-  const leaveRecord = dateStr ? isWorkerOnLeave(wid, dateStr) : null;
   
   const pad = (n) => String(n).padStart(2, "0");
-  const projStartTime = s ? `${pad(s.getHours())}:${pad(s.getMinutes())}` : null;
-  const projEndTime = e ? `${pad(e.getHours())}:${pad(e.getMinutes())}` : null;
+  const projStartTime = s ? `${pad(s.getHours())}:${pad(s.getMinutes())}` : "08:00";
+  const projEndTime = e ? `${pad(e.getHours())}:${pad(e.getMinutes())}` : "18:00";
+  
+  const startDateStr = s ? `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, "0")}-${String(s.getDate()).padStart(2, "0")}` : null;
+  const endDateStr = e ? `${e.getFullYear()}-${String(e.getMonth() + 1).padStart(2, "0")}-${String(e.getDate()).padStart(2, "0")}` : startDateStr;
+  
+  const leaveRecord = startDateStr ? getProjectLeaveConflict(wid, startDateStr, endDateStr || startDateStr) : null;
   const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
   
   if (hasLeaveConflict) {
@@ -2577,7 +2622,7 @@ function exportStats() {
         `"${workerText.replace(/"/g, '""')}"`,
       ].join(",");
     })
-  ).concat(["合计(已登记实际),,," + totalEst + "," + totalAct + "," + fmtSignedDiff(totalAct - totalEst) + ","]);
+  ).concat(["合计(已登记实际),," + totalEst + "," + totalAct + "," + fmtSignedDiff(totalAct - totalEst) + ","]);
 
   const csv = "\ufeff" + workerLines.join("\n") + dailyLines.join("\n") + leaveLines.join("\n") + projLines.join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -3608,17 +3653,20 @@ async function timelineQuickAssignWorker(pid, wid) {
   
   const s = projectStart(p);
   const e = projectEnd(p);
-  const dateStr = s ? `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, "0")}-${String(s.getDate()).padStart(2, "0")}` : null;
-  const leaveRecord = dateStr ? isWorkerOnLeave(wid, dateStr) : null;
   
   const pad = (n) => String(n).padStart(2, "0");
-  const projStartTime = s ? `${pad(s.getHours())}:${pad(s.getMinutes())}` : null;
-  const projEndTime = e ? `${pad(e.getHours())}:${pad(e.getMinutes())}` : null;
+  const projStartTime = s ? `${pad(s.getHours())}:${pad(s.getMinutes())}` : "08:00";
+  const projEndTime = e ? `${pad(e.getHours())}:${pad(e.getMinutes())}` : "18:00";
+  
+  const startDateStr = s ? `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, "0")}-${String(s.getDate()).padStart(2, "0")}` : null;
+  const endDateStr = e ? `${e.getFullYear()}-${String(e.getMonth() + 1).padStart(2, "0")}-${String(e.getDate()).padStart(2, "0")}` : startDateStr;
+  
+  const leaveRecord = startDateStr ? getProjectLeaveConflict(wid, startDateStr, endDateStr || startDateStr) : null;
   const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
   
   if (hasLeaveConflict) {
     const w = getWorker(wid);
-    toast(`${w ? w.name : "该人员"} 在此时间段正在请假，无法分配！`);
+    toast(`${w ? w.name : "该人员"} 在此时间段正在请假，无法分配！\n请假时段：${formatLeaveTime(leaveRecord)}`);
     document.getElementById("tlMenuAssignSel").value = "";
     return;
   }
@@ -4273,7 +4321,7 @@ async function startCloudSession() {
 
   // 载入当前用户的角色 / 门店
   const { data: prof } = await sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
-  currentProfile = { role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null };
+  currentProfile = { role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null };
 
   document.getElementById("dropdownEmail").textContent = currentUser.email;
   document.getElementById("dropdownRole").textContent = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
