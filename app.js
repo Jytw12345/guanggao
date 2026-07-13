@@ -3249,4 +3249,21 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("sw.js").catch((err) => console.warn("Service Worker 注册失败", err));
   });
+  
+  let resizeTimeout;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(() => {
+      if (document.body.classList.contains("timeline-view")) {
+        const activeTab = document.querySelector(".tab-panel.active");
+        if (activeTab) {
+          if (activeTab.id === "calendar") {
+            renderCalendar();
+          } else if (activeTab.id === "workers") {
+            renderWorkers();
+          }
+        }
+      }
+    }, 200);
+  });
 }
