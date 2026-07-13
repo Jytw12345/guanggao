@@ -275,6 +275,120 @@ function toast(msg) {
 }
 
 /* ============================================================
+ * 推送通知功能
+ * ============================================================ */
+let notificationPermissionGranted = false;
+let lastNotificationTime = {};
+
+async function requestNotificationPermission() {
+  if ("Notification" in window && !notificationPermissionGranted) {
+    const permission = await Notification.requestPermission();
+    notificationPermissionGranted = permission === "granted";
+    if (notificationPermissionGranted) {
+      toast("通知权限已开启");
+    }
+  }
+}
+
+function showPushNotification(title, body, icon = "icons/icon-192.png", data = {}) {
+  if (!notificationPermissionGranted || !("Notification" in window)) return;
+
+  const key = title + body;
+  const now = Date.now();
+  if (lastNotificationTime[key] && now - lastNotificationTime[key] < 30000) {
+    return;
+  }
+  lastNotificationTime[key] = now;
+
+  try {
+    const notification = new Notification(title, {
+      body,
+      icon,
+      data,
+      badge: "icons/icon-192.png",
+      requireInteraction: false,
+      timestamp: now,
+    });
+
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+      if (data.projectId) {
+        openProjectDetail(data.projectId);
+      }
+    };
+  } catch (e) {
+    console.error("推送通知失败", e);
+  }
+}
+
+function showNotificationAlert(msg) {
+  const alertEl = document.createElement("div");
+  alertEl.className = "notification-alert";
+  alertEl.innerHTML = `<span class="notification-icon">🔔</span><span class="notification-text">${esc(msg)}</span>`;
+  document.body.appendChild(alertEl);
+  setTimeout(() => {
+    alertEl.classList.add("fade-out");
+    setTimeout(() => alertEl.remove(), 300);
+  }, 4000);
+}
+
+function sendNotificationForProjectChange(eventType, project) {
+  if (!project) return;
+
+  const store = getStore(project.storeId);
+  const storeName = store ? store.name : "未知门店";
+
+  switch (eventType) {
+    case "new":
+      showPushNotification(
+        "📋 新预约提醒",
+        `门店「${storeName}」新增项目：${project.name}`,
+        "icons/icon-192.png",
+        { projectId: project.id }
+      );
+      showNotificationAlert(`📋 新预约：${project.name}（${storeName}）`);
+      break;
+    case "start":
+      showPushNotification(
+        "🏗️ 施工开始提醒",
+        `项目「${project.name}」已开始施工`,
+        "icons/icon-192.png",
+        { projectId: project.id }
+      );
+      showNotificationAlert(`🏗️ 施工开始：${project.name}`);
+      break;
+    case "done":
+      showPushNotification(
+        "✅ 施工完成提醒",
+        `项目「${project.name}」已完工，请安排验收`,
+        "icons/icon-192.png",
+        { projectId: project.id }
+      );
+      showNotificationAlert(`✅ 施工完成：${project.name}`);
+      break;
+    case "accepted":
+      showPushNotification(
+        "🎉 验收通过提醒",
+        `项目「${project.name}」已验收通过`,
+        "icons/icon-192.png",
+        { projectId: project.id }
+      );
+      showNotificationAlert(`🎉 验收通过：${project.name}`);
+      break;
+    case "update":
+      showPushNotification(
+        "📝 项目更新提醒",
+        `项目「${project.name}」信息已更新`,
+        "icons/icon-192.png",
+        { projectId: project.id }
+      );
+      showNotificationAlert(`📝 项目更新：${project.name}`);
+      break;
+  }
+}
+
+/* ============================================================
  * 字段映射（云端 snake_case <-> 前端 camelCase）
  * ============================================================ */
 let modifiedProjectIds = new Set();
@@ -1026,6 +1140,11 @@ async function saveProject(id) {
   modal.close();
   renderAll();
   toast("已保存");
+  
+  const p = getProject(payload.id || (await repo.getLastProjectId()));
+  if (p) {
+    sendNotificationForProjectChange(id ? "update" : "new", p);
+  }
 }
 
 async function deleteProject(id) {
@@ -1404,6 +1523,17 @@ async function updateProjectStatus(id, status) {
   await repo.loadAll();
   renderAll();
   toast("状态已更新");
+  
+  const p = getProject(id);
+  if (p) {
+    if (status === STATUS.WORKING) {
+      sendNotificationForProjectChange("start", p);
+    } else if (status === STATUS.DONE) {
+      sendNotificationForProjectChange("done", p);
+    } else if (status === STATUS.ACCEPTED) {
+      sendNotificationForProjectChange("accepted", p);
+    }
+  }
 }
 
 async function reviewProject(id) {
@@ -1518,6 +1648,11 @@ async function saveAcceptance(id) {
   modal.close();
   renderAll();
   toast("验收信息已保存");
+  
+  const p = getProject(id);
+  if (p) {
+    sendNotificationForProjectChange("accepted", p);
+  }
 }
 
 /* ============================================================
@@ -2542,7 +2677,7 @@ function renderTimelineInDetail() {
       const overtimeClass = isOvertime ? "timeline-task-overtime" : "";
       const canDrag = p.status === "预约中";
       const dragAttr = canDrag
-        ? `draggable="true" ondragstart="timelineDragStart(event)" ondragend="timelineDragEnd(event)"`
+        ? `draggable="true" ondragstart="timelineDragStart(event)" ondragend="timelineDragEnd(event)" onmousedown="timelineDragMouseDown(event)"`
         : `draggable="false"`;
       const lockClass = canDrag ? "" : "timeline-task-locked";
 
@@ -2922,6 +3057,12 @@ let touchDragOriginalLeft = 0;
 let touchDragStarted = false;
 const DRAG_THRESHOLD = 10;
 
+let mouseDragTask = null;
+let mouseDragStartX = 0;
+let mouseDragStartY = 0;
+let mouseDragOriginalLeft = 0;
+let mouseDragStarted = false;
+
 function timelineTouchStart(e) {
   const task = e.target.closest(".timeline-task");
   if (!task || !task.draggable) return;
@@ -2964,11 +3105,39 @@ function timelineTouchMove(e) {
   e.preventDefault();
 
   const timelineMain = document.getElementById("timelineMain");
+  const dragHint = document.getElementById("tlDragHint");
   if (!timelineMain) return;
 
   let newLeft = touchDragOriginalLeft + deltaX;
   newLeft = Math.max(0, Math.min(newLeft, timelineMain.clientWidth - 60));
   touchDragTask.el.style.left = newLeft + "px";
+
+  if (dragHint) {
+    const hourOffset = newLeft / TL_ACTUAL_HOUR_WIDTH;
+    let totalMinutes = Math.round(hourOffset * 60);
+    totalMinutes = Math.round(totalMinutes / 5) * 5;
+    const hours = TL_VIEW_START_HOUR + Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    const timelineStart = new Date(touchDragTask.start);
+    timelineStart.setHours(hours, minutes, 0, 0);
+
+    const duration = touchDragTask.end.getTime() - touchDragTask.start.getTime();
+    const newEnd = new Date(timelineStart.getTime() + duration);
+
+    const pad = (n) => String(n).padStart(2, "0");
+    const timeStr = `${pad(timelineStart.getHours())}:${pad(timelineStart.getMinutes())} ~ ${pad(newEnd.getHours())}:${pad(newEnd.getMinutes())}`;
+
+    const startH = timelineStart.getHours() + timelineStart.getMinutes() / 60;
+    const endH = newEnd.getHours() + newEnd.getMinutes() / 60;
+    const isOvertime = (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
+                       startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
+
+    dragHint.innerHTML = `${timeStr}${isOvertime ? " 🌙 加班" : ""}`;
+    dragHint.style.left = newLeft + "px";
+    dragHint.style.top = "-28px";
+    dragHint.style.display = "block";
+  }
 }
 
 function timelineTouchEnd(e) {
@@ -2980,6 +3149,11 @@ function timelineTouchEnd(e) {
   const originalEnd = touchDragTask.end;
   
   task.classList.remove("timeline-task-dragging");
+
+  const dragHint = document.getElementById("tlDragHint");
+  if (dragHint) {
+    dragHint.style.display = "none";
+  }
 
   if (!touchDragStarted) {
     touchDragTask = null;
@@ -3121,6 +3295,162 @@ function timelineDragEnd(e) {
   modal.open("修改预约时间", modalContent);
 }
 
+function timelineDragMouseDown(e) {
+  if (e.button !== 0) return;
+  
+  const task = e.target.closest(".timeline-task");
+  if (!task || !task.draggable) return;
+
+  const left = parseFloat(task.style.left) || 0;
+  mouseDragTask = {
+    el: task,
+    id: task.dataset.projectId,
+    start: new Date(task.dataset.start),
+    end: new Date(task.dataset.end),
+    originalLeft: left,
+  };
+  mouseDragStartX = e.clientX;
+  mouseDragStartY = e.clientY;
+  mouseDragOriginalLeft = left;
+  mouseDragStarted = false;
+
+  task.classList.add("timeline-task-dragging");
+
+  e.preventDefault();
+}
+
+function timelineMouseMove(e) {
+  if (!mouseDragTask) return;
+
+  const deltaX = e.clientX - mouseDragStartX;
+  const deltaY = e.clientY - mouseDragStartY;
+
+  if (!mouseDragStarted) {
+    if (Math.abs(deltaX) > DRAG_THRESHOLD) {
+      mouseDragStarted = true;
+    } else if (Math.abs(deltaY) > DRAG_THRESHOLD) {
+      mouseDragTask = null;
+      return;
+    }
+    return;
+  }
+
+  e.preventDefault();
+
+  const timelineMain = document.getElementById("timelineMain");
+  const dragHint = document.getElementById("tlDragHint");
+  if (!timelineMain) return;
+
+  let newLeft = mouseDragOriginalLeft + deltaX;
+  newLeft = Math.max(0, Math.min(newLeft, timelineMain.clientWidth - 60));
+  mouseDragTask.el.style.left = newLeft + "px";
+
+  if (dragHint) {
+    const hourOffset = newLeft / TL_ACTUAL_HOUR_WIDTH;
+    let totalMinutes = Math.round(hourOffset * 60);
+    totalMinutes = Math.round(totalMinutes / 5) * 5;
+    const hours = TL_VIEW_START_HOUR + Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    const timelineStart = new Date(mouseDragTask.start);
+    timelineStart.setHours(hours, minutes, 0, 0);
+
+    const duration = mouseDragTask.end.getTime() - mouseDragTask.start.getTime();
+    const newEnd = new Date(timelineStart.getTime() + duration);
+
+    const pad = (n) => String(n).padStart(2, "0");
+    const timeStr = `${pad(timelineStart.getHours())}:${pad(timelineStart.getMinutes())} ~ ${pad(newEnd.getHours())}:${pad(newEnd.getMinutes())}`;
+
+    const startH = timelineStart.getHours() + timelineStart.getMinutes() / 60;
+    const endH = newEnd.getHours() + newEnd.getMinutes() / 60;
+    const isOvertime = (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
+                       startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
+
+    dragHint.innerHTML = `${timeStr}${isOvertime ? " 🌙 加班" : ""}`;
+    dragHint.style.left = newLeft + "px";
+    dragHint.style.top = "-28px";
+    dragHint.style.display = "block";
+  }
+}
+
+function timelineMouseUp(e) {
+  if (!mouseDragTask) return;
+
+  const task = mouseDragTask.el;
+  const originalLeft = mouseDragTask.originalLeft;
+  const originalStart = mouseDragTask.start;
+  const originalEnd = mouseDragTask.end;
+  
+  task.classList.remove("timeline-task-dragging");
+
+  const dragHint = document.getElementById("tlDragHint");
+  if (dragHint) {
+    dragHint.style.display = "none";
+  }
+
+  if (!mouseDragStarted) {
+    mouseDragTask = null;
+    return;
+  }
+
+  const timelineMain = document.getElementById("timelineMain");
+  if (!timelineMain) { mouseDragTask = null; return; }
+
+  const newLeft = parseFloat(task.style.left) || originalLeft;
+
+  const hourOffset = newLeft / TL_ACTUAL_HOUR_WIDTH;
+  let totalMinutes = Math.round(hourOffset * 60);
+  totalMinutes = Math.round(totalMinutes / 5) * 5;
+  const hours = TL_VIEW_START_HOUR + Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  const timelineStart = new Date(originalStart);
+  timelineStart.setHours(hours, minutes, 0, 0);
+
+  const duration = originalEnd.getTime() - originalStart.getTime();
+  const newEnd = new Date(timelineStart.getTime() + duration);
+
+  const startH = timelineStart.getHours() + timelineStart.getMinutes() / 60;
+  const endH = newEnd.getHours() + newEnd.getMinutes() / 60;
+  const isOvertime = (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
+                     startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
+
+  mouseDragTask = null;
+
+  const p = getProject(task.dataset.projectId);
+  if (!p) return;
+
+  const store = getStore(p.storeId);
+  const customerPhone = p.phone || "未填写";
+  const storePhone = (store && store.phone) || "未填写";
+
+  const oldStartStr = fmtDateTime(originalStart);
+  const newStartStr = fmtDateTime(timelineStart);
+  const overtimeWarn = isOvertime
+    ? `<div class="tl-drag-overtime">🌙 注意：新时间处于加班时段（工作时间 8:00-18:00 外），代表需要加班！</div>`
+    : "";
+
+  const modalContent = `
+    <div class="tl-drag-modal">
+      <h3>⚠ 确认修改预约时间</h3>
+      <div class="tl-drag-info">
+        <div class="tl-drag-row"><span>项目名称</span><span>${esc(p.name)}</span></div>
+        <div class="tl-drag-row"><span>原时间</span><span>${oldStartStr}</span></div>
+        <div class="tl-drag-row"><span>新时间</span><span>${newStartStr}</span></div>
+        <div class="tl-drag-row"><span>客户电话</span><span><a href="tel:${customerPhone}" class="tl-drag-phone">📞 ${customerPhone}</a></span></div>
+        <div class="tl-drag-row"><span>门店电话</span><span><a href="tel:${storePhone}" class="tl-drag-phone">📞 ${storePhone}</a></span></div>
+      </div>
+      ${overtimeWarn}
+      <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
+      <div class="tl-drag-actions">
+        <button class="btn" onclick="modal.close(); document.getElementById('timelineMain').querySelector('.timeline-task[data-project-id=\"${task.dataset.projectId}\"]').style.left = '${originalLeft}px';">取消</button>
+        <button class="btn primary" onclick="modal.close(); saveTimelineTaskTime('${task.dataset.projectId}', new Date('${timelineStart.toISOString()}'), new Date('${newEnd.toISOString()}'));">确认调整时间</button>
+      </div>
+    </div>`;
+
+  modal.open("修改预约时间", modalContent);
+}
+
 async function saveTimelineTaskTime(projectId, newStart, newEnd) {
   const p = getProject(projectId);
   if (!p) return;
@@ -3232,6 +3562,11 @@ async function startCloudSession() {
   document.getElementById("btnLogoutMenu").addEventListener("click", () => {
     document.getElementById("userDropdown").classList.add("hidden");
     doLogout();
+  });
+
+  document.getElementById("btnNotifyToggle").addEventListener("click", () => {
+    document.getElementById("userDropdown").classList.add("hidden");
+    requestNotificationPermission();
   });
 
   // 未分配角色：显示提示并停止后续加载
@@ -3385,6 +3720,9 @@ function bindEvents() {
   document.getElementById("authPassword").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doLogin();
   });
+
+  document.addEventListener("mousemove", timelineMouseMove);
+  document.addEventListener("mouseup", timelineMouseUp);
 }
 
 async function init() {
@@ -3406,6 +3744,8 @@ async function init() {
     applyPermissions();
     renderAll();
   }
+  
+  requestNotificationPermission();
 }
 
 document.addEventListener("DOMContentLoaded", init);
