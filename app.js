@@ -277,6 +277,8 @@ function toast(msg) {
 /* ============================================================
  * 字段映射（云端 snake_case <-> 前端 camelCase）
  * ============================================================ */
+let modifiedProjectIds = new Set();
+
 const mapProject = (r) => ({
   id: r.id,
   name: r.name,
@@ -293,10 +295,12 @@ const mapProject = (r) => ({
   storeId: r.store_id || "",
   createdBy: r.created_by || null,
   assignedWorkerIds: Array.isArray(r.assigned_workers) ? r.assigned_workers : [],
+  outsourcedWorkers: r.outsourced_workers || "",
   started_at: r.started_at || "",
   finished_at: r.finished_at || "",
   createdAt: r.created_at,
   workLogs: [],
+  timeModified: modifiedProjectIds.has(r.id),
 });
 
 const projectToRow = (p) => ({
@@ -314,6 +318,7 @@ const projectToRow = (p) => ({
   acceptance: p.acceptance || null,
   store_id: p.storeId || null,
   assigned_workers: p.assignedWorkerIds || [],
+  outsourced_workers: p.outsourcedWorkers || "",
   started_at: p.started_at || null,
   finished_at: p.finished_at || null,
   updated_at: new Date().toISOString(),
@@ -355,7 +360,7 @@ const repo = {
           rolePerms[r.role] = { ...(DEFAULT_ROLE_PERMS[r.role] || {}), ...(r.perms || {}) };
         });
       }
-      cache.stores = (sRes.data || []).map((r) => ({ id: r.id, name: r.name }))
+      cache.stores = (sRes.data || []).map((r) => ({ id: r.id, name: r.name, phone: r.phone || "" }))
         .sort((a, b) => a.name.localeCompare(b.name, "zh"));
       cache.workers = (wRes.data || []).map((r) => ({
         id: r.id, name: r.name, phone: r.phone, role: r.role,
@@ -374,7 +379,7 @@ const repo = {
   /* ---- 门店 ---- */
   async saveStore(store, id) {
     if (MODE === "cloud") {
-      const { error } = await sb.from("stores").upsert({ id: id || uid(), name: store.name });
+      const { error } = await sb.from("stores").upsert({ id: id || uid(), name: store.name, phone: store.phone || null });
       if (error) return fail(error);
     } else {
       if (id) Object.assign(getStore(id), store);
@@ -483,7 +488,16 @@ const repo = {
       const { error } = await sb.from("projects").update(row).eq("id", id);
       if (error) return fail(error);
     } else {
-      Object.assign(getProject(id), patch);
+      const p = getProject(id);
+      for (const [key, value] of Object.entries(patch)) {
+        if (key.includes("_")) {
+          const camelKey = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+          if (camelKey in p) p[camelKey] = value;
+          else p[key] = value;
+        } else {
+          p[key] = value;
+        }
+      }
       saveLocal();
     }
   },
@@ -599,28 +613,170 @@ function setSyncStatus(cls, text) {
  * ============================================================ */
 function renderWorkers() {
   const list = document.getElementById("workerList");
+  const today = fmtDate(new Date());
+  const canManage = perm.manageWorkers();
+  const isWorkerRole = myRole() === ROLE.WORKER;
+  
+  if (isWorkerRole) {
+    renderWorkerScheduleForWorker(today);
+    return;
+  }
+  
   if (cache.workers.length === 0) {
     list.innerHTML = `<div class="empty">暂无施工人员，点击右上角「添加人员」创建。</div>`;
     return;
   }
-  list.innerHTML = cache.workers.map((w) => {
-    const totalHours = cache.projects.reduce((s, p) =>
-      s + (p.workLogs || []).filter((l) => l.workerId === w.id)
-        .reduce((a, l) => a + (Number(l.hours) || 0), 0), 0);
-    return `
-      <div class="card">
-        <div class="card-title">
-          <h3>${esc(w.name)}</h3>
-          <span class="badge 已完工">${esc(w.role || "施工")}</span>
-        </div>
-        <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
-        <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
-        <div class="card-actions">
-          <button class="btn small" onclick="editWorker('${w.id}')">编辑</button>
-          <button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>
+  
+  const timelineHtml = renderWorkerScheduleHtml(today);
+  
+  list.innerHTML = `
+    <div id="workerScheduleSection" style="margin-bottom: 24px;">
+      <div class="section-head" style="margin-bottom: 12px;">
+        <h3 style="margin:0; font-size:16px;">📅 今日施工时间安排</h3>
+        <button class="btn small primary" onclick="renderWorkers()">🔄 刷新</button>
+      </div>
+      <div id="workerScheduleView">${timelineHtml}</div>
+    </div>
+    <div class="section-head" style="margin-bottom: 12px;">
+      <h3 style="margin:0; font-size:16px;">👷 施工人员列表</h3>
+    </div>
+    <div class="card-grid" style="margin-top:0;">
+    ${cache.workers.map((w) => {
+      const totalHours = cache.projects.reduce((s, p) =>
+        s + (p.workLogs || []).filter((l) => l.workerId === w.id)
+          .reduce((a, l) => a + (Number(l.hours) || 0), 0), 0);
+      return `
+        <div class="card">
+          <div class="card-title">
+            <h3>${esc(w.name)}</h3>
+            <span class="badge 已完工">${esc(w.role || "施工")}</span>
+          </div>
+          <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
+          <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
+          <div class="card-actions">
+            <button class="btn small" onclick="editWorker('${w.id}')">编辑</button>
+            <button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>
+            <button class="btn small" onclick="renderWorkerSchedule('${today}', '${w.id}')">查看安排</button>
+          </div>
+        </div>`;
+    }).join("")}
+    </div>`;
+}
+
+function renderWorkerScheduleHtml(dateStr, workerId = null) {
+  const items = cache.projects.filter(p => {
+    if (!p.assignedWorkerIds || p.assignedWorkerIds.length === 0) return false;
+    if (isCompleted(p)) return false;
+    const start = projectStart(p);
+    if (!start) return false;
+    return fmtDate(start) === dateStr;
+  });
+  
+  if (items.length === 0) {
+    return `<div class="empty" style="padding:24px 0;">${dateStr} 暂无施工安排</div>`;
+  }
+  
+  const workers = workerId ? [getWorker(workerId)].filter(Boolean) : cache.workers;
+  const totalHours = 16;
+  const availableWidth = window.innerWidth - 64;
+  const containerWidth = Math.max(800, availableWidth);
+  const hourWidth = Math.max(50, containerWidth / totalHours);
+  const totalWidth = containerWidth;
+  
+  const hourMarks = [];
+  for (let h = 6; h <= 22; h++) {
+    hourMarks.push(`<div class="tl-hour-mark ${h >= 8 && h <= 18 ? 'work' : 'overtime'}" style="left:${(h - 6) * hourWidth}px;">${h}:00</div>`);
+  }
+  
+  const workBgLeft = (8 - 6) * hourWidth;
+  const workBgWidth = (18 - 8) * hourWidth;
+  
+  let lanesHtml = "";
+  
+  workers.forEach((w) => {
+    const workerProjects = items.filter(p => p.assignedWorkerIds.includes(w.id));
+    
+    let tasksHtml = "";
+    workerProjects.forEach(p => {
+      const start = projectStart(p);
+      const end = projectEnd(p) || new Date((start || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
+      
+      if (!start) return;
+      
+      const startMinutes = (start.getHours() - 6) * 60 + start.getMinutes();
+      const endMinutes = (end.getHours() - 6) * 60 + end.getMinutes();
+      const left = (startMinutes / 60) * hourWidth;
+      const width = ((endMinutes - startMinutes) / 60) * hourWidth;
+      
+      const statusClass = `timeline-task-${p.status === "预约中" ? "booked" : p.status === "施工中" ? "working" : p.status === "已完工" ? "done" : ""}`;
+      const pad = (n) => String(n).padStart(2, "0");
+      const timeStr = `${pad(start.getHours())}:${pad(start.getMinutes())} ~ ${pad(end.getHours())}:${pad(end.getMinutes())}`;
+      
+      tasksHtml += `
+        <div class="timeline-task ${statusClass}" style="left:${left}px; width:${width}px; height:40px;">
+          <div class="timeline-task-header">
+            <span class="timeline-task-name" style="font-size:11px;">${esc(p.name)}</span>
+          </div>
+          <div class="timeline-task-body" style="font-size:9px;">
+            ${esc(storeName(p.storeId))} · ${timeStr}
+          </div>
+        </div>`;
+    });
+    
+    lanesHtml += `
+      <div class="tl-lane" style="height:50px; border-bottom:1px solid #eee; display:flex;">
+        <div class="tl-lane-label" style="width:60px; flex-shrink:0; padding:5px; font-size:12px; font-weight:bold;">${esc(w.name)}</div>
+        <div class="tl-lane-body" style="flex:1; position:relative; height:50px; width:${totalWidth}px;">
+          <div class="tl-bg-work" style="left:${workBgLeft}px; width:${workBgWidth}px; height:100%;"></div>
+          <div class="tl-bg-overtime" style="width:${workBgLeft}px; height:100%;"></div>
+          <div class="tl-bg-overtime" style="left:${workBgLeft + workBgWidth}px; width:${totalWidth - workBgLeft - workBgWidth}px; height:100%;"></div>
+          <div class="tl-tasks">${tasksHtml}</div>
         </div>
       </div>`;
-  }).join("");
+  });
+  
+  return `
+    <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">绿色区域为工作时间(8:00-18:00)，橙色区域为加班时间</div>
+    <div class="tl-wrapper" style="width:100%;">
+      <div class="timeline-horizontal" style="width:${totalWidth + 60}px; min-width:100%;">
+        <div class="tl-axis" style="width:${totalWidth}px; margin-left:60px;">${hourMarks.join("")}</div>
+        <div class="tl-scroll" style="max-height:${workers.length * 50 + 50}px;">
+          ${lanesHtml}
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderWorkerScheduleForWorker(dateStr) {
+  const list = document.getElementById("workerList");
+  if (!list) return;
+  
+  document.body.classList.add("timeline-view");
+  
+  list.innerHTML = `
+    <div id="workerScheduleSection" style="margin-bottom: 16px;">
+      <p class="hint" style="font-size:12px;">📅 ${dateStr} 施工人员时间安排</p>
+    </div>
+    <div id="workerScheduleView"></div>`;
+  
+  setTimeout(() => {
+    const timelineHtml = renderWorkerScheduleHtml(dateStr);
+    const container = document.getElementById("workerScheduleView");
+    if (container) {
+      container.innerHTML = timelineHtml;
+    }
+  }, 100);
+}
+
+function renderWorkerSchedule(dateStr, workerId = null) {
+  const container = document.getElementById("workerScheduleView");
+  if (!container) return;
+  
+  const timelineHtml = renderWorkerScheduleHtml(dateStr, workerId);
+  
+  container.innerHTML = timelineHtml;
+  container.style.display = 'block';
+  container.style.marginBottom = '20px';
 }
 
 function workerForm(w = {}) {
@@ -708,7 +864,10 @@ function renderProjects() {
       <div class="card">
         <div class="card-title">
           <h3>${esc(p.name)}</h3>
-          <span class="badge ${p.status}">${p.status}</span>
+          <div style="display: flex; gap: 4px;">
+            <span class="badge ${p.status}">${p.status}</span>
+            ${p.timeModified ? `<span class="badge modified">✏️ 已改点</span>` : ""}
+          </div>
         </div>
         <div class="card-row"><span>预约门店</span><b>${esc(storeName(p.storeId))}</b></div>
         <div class="card-row"><span>客户</span><b>${esc(p.customer || "—")}</b></div>
@@ -718,9 +877,9 @@ function renderProjects() {
         <div class="card-row"><span>预计 / 实际工时</span><b>${est} / ${hasActual ? act : "—"} 小时</b></div>
         <div class="card-row"><span>工时差异</span><b>${diffLabel(p)}</b></div>
         <div class="card-row"><span>已填施工工时</span><b>${done} 小时</b></div>
-        ${p.started_at ? `<div class="card-row"><span>开始施工</span><b>${esc(fmtDateTime(p.started_at))}</b></div>` : ""}
-        ${p.finished_at ? `<div class="card-row"><span>完工时间</span><b>${esc(fmtDateTime(p.finished_at))}</b></div>` : ""}
-        ${p.started_at && p.finished_at ? `<div class="card-row"><span>施工时长</span><b>${esc(calcDuration(p.started_at, p.finished_at))}</b></div>` : ""}
+        <div class="card-row"><span>开始施工</span><b>${p.started_at ? esc(fmtDateTime(p.started_at)) : "—"}</b></div>
+        <div class="card-row"><span>完工时间</span><b>${p.finished_at ? esc(fmtDateTime(p.finished_at)) : "—"}</b></div>
+        <div class="card-row"><span>施工时长</span><b>${p.started_at && p.finished_at ? esc(calcDuration(p.started_at, p.finished_at)) : "—"}</b></div>
         <div class="card-actions">
           <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
           ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">编辑</button>` : ""}
@@ -860,18 +1019,18 @@ async function deleteProject(id) {
  * ============================================================ */
 let currentProjectId = "";
 
-/* 日历视图状态 */
-let calMonth = (() => { const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d; })();
-let calSelectedDate = "";
+/* 日历视图状态（移至下方统一定义） */
 
 function refreshProjectSelector() {
   const sel = document.getElementById("constructionProjectSelect");
   const prev = currentProjectId;
-  const items = cache.projects.slice().sort((a, b) =>
+  const items = cache.projects.slice()
+    .filter(p => p.status !== "已审核" && p.status !== "已验收")
+    .sort((a, b) =>
     new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0));
   sel.innerHTML = `<option value="">— 请选择项目 —</option>` +
     items.map((p) => `<option value="${p.id}">${esc(p.name)}（${p.status}）</option>`).join("");
-  if (prev && getProject(prev)) sel.value = prev;
+  if (prev && getProject(prev) && items.some(i => i.id === prev)) sel.value = prev;
 }
 
 function gotoConstruction(id) {
@@ -931,10 +1090,22 @@ function renderConstruction() {
       <div class="assign-list">${assignedChips}</div>
       ${canAssign ? `
       <div class="assign-form">
-        <select class="input" id="assignWorkerSel">
-          ${assignSelectOpts || `<option value="">无可选人员</option>`}
+        <select class="input" id="assignWorkerSel" onchange="showWorkerSchedule('${p.id}', this.value)">
+          <option value="">请选择安装人员</option>
+          ${assignSelectOpts || ``}
         </select>
         <button class="btn primary" onclick="assignWorker('${p.id}')">分配</button>
+      </div>
+      <div id="workerSchedule" class="worker-schedule"></div>` : ""}
+      ${canEdit ? `
+      <div class="outsourced-block">
+        <h4>🤝 外协人员</h4>
+        <p class="hint" style="margin:0 0 8px;font-size:12px">当任务由外协人员完成时，填写外协人员姓名（多个用逗号分隔）。设置外协后，该任务不占用内部施工人员工时，时间冲突将被解除。</p>
+        <div class="assign-form" style="margin-bottom:0">
+          <input type="text" class="input" id="outsourcedWorkersInput" placeholder="输入外协人员姓名，多个用逗号分隔" value="${esc(p.outsourcedWorkers || "")}" style="flex:1">
+          <button class="btn" onclick="saveOutsourcedWorkers('${p.id}', document.getElementById('outsourcedWorkersInput').value)">保存</button>
+        </div>
+        ${p.outsourcedWorkers ? `<div class="outsourced-hint">当前任务已设置为外协</div>` : ""}
       </div>` : ""}
     </div>`;
 
@@ -1046,10 +1217,101 @@ function assignConflicts(project, workerId) {
   if (!s || !e) return [];
   return cache.projects.filter((o) => {
     if (o.id === project.id) return false;
+    if (isCompleted(o)) return false;
     if (!(o.assignedWorkerIds || []).includes(workerId)) return false;
     const os = projectStart(o), oe = projectEnd(o);
     return os && oe && intervalsOverlap(s, e, os, oe);
   });
+}
+
+/* 判断项目是否已完成（不参与人员冲突检测） */
+function isCompleted(p) {
+  return ["已完工", "已审核", "已验收"].includes(p.status);
+}
+
+/* 判断项目是否为外协任务（只有外协人员，没有内部施工人员） */
+function isOutsourced(p) {
+  const hasInternal = (p.assignedWorkerIds || []).length > 0;
+  const hasOutsourced = (p.outsourcedWorkers || "").trim().length > 0;
+  return !hasInternal && hasOutsourced;
+}
+
+/* 获取某安装人员在指定日期已分配的项目列表 */
+function getWorkerAssignmentsOnDate(workerId, dateStr) {
+  if (!workerId || !dateStr) return [];
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const targetDate = new Date(y, m - 1, d);
+  const nextDate = new Date(y, m - 1, d + 1);
+  return cache.projects.filter((p) => {
+    if (!(p.assignedWorkerIds || []).includes(workerId)) return false;
+    const s = projectStart(p);
+    if (!s) return false;
+    return s >= targetDate && s < nextDate;
+  }).sort((a, b) => {
+    const sa = projectStart(a), sb = projectStart(b);
+    return (sa || new Date()).getTime() - (sb || new Date()).getTime();
+  });
+}
+
+/* 格式化时间段显示（仅当天时间） */
+function fmtTimeOnly(p) {
+  const s = projectStart(p);
+  const e = projectEnd(p);
+  if (!s) return "—";
+  const pad = (n) => String(n).padStart(2, "0");
+  const startStr = `${pad(s.getHours())}:${pad(s.getMinutes())}`;
+  if (!e) return startStr;
+  return `${startStr} ~ ${pad(e.getHours())}:${pad(e.getMinutes())}`;
+}
+
+/* 显示安装人员当天已分配的时间段 */
+function showWorkerSchedule(pid, workerId) {
+  const container = document.getElementById("workerSchedule");
+  if (!container) return;
+  if (!workerId) {
+    container.innerHTML = "";
+    return;
+  }
+  const p = getProject(pid);
+  if (!p) return;
+  const s = projectStart(p);
+  if (!s) {
+    container.innerHTML = `<p class="hint" style="margin:8px 0 0">请先设置项目预约时间</p>`;
+    return;
+  }
+  const dateStr = `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, "0")}-${String(s.getDate()).padStart(2, "0")}`;
+  const assignments = getWorkerAssignmentsOnDate(workerId, dateStr);
+  const w = getWorker(workerId);
+  const workerName = w ? w.name : "未知人员";
+  
+  if (!assignments.length) {
+    container.innerHTML = `
+      <div class="worker-schedule-box">
+        <div class="worker-schedule-title">📅 ${workerName} 在 ${dateStr} 的安排</div>
+        <div class="worker-schedule-empty">✓ 当天暂无其他分配</div>
+      </div>`;
+    return;
+  }
+  
+  const currentProject = assignments.find((a) => a.id === pid);
+  const itemsHtml = assignments.map((item) => {
+    const isCurrent = item.id === pid;
+    const conflicts = assignConflicts(item, workerId);
+    const conflictCount = conflicts.length;
+    return `
+      <div class="worker-schedule-item ${isCurrent ? "current" : ""} ${conflictCount > 0 ? "conflict" : ""}">
+        <div class="worker-schedule-time">${fmtTimeOnly(item)}</div>
+        <div class="worker-schedule-project">${esc(item.name)}</div>
+        <div class="worker-schedule-meta">${esc(storeName(item.storeId))} · ${item.estimatedHours}h · ${item.status}${conflictCount > 0 ? ` · ⚠${conflictCount}冲突` : ""}</div>
+      </div>`;
+  }).join("");
+  
+  container.innerHTML = `
+    <div class="worker-schedule-box">
+      <div class="worker-schedule-title">📅 ${workerName} 在 ${dateStr} 的安排</div>
+      <div class="worker-schedule-list">${itemsHtml}</div>
+      ${currentProject ? `<div class="worker-schedule-hint">当前项目已标记</div>` : ""}
+    </div>`;
 }
 
 async function assignWorker(pid) {
@@ -1071,6 +1333,16 @@ async function assignWorker(pid) {
   await repo.loadAll();
   renderAll();
   toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
+}
+
+/* 保存外协人员信息 */
+async function saveOutsourcedWorkers(pid, names) {
+  const p = getProject(pid);
+  if (!p) return;
+  await repo.saveProject({ outsourcedWorkers: names.trim() }, pid);
+  await repo.loadAll();
+  renderAll();
+  toast(names.trim() ? "外协人员已保存，该任务不再占用内部施工人员" : "外协人员已清除");
 }
 
 async function unassignWorker(pid, wid) {
@@ -1556,6 +1828,10 @@ function storeForm(s = {}) {
       <label>门店名称 *</label>
       <input class="input" id="sName" value="${esc(s.name || "")}" placeholder="如：北京朝阳店" />
     </div>
+    <div class="form-row">
+      <label>门店电话</label>
+      <input class="input" id="sPhone" value="${esc(s.phone || "")}" placeholder="如：13800138000" />
+    </div>
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
       <button class="btn primary" onclick="saveStoreForm('${s.id || ""}')">保存</button>
@@ -1567,8 +1843,9 @@ function editStore(id) { modal.open("编辑门店", storeForm(getStore(id))); }
 
 async function saveStoreForm(id) {
   const name = document.getElementById("sName").value.trim();
+  const phone = document.getElementById("sPhone").value.trim();
   if (!name) { toast("请填写门店名称"); return; }
-  await repo.saveStore({ name }, id);
+  await repo.saveStore({ name, phone }, id);
   await repo.loadAll();
   modal.close();
   renderAll();
@@ -1711,6 +1988,15 @@ function switchTab(name) {
   document.querySelectorAll(".bottom-nav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === name));
   document.querySelector(".tabs").classList.remove("open");
+
+  if (name !== "calendar" && name !== "workers") {
+    document.body.classList.remove("timeline-view");
+    document.removeEventListener("click", timelineCloseAllTasks);
+    closeTimelineActionMenu();
+  } else {
+    if (name === "calendar") renderCalendar();
+    document.body.classList.add("timeline-view");
+  }
 }
 
 /* 头部角色标签 */
@@ -1738,7 +2024,7 @@ function applyPermissions() {
     construction: role != null,
     stats: perm.viewStats(),
     storeStats: perm.viewStoreStats(),
-    workers: perm.manageWorkers(),
+    workers: perm.manageWorkers() || myRole() === ROLE.WORKER,
     stores: perm.manageStores(),
     accounts: perm.manageAccounts() && MODE === "cloud",
     rolePerms: perm.manageAccounts() && MODE === "cloud",
@@ -1759,6 +2045,7 @@ function applyPermissions() {
     projects: role != null,
     calendar: role != null,
     construction: role != null,
+    workers: role != null,
     stats: perm.viewStats(),
     storeStats: perm.viewStoreStats(),
   };
@@ -1793,6 +2080,10 @@ function renderAll() {
 /* ============================================================
  * 日历统计视图
  * ============================================================ */
+let calMonth = new Date(); calMonth.setDate(1); calMonth.setHours(0, 0, 0, 0);
+let calSelectedDate = dateKey(new Date());
+let calViewMode = "timeline"; /* "calendar" | "timeline" */
+
 function dateKey(d) {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -1817,7 +2108,13 @@ function renderCalendar() {
   const grid = document.getElementById("calGrid");
   const weekdaysEl = document.getElementById("calWeekdays");
   if (!grid || !weekdaysEl) return;
+  
+  grid.style.display = "";
+  grid.style.gridTemplateColumns = "";
+  grid.style.gap = "";
+
   const label = document.getElementById("calLabel");
+
   const year = calMonth.getFullYear();
   const month = calMonth.getMonth();
   if (label) label.textContent = `${year} 年 ${month + 1} 月`;
@@ -1847,9 +2144,13 @@ function renderCalendar() {
     const more = items.length > 3 ? `<div class="cal-more">+${items.length - 3} 更多</div>` : "";
     const countBadge = items.length ? `<span class="cal-count">${items.length}</span>` : "";
     const totalHours = items.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
-    const hoursHtml = totalHours > 0 ? `<div class="cal-hours">${totalHours}h</div>` : "";
+    /* 工时阈值着色：>40 严重超载(红)，>32 工时排满(橙)，其余默认蓝 */
+    let hoursClass = "cal-hours";
+    if (totalHours > 40) hoursClass += " danger";
+    else if (totalHours > 32) hoursClass += " warn";
+    const hoursHtml = totalHours > 0 ? `<div class="${hoursClass}" title="当天预约工时 ${totalHours}h">${totalHours}h</div>` : "";
     cells += `
-      <div class="cal-cell ${items.length ? "has" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""}" onclick="selectCalDay('${ds}')">
+      <div class="cal-cell ${items.length ? "has" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""}" onclick="selectCalDay('${ds}');">
         <div class="cal-daynum">${day}${countBadge}</div>
         ${evHtml}${more}${hoursHtml}
       </div>`;
@@ -1873,6 +2174,16 @@ function selectCalDay(ds) {
 function renderCalDay() {
   const box = document.getElementById("calDayDetail");
   if (!box) return;
+
+  if (calViewMode === "timeline") {
+    renderTimelineInDetail();
+    return;
+  }
+
+  document.body.classList.remove("timeline-view");
+  document.removeEventListener("click", timelineCloseAllTasks);
+  closeTimelineActionMenu();
+
   if (!calSelectedDate) {
     box.innerHTML = `<p class="hint">点击上方某一天，查看当天各时间段的预约、项目进度与安装人员安排。</p>`;
     return;
@@ -1891,7 +2202,33 @@ function renderCalDay() {
       workerHours[name] = (workerHours[name] || 0) + (log.hours || 0);
     });
   });
-  const rows = items.map((p) => {
+
+  /* 时段重复预约检测：计算每个项目同时段重叠数（含自身），并找出最大并发数。
+   * 仅对具备有效开始/结束时间的项目计算；无结束时间的项目视为"瞬时点"。
+   * 外协任务和已完成项目不参与并发计算。 */
+  const overlapCount = new Array(items.length).fill(0);
+  let maxConcurrency = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (isOutsourced(items[i])) continue;
+    if (isCompleted(items[i])) continue;
+    const si = projectStart(items[i]), ei = projectEnd(items[i]);
+    if (!si) continue;
+    const eiEff = ei || si;
+    let cnt = 1;
+    for (let j = 0; j < items.length; j++) {
+      if (j === i) continue;
+      if (isOutsourced(items[j])) continue;
+      if (isCompleted(items[j])) continue;
+      const sj = projectStart(items[j]), ej = projectEnd(items[j]);
+      if (!sj) continue;
+      const ejEff = ej || sj;
+      if (intervalsOverlap(si, eiEff, sj, ejEff)) cnt++;
+    }
+    overlapCount[i] = cnt;
+    if (cnt > maxConcurrency) maxConcurrency = cnt;
+  }
+
+  const rows = items.map((p, idx) => {
     const isDoneOrReviewed = (p.status === STATUS.DONE || p.status === STATUS.REVIEWED || p.status === STATUS.ACCEPTED);
     let workersHtml;
     if (isDoneOrReviewed) {
@@ -1912,9 +2249,13 @@ function renderCalDay() {
     }
     const workerLabel = isDoneOrReviewed ? "施工人员" : "安装人员";
     const { est, act, hasActual } = hoursDiff(p);
+    const concur = overlapCount[idx];
+    const concurTag = concur >= 3
+      ? `<span class="concur-tag danger" title="该时段有 ${concur} 个项目同时预约">⏰ ${concur} 并发</span>`
+      : (concur >= 2 ? `<span class="concur-tag warn" title="该时段有 ${concur} 个项目同时预约">${concur} 并发</span>` : "");
     return `
-      <div class="cal-detail-item">
-        <div class="cal-detail-time">${esc(fmtTimeRange(p))}</div>
+      <div class="cal-detail-item ${concur >= 3 ? "item-conflict" : ""}">
+        <div class="cal-detail-time">${esc(fmtTimeRange(p))}${concurTag}</div>
         <div class="cal-detail-main">
           <div class="cal-detail-title"><b>${esc(p.name)}</b> <span class="badge ${p.status}">${p.status}</span></div>
           <div class="cal-detail-sub">${esc(storeName(p.storeId))} · 客户 ${esc(p.customer || "—")} · 预计 ${est} / 实际 ${hasActual ? act : "—"} 小时</div>
@@ -1923,22 +2264,714 @@ function renderCalDay() {
         <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
       </div>`;
   }).join("");
+
+  /* 工时超载提示：>40 严重超载需外协；>32 工时排满需全员加班 */
+  const alerts = [];
+  if (totalEst > 40) {
+    alerts.push(`<div class="cal-alert danger">⚠ <b>工时严重超载（${totalEst}h）</b>：施工人员加班可能都完不成，建议安排外协或拆分到其他日期。</div>`);
+  } else if (totalEst > 32) {
+    alerts.push(`<div class="cal-alert warn">⚠ <b>工时排满（${totalEst}h）</b>：可能需要全员加班才能完成，请提前协调人员。</div>`);
+  }
+  if (maxConcurrency >= 3) {
+    alerts.push(`<div class="cal-alert warn">⏰ <b>时段冲突</b>：当天有 <b>${maxConcurrency}</b> 个项目在同一时间段重复预约，可能需要外协或增加人员，建议错峰安排。</div>`);
+  }
+  const alertsHtml = alerts.length ? `<div class="cal-alerts">${alerts.join("")}</div>` : "";
+
   const workerStatsText = Object.keys(workerHours).length > 0 ? ` · 👷 ${Object.entries(workerHours).map(([name, hours]) => `${esc(name)}${hours}h`).join("、")}` : "";
+  /* 汇总栏工时数值也按阈值着色 */
+  let estColorStyle = "";
+  if (totalEst > 40) estColorStyle = "color:var(--danger)";
+  else if (totalEst > 32) estColorStyle = "color:var(--warn)";
   box.innerHTML = `
     <div class="detail-block">
       <h3>📅 ${esc(calSelectedDate)}（当天 ${items.length} 个预约）</h3>
-      <div class="cal-summary-bar">总预计工时 ${totalEst}h / 总实际工时 ${totalAct > 0 ? totalAct + 'h' : '—'}${workerStatsText}</div>
+      <div class="cal-summary-bar">总预计工时 <b style="${estColorStyle}">${totalEst}h</b> / 总实际工时 ${totalAct > 0 ? totalAct + 'h' : '—'}${workerStatsText}</div>
+      ${alertsHtml}
       <div class="cal-detail-list">${rows}</div>
     </div>`;
 }
 
-function calPrevMonth() { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); renderCalendar(); }
-function calNextMonth() { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); renderCalendar(); }
+function calPrevMonth() { 
+  calViewMode = "calendar";
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); 
+  renderCalendar(); 
+}
+function calNextMonth() { 
+  calViewMode = "calendar";
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); 
+  renderCalendar(); 
+}
 function calGotoToday() {
   const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0);
   calMonth = d;
   calSelectedDate = dateKey(new Date());
+  calViewMode = "timeline";
   renderCalendar();
+}
+
+function toggleCalView() {
+  calViewMode = calViewMode === "calendar" ? "timeline" : "calendar";
+  renderCalendar();
+}
+
+/* 时间线视图 - 水平时间轴，工作时段 8:00-18:00，超范围代表加班 */
+const TL_VIEW_START_HOUR = 6;   /* 时间轴显示起点 */
+const TL_VIEW_END_HOUR = 22;    /* 时间轴显示终点 */
+const TL_WORK_START_HOUR = 8;   /* 工作时段起点 */
+const TL_WORK_END_HOUR = 18;    /* 工作时段终点 */
+let TL_ACTUAL_HOUR_WIDTH = 90;  /* 实际渲染使用的每小时像素宽度 */
+const TL_LANE_HEIGHT = 75;      /* 每行任务高度 */
+
+function renderTimelineInDetail() {
+  const grid = document.getElementById("calGrid");
+  const weekdaysEl = document.getElementById("calWeekdays");
+  const detailBox = document.getElementById("calDayDetail");
+  const label = document.getElementById("calLabel");
+
+  document.body.classList.add("timeline-view");
+
+  if (label) label.textContent = `${calSelectedDate} 时间线视图`;
+
+  const items = projectsOnDate(calSelectedDate);
+  const totalHours = TL_VIEW_END_HOUR - TL_VIEW_START_HOUR;
+  const containerWidth = window.innerWidth - 60;
+  const minHourWidth = window.innerWidth < 768 ? 40 : 50;
+  const hourWidth = Math.max(minHourWidth, Math.floor(containerWidth / totalHours));
+  TL_ACTUAL_HOUR_WIDTH = hourWidth;
+  const totalWidth = totalHours * hourWidth;
+
+  const hasInternalWorker = (p) => (p.assignedWorkerIds || []).length > 0;
+  const hasOutsourced = (p) => (p.outsourcedWorkers || "").trim().length > 0;
+  
+  const statEstHours = items.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+  const statActHours = items.reduce((sum, p) => sum + (p.actualHours || 0), 0);
+  const statInternalHours = items.filter(hasInternalWorker).reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+  const statOutsourcedHours = items.filter((p) => !hasInternalWorker && hasOutsourced).reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+  
+  const statOvertime = items.filter((p) => {
+    const start = projectStart(p);
+    const end = projectEnd(p) || new Date((start || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
+    if (!start) return false;
+    const startH = start.getHours() + start.getMinutes() / 60;
+    const endH = end.getHours() + end.getMinutes() / 60;
+    return (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
+           startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
+  }).length;
+  
+  const statConflict = items.filter((p) => {
+    if (!hasInternalWorker(p)) return false;
+    if (isCompleted(p)) return false;
+    const start = projectStart(p);
+    const end = projectEnd(p) || new Date((start || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
+    if (!start) return false;
+    return items.filter((other) => {
+      if (other.id === p.id) return false;
+      if (isCompleted(other)) return false;
+      if (!hasInternalWorker(other)) return false;
+      const os = projectStart(other);
+      const oe = projectEnd(other) || os;
+      if (!os) return false;
+      return intervalsOverlap(start, end, os, oe);
+    }).length >= 2;
+  }).length;
+
+  let timelineHtml = "";
+  if (!items.length) {
+    timelineHtml = `
+      <div class="timeline-container">
+        <div class="timeline-empty">
+          <div class="timeline-empty-icon">📅</div>
+          <div class="timeline-empty-text">${esc(calSelectedDate)} 暂无预约任务</div>
+        </div>
+      </div>`;
+  } else {
+    const hourMarks = [];
+    for (let h = TL_VIEW_START_HOUR; h <= TL_VIEW_END_HOUR; h++) {
+      const isWorkHour = h >= TL_WORK_START_HOUR && h <= TL_WORK_END_HOUR;
+      hourMarks.push(`<div class="tl-hour-mark ${isWorkHour ? "work" : "overtime"}" style="left:${(h - TL_VIEW_START_HOUR) * hourWidth}px">${String(h).padStart(2, "0")}:00</div>`);
+    }
+
+    const lanes = [];
+    const itemLane = {};
+    items.forEach((p) => {
+      const s = projectStart(p);
+      const e = projectEnd(p) || new Date(s.getTime() + (p.estimatedHours || 2) * 3600000);
+      const startMs = s.getTime(), endMs = e.getTime();
+      let laneIdx = lanes.findIndex((lastEnd) => lastEnd <= startMs);
+      if (laneIdx === -1) { laneIdx = lanes.length; lanes.push(endMs); }
+      else lanes[laneIdx] = endMs;
+      itemLane[p.id] = laneIdx;
+    });
+    const laneCount = Math.max(1, lanes.length);
+
+    const workBgLeft = (TL_WORK_START_HOUR - TL_VIEW_START_HOUR) * hourWidth;
+    const workBgWidth = (TL_WORK_END_HOUR - TL_WORK_START_HOUR) * hourWidth;
+    const otRightLeft = workBgLeft + workBgWidth;
+    const otRightWidth = totalWidth - otRightLeft;
+
+    const tasksHtml = items.map((p) => {
+      const start = projectStart(p);
+      const end = projectEnd(p) || new Date(start.getTime() + (p.estimatedHours || 2) * 3600000);
+      if (!start) return "";
+
+      const startHourOffset = (start.getHours() + start.getMinutes() / 60) - TL_VIEW_START_HOUR;
+      const duration = (end - start) / 3600000;
+      const left = startHourOffset * hourWidth;
+      const width = Math.max(60, duration * hourWidth);
+      const top = itemLane[p.id] * TL_LANE_HEIGHT;
+
+      const startH = start.getHours() + start.getMinutes() / 60;
+      const endH = end.getHours() + end.getMinutes() / 60;
+      const isOvertime = (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
+                         startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
+
+      const hasInternal = (p.assignedWorkerIds || []).length > 0;
+      const isOutsourcedTask = isOutsourced(p);
+      const statusClass = isOutsourcedTask ? "timeline-task-outsourced" :
+                         p.status === "施工中" ? "timeline-task-working" :
+                         p.status === "已完工" ? "timeline-task-done" :
+                         p.status === "已验收" ? "timeline-task-accepted" :
+                         "timeline-task-default";
+
+      const conflicts = hasInternal && !isCompleted(p) ? (p.assignedWorkerIds || []).reduce((total, wid) => {
+        return total + assignConflicts(p, wid).length;
+      }, 0) : 0;
+      const conflictClass = conflicts >= 1 ? "timeline-task-conflict" : "";
+      const overtimeClass = isOvertime ? "timeline-task-overtime" : "";
+      const canDrag = p.status === "预约中";
+      const dragAttr = canDrag
+        ? `draggable="true" ondragstart="timelineDragStart(event)" ondragend="timelineDragEnd(event)"`
+        : `draggable="false"`;
+      const lockClass = canDrag ? "" : "timeline-task-locked";
+
+      const pad = (n) => String(n).padStart(2, "0");
+      const timeStr = `${pad(start.getHours())}:${pad(start.getMinutes())} ~ ${pad(end.getHours())}:${pad(end.getMinutes())}`;
+      let workers = (p.assignedWorkerIds || []).map((wid) => { const w = getWorker(wid); return w ? w.name : "未分配"; }).join("、");
+      if (p.outsourcedWorkers) {
+        workers = workers ? `${workers} / ${p.outsourcedWorkers}` : p.outsourcedWorkers;
+      }
+      workers = workers || "未分配";
+
+      return `
+        <div class="timeline-task ${statusClass} ${conflictClass} ${overtimeClass} ${lockClass}"
+             ${dragAttr}
+             data-project-id="${p.id}"
+             data-start="${start.toISOString()}"
+             data-end="${end.toISOString()}"
+             data-original-left="${left}"
+             style="left: ${left}px; width: ${width}px; top: ${top}px; height: ${TL_LANE_HEIGHT - 10}px;"
+             onmousedown="timelineTaskMouseDown(event)"
+             ontouchstart="timelineTouchStart(event)"
+             ontouchmove="timelineTouchMove(event)"
+             ontouchend="timelineTouchEnd(event)"
+             onclick="timelineTaskClick(event, '${p.id}')">
+          <div class="timeline-task-header">
+            <span class="timeline-task-name">${esc(p.name)}</span>
+            <div class="timeline-task-badges">
+              <span class="timeline-task-status">${p.status}</span>
+              ${hasOutsourced(p) ? `<span class="timeline-task-outsourced-badge">🤝 外协</span>` : ""}
+              ${p.timeModified ? `<span class="timeline-task-modified-badge">✏️ 已改点</span>` : ""}
+              ${isOvertime ? `<span class="timeline-task-overtime-badge">🌙 加班</span>` : ""}
+              ${conflicts >= 1 ? `<span class="timeline-task-conflict-badge">⚠ ${conflicts} 冲突</span>` : ""}
+              ${!canDrag ? `<span class="timeline-task-lock-badge">🔒 不可拖动</span>` : ""}
+            </div>
+          </div>
+          <div class="timeline-task-info">
+            <span>⏰ ${timeStr}</span>
+            <span>⏱️ ${p.estimatedHours}h</span>
+          </div>
+          <div class="timeline-task-workers">👤 ${esc(workers)}</div>
+        </div>`;
+    }).join("");
+
+    timelineHtml = `
+      <div class="timeline-container timeline-horizontal">
+        <div class="tl-stats">
+          <span class="tl-stat-item"><span class="tl-stat-label">总预计工时</span><span class="tl-stat-value ${statEstHours > 40 ? 'danger' : statEstHours > 32 ? 'warn' : ''}">${statEstHours}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">施工人员工时</span><span class="tl-stat-value ${statInternalHours > 40 ? 'danger' : statInternalHours > 32 ? 'warn' : ''}">${statInternalHours}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">外协工时</span><span class="tl-stat-value">${statOutsourcedHours}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">实际工时</span><span class="tl-stat-value">${statActHours}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">加班项目</span><span class="tl-stat-value ${statOvertime > 0 ? 'warn' : ''}">${statOvertime}个</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">人员冲突</span><span class="tl-stat-value ${statConflict > 0 ? 'danger' : ''}">${statConflict}个</span></span>
+        </div>
+        <div class="tl-legend">
+          <span class="tl-legend-item"><span class="tl-legend-box work"></span>工作时间 8:00-18:00</span>
+          <span class="tl-legend-item"><span class="tl-legend-box overtime"></span>加班区（需协调）</span>
+          <span class="tl-legend-item">💡 仅"预约中"状态可拖动调整时间</span>
+          <span class="tl-legend-item">🔒 施工中/已完工等不可拖动</span>
+          <span class="tl-legend-item">🖱️ 点击任务查看详情和操作</span>
+        </div>
+        <div class="tl-scroll">
+          <div class="tl-axis" style="width:${totalWidth}px;">
+            ${hourMarks.join("")}
+          </div>
+          <div class="tl-body" id="timelineMain" style="width:${totalWidth}px; height:${laneCount * TL_LANE_HEIGHT}px;">
+            <div class="tl-bg-work" style="left:${workBgLeft}px; width:${workBgWidth}px; height:100%;"></div>
+            <div class="tl-bg-overtime tl-bg-ot-left" style="width:${workBgLeft}px; height:100%;"></div>
+            <div class="tl-bg-overtime tl-bg-ot-right" style="left:${otRightLeft}px; width:${otRightWidth}px; height:100%;"></div>
+            <div class="tl-grid-lines">
+              ${(() => {
+                let lines = "";
+                for (let h = TL_VIEW_START_HOUR; h <= TL_VIEW_END_HOUR; h++) {
+                  lines += `<div class="tl-grid-line" style="left:${(h - TL_VIEW_START_HOUR) * hourWidth}px"></div>`;
+                }
+                return lines;
+              })()}
+            </div>
+            <div class="tl-tasks">${tasksHtml}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  if (detailBox) detailBox.innerHTML = timelineHtml;
+
+  setTimeout(() => {
+    document.addEventListener("click", timelineCloseAllTasks);
+  }, 0);
+}
+
+let draggedTask = null;
+let timelineMouseDown = { x: 0, y: 0, time: 0 };
+
+/* 记录鼠标按下位置，用于区分点击和拖拽 */
+function timelineTaskMouseDown(e) {
+  timelineMouseDown = { x: e.clientX, y: e.clientY, time: Date.now() };
+}
+
+/* 点击任务卡片：弹出浮动操作菜单 */
+function timelineTaskClick(e, projectId) {
+  /* 如果是拖拽结束（鼠标移动超过 5px），不触发点击 */
+  const deltaX = Math.abs(e.clientX - timelineMouseDown.x);
+  const deltaY = Math.abs(e.clientY - timelineMouseDown.y);
+  if (deltaX > 5 || deltaY > 5) return;
+
+  /* 如果点击的是浮动菜单内部，不处理 */
+  if (e.target.closest(".tl-action-menu")) return;
+
+  openTimelineActionMenu(e.currentTarget, projectId);
+}
+
+/* 打开时间线任务浮动菜单（可被程序化调用） */
+function openTimelineActionMenu(taskEl, projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+
+  /* 关闭已有菜单 */
+  closeTimelineActionMenu();
+
+  /* 高亮当前任务 */
+  document.querySelectorAll(".timeline-task-active").forEach((t) => t.classList.remove("timeline-task-active"));
+  taskEl.classList.add("timeline-task-active");
+
+  /* 构建浮动菜单 */
+  const menu = document.createElement("div");
+  menu.className = "tl-action-menu";
+  menu.id = "tlActionMenu";
+
+  const start = projectStart(p);
+  const end = projectEnd(p);
+  const pad = (n) => String(n).padStart(2, "0");
+  const timeStr = start
+    ? `${pad(start.getHours())}:${pad(start.getMinutes())} ~ ${end ? `${pad(end.getHours())}:${pad(end.getMinutes())}` : "?"}`
+    : "—";
+  const workers = (p.assignedWorkerIds || []).map((wid) => { const w = getWorker(wid); return w ? w.name : "未分配"; }).join("、") || "未分配";
+
+  const canAssign = perm.assignWorker(p);
+  const assigned = p.assignedWorkerIds || [];
+  const assignedChips = assigned.length
+    ? assigned.map((wid) => {
+        const w = getWorker(wid);
+        const conflicts = assignConflicts(p, wid);
+        return `<span class="tl-menu-assign-chip ${conflicts.length ? 'conflict' : ''}" title="${conflicts.length ? '时间冲突' : ''}">${w ? esc(w.name) : '(已删除)'}` +
+               `${canAssign ? `<span class="tl-menu-assign-remove" onclick="timelineUnassignWorker('${p.id}', '${wid}')">✕</span>` : ''}</span>`;
+      }).join("")
+    : `<span class="tl-menu-assign-empty">未分配人员</span>`;
+  
+  const availableWorkers = cache.workers.filter((w) => !assigned.includes(w.id));
+  const assignOpts = availableWorkers.map((w) => {
+    const conflicts = assignConflicts(p, w.id);
+    return `<option value="${w.id}" ${conflicts.length ? 'data-conflict="1"' : ''}>${esc(w.name)}${conflicts.length ? ' ⚠冲突' : ''}</option>`;
+  }).join("");
+
+  menu.innerHTML = `
+    <div class="tl-menu-header">
+      <span class="tl-menu-title">${esc(p.name)}</span>
+      <span class="tl-menu-close" onclick="closeTimelineActionMenu()">✕</span>
+    </div>
+    <div class="tl-menu-info">
+      <div><span>状态</span><b><span class="badge ${p.status}">${p.status}</span></b></div>
+      <div><span>客户</span><b>${esc(p.customer || "—")}</b></div>
+      <div><span>时间</span><b>${timeStr}</b></div>
+      <div><span>工时</span><b>${p.estimatedHours || 0}h</b></div>
+      <div><span>地址</span><b>${esc(p.address || "—")}</b></div>
+    </div>
+    ${canAssign ? `
+    <div class="tl-menu-assign">
+      <div class="tl-menu-assign-label">👤 安装人员</div>
+      <div class="tl-menu-assign-list">${assignedChips}</div>
+      ${availableWorkers.length ? `
+      <div class="tl-menu-assign-form">
+        <select class="input" id="tlMenuAssignSel" onchange="timelineQuickAssignWorker('${p.id}', this.value)">
+          <option value="">选择人员分配</option>
+          ${assignOpts}
+        </select>
+      </div>` : `<div class="tl-menu-assign-empty">暂无可选人员</div>`}
+      <div class="tl-menu-outsourced">
+        <div class="tl-menu-assign-label">🤝 外协人员</div>
+        <div class="tl-menu-assign-form">
+          <input type="text" class="input" id="tlMenuOutsourcedInput" placeholder="输入外协姓名" value="${esc(p.outsourcedWorkers || "")}" style="flex:1">
+          <button class="btn small" onclick="timelineSaveOutsourced('${p.id}', document.getElementById('tlMenuOutsourcedInput').value)">保存</button>
+        </div>
+        ${p.outsourcedWorkers ? `<div class="tl-menu-outsourced-hint">已设置外协，不占用内部人员</div>` : ""}
+      </div>
+    </div>` : `<div class="tl-menu-info"><div><span>人员</span><b>${esc(workers)}</b></div></div>`}
+    <div class="tl-menu-actions">
+      <button class="btn small primary" onclick="closeTimelineActionMenu(); gotoConstruction('${p.id}')">施工管理</button>
+      ${perm.editProject(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); editProject('${p.id}')">编辑</button>` : ""}
+      ${perm.reviewProject(p) && !isReviewed(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); reviewProject('${p.id}')">审核</button>` : ""}
+      ${perm.deleteProject(p) ? `<button class="btn small danger" onclick="closeTimelineActionMenu(); deleteProject('${p.id}')">删除</button>` : ""}
+    </div>`;
+
+  document.body.appendChild(menu);
+
+  /* 定位菜单：显示在任务卡片下方 */
+  const taskRect = taskEl.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  let left = taskRect.left;
+  let top = taskRect.bottom + 6;
+
+  /* 防止超出右侧 */
+  if (left + menuRect.width > window.innerWidth - 10) {
+    left = window.innerWidth - menuRect.width - 10;
+  }
+  /* 防止超出底部：改为显示在上方 */
+  if (top + menuRect.height > window.innerHeight - 10) {
+    top = taskRect.top - menuRect.height - 6;
+  }
+  /* 确保不超出左侧 */
+  if (left < 10) left = 10;
+
+  menu.style.left = left + "px";
+  menu.style.top = top + "px";
+}
+
+/* 时间线快速分配安装人员 */
+async function timelineQuickAssignWorker(pid, wid) {
+  if (!wid) return;
+  const p = getProject(pid);
+  if (!p) return;
+  const cur = p.assignedWorkerIds || [];
+  if (cur.includes(wid)) {
+    document.getElementById("tlMenuAssignSel").value = "";
+    return;
+  }
+  const conflicts = assignConflicts(p, wid);
+  if (conflicts.length) {
+    const w = getWorker(wid);
+    const msg = `${w ? w.name : "该人员"} 在此时间段已被分配到：\n` +
+      conflicts.map((c) => `· ${c.name}（${fmtTimeRange(c)}）`).join("\n") +
+      `\n\n存在时间冲突，仍要分配吗？`;
+    if (!confirm(msg)) {
+      document.getElementById("tlMenuAssignSel").value = "";
+      return;
+    }
+  }
+  await repo.setAssignedWorkers(pid, cur.concat(wid));
+  await repo.loadAll();
+  renderTimelineInDetail();
+  setTimeout(() => {
+    const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
+    if (taskEl) {
+      openTimelineActionMenu(taskEl, pid);
+    }
+  }, 100);
+  toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
+}
+
+/* 时间线快速移除安装人员 */
+async function timelineUnassignWorker(pid, wid) {
+  await repo.setAssignedWorkers(pid, (getProject(pid).assignedWorkerIds || []).filter((x) => x !== wid));
+  await repo.loadAll();
+  renderTimelineInDetail();
+  setTimeout(() => {
+    const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
+    if (taskEl) {
+      openTimelineActionMenu(taskEl, pid);
+    }
+  }, 100);
+  toast("已移除人员");
+}
+
+/* 时间线保存外协人员 */
+async function timelineSaveOutsourced(pid, names) {
+  const p = getProject(pid);
+  if (!p) return;
+  await repo.saveProject({ outsourcedWorkers: names.trim() }, pid);
+  await repo.loadAll();
+  renderTimelineInDetail();
+  setTimeout(() => {
+    const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
+    if (taskEl) {
+      openTimelineActionMenu(taskEl, pid);
+    }
+  }, 100);
+  toast(names.trim() ? "外协已保存，不占用内部施工人员" : "外协已清除");
+}
+
+/* 关闭浮动操作菜单 */
+function closeTimelineActionMenu() {
+  const menu = document.getElementById("tlActionMenu");
+  if (menu) menu.remove();
+  document.querySelectorAll(".timeline-task-active").forEach((t) => t.classList.remove("timeline-task-active"));
+}
+
+/* 点击空白区域关闭浮动菜单 */
+function timelineCloseAllTasks(e) {
+  if (!e.target.closest(".timeline-task") && !e.target.closest(".tl-action-menu")) {
+    closeTimelineActionMenu();
+  }
+}
+
+function timelineDragStart(e) {
+  const task = e.target.closest(".timeline-task");
+  if (!task) return;
+
+  const left = parseFloat(task.style.left) || 0;
+  draggedTask = {
+    el: task,
+    id: task.dataset.projectId,
+    start: new Date(task.dataset.start),
+    end: new Date(task.dataset.end),
+    originalLeft: left,
+    startClientX: e.clientX,
+  };
+
+  task.classList.add("timeline-task-dragging");
+
+  e.dataTransfer.effectAllowed = "move";
+  /* Firefox 需要 setData 才能触发拖拽 */
+  try { e.dataTransfer.setData("text/plain", task.dataset.projectId); } catch (_) {}
+}
+
+let touchDragTask = null;
+let touchDragStartX = 0;
+let touchDragStartY = 0;
+let touchDragOriginalLeft = 0;
+let touchDragStarted = false;
+const DRAG_THRESHOLD = 10;
+
+function timelineTouchStart(e) {
+  const task = e.target.closest(".timeline-task");
+  if (!task || !task.draggable) return;
+
+  const left = parseFloat(task.style.left) || 0;
+  const touch = e.touches[0];
+  
+  touchDragTask = {
+    el: task,
+    id: task.dataset.projectId,
+    start: new Date(task.dataset.start),
+    end: new Date(task.dataset.end),
+    originalLeft: left,
+  };
+  touchDragStartX = touch.clientX;
+  touchDragStartY = touch.clientY;
+  touchDragOriginalLeft = left;
+  touchDragStarted = false;
+
+  task.classList.add("timeline-task-dragging");
+}
+
+function timelineTouchMove(e) {
+  if (!touchDragTask) return;
+
+  const touch = e.touches[0];
+  const deltaX = touch.clientX - touchDragStartX;
+  const deltaY = touch.clientY - touchDragStartY;
+
+  if (!touchDragStarted) {
+    if (Math.abs(deltaX) > DRAG_THRESHOLD) {
+      touchDragStarted = true;
+    } else if (Math.abs(deltaY) > DRAG_THRESHOLD) {
+      touchDragTask = null;
+      return;
+    }
+    return;
+  }
+
+  e.preventDefault();
+
+  const timelineMain = document.getElementById("timelineMain");
+  if (!timelineMain) return;
+
+  let newLeft = touchDragOriginalLeft + deltaX;
+  newLeft = Math.max(0, Math.min(newLeft, timelineMain.clientWidth - 60));
+  touchDragTask.el.style.left = newLeft + "px";
+}
+
+function timelineTouchEnd(e) {
+  if (!touchDragTask) return;
+
+  const task = touchDragTask.el;
+  const originalLeft = touchDragTask.originalLeft;
+  const originalStart = touchDragTask.start;
+  const originalEnd = touchDragTask.end;
+  
+  task.classList.remove("timeline-task-dragging");
+
+  if (!touchDragStarted) {
+    touchDragTask = null;
+    return;
+  }
+
+  const timelineMain = document.getElementById("timelineMain");
+  if (!timelineMain) { touchDragTask = null; return; }
+
+  const newLeft = parseFloat(task.style.left) || originalLeft;
+
+  const hourOffset = newLeft / TL_ACTUAL_HOUR_WIDTH;
+  let totalMinutes = Math.round(hourOffset * 60);
+  totalMinutes = Math.round(totalMinutes / 5) * 5;
+  const hours = TL_VIEW_START_HOUR + Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  const timelineStart = new Date(originalStart);
+  timelineStart.setHours(hours, minutes, 0, 0);
+
+  const duration = originalEnd.getTime() - originalStart.getTime();
+  const newEnd = new Date(timelineStart.getTime() + duration);
+
+  const startH = timelineStart.getHours() + timelineStart.getMinutes() / 60;
+  const endH = newEnd.getHours() + newEnd.getMinutes() / 60;
+  const isOvertime = (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
+                     startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
+
+  touchDragTask = null;
+
+  const p = getProject(task.dataset.projectId);
+  if (!p) return;
+
+  const store = getStore(p.storeId);
+  const customerPhone = p.phone || "未填写";
+  const storePhone = (store && store.phone) || "未填写";
+
+  const oldStartStr = fmtDateTime(originalStart);
+  const newStartStr = fmtDateTime(timelineStart);
+  const overtimeWarn = isOvertime
+    ? `<div class="tl-drag-overtime">🌙 注意：新时间处于加班时段（工作时间 8:00-18:00 外），代表需要加班！</div>`
+    : "";
+
+  const modalContent = `
+    <div class="tl-drag-modal">
+      <h3>⚠ 确认修改预约时间</h3>
+      <div class="tl-drag-info">
+        <div class="tl-drag-row"><span>项目名称</span><span>${esc(p.name)}</span></div>
+        <div class="tl-drag-row"><span>原时间</span><span>${oldStartStr}</span></div>
+        <div class="tl-drag-row"><span>新时间</span><span>${newStartStr}</span></div>
+        <div class="tl-drag-row"><span>客户电话</span><span><a href="tel:${customerPhone}" class="tl-drag-phone">📞 ${customerPhone}</a></span></div>
+        <div class="tl-drag-row"><span>门店电话</span><span><a href="tel:${storePhone}" class="tl-drag-phone">📞 ${storePhone}</a></span></div>
+      </div>
+      ${overtimeWarn}
+      <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
+      <div class="tl-drag-actions">
+        <button class="btn" onclick="modal.close(); document.getElementById('timelineMain').querySelector('.timeline-task[data-project-id=\"${task.dataset.projectId}\"]').style.left = '${originalLeft}px';">取消</button>
+        <button class="btn primary" onclick="modal.close(); saveTimelineTaskTime('${task.dataset.projectId}', new Date('${timelineStart.toISOString()}'), new Date('${newEnd.toISOString()}'));">确认调整时间</button>
+      </div>
+    </div>`;
+
+  modal.open("修改预约时间", modalContent);
+}
+
+function timelineDragEnd(e) {
+  if (!draggedTask) return;
+
+  const task = draggedTask.el;
+  const originalLeft = draggedTask.originalLeft;
+  const originalStart = draggedTask.start;
+  const originalEnd = draggedTask.end;
+  task.classList.remove("timeline-task-dragging");
+
+  const timelineMain = document.getElementById("timelineMain");
+  if (!timelineMain) { draggedTask = null; return; }
+
+  /* 用鼠标水平移动量计算新位置 */
+  const deltaX = e.clientX - draggedTask.startClientX;
+  let newLeft = originalLeft + deltaX;
+  newLeft = Math.max(0, Math.min(newLeft, timelineMain.clientWidth - 60));
+
+  /* 把像素位置转换为时间，按5分钟粒度吸附 */
+  const hourOffset = newLeft / TL_ACTUAL_HOUR_WIDTH;
+  let totalMinutes = Math.round(hourOffset * 60);
+  totalMinutes = Math.round(totalMinutes / 5) * 5;
+  const hours = TL_VIEW_START_HOUR + Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  const timelineStart = new Date(originalStart);
+  timelineStart.setHours(hours, minutes, 0, 0);
+
+  const duration = originalEnd.getTime() - originalStart.getTime();
+  const newEnd = new Date(timelineStart.getTime() + duration);
+
+  /* 判断是否加班 */
+  const startH = timelineStart.getHours() + timelineStart.getMinutes() / 60;
+  const endH = newEnd.getHours() + newEnd.getMinutes() / 60;
+  const isOvertime = (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
+                     startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
+
+  draggedTask = null;
+
+  const p = getProject(task.dataset.projectId);
+  if (!p) return;
+
+  const store = getStore(p.storeId);
+  const customerPhone = p.phone || "未填写";
+  const storePhone = (store && store.phone) || "未填写";
+
+  const oldStartStr = fmtDateTime(originalStart);
+  const newStartStr = fmtDateTime(timelineStart);
+  const overtimeWarn = isOvertime
+    ? `<div class="tl-drag-overtime">🌙 注意：新时间处于加班时段（工作时间 8:00-18:00 外），代表需要加班！</div>`
+    : "";
+
+  const modalContent = `
+    <div class="tl-drag-modal">
+      <h3>⚠ 确认修改预约时间</h3>
+      <div class="tl-drag-info">
+        <div class="tl-drag-row"><span>项目名称</span><span>${esc(p.name)}</span></div>
+        <div class="tl-drag-row"><span>原时间</span><span>${oldStartStr}</span></div>
+        <div class="tl-drag-row"><span>新时间</span><span>${newStartStr}</span></div>
+        <div class="tl-drag-row"><span>客户电话</span><span><a href="tel:${customerPhone}" class="tl-drag-phone">📞 ${customerPhone}</a></span></div>
+        <div class="tl-drag-row"><span>门店电话</span><span><a href="tel:${storePhone}" class="tl-drag-phone">📞 ${storePhone}</a></span></div>
+      </div>
+      ${overtimeWarn}
+      <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
+      <div class="tl-drag-actions">
+        <button class="btn" onclick="modal.close(); document.getElementById('timelineMain').querySelector('.timeline-task-dragging').style.left = '${originalLeft}px';">取消</button>
+        <button class="btn primary" onclick="modal.close(); saveTimelineTaskTime('${task.dataset.projectId}', new Date('${timelineStart.toISOString()}'), new Date('${newEnd.toISOString()}'));">确认调整时间</button>
+      </div>
+    </div>`;
+
+  modal.open("修改预约时间", modalContent);
+}
+
+async function saveTimelineTaskTime(projectId, newStart, newEnd) {
+  const p = getProject(projectId);
+  if (!p) return;
+  
+  const patch = {
+    appointment_time: newStart.toISOString(),
+    end_time: newEnd.toISOString(),
+  };
+  
+  await repo.patchProject(projectId, patch);
+  
+  modifiedProjectIds.add(projectId);
+  
+  await repo.loadAll();
+  
+  renderAll();
+  toast("预约时间已更新");
 }
 
 /* ============================================================
@@ -2150,6 +3183,7 @@ function bindEvents() {
   document.getElementById("calPrev").addEventListener("click", calPrevMonth);
   document.getElementById("calNext").addEventListener("click", calNextMonth);
   document.getElementById("calToday").addEventListener("click", calGotoToday);
+  document.getElementById("calToggleView").addEventListener("click", toggleCalView);
 
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
