@@ -2608,7 +2608,8 @@ function renderTimelineInDetail() {
           <div class="tl-axis" style="width:${totalWidth}px;">
             ${hourMarks.join("")}
           </div>
-          <div class="tl-body" id="timelineMain" style="width:${totalWidth}px; height:${laneCount * TL_LANE_HEIGHT}px;">
+          <div class="tl-body" id="timelineMain" style="width:${totalWidth}px; height:${laneCount * TL_LANE_HEIGHT}px;"
+             ondragover="timelineDragOver(event)" ondragenter="timelineDragEnter(event)" ondragleave="timelineDragLeave(event)">
             <div class="tl-bg-work" style="left:${workBgLeft}px; width:${workBgWidth}px; height:100%;"></div>
             <div class="tl-bg-overtime tl-bg-ot-left" style="width:${workBgLeft}px; height:100%;"></div>
             <div class="tl-bg-overtime tl-bg-ot-right" style="left:${otRightLeft}px; width:${otRightWidth}px; height:100%;"></div>
@@ -2622,6 +2623,7 @@ function renderTimelineInDetail() {
               })()}
             </div>
             <div class="tl-tasks">${tasksHtml}</div>
+            <div class="tl-drag-hint" id="tlDragHint" style="display:none;"></div>
           </div>
         </div>
       </div>`;
@@ -2853,8 +2855,64 @@ function timelineDragStart(e) {
   task.classList.add("timeline-task-dragging");
 
   e.dataTransfer.effectAllowed = "move";
-  /* Firefox 需要 setData 才能触发拖拽 */
-  try { e.dataTransfer.setData("text/plain", task.dataset.projectId); } catch (_) {}
+  e.dataTransfer.setData("text/plain", task.dataset.projectId);
+}
+
+function timelineDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+
+  if (!draggedTask) return;
+
+  const timelineMain = document.getElementById("timelineMain");
+  const dragHint = document.getElementById("tlDragHint");
+  if (!timelineMain || !dragHint) return;
+
+  const rect = timelineMain.getBoundingClientRect();
+  const clientX = e.clientX;
+  const relativeX = clientX - rect.left;
+  
+  const deltaX = clientX - draggedTask.startClientX;
+  let newLeft = draggedTask.originalLeft + deltaX;
+  newLeft = Math.max(0, Math.min(newLeft, timelineMain.clientWidth - 60));
+
+  draggedTask.el.style.left = newLeft + "px";
+
+  const hourOffset = newLeft / TL_ACTUAL_HOUR_WIDTH;
+  let totalMinutes = Math.round(hourOffset * 60);
+  totalMinutes = Math.round(totalMinutes / 5) * 5;
+  const hours = TL_VIEW_START_HOUR + Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  const timelineStart = new Date(draggedTask.start);
+  timelineStart.setHours(hours, minutes, 0, 0);
+
+  const duration = draggedTask.end.getTime() - draggedTask.start.getTime();
+  const newEnd = new Date(timelineStart.getTime() + duration);
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const timeStr = `${pad(timelineStart.getHours())}:${pad(timelineStart.getMinutes())} ~ ${pad(newEnd.getHours())}:${pad(newEnd.getMinutes())}`;
+
+  const startH = timelineStart.getHours() + timelineStart.getMinutes() / 60;
+  const endH = newEnd.getHours() + newEnd.getMinutes() / 60;
+  const isOvertime = (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
+                     startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
+
+  dragHint.innerHTML = `${timeStr}${isOvertime ? " 🌙 加班" : ""}`;
+  dragHint.style.left = newLeft + "px";
+  dragHint.style.top = "-28px";
+  dragHint.style.display = "block";
+}
+
+function timelineDragEnter(e) {
+  e.preventDefault();
+}
+
+function timelineDragLeave(e) {
+  const dragHint = document.getElementById("tlDragHint");
+  if (dragHint) {
+    dragHint.style.display = "none";
+  }
 }
 
 let touchDragTask = null;
@@ -2994,6 +3052,11 @@ function timelineDragEnd(e) {
   const originalStart = draggedTask.start;
   const originalEnd = draggedTask.end;
   task.classList.remove("timeline-task-dragging");
+
+  const dragHint = document.getElementById("tlDragHint");
+  if (dragHint) {
+    dragHint.style.display = "none";
+  }
 
   const timelineMain = document.getElementById("timelineMain");
   if (!timelineMain) { draggedTask = null; return; }

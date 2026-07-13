@@ -2219,6 +2219,20 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   border-radius: 4px;
 }
 
+.tl-body .tl-drag-hint {
+  position: absolute;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(139, 92, 246, 0.9);
+  padding: 4px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 100;
+  margin: 0;
+  pointer-events: none;
+}
+
 .tl-drag-actions {
   display: flex;
   gap: 12px;
