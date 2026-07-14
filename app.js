@@ -1911,8 +1911,6 @@ function projectForm(p = {}) {
     cache.stores.map((s) =>
       `<option value="${s.id}" ${s.id === selectedStore ? "selected" : ""}>${esc(s.name)}</option>`).join("");
   const startDate = p.appointmentTime ? new Date(p.appointmentTime) : new Date();
-  const endDateVal = p.endTime ? new Date(p.endTime) : startDate;
-  const isCrossDay = p.endTime && endDateVal.toDateString() !== startDate.toDateString();
   return `
     <div style="display:flex;align-items:flex-start;gap:10px;width:100%;">
       <div style="flex-shrink:0;">
@@ -1942,49 +1940,48 @@ function projectForm(p = {}) {
       <input class="input" id="pAddress" value="${esc(p.address || "")}" placeholder="施工现场地址" />
     </div>
     <div class="form-row">
-      <label style="width:100%;margin-bottom:8px;"><span style="color:var(--warn)">📅</span> 预约时间 *</label>
-      <div style="display:flex;align-items:center;gap:6px;width:100%;flex-wrap:wrap;">
-        <input class="input" type="date" id="pDate" value="${startDate.toISOString().slice(0, 10)}" onchange="updateSpanHint()" style="width:auto;" />
-        <select class="input" id="pTime" onchange="updateSpanHint()" style="width:auto;max-width:100px;">
-          ${(() => {
-            const times = [];
-            for (let h = 7; h <= 21; h++) {
-              for (let m = 0; m < 60; m += 10) {
-                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+      <label><span style="color:var(--warn)">📅</span> 预约时间 *</label>
+      <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
+        <input class="input" type="date" id="pDate" value="${startDate.toISOString().slice(0, 10)}" onchange="updateSpanHint()" style="width:100%;" />
+        <div style="display:flex;align-items:center;gap:6px;width:100%;">
+          <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
+          <select class="input" id="pTime" onchange="updateSpanHint()" style="flex:1;max-width:90px;">
+            ${(() => {
+              const times = [];
+              for (let h = 7; h <= 21; h++) {
+                for (let m = 0; m < 60; m += 10) {
+                  times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+                }
               }
-            }
-            times.push('22:00');
-            const curTime = p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '09:00';
-            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
-          })()}
-        </select>
-        <span style="font-size:16px;color:#94a3b8;">→</span>
-        <input class="input" type="date" id="pEndDate" value="${endDateVal.toISOString().slice(0, 10)}" onchange="updateSpanHint()" style="width:auto;display:${isCrossDay ? 'inline-block' : 'none'};" />
-        <select class="input" id="pEnd" onchange="updateSpanHint()" style="width:auto;max-width:100px;">
-          ${(() => {
-            const times = [];
-            for (let h = 7; h <= 21; h++) {
-              for (let m = 0; m < 60; m += 10) {
-                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+              times.push('22:00');
+              const curTime = p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '09:00';
+              return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
+            })()}
+          </select>
+          <span style="font-size:14px;color:#94a3b8;flex-shrink:0;">→</span>
+          <span style="font-size:11px;color:#64748b;flex-shrink:0;">结束</span>
+          <select class="input" id="pEnd" onchange="updateSpanHint()" style="flex:1;max-width:90px;">
+            ${(() => {
+              const times = [];
+              for (let h = 7; h <= 21; h++) {
+                for (let m = 0; m < 60; m += 10) {
+                  times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+                }
               }
-            }
-            times.push('22:00');
-            const curTime = p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '12:00';
-            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
-          })()}
-        </select>
+              times.push('22:00');
+              const curTime = p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '12:00';
+              return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
+            })()}
+          </select>
+        </div>
       </div>
     </div>
     <div class="form-row">
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-        <button class="btn small" onclick="setPTimeRange('morning')" style="background:#e0f2fe;color:#0891b2;border-color:#7dd3fc;border-radius:6px;padding:4px 12px;">🌅 上午</button>
-        <button class="btn small" onclick="setPTimeRange('afternoon')" style="background:#fef3c7;color:#d97706;border-color:#fcd34d;border-radius:6px;padding:4px 12px;">☀️ 下午</button>
-        <button class="btn small" onclick="setPTimeRange('full')" style="background:#dcfce7;color:#16a34a;border-color:#86efac;border-radius:6px;padding:4px 12px;">📅 全天</button>
-        <button class="btn small" onclick="setPTimeRange('twohour')" style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:6px;padding:4px 12px;">⏱️ 2小时</button>
-        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;margin-left:8px;padding:4px 8px;background:#f1f5f9;border-radius:6px;">
-          <input type="checkbox" id="pCrossDay" ${isCrossDay ? 'checked' : ''} onchange="toggleCrossDay()" style="width:14px;height:14px;" />
-          <span style="font-size:12px;color:#64748b;">📆 跨天</span>
-        </label>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+        <button class="btn small" onclick="setPTimeRange('morning')" style="background:#e0f2fe;color:#0891b2;border-color:#7dd3fc;border-radius:4px;padding:3px 8px;font-size:12px;">🌅 上午</button>
+        <button class="btn small" onclick="setPTimeRange('afternoon')" style="background:#fef3c7;color:#d97706;border-color:#fcd34d;border-radius:4px;padding:3px 8px;font-size:12px;">☀️ 下午</button>
+        <button class="btn small" onclick="setPTimeRange('full')" style="background:#dcfce7;color:#16a34a;border-color:#86efac;border-radius:4px;padding:3px 8px;font-size:12px;">📅 全天</button>
+        <button class="btn small" onclick="setPTimeRange('twohour')" style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:4px;padding:3px 8px;font-size:12px;">⏱️ 2小时</button>
       </div>
     </div>
     <div id="pDurationCard" style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">
@@ -2018,11 +2015,18 @@ function projectForm(p = {}) {
             <option value="3" ${(p.workerCount === 3 || (p.assignedWorkerIds && p.assignedWorkerIds.length === 3)) ? 'selected' : ''}>3人</option>
             <option value="4" ${(p.workerCount >= 4 || (p.assignedWorkerIds && p.assignedWorkerIds.length >= 4)) ? 'selected' : ''}>4人+</option>
           </select>
-          <button class="btn small" onclick="autoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">⏱️ 自动计算</button>
+          <button class="btn small" onclick="autoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">计算</button>
         </div>
       </div>
     </div>
     <div class="form-grid">
+      <div class="form-row">
+        <label><span style="color:#8b5cf6;">⏰</span> 外协工时</label>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input class="input" type="number" min="0" step="0.5" id="pOutsourcedHours" value="${esc(p.outsourcedHours ?? "")}" placeholder="0" style="width:auto;max-width:100px;" />
+          <span style="font-size:12px;color:#8b5cf6;font-weight:500;">人·小时</span>
+        </div>
+      </div>
       <div class="form-row">
         <label><span style="color:#8b5cf6;">👤</span> 外协人数</label>
         <div style="display:flex;align-items:center;gap:6px;">
@@ -2033,13 +2037,6 @@ function projectForm(p = {}) {
             <option value="3" ${p.outsourcedCount === 3 ? 'selected' : ''}>3人</option>
             <option value="4" ${p.outsourcedCount >= 4 ? 'selected' : ''}>4人+</option>
           </select>
-        </div>
-      </div>
-      <div class="form-row">
-        <label><span style="color:#8b5cf6;">⏰</span> 外协工时</label>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <input class="input" type="number" min="0" step="0.5" id="pOutsourcedHours" value="${esc(p.outsourcedHours ?? "")}" placeholder="0" style="width:auto;max-width:100px;" />
-          <span style="font-size:12px;color:#8b5cf6;font-weight:500;">人·小时</span>
         </div>
       </div>
     </div>

@@ -1249,13 +1249,27 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   }
 
   .form-row label {
-    font-size: 14px;
-    margin-bottom: 5px;
+    font-size: 13px;
+    margin-bottom: 4px;
   }
 
   .form-grid {
-    grid-template-columns: 1fr;
-    gap: 12px;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .modal-content .form-row {
+    margin-bottom: 8px;
+  }
+
+  .modal-content .input {
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+
+  .modal-content select.input {
+    padding: 6px 8px;
+    font-size: 13px;
   }
 
   .leave-time-section {
@@ -1273,7 +1287,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 
   .modal-content > div:first-child {
     flex-direction: column !important;
-    gap: 10px !important;
+    gap: 8px !important;
   }
 
   .modal-content > div:first-child > div {
@@ -1281,41 +1295,83 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
     min-width: 0 !important;
   }
 
-  .modal-content .form-row > div[style*="display:flex"]:not([style*="flex-wrap"]),
-  .modal-content .form-row > div[style*="display:flex"]:not([style*="flex-wrap"]) {
-    flex-direction: column !important;
-    gap: 8px !important;
+  .modal-content .form-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
-  .modal-content .form-row > div[style*="flex-wrap"] {
-    gap: 8px !important;
+  .modal-content .form-row label {
+    flex: 0 0 auto;
+    min-width: 70px;
+    max-width: 80px;
+    font-size: 12px;
+    margin-bottom: 0;
   }
 
-  .modal-content .form-row > div[style*="flex-wrap"] .input,
-  .modal-content .form-row > div[style*="flex-wrap"] select {
+  .modal-content .form-row > div {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .modal-content .form-row > div[style*="display:flex"] {
+    flex-direction: row !important;
+    align-items: center;
+    gap: 4px !important;
+  }
+
+  .modal-content .form-row > div[style*="display:flex"] .input[type="number"],
+  .modal-content .form-row > div[style*="display:flex"] input[type="number"] {
+    flex: 0 0 40px !important;
+    min-width: 40px !important;
+    max-width: 40px !important;
+    width: 40px !important;
+    padding: 3px 4px !important;
+    font-size: 10px !important;
+    text-align: center;
+  }
+
+  .modal-content .form-row > div[style*="display:flex"] select,
+  .modal-content .form-row > div[style*="display:flex"] .input:not([type="number"]) {
     flex: 1 !important;
-    min-width: 80px !important;
-    max-width: 130px !important;
+    min-width: 0 !important;
+    max-width: 70px !important;
     width: auto !important;
+    padding: 3px 4px !important;
+    font-size: 10px !important;
   }
 
-  .modal-content .form-row > div[style*="flex-wrap"] .btn {
+  .modal-content .form-row > div[style*="display:flex"] span {
+    font-size: 9px !important;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .modal-content .form-row > div[style*="display:flex"] .btn {
     flex: 0 0 auto !important;
     width: auto !important;
-    padding: 6px 12px !important;
-    font-size: 12px !important;
+    padding: 2px 6px !important;
+    font-size: 10px !important;
   }
 
-  .modal-content .form-row > div[style*="flex-wrap"] label {
-    flex: 0 0 auto !important;
-    width: auto !important;
+  .modal-content .form-row .hint {
+    font-size: 10px !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
 
-  .modal-content .form-row > div:not([style*="flex-wrap"]) .input,
-  .modal-content .form-row > div:not([style*="flex-wrap"]) select,
-  .modal-content .form-row > div:not([style*="flex-wrap"]) input {
+  .modal-content .form-row > div[style*="flex-direction:column"] {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+  }
+
+  .modal-content .form-row > div[style*="flex-direction:column"] .input,
+  .modal-content .form-row > div[style*="flex-direction:column"] select {
+    max-width: none !important;
     width: 100% !important;
-    max-width: 100% !important;
   }
 
   #pDurationCard {
