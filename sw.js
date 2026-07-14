@@ -1,12 +1,6 @@
-/* ============================================================
- * Service Worker —— 让系统可安装到桌面/主屏，并在离线时可用
- * 策略：应用外壳(app shell)走 stale-while-revalidate（先返回缓存、
- *       同时后台更新）；第三方请求(Supabase / CDN)一律走网络不缓存。
- * 每次改动前端资源时，把 CACHE 版本号 +1 即可让旧缓存失效。
- * ============================================================ */
-const CACHE = "ad-install-v2";
+const CACHE = "ad-install-v3";
+const VERSION = "v3";
 
-/* 需要预缓存的应用外壳资源（相对路径，兼容子目录部署，如 GitHub Pages） */
 const ASSETS = [
   "./",
   "./index.html",
@@ -19,7 +13,6 @@ const ASSETS = [
 ];
 
 self.addEventListener("install", (e) => {
-  // 逐个缓存并容错：即使个别资源 404 也不影响 SW 安装（不再用 addAll 的“全有或全无”）
   e.waitUntil(
     caches.open(CACHE)
       .then((c) => Promise.all(ASSETS.map((url) => c.add(url).catch((err) => console.warn("预缓存失败:", url, err)))))
@@ -29,9 +22,16 @@ self.addEventListener("install", (e) => {
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
+    Promise.all([
+      caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))),
+      self.clients.claim()
+    ]).then(() => {
+      self.clients.matchAll({ type: "window" }).then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({ type: "VERSION_UPDATED", version: VERSION });
+        });
+      });
+    })
   );
 });
 
@@ -40,7 +40,6 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
-  // 仅接管同源资源；Supabase 数据、Supabase 实时、CDN 脚本等第三方请求直接走网络
   if (url.origin !== self.location.origin) return;
 
   e.respondWith(
@@ -57,4 +56,13 @@ self.addEventListener("fetch", (e) => {
       return cached || network;
     })
   );
+});
+
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "GET_VERSION") {
+    e.ports[0].postMessage({ type: "VERSION_RESPONSE", version: VERSION });
+  }
+  if (e.data && e.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
 });

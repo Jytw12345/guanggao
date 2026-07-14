@@ -747,6 +747,23 @@ textarea.input { resize: vertical; min-height: 70px; }
   padding: 3px 8px;
 }
 
+.btn.tiny.danger {
+  background: #ef4444;
+  color: white;
+}
+
+.schedule-progress-item.overdue {
+  background: #fef2f2;
+  border-left: 3px solid #ef4444;
+}
+
+.overdue-badge {
+  font-size: 11px;
+  color: #ef4444;
+  font-weight: 600;
+  margin-left: 4px;
+}
+
 .leave-calendar-day {
   width: 60px;
   text-align: center;
@@ -823,6 +840,16 @@ textarea.input { resize: vertical; min-height: 70px; }
   color: var(--muted);
 }
 .modal-body { padding: 20px; }
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  background: #fafafa;
+  border-bottom-left-radius: 14px;
+  border-bottom-right-radius: 14px;
+}
 
 .hidden { display: none !important; }
 

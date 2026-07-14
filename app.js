@@ -2338,8 +2338,18 @@ function renderConstruction() {
         <div class="info-grid">
           <div class="info-item"><div class="k">验收人</div><div class="v">${esc(ac.acceptedBy)}</div></div>
           <div class="info-item"><div class="k">验收时间</div><div class="v">${fmtDate(ac.acceptedAt)}</div></div>
+          <div class="info-item"><div class="k">验收类型</div><div class="v">${esc(ac.type || "—")}</div></div>
+          <div class="info-item"><div class="k">验收方式</div><div class="v">${esc(ac.method || "—")}</div></div>
           <div class="info-item"><div class="k">验收结果</div><div class="v">${esc(ac.quality)}</div></div>
+          <div class="info-item"><div class="k">验收结论</div><div class="v">${esc(ac.conclusion || "—")}</div></div>
         </div>
+        ${ac.items && ac.items.length > 0 ? `
+        <div style="margin-top:10px">
+          <div class="k">验收项检查</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;">
+            ${ac.items.map(item => `<span class="badge">✓ ${esc(item)}</span>`).join("")}
+          </div>
+        </div>` : ""}
         <div class="info-item" style="margin-top:10px"><div class="k">验收备注</div><div class="v" style="font-weight:400">${esc(ac.note || "—")}</div></div>
         ${canEdit ? `<div class="card-actions"><button class="btn small" onclick="openAcceptance('${p.id}')">修改验收</button></div>` : ""}
       ` : (canEdit ? `
@@ -2859,11 +2869,17 @@ function generateWorkerScheduleDescription(dateStr = null) {
     description += `</div>`;
   }
   
-  if (todayProjects.length > 0) {
+  const allTodayProjects = cache.projects.filter(p => {
+    const pStart = projectStart(p);
+    if (!pStart) return false;
+    return pStart.toISOString().slice(0, 10) === dateStrFormatted;
+  }).sort((a, b) => projectStart(a) - projectStart(b));
+  
+  if (allTodayProjects.length > 0) {
     description += `<div class="schedule-progress">`;
     description += `<div class="schedule-section-title">📊 项目进度跟踪</div>`;
     
-    todayProjects.forEach(p => {
+    allTodayProjects.forEach(p => {
       const store = getStore(p.storeId);
       const storeName = store ? store.name : "未知门店";
       const pStart = projectStart(p);
@@ -2879,10 +2895,18 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const elapsedMs = pStart ? Math.max(0, now - pStart) : 0;
       const autoProgress = durationMs > 0 ? Math.min(100, Math.round((elapsedMs / durationMs) * 100)) : 0;
       
+      const isOverdue = p.status === "预约中" && !p.started_at && pStart && now > pStart;
+      
       switch (p.status) {
         case "预约中":
-          statusColor = "#3b82f6";
-          progress = now >= pStart ? Math.min(30, autoProgress) : 0;
+          if (isOverdue) {
+            statusColor = "#ef4444";
+            statusText = "预约中（已超期）";
+            progress = 0;
+          } else {
+            statusColor = "#3b82f6";
+            progress = now >= pStart ? Math.min(30, autoProgress) : 0;
+          }
           break;
         case "施工中":
           statusColor = "#f59e0b";
@@ -2908,22 +2932,22 @@ function generateWorkerScheduleDescription(dateStr = null) {
       }
       
       const statusActions = [];
-      if ((isManager() || isWorker()) && p.status === "预约中") {
-        statusActions.push(`<button class="btn tiny" onclick="updateProjectStatus('${p.id}', '施工中')">开始施工</button>`);
+      if ((isManager() || isWorker() || isStoreManager()) && p.status === "预约中") {
+        statusActions.push('<button class="btn tiny ' + (isOverdue ? 'danger' : '') + '" onclick="updateProjectStatus(\'' + p.id + '\', \'施工中\')">开始施工</button>');
       }
-      if ((isManager() || isWorker()) && p.status === "施工中") {
-        statusActions.push(`<button class="btn tiny" onclick="updateProjectStatus('${p.id}', '已完工')">完成安装</button>`);
+      if ((isManager() || isWorker() || isStoreManager()) && p.status === "施工中") {
+        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'已完工\')">完成安装</button>');
       }
-      if ((isManager() || isWorker()) && (p.status === "已完工" || p.status === "已完成")) {
-        statusActions.push(`<button class="btn tiny" onclick="updateProjectStatus('${p.id}', '已验收')">确认验收</button>`);
+      if ((isManager() || isWorker() || isStoreManager()) && (p.status === "已完工" || p.status === "已完成")) {
+        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'已验收\')">确认验收</button>');
       }
       
       description += `
-        <div class="schedule-progress-item">
+        <div class="schedule-progress-item ${isOverdue ? 'overdue' : ''}">
           <div class="schedule-progress-header">
             <span class="schedule-progress-name">${esc(p.name)}</span>
             <span class="schedule-progress-store">${esc(storeName)}</span>
-            <span class="schedule-progress-time">${startTime}</span>
+            <span class="schedule-progress-time">${startTime} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
           </div>
           <div class="schedule-progress-bar-container">
             <div class="schedule-progress-bar" style="width: ${progress}%; background-color: ${statusColor};"></div>
@@ -2949,26 +2973,213 @@ function updateProjectStatus(id, newStatus) {
   const p = getProject(id);
   if (!p) return;
   
+  if (newStatus === "已完工") {
+    openCompleteProjectForm(id);
+    return;
+  }
+  
+  if (newStatus === "已验收") {
+    openAcceptance(id);
+    return;
+  }
+  
   p.status = newStatus;
   
+  const now = new Date().toISOString();
+  
+  if (newStatus === "施工中") {
+    p.started_at = now;
+  }
+  
   if (MODE === "cloud" && cloudConfigured()) {
-    supabase.from("projects").update({ status: newStatus, updated_at: new Date().toISOString() }).eq("id", id).then(() => {
+    const updateData = { status: newStatus, updated_at: now };
+    if (newStatus === "施工中") {
+      updateData.started_at = now;
+    }
+    sb.from("projects").update(updateData).eq("id", id).then(() => {
       toast(`项目状态已更新为：${newStatus}`);
       renderConstruction();
     }).catch(() => {
       toast("更新失败");
     });
   } else {
-    saveProjects();
+    saveLocal();
     toast(`项目状态已更新为：${newStatus}`);
     renderConstruction();
   }
 }
 
+function openCompleteProjectForm(id) {
+  const p = getProject(id);
+  if (!p) return;
+  
+  const workers = (p.assignedWorkerIds || []).map(wid => {
+    const w = getWorker(wid);
+    return w ? w : { id: wid, name: "未知", phone: "" };
+  });
+  
+  const outsourcedWorkers = (p.outsourcedWorkers || "").split(",").map(n => n.trim()).filter(n => n);
+  
+  const dateStr = new Date().toISOString().slice(0, 10);
+  
+  const startedAt = p.started_at ? new Date(p.started_at) : null;
+  const finishedAt = new Date();
+  const durationHours = startedAt ? ((finishedAt - startedAt) / (1000 * 60 * 60)).toFixed(1) : "未知";
+  
+  const startTimeStr = startedAt ? `${startedAt.getFullYear()}/${String(startedAt.getMonth() + 1).padStart(2, "0")}/${String(startedAt.getDate()).padStart(2, "0")} ${String(startedAt.getHours()).padStart(2, "0")}:${String(startedAt.getMinutes()).padStart(2, "0")}` : "未记录";
+  const endTimeStr = `${finishedAt.getFullYear()}/${String(finishedAt.getMonth() + 1).padStart(2, "0")}/${String(finishedAt.getDate()).padStart(2, "0")} ${String(finishedAt.getHours()).padStart(2, "0")}:${String(finishedAt.getMinutes()).padStart(2, "0")}`;
+  
+  let form = `<div class="form-grid">`;
+  
+  form += `<div class="form-row">
+    <label>项目名称</label>
+    <input type="text" value="${esc(p.name || "")}" disabled class="input">
+  </div>`;
+  
+  form += `<div class="form-row">
+    <label>门店</label>
+    <input type="text" value="${esc(storeName(p.storeId))}" disabled class="input">
+  </div>`;
+  
+  form += `<div class="form-row" style="grid-column:1/-1;background:#f0f9ff;padding:12px;border-radius:8px;margin-bottom:8px;">
+    <div style="display:flex;justify-content:space-between;gap:16px;">
+      <div>
+        <div style="font-size:12px;color:#6b7280;">开工时间</div>
+        <div style="font-weight:600;color:#1e40af;">${esc(startTimeStr)}</div>
+      </div>
+      <div>
+        <div style="font-size:12px;color:#6b7280;">完工时间</div>
+        <div style="font-weight:600;color:#1e40af;">${esc(endTimeStr)}</div>
+      </div>
+      <div>
+        <div style="font-size:12px;color:#6b7280;">总用时</div>
+        <div style="font-weight:600;color:#059669;">${esc(durationHours)} 小时</div>
+      </div>
+    </div>
+  </div>`;
+  
+  if (workers.length > 0) {
+    form += `<div class="form-row" style="grid-column:1/-1;">
+      <label>施工人员工时</label>
+      <span style="font-size:12px;color:#6b7280;">根据实际工作时间填写</span>
+    </div>`;
+    
+    workers.forEach((w, idx) => {
+      form += `<div class="form-row" style="grid-column:1/-1;">
+        <div style="display:flex;gap:12px;align-items:center;width:100%;">
+          <span style="min-width:100px;font-weight:500;">${esc(w.name)}</span>
+          <input type="number" id="workerHours_${idx}" placeholder="工时" step="0.5" min="0" max="24" class="input" style="flex:1;">
+          <input type="text" id="workerNote_${idx}" placeholder="备注（可选）" class="input" style="flex:2;">
+        </div>
+      </div>`;
+    });
+  }
+  
+  if (outsourcedWorkers.length > 0) {
+    form += `<div class="form-row" style="grid-column:1/-1;margin-top:8px;">
+      <label>外协人员工时</label>
+      <span style="font-size:12px;color:#6b7280;">根据实际工作时间填写</span>
+    </div>`;
+    
+    outsourcedWorkers.forEach((name, idx) => {
+      form += `<div class="form-row" style="grid-column:1/-1;">
+        <div style="display:flex;gap:12px;align-items:center;width:100%;">
+          <span style="min-width:100px;font-weight:500;">${esc(name)}</span>
+          <input type="number" id="outsourcedHours_${idx}" placeholder="工时" step="0.5" min="0" max="24" class="input" style="flex:1;">
+          <input type="text" id="outsourcedNote_${idx}" placeholder="备注（可选）" class="input" style="flex:2;">
+        </div>
+      </div>`;
+    });
+  }
+  
+  form += `<div class="form-row" style="grid-column:1/-1;">
+    <label>项目备注</label>
+    <textarea id="projectNote" rows="3" class="input" placeholder="请输入项目备注..."></textarea>
+  </div>`;
+  
+  form += `</div>`;
+  
+  modal.open("完成项目 - 填写工时", form, {
+    confirmText: "确认完工",
+    cancelText: "取消",
+    onConfirm: () => {
+      let totalHours = 0;
+      const logs = [];
+      
+      workers.forEach((w, idx) => {
+        const hours = parseFloat(document.getElementById(`workerHours_${idx}`)?.value);
+        const note = document.getElementById(`workerNote_${idx}`)?.value;
+        if (hours && hours > 0) {
+          totalHours += hours;
+          logs.push({
+            workerId: w.id,
+            workerName: w.name,
+            hours: hours,
+            date: dateStr,
+            note: note || null
+          });
+        }
+      });
+      
+      outsourcedWorkers.forEach((name, idx) => {
+        const hours = parseFloat(document.getElementById(`outsourcedHours_${idx}`)?.value);
+        const note = document.getElementById(`outsourcedNote_${idx}`)?.value;
+        if (hours && hours > 0) {
+          totalHours += hours;
+          logs.push({
+            workerId: "",
+            workerName: name,
+            hours: hours,
+            date: dateStr,
+            note: note || null
+          });
+        }
+      });
+      
+      if (totalHours <= 0) {
+        toast("请至少填写一个人员的工时");
+        return false;
+      }
+      
+      const now = new Date().toISOString();
+      
+      p.status = "已完工";
+      p.actualHours = (p.actualHours || 0) + totalHours;
+      p.finished_at = now;
+      
+      logs.forEach(log => {
+        if (!p.workLogs) p.workLogs = [];
+        p.workLogs.push({ id: uid(), ...log });
+      });
+      
+      if (MODE === "cloud" && cloudConfigured()) {
+        Promise.all([
+          sb.from("projects").update({ status: "已完工", actualHours: p.actualHours, finished_at: now, updated_at: now }).eq("id", id),
+          ...logs.map(log => sb.from("work_logs").insert({
+            id: log.id, project_id: id, worker_id: log.workerId,
+            worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note
+          }))
+        ]).then(() => {
+          toast(`项目已完工，总工时：${totalHours}小时`);
+          renderConstruction();
+        }).catch(() => {
+          toast("更新失败");
+        });
+      } else {
+        saveLocal();
+        toast(`项目已完工，总工时：${totalHours}小时`);
+        renderConstruction();
+      }
+      
+      return true;
+    }
+  });
+}
+
 function openAcceptance(id) {
   const p = getProject(id);
   const ac = p.acceptance || {};
-  modal.open("填写验收信息", `
+  modal.open("确认验收 - 填写验收信息", `
     <div class="form-grid">
       <div class="form-row">
         <label>验收人 *</label>
@@ -2977,6 +3188,20 @@ function openAcceptance(id) {
       <div class="form-row">
         <label>验收时间</label>
         <input class="input" type="date" id="acAt" value="${esc(ac.acceptedAt || new Date().toISOString().slice(0,10))}" />
+      </div>
+      <div class="form-row">
+        <label>验收类型</label>
+        <select class="input" id="acType">
+          ${["现场验收", "远程验收", "第三方验收", "内部验收"].map((t) =>
+            `<option value="${t}" ${ac.type === t ? "selected" : ""}>${t}</option>`).join("")}
+        </select>
+      </div>
+      <div class="form-row">
+        <label>验收方式</label>
+        <select class="input" id="acMethod">
+          ${["实物验收", "图片验收", "视频验收", "混合验收"].map((m) =>
+            `<option value="${m}" ${ac.method === m ? "selected" : ""}>${m}</option>`).join("")}
+        </select>
       </div>
     </div>
     <div class="form-row">
@@ -2987,12 +3212,30 @@ function openAcceptance(id) {
       </select>
     </div>
     <div class="form-row">
+      <label>验收结论</label>
+      <select class="input" id="acConclusion">
+        ${["通过", "有条件通过", "不通过"].map((c) =>
+          `<option value="${c}" ${ac.conclusion === c ? "selected" : ""}>${c}</option>`).join("")}
+      </select>
+    </div>
+    <div class="form-row">
       <label>验收备注</label>
-      <textarea class="input" id="acNote" placeholder="现场情况、遗留问题等">${esc(ac.note || "")}</textarea>
+      <textarea class="input" id="acNote" placeholder="现场情况、遗留问题、整改要求等">${esc(ac.note || "")}</textarea>
+    </div>
+    <div class="form-row" style="grid-column:1/-1;">
+      <label>验收项检查</label>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;">
+        ${["安装位置准确", "安装牢固", "外观整洁", "功能正常", "安全达标"].map((item, idx) => `
+          <label style="display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="acItem_${idx}" ${ac.items && ac.items.includes(item) ? "checked" : ""} />
+            <span>${item}</span>
+          </label>
+        `).join("")}
+      </div>
     </div>
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
-      <button class="btn primary" onclick="saveAcceptance('${id}')">保存验收</button>
+      <button class="btn primary" onclick="saveAcceptance('${id}')">确认验收</button>
     </div>
   `);
 }
@@ -3000,11 +3243,24 @@ function openAcceptance(id) {
 async function saveAcceptance(id) {
   const by = document.getElementById("acBy").value.trim();
   if (!by) { toast("请填写验收人"); return; }
+  
+  const items = [];
+  const checkItems = ["安装位置准确", "安装牢固", "外观整洁", "功能正常", "安全达标"];
+  checkItems.forEach((item, idx) => {
+    if (document.getElementById(`acItem_${idx}`)?.checked) {
+      items.push(item);
+    }
+  });
+  
   const acceptance = {
     acceptedBy: by,
     acceptedAt: document.getElementById("acAt").value,
+    type: document.getElementById("acType").value,
+    method: document.getElementById("acMethod").value,
     quality: document.getElementById("acQuality").value,
+    conclusion: document.getElementById("acConclusion").value,
     note: document.getElementById("acNote").value.trim(),
+    items: items,
   };
   await repo.patchProject(id, { acceptance, status: STATUS.ACCEPTED });
   await repo.loadAll();
@@ -3611,15 +3867,34 @@ async function toggleRolePerm(role, cap, checked) {
 /* ============================================================
  * 弹窗 & Tab
  * ============================================================ */
+let modalOnConfirm = null;
+
 const modal = {
-  open(title, bodyHtml) {
+  open(title, bodyHtml, options = {}) {
     document.getElementById("modalTitle").textContent = title;
     document.getElementById("modalBody").innerHTML = bodyHtml;
+    
+    const confirmBtn = document.getElementById("modalConfirm");
+    const cancelBtn = document.getElementById("modalCancel");
+    
+    if (options.onConfirm) {
+      modalOnConfirm = options.onConfirm;
+      confirmBtn.textContent = options.confirmText || "确认";
+      confirmBtn.classList.remove("hidden");
+      cancelBtn.textContent = options.cancelText || "取消";
+      cancelBtn.classList.remove("hidden");
+    } else {
+      modalOnConfirm = null;
+      confirmBtn.classList.add("hidden");
+      cancelBtn.classList.add("hidden");
+    }
+    
     document.getElementById("modal").classList.remove("hidden");
   },
   close() {
     document.getElementById("modal").classList.add("hidden");
     document.getElementById("modalBody").innerHTML = "";
+    modalOnConfirm = null;
   },
 };
 
@@ -5919,6 +6194,15 @@ function bindEvents() {
   });
 
   document.getElementById("modalClose").addEventListener("click", () => modal.close());
+  document.getElementById("modalCancel").addEventListener("click", () => modal.close());
+  document.getElementById("modalConfirm").addEventListener("click", () => {
+    if (modalOnConfirm) {
+      const result = modalOnConfirm();
+      if (result !== false) {
+        modal.close();
+      }
+    }
+  });
   const modalMask = document.getElementById("modal");
   let maskMouseDown = false;
   modalMask.addEventListener("mousedown", (e) => {
@@ -6008,10 +6292,35 @@ async function init() {
 
 document.addEventListener("DOMContentLoaded", init);
 
-/* ---------- PWA：注册 Service Worker（离线可用 / 可安装到主屏） ---------- */
+/* ---------- PWA：注册 Service Worker（离线可用 / 可安装到主屏 / 自动更新） ---------- */
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").catch((err) => console.warn("Service Worker 注册失败", err));
+    navigator.serviceWorker.register("sw.js").then((registration) => {
+      registration.update();
+      
+      registration.addEventListener("updatefound", () => {
+        const newWorker = registration.installing;
+        newWorker.addEventListener("statechange", () => {
+          if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+            if (confirm("发现新版本！是否立即刷新以获取最新功能？")) {
+              window.location.reload();
+            }
+          }
+        });
+      });
+      
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        window.location.reload();
+      });
+      
+      navigator.serviceWorker.addEventListener("message", (e) => {
+        if (e.data && e.data.type === "VERSION_UPDATED") {
+          if (confirm(`应用已更新至新版本 ${e.data.version}！是否立即刷新？`)) {
+            window.location.reload();
+          }
+        }
+      });
+    }).catch((err) => console.warn("Service Worker 注册失败", err));
   });
   
   let resizeTimeout;
