@@ -28,6 +28,7 @@
           <div id="globalSearchResults" class="search-results"></div>
         </div>
         <span id="syncStatus" class="sync-status" title="同步状态">● 本地模式</span>
+        <button id="btnHelp" class="btn small" onclick="showHelp()">📖 帮助</button>
         <button id="userMenu" class="user-menu-btn hidden" aria-label="用户菜单">👤</button>
         <span id="userInfo" class="user-info hidden"></span>
         <span id="roleInfo" class="role-info hidden"></span>
@@ -52,6 +53,8 @@
         <div class="dropdown-item" onclick="exportProjects()">📋 导出项目数据</div>
         <div class="dropdown-item" onclick="exportWorkLogs()">📝 导出工时记录</div>
         <div class="dropdown-item" onclick="exportLeaveRecords()">🏥 导出请假记录</div>
+        <div class="dropdown-item" onclick="exportWorkers()">👷 导出施工人员</div>
+        <div class="dropdown-item" onclick="exportStores()">🏪 导出门店数据</div>
         <div class="dropdown-divider"></div>
         <div class="dropdown-item" onclick="showOperationLogs()">📝 操作日志</div>
         <div class="dropdown-divider"></div>

@@ -685,10 +685,9 @@ const repo = {
     if (MODE === "cloud") {
       const { error } = await sb.from("leave_records").delete().eq("id", id);
       if (error) return fail(error);
-    } else {
-      cache.leaveRecords = cache.leaveRecords.filter((l) => l.id !== id);
-      saveLocal();
     }
+    cache.leaveRecords = cache.leaveRecords.filter((l) => l.id !== id);
+    if (MODE !== "cloud") saveLocal();
   },
   async saveHoliday(holiday, id) {
     if (MODE === "cloud") {
@@ -1601,7 +1600,6 @@ async function deleteLeaveRecord(id) {
   if (!perm.manageLeaves()) { toast("权限不足"); return; }
   if (!confirm("确定删除该请假记录？")) return;
   await repo.deleteLeaveRecord(id);
-  await repo.loadAll();
   renderAll();
   toast("请假记录已删除");
 }
@@ -1842,7 +1840,13 @@ function projectForm(p = {}) {
         <label>开始时间 *</label>
         <select class="input" id="pTime" onchange="updateSpanHint()">
           ${(() => {
-            const times = ['08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00'];
+            const times = [];
+            for (let h = 7; h <= 21; h++) {
+              for (let m = 0; m < 60; m += 10) {
+                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+              }
+            }
+            times.push('22:00');
             const current = p.appointmentTime ? new Date(p.appointmentTime) : null;
             const curTime = current ? `${String(current.getHours()).padStart(2, '0')}:${String(current.getMinutes()).padStart(2, '0')}` : '09:00';
             return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
@@ -1853,7 +1857,13 @@ function projectForm(p = {}) {
         <label>结束时间 *</label>
         <select class="input" id="pEnd" onchange="updateSpanHint()">
           ${(() => {
-            const times = ['08:00', '08:30', '09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00', '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30', '19:00', '19:30', '20:00'];
+            const times = [];
+            for (let h = 7; h <= 21; h++) {
+              for (let m = 0; m < 60; m += 10) {
+                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+              }
+            }
+            times.push('22:00');
             const current = p.endTime ? new Date(p.endTime) : null;
             const curTime = current ? `${String(current.getHours()).padStart(2, '0')}:${String(current.getMinutes()).padStart(2, '0')}` : '12:00';
             return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
@@ -2694,12 +2704,13 @@ function generateWorkerScheduleDescription(dateStr = null) {
   const dateStrFormatted = targetDate.toISOString().slice(0, 10);
   const weekday = ["日", "一", "二", "三", "四", "五", "六"][targetDate.getDay()];
   
-  const todayProjects = cache.projects.filter(p => {
-    if (isCompleted(p)) return false;
+  const allTodayProjects = cache.projects.filter(p => {
     const pStart = projectStart(p);
     if (!pStart) return false;
     return pStart.toISOString().slice(0, 10) === dateStrFormatted;
   }).sort((a, b) => projectStart(a) - projectStart(b));
+  
+  const todayProjects = allTodayProjects.filter(p => !isCompleted(p));
   
   const workerSchedule = {};
   todayProjects.forEach(p => {
@@ -2774,9 +2785,23 @@ function generateWorkerScheduleDescription(dateStr = null) {
       
       const actualDuration = pStart && pEnd ? ((pEnd - pStart) / (1000 * 60 * 60)).toFixed(1) : 0;
       
+      let timePrefix = "";
+      if (pStart) {
+        const hour = pStart.getHours();
+        if (hour < 6) timePrefix = "凌晨";
+        else if (hour < 9) timePrefix = "早上";
+        else if (hour < 12) timePrefix = "上午";
+        else if (hour < 14) timePrefix = "中午";
+        else if (hour < 18) timePrefix = "下午";
+        else if (hour < 22) timePrefix = "晚上";
+        else timePrefix = "深夜";
+      } else {
+        timePrefix = "早上";
+      }
+      
       let taskDesc = "";
       if (idx === 0) {
-        taskDesc = `早上${startTime}出发，`;
+        taskDesc = `${timePrefix}${startTime}出发，`;
       } else if (idx === 1) {
         taskDesc = `忙完回来后，${startTime}再去，`;
       } else {
@@ -2844,14 +2869,24 @@ function generateWorkerScheduleDescription(dateStr = null) {
   todayProjects.forEach(p => {
     (p.assignedWorkerIds || []).forEach(wid => allWorkerIds.add(wid));
   });
-  const totalProjects = todayProjects.length;
+  const totalProjects = allTodayProjects.length;
+  const statusCounts = {
+    "预约中": allTodayProjects.filter(p => p.status === "预约中").length,
+    "施工中": allTodayProjects.filter(p => p.status === "施工中").length,
+    "已完工": allTodayProjects.filter(p => p.status === "已完工").length,
+    "已验收": allTodayProjects.filter(p => p.status === "已验收").length,
+    "已审核": allTodayProjects.filter(p => p.status === "已审核").length,
+    "已取消": allTodayProjects.filter(p => p.status === "已取消").length,
+  };
+  const completedProjects = statusCounts["已完工"] + statusCounts["已验收"] + statusCounts["已审核"];
+  const inProgressProjects = statusCounts["预约中"] + statusCounts["施工中"];
   const totalWorkers = allWorkerIds.size;
   const onJobWorkers = workersWithProjects.length;
   const totalAvailable = cache.workers.length;
   
   if (totalProjects > 0) {
     description += `<div class="schedule-summary">`;
-    description += `<div class="schedule-summary-item">📋 今日项目：${totalProjects} 个</div>`;
+    description += `<div class="schedule-summary-item">📋 今日项目：${totalProjects} 个（进行中 ${inProgressProjects} 个，已完工 ${statusCounts["已完工"]} 个，已验收 ${statusCounts["已验收"]} 个，已审核 ${statusCounts["已审核"]} 个${statusCounts["已取消"] > 0 ? `，已取消 ${statusCounts["已取消"]} 个` : ``}）</div>`;
     description += `<div class="schedule-summary-item">👷 出勤人员：${onJobWorkers} 人</div>`;
     description += `<div class="schedule-summary-item">🏥 请假人员：${onLeaveWorkers.length} 人</div>`;
     description += `<div class="schedule-summary-item">👤 总人数：${totalAvailable} 人</div>`;
@@ -2868,12 +2903,6 @@ function generateWorkerScheduleDescription(dateStr = null) {
     }
     description += `</div>`;
   }
-  
-  const allTodayProjects = cache.projects.filter(p => {
-    const pStart = projectStart(p);
-    if (!pStart) return false;
-    return pStart.toISOString().slice(0, 10) === dateStrFormatted;
-  }).sort((a, b) => projectStart(a) - projectStart(b));
   
   if (allTodayProjects.length > 0) {
     description += `<div class="schedule-progress">`;
@@ -4112,17 +4141,28 @@ function downloadCSV(filename, data) {
 }
 
 function exportProjects() {
-  const headers = ["项目ID", "项目名称", "门店", "状态", "预约时间", "预计工时", "实际工时", "施工人员", "创建时间"];
+  const headers = ["项目ID", "项目名称", "门店", "客户名称", "联系电话", "地址", "状态", "预约时间", "结束时间", "预计工时", "外协工时", "实际工时", "施工人数", "施工人员", "外协人员", "开工时间", "完工时间", "备注", "创建时间", "更新时间"];
   const rows = cache.projects.map(p => [
     p.id,
     p.name || "",
     storeName(p.storeId) || "",
+    p.customer || "",
+    p.phone || "",
+    p.address || "",
     p.status || "",
     p.appointmentTime || "",
+    p.endTime || "",
     p.estimatedHours || 0,
+    p.outsourcedHours || 0,
     p.actualHours || 0,
+    p.workerCount || 1,
     (p.assignedWorkerIds || []).map(wid => getWorker(wid)?.name || wid).join(", ") || "",
-    p.createdAt || ""
+    p.outsourcedWorkers || "",
+    p.started_at || "",
+    p.finished_at || "",
+    p.note || "",
+    p.createdAt || "",
+    p.updatedAt || ""
   ]);
   const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
   downloadCSV(`项目数据_${new Date().toISOString().slice(0, 10)}.csv`, csv);
@@ -4130,15 +4170,19 @@ function exportProjects() {
 }
 
 function exportWorkLogs() {
-  const headers = ["日志ID", "项目ID", "项目名称", "员工", "日期", "工时", "备注", "是否外协"];
+  const headers = ["日志ID", "项目ID", "项目名称", "门店", "员工ID", "员工姓名", "日期", "工时", "开始时间", "结束时间", "备注", "是否外协"];
   const rows = cache.projects.flatMap(p => 
     (p.workLogs || []).map(l => [
       l.id || "",
       p.id,
       p.name || "",
-      l.workerId ? (getWorker(l.workerId)?.name || l.workerId) : "",
+      storeName(p.storeId) || "",
+      l.workerId || "",
+      l.workerName || (l.workerId ? (getWorker(l.workerId)?.name || "") : ""),
       l.date || "",
       l.hours || 0,
+      l.startTime || "",
+      l.endTime || "",
       l.note || "",
       l.isOutsourced ? "是" : "否"
     ])
@@ -4169,11 +4213,40 @@ function exportLeaveRecords() {
   document.getElementById("exportMenu").classList.add("hidden");
 }
 
+function exportWorkers() {
+  const headers = ["员工ID", "姓名", "联系电话", "角色", "创建时间"];
+  const rows = cache.workers.map(w => [
+    w.id,
+    w.name || "",
+    w.phone || "",
+    w.role || "",
+    w.createdAt || ""
+  ]);
+  const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
+  downloadCSV(`施工人员_${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  document.getElementById("exportMenu").classList.add("hidden");
+}
+
+function exportStores() {
+  const headers = ["门店ID", "门店名称", "联系电话", "创建时间"];
+  const rows = cache.stores.map(s => [
+    s.id,
+    s.name || "",
+    s.phone || "",
+    s.createdAt || ""
+  ]);
+  const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
+  downloadCSV(`门店数据_${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  document.getElementById("exportMenu").classList.add("hidden");
+}
+
 function exportAllData() {
   const timestamp = new Date().toISOString().slice(0, 10);
   exportProjects();
   setTimeout(() => exportWorkLogs(), 500);
   setTimeout(() => exportLeaveRecords(), 1000);
+  setTimeout(() => exportWorkers(), 1500);
+  setTimeout(() => exportStores(), 2000);
   document.getElementById("exportMenu").classList.add("hidden");
 }
 
@@ -4279,6 +4352,7 @@ function renderAll() {
   refreshWorkerSelectors();
   renderConstruction();
   renderCalendar();
+  renderTimelineInDetail();
   renderStats();
   renderStoreStats();
   renderStores();
@@ -4687,9 +4761,8 @@ async function withdrawLeave(id) {
   if (!confirm(`确定要撤回您的 ${LEAVE_TYPE_LABEL[record.leaveType]} 申请吗？`)) return;
   
   await repo.deleteLeaveRecord(id);
-  await repo.loadAll();
   logOperation("LEAVE_WITHDRAW", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `时间段：${record.startDate}~${record.endDate}`);
-  renderLeaves();
+  renderAll();
   toast("请假申请已撤回");
 }
 
@@ -5026,6 +5099,8 @@ function renderTimelineInDetail() {
   const detailBox = document.getElementById("calDayDetail");
   const label = document.getElementById("calLabel");
 
+  if (!grid || !weekdaysEl || !detailBox) return;
+
   document.body.classList.add("timeline-view");
 
   if (label) label.textContent = `${calSelectedDate} 时间线视图`;
@@ -5239,6 +5314,7 @@ function renderTimelineInDetail() {
             const d = new Date(today.getTime() + i * 24 * 60 * 60 * 1000);
             const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
             const leaves = cache.leaveRecords.filter((lr) => {
+              if (lr.status === "rejected") return false;
               const sd = new Date(lr.startDate);
               sd.setHours(0, 0, 0, 0);
               const ed = new Date(lr.endDate);
@@ -6339,4 +6415,8 @@ if ("serviceWorker" in navigator) {
       }
     }, 200);
   });
+}
+
+function showHelp() {
+  window.open("help.html", "_blank");
 }
