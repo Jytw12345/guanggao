@@ -4633,7 +4633,7 @@ function renderLeaves() {
   }
   
   recordList.innerHTML = `
-    ${historyRecords.length > 0 ? historyRecords.map(r => renderLeaveCard(r, false)).join("") : 
+    ${historyRecords.length > 0 ? historyRecords.map(r => renderLeaveCard(r, perm.manageLeaves())).join("") : 
       '<div style="text-align:center;color:var(--muted);padding:40px;">暂无请假记录</div>'}
   `;
   
@@ -6418,7 +6418,7 @@ async function startCloudSession() {
   document.getElementById("dropdownEmail").textContent = currentProfile.name || currentUser.email;
   document.getElementById("dropdownRole").textContent = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
   
-  if (currentProfile.role === "admin") {
+  if (currentProfile.role === ROLE.MANAGER) {
     document.getElementById("btnMigrate").classList.remove("hidden");
     document.getElementById("btnExportLocal").classList.remove("hidden");
   } else {
@@ -6467,7 +6467,7 @@ function showNoAccess(email) {
  * 本地数据迁移到云端
  * ============================================================ */
 async function migrateLocalToCloud() {
-  if (currentProfile.role !== "admin") {
+  if (currentProfile.role !== ROLE.MANAGER) {
     toast("只有总经理可以执行此操作");
     return;
   }
@@ -6516,7 +6516,7 @@ async function migrateLocalToCloud() {
  * 导出云端数据到本地
  * ============================================================ */
 async function exportCloudToLocal() {
-  if (currentProfile.role !== "admin") {
+  if (currentProfile.role !== ROLE.MANAGER) {
     toast("只有总经理可以执行此操作");
     return;
   }

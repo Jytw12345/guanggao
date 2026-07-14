@@ -1223,12 +1223,17 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   }
 
   .toolbar {
-    flex-direction: column;
-    gap: 10px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
   .toolbar .input {
-    width: 100%;
+    flex: 1;
+    min-width: 80px;
+    max-width: 110px;
+    font-size: 12px;
+    padding: 6px 8px;
   }
 
   .section-head {
@@ -1264,7 +1269,64 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 
   .leave-time-section-new {
     flex-direction: column;
-    gap: 12px;
+  }
+
+  .modal-content > div:first-child {
+    flex-direction: column !important;
+    gap: 10px !important;
+  }
+
+  .modal-content > div:first-child > div {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .modal-content .form-row > div[style*="display:flex"]:not([style*="flex-wrap"]),
+  .modal-content .form-row > div[style*="display:flex"]:not([style*="flex-wrap"]) {
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+
+  .modal-content .form-row > div[style*="flex-wrap"] {
+    gap: 8px !important;
+  }
+
+  .modal-content .form-row > div[style*="flex-wrap"] .input,
+  .modal-content .form-row > div[style*="flex-wrap"] select {
+    flex: 1 !important;
+    min-width: 80px !important;
+    max-width: 130px !important;
+    width: auto !important;
+  }
+
+  .modal-content .form-row > div[style*="flex-wrap"] .btn {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    padding: 6px 12px !important;
+    font-size: 12px !important;
+  }
+
+  .modal-content .form-row > div[style*="flex-wrap"] label {
+    flex: 0 0 auto !important;
+    width: auto !important;
+  }
+
+  .modal-content .form-row > div:not([style*="flex-wrap"]) .input,
+  .modal-content .form-row > div:not([style*="flex-wrap"]) select,
+  .modal-content .form-row > div:not([style*="flex-wrap"]) input {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  #pDurationCard {
+    flex-direction: row !important;
+    justify-content: space-between !important;
+    text-align: left !important;
+    gap: 10px !important;
+  }
+
+  #pDurationCard > div:last-child {
+    text-align: right !important;
   }
 
   .leave-time-input-row {
