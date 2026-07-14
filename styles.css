@@ -53,6 +53,97 @@ body {
   gap: 8px;
 }
 
+.global-search {
+  position: relative;
+}
+
+.global-search input {
+  width: 240px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 13px;
+  outline: none;
+  transition: all 0.2s;
+  background: #f9fafb;
+}
+
+.global-search input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.1);
+  width: 280px;
+}
+
+.search-results {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 360px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  z-index: 100;
+  display: none;
+}
+
+.search-results.show {
+  display: block;
+}
+
+.search-results-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.search-result-item {
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.search-result-item:hover {
+  background: #f3f4f6;
+}
+
+.search-result-item:last-child {
+  border-bottom: none;
+}
+
+.search-result-icon {
+  font-size: 18px;
+  width: 24px;
+  text-align: center;
+}
+
+.search-result-content {
+  flex: 1;
+}
+
+.search-result-title {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.search-result-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.search-results-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .user-menu-btn {
   background: none;
   border: none;
@@ -405,6 +496,38 @@ textarea.input { resize: vertical; min-height: 70px; }
   margin-top: 8px;
 }
 
+.leave-time-section {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.leave-time-group {
+  background: #f9fafb;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.leave-time-group .form-row {
+  margin-bottom: 10px;
+}
+
+.leave-time-group .form-row:last-child {
+  margin-bottom: 0;
+}
+
+.leave-time-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  color: #9ca3af;
+  font-weight: bold;
+}
+
 /* 弹窗 */
 .modal-mask {
   position: fixed;
@@ -744,6 +867,27 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
     display: none;
   }
 
+  .global-search {
+    flex: 1;
+    max-width: 200px;
+  }
+
+  .global-search input {
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .global-search input:focus {
+    width: 100%;
+  }
+
+  .search-results {
+    right: -10px;
+    width: calc(100vw - 20px);
+    max-width: none;
+  }
+
   .user-menu-btn {
     display: flex;
     font-size: 20px;
@@ -824,6 +968,15 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   .form-grid {
     grid-template-columns: 1fr;
     gap: 16px;
+  }
+
+  .leave-time-section {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .leave-time-arrow {
+    display: none;
   }
 
   .form-actions {

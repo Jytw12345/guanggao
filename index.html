@@ -23,10 +23,15 @@
       <span class="logo">🏗️</span>
       <h1>广告安装施工预约管理系统</h1>
       <div class="header-right">
+        <div class="global-search">
+          <input type="text" id="globalSearch" placeholder="🔍 搜索项目、员工、门店..." />
+          <div id="globalSearchResults" class="search-results"></div>
+        </div>
         <span id="syncStatus" class="sync-status" title="同步状态">● 本地模式</span>
         <button id="userMenu" class="user-menu-btn hidden" aria-label="用户菜单">👤</button>
         <span id="userInfo" class="user-info hidden"></span>
         <span id="roleInfo" class="role-info hidden"></span>
+        <button id="btnExport" class="btn small" onclick="showExportMenu()">📥 导出数据</button>
         <button id="btnMigrate" class="btn small hidden">导入本地数据</button>
         <button id="btnLogout" class="btn small hidden">登出</button>
       </div>
@@ -43,6 +48,15 @@
         <button class="dropdown-item btn-link" id="btnMigrateMenu">导入本地数据</button>
         <button class="dropdown-item btn-link" id="btnLogoutMenu">登出</button>
       </div>
+      <div id="exportMenu" class="user-dropdown hidden">
+        <div class="dropdown-item" onclick="exportProjects()">📋 导出项目数据</div>
+        <div class="dropdown-item" onclick="exportWorkLogs()">📝 导出工时记录</div>
+        <div class="dropdown-item" onclick="exportLeaveRecords()">🏥 导出请假记录</div>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-item" onclick="showOperationLogs()">📝 操作日志</div>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-item" onclick="exportAllData()">📦 导出全部数据</div>
+      </div>
     </div>
     <nav class="tabs">
       <button class="tab-btn active" data-tab="projects">项目预约</button>
@@ -51,6 +65,7 @@
       <button class="tab-btn" data-tab="stats">工时统计</button>
       <button class="tab-btn" data-tab="storeStats">店面统计</button>
       <button class="tab-btn" data-tab="workers">施工人员</button>
+      <button class="tab-btn" data-tab="leaves">请假管理</button>
       <button class="tab-btn" data-tab="stores">门店管理</button>
       <button class="tab-btn" data-tab="accounts">账号管理</button>
       <button class="tab-btn" data-tab="rolePerms">角色权限</button>
@@ -62,8 +77,8 @@
     <button class="bottom-nav-item" data-tab="calendar" title="日历">📅</button>
     <button class="bottom-nav-item" data-tab="construction" title="施工管理">🏗️</button>
     <button class="bottom-nav-item" data-tab="workers" title="施工人员">👷</button>
+    <button class="bottom-nav-item" data-tab="leaves" title="请假管理">🏥</button>
     <button class="bottom-nav-item" data-tab="stats" title="工时统计">📊</button>
-    <button class="bottom-nav-item" data-tab="storeStats" title="店面统计">🏬</button>
   </nav>
 
   <main class="container">
@@ -88,6 +103,8 @@
         </select>
         <div class="toolbar-time-filter">
           <span style="font-size:12px; color:var(--muted); margin-right:6px;">时间范围</span>
+          <button class="btn small" id="timeFilterAll" onclick="setProjectTimeFilter(0)">全部</button>
+          <button class="btn small" id="timeFilter3" onclick="setProjectTimeFilter(3)">3天</button>
           <button class="btn small primary" id="timeFilter7" onclick="setProjectTimeFilter(7)">7天</button>
           <button class="btn small" id="timeFilter15" onclick="setProjectTimeFilter(15)">15天</button>
           <button class="btn small" id="timeFilter30" onclick="setProjectTimeFilter(30)">30天</button>
@@ -197,6 +214,36 @@
       </div>
       <p class="hint">按角色勾选可执行的操作，保存后同角色的所有账号立即生效（总经理恒拥有全部权限，无需配置）。“编辑/删除预约”对店长仍限本门店范围。</p>
       <div id="rolePermList"></div>
+    </section>
+
+    <!-- 请假管理 -->
+    <section id="leaves" class="tab-panel">
+      <div class="section-head">
+        <h2>请假管理</h2>
+        <div class="toolbar" style="margin-top:0;">
+          <select id="leaveStatusFilter" class="input" style="width:auto;">
+            <option value="">全部状态</option>
+            <option value="pending">待审批</option>
+            <option value="approved">已批准</option>
+            <option value="rejected">已拒绝</option>
+          </select>
+          <select id="leaveTypeFilter" class="input" style="width:auto;">
+            <option value="">全部类型</option>
+            <option value="personal">事假</option>
+            <option value="sick">病假</option>
+            <option value="annual">年假</option>
+            <option value="comp">调休</option>
+            <option value="other">其他</option>
+          </select>
+          <select id="leaveWorkerFilter" class="input" style="width:auto;">
+            <option value="">全部人员</option>
+          </select>
+        </div>
+      </div>
+      <div id="leaveStats" class="card-grid" style="margin-bottom:20px;"></div>
+      <div id="leavePendingList" class="card-grid" style="margin-bottom:20px;"></div>
+      <div id="leaveRecordList" class="card-grid" style="margin-bottom:20px;"></div>
+      <div id="holidayManage" class="card-grid"></div>
     </section>
   </main>
 

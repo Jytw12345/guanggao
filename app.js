@@ -16,7 +16,7 @@ const STATUS = {
 };
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [], leaveRecords: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -290,6 +290,10 @@ function showNotificationAlert(msg) {
   }, 4000);
 }
 
+function notify(title, message) {
+  showNotificationAlert(`${title}：${message}`);
+}
+
 function sendNotificationForProjectChange(eventType, project) {
   if (!project) return;
 
@@ -390,17 +394,31 @@ const repo = {
   /* ---- 载入全部数据到 cache ---- */
   async loadAll() {
     if (MODE === "cloud") {
-      const [wRes, pRes, lRes, sRes, rpRes, lrRes] = await Promise.all([
+      const [wRes, pRes, lRes, sRes, rpRes, lrRes, lqRes, hRes] = await Promise.all([
         sb.from("workers").select("*"),
         sb.from("projects").select("*"),
         sb.from("work_logs").select("*"),
         sb.from("stores").select("*"),
         sb.from("role_permissions").select("*"),
         sb.from("leave_records").select("*"),
+        sb.from("leave_quota").select("*"),
+        sb.from("holidays").select("*"),
       ]);
-      if (wRes.error || pRes.error || lRes.error || sRes.error) {
-        console.error(wRes.error || pRes.error || lRes.error || sRes.error);
-        toast("云端数据读取失败，请检查建表脚本是否已执行");
+      const allErrors = [
+        { name: "workers", res: wRes },
+        { name: "projects", res: pRes },
+        { name: "work_logs", res: lRes },
+        { name: "stores", res: sRes },
+        { name: "role_permissions", res: rpRes },
+        { name: "leave_records", res: lrRes },
+        { name: "leave_quota", res: lqRes },
+        { name: "holidays", res: hRes },
+      ].filter(e => e.res.error);
+      
+      if (allErrors.length > 0) {
+        const errorMsg = allErrors.map(e => `${e.name}: ${e.res.error.message}`).join("\n");
+        console.error("云端数据读取失败:", errorMsg);
+        toast(`云端数据读取失败，${allErrors.length} 个表出错，请检查建表脚本是否已执行`);
         return;
       }
       // 角色权限：以默认模板为底，用云端配置覆盖（rpRes 出错则退回默认）
@@ -427,9 +445,28 @@ const repo = {
       });
       cache.leaveRecords = (lrRes.data || []).map((r) => ({
         id: r.id, workerId: r.worker_id, workerName: r.worker_name,
+        leaveType: r.leave_type || "personal",
         startDate: r.start_date, startType: r.start_type || "all", startTime: r.start_time,
         endDate: r.end_date, endType: r.end_type || "all", endTime: r.end_time,
-        reason: r.reason, status: r.status, createdAt: r.created_at,
+        reason: r.reason, status: r.status || "pending",
+        reviewerId: r.reviewer_id, reviewerName: r.reviewer_name,
+        reviewNote: r.review_note, reviewedAt: r.reviewed_at,
+        createdAt: r.created_at,
+      }));
+      cache.leaveQuota = (lqRes.data || []).map((r) => ({
+        id: r.id, workerId: r.worker_id,
+        personal_days: r.personal_days || 15,
+        sick_days: r.sick_days || 30,
+        annual_days: r.annual_days || 10,
+        comp_days: r.comp_days || 0,
+        year: r.year,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }));
+      cache.holidays = (hRes.data || []).map((r) => ({
+        id: r.id, date: r.date, name: r.name,
+        isWorkday: r.is_workday || false,
+        createdAt: r.created_at,
       }));
     } else {
       loadLocal();
@@ -629,9 +666,12 @@ const repo = {
     if (MODE === "cloud") {
       const row = {
         id: id || uid(), worker_id: leave.workerId, worker_name: leave.workerName,
+        leave_type: leave.leaveType || "personal",
         start_date: leave.startDate, start_type: leave.startType || "all", start_time: leave.startTime || null,
         end_date: leave.endDate, end_type: leave.endType || "all", end_time: leave.endTime || null,
-        reason: leave.reason || null, status: leave.status || "approved",
+        reason: leave.reason || null, status: leave.status || "pending",
+        reviewer_id: leave.reviewerId || null, reviewer_name: leave.reviewerName || null,
+        review_note: leave.reviewNote || null, reviewed_at: leave.reviewedAt || null,
       };
       const { error } = await sb.from("leave_records").upsert(row);
       if (error) return fail(error);
@@ -650,11 +690,48 @@ const repo = {
       saveLocal();
     }
   },
+  async saveHoliday(holiday, id) {
+    if (MODE === "cloud") {
+      const row = {
+        id: id || uid(), date: holiday.date, name: holiday.name,
+        is_workday: holiday.isWorkday || false,
+      };
+      const { error } = await sb.from("holidays").upsert(row);
+      if (error) return fail(error);
+    } else {
+      const existing = cache.holidays.find(h => h.date === holiday.date);
+      if (existing) Object.assign(existing, holiday);
+      else cache.holidays.push({ id: uid(), ...holiday });
+      saveLocal();
+    }
+  },
+  async deleteHoliday(id) {
+    if (MODE === "cloud") {
+      const { error } = await sb.from("holidays").delete().eq("id", id);
+      if (error) return fail(error);
+    } else {
+      cache.holidays = cache.holidays.filter((h) => h.id !== id);
+      saveLocal();
+    }
+  },
 };
 
 function fail(error) {
-  console.error(error);
-  toast("云端操作失败：" + (error.message || "未知错误"));
+  console.error("云端操作失败:", error);
+  let message = "云端操作失败";
+  if (error.message) {
+    message += "：" + error.message;
+    if (error.message.includes("column")) {
+      message += "\n提示：请检查建表脚本是否已执行";
+    } else if (error.message.includes("RLS")) {
+      message += "\n提示：可能是权限不足，请联系管理员";
+    } else if (error.message.includes("duplicate")) {
+      message += "\n提示：数据重复，请检查";
+    }
+  } else if (error.code) {
+    message += "（错误码：" + error.code + "）";
+  }
+  toast(message);
   throw error;
 }
 
@@ -674,6 +751,8 @@ function loadLocal() {
       });
       cache.stores = data.stores || [];
       cache.leaveRecords = data.leaveRecords || [];
+      cache.leaveQuota = data.leaveQuota || [];
+      cache.holidays = data.holidays || [];
     }
   } catch (e) {
     console.error("读取本地数据失败", e);
@@ -689,7 +768,14 @@ function loadLocal() {
 }
 
 function saveLocal() {
-  localStorage.setItem(STORE_KEY, JSON.stringify({ workers: cache.workers, projects: cache.projects, stores: cache.stores, leaveRecords: cache.leaveRecords }));
+  localStorage.setItem(STORE_KEY, JSON.stringify({ 
+    workers: cache.workers, 
+    projects: cache.projects, 
+    stores: cache.stores, 
+    leaveRecords: cache.leaveRecords,
+    leaveQuota: cache.leaveQuota,
+    holidays: cache.holidays
+  }));
 }
 
 /* ============================================================
@@ -728,16 +814,18 @@ function setSyncStatus(cls, text) {
 /* ============================================================
  * 施工人员模块
  * ============================================================ */
-function renderWorkers() {
+function renderWorkers(dateStr) {
   const list = document.getElementById("workerList");
   const today = fmtDate(new Date());
-  const canManage = perm.manageWorkers();
+  const displayDate = dateStr || today;
   const isWorkerRole = myRole() === ROLE.WORKER;
   
   if (isWorkerRole) {
-    renderWorkerScheduleForWorker(today);
+    renderWorkerScheduleForWorker(displayDate);
     return;
   }
+  
+  if (!list) return;
   
   if (cache.workers.length === 0) {
     list.innerHTML = `<div class="empty">暂无施工人员，点击右上角「添加人员」创建。</div>`;
@@ -752,65 +840,11 @@ function renderWorkers() {
   const tomorrowStr = fmtDate(tomorrow);
   const dayAfterStr = fmtDate(dayAfterTomorrow);
   
-  const timelineHtml = renderWorkerScheduleHtml(today);
+  const isToday = displayDate === today;
+  const isTomorrow = displayDate === tomorrowStr;
+  const isDayAfter = displayDate === dayAfterStr;
   
-  list.innerHTML = `
-    <div id="workerScheduleSection" style="margin-bottom: 24px;">
-      <div class="section-head" style="margin-bottom: 12px; display:flex; align-items:center; justify-content:space-between;">
-        <h3 style="margin:0; font-size:16px;">📅 施工时间安排</h3>
-        <div style="display:flex; gap:4px;">
-          <button class="btn small primary" onclick="renderWorkers()">今天</button>
-          <button class="btn small" onclick="renderWorkersWithDate('${tomorrowStr}')">明天</button>
-          <button class="btn small" onclick="renderWorkersWithDate('${dayAfterStr}')">后天</button>
-          <button class="btn small" onclick="renderWorkers()">🔄 刷新</button>
-        </div>
-      </div>
-      <div id="workerScheduleView">${timelineHtml}</div>
-    </div>
-    <div class="section-head" style="margin-bottom: 12px;">
-      <h3 style="margin:0; font-size:16px;">👷 施工人员列表</h3>
-    </div>
-    <div class="card-grid" style="margin-top:0;">
-    ${cache.workers.map((w) => {
-      const totalHours = cache.projects.reduce((s, p) =>
-        s + (p.workLogs || []).filter((l) => l.workerId === w.id)
-          .reduce((a, l) => a + (Number(l.hours) || 0), 0), 0);
-      return `
-        <div class="card">
-          <div class="card-title">
-            <h3>${esc(w.name)}</h3>
-            <span class="badge 已完工">${esc(w.role || "施工")}</span>
-          </div>
-          <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
-          <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
-          <div class="card-actions">
-            ${isManager() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
-            <button class="btn small" onclick="renderWorkerSchedule('${today}', '${w.id}')">查看安排</button>
-            <button class="btn small" onclick="openLeaveForm('${w.id}')" style="background:#ef4444;color:#fff">请假</button>
-          </div>
-        </div>`;
-    }).join("")}
-    </div>`;
-}
-
-function renderWorkersWithDate(dateStr) {
-  const list = document.getElementById("workerList");
-  if (!list) return;
-  
-  const today = fmtDate(new Date());
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const dayAfterTomorrow = new Date();
-  dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
-  
-  const tomorrowStr = fmtDate(tomorrow);
-  const dayAfterStr = fmtDate(dayAfterTomorrow);
-  
-  const isToday = dateStr === today;
-  const isTomorrow = dateStr === tomorrowStr;
-  const isDayAfter = dateStr === dayAfterStr;
-  
-  const timelineHtml = renderWorkerScheduleHtml(dateStr);
+  const timelineHtml = renderWorkerScheduleHtml(displayDate);
   
   list.innerHTML = `
     <div id="workerScheduleSection" style="margin-bottom: 24px;">
@@ -818,8 +852,8 @@ function renderWorkersWithDate(dateStr) {
         <h3 style="margin:0; font-size:16px;">📅 施工时间安排</h3>
         <div style="display:flex; gap:4px;">
           <button class="btn small ${isToday ? 'primary' : ''}" onclick="renderWorkers()">今天</button>
-          <button class="btn small ${isTomorrow ? 'primary' : ''}" onclick="renderWorkersWithDate('${tomorrowStr}')">明天</button>
-          <button class="btn small ${isDayAfter ? 'primary' : ''}" onclick="renderWorkersWithDate('${dayAfterStr}')">后天</button>
+          <button class="btn small ${isTomorrow ? 'primary' : ''}" onclick="renderWorkers('${tomorrowStr}')">明天</button>
+          <button class="btn small ${isDayAfter ? 'primary' : ''}" onclick="renderWorkers('${dayAfterStr}')">后天</button>
           <button class="btn small" onclick="renderWorkers()">🔄 刷新</button>
         </div>
       </div>
@@ -843,7 +877,7 @@ function renderWorkersWithDate(dateStr) {
           <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
           <div class="card-actions">
             ${isManager() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
-            <button class="btn small" onclick="renderWorkerSchedule('${dateStr}', '${w.id}')">查看安排</button>
+            <button class="btn small" onclick="renderWorkerSchedule('${displayDate}', '${w.id}')">查看安排</button>
             <button class="btn small" onclick="openLeaveForm('${w.id}')" style="background:#ef4444;color:#fff">请假</button>
           </div>
         </div>`;
@@ -1121,6 +1155,20 @@ async function deleteWorker(id) {
   toast("已删除");
 }
 
+const LEAVE_TYPE_LABEL = {
+  personal: "事假",
+  sick: "病假",
+  annual: "年假",
+  comp: "调休",
+  other: "其他"
+};
+
+const LEAVE_STATUS_LABEL = {
+  pending: "待审批",
+  approved: "已批准",
+  rejected: "已拒绝"
+};
+
 function openLeaveForm(workerId) {
   const w = getWorker(workerId);
   if (!w) return;
@@ -1135,38 +1183,69 @@ function openLeaveForm(workerId) {
         <input type="hidden" id="leaveWorkerName" value="${esc(w.name)}" />
       </div>
       <div class="form-row">
-        <label>请假开始日期 *</label>
-        <input class="input" type="date" id="leaveStartDate" value="${today}" min="${today}" onchange="updateLeaveEndDateMin()" />
-      </div>
-      <div class="form-row">
-        <label>开始时段 *</label>
-        <select class="input" id="leaveStartType">
-          <option value="all">全天</option>
-          <option value="morning">上午（08:00-12:00）</option>
-          <option value="afternoon">下午（13:00-18:00）</option>
-          <option value="custom">自定义时间</option>
+        <label>请假类型 *</label>
+        <select class="input" id="leaveType">
+          <option value="personal">事假</option>
+          <option value="sick">病假</option>
+          <option value="annual">年假</option>
+          <option value="comp">调休</option>
+          <option value="other">其他</option>
         </select>
       </div>
-      <div class="form-row" id="leaveStartTimeRow" style="display:none;">
-        <label>开始时间</label>
-        <input class="input" type="time" id="leaveStartTime" value="08:00" />
+      <div class="form-row" id="leaveQuotaHint" style="display:none;background:#fef3c7;border-left:3px solid #f59e0b;padding:10px 15px;border-radius:4px;">
+        <span style="font-weight:bold;color:#f59e0b">⚠️ 额度提示：</span>
+        <span id="leaveQuotaText" style="color:#92400e"></span>
       </div>
-      <div class="form-row">
-        <label>请假结束日期 *</label>
-        <input class="input" type="date" id="leaveEndDate" value="${tomorrow}" min="${today}" />
+      <div class="leave-time-section">
+        <div class="leave-time-group">
+          <h4 style="margin:0 0 12px 0;font-size:14px;color:var(--primary)">📅 开始时间</h4>
+          <div class="form-row">
+            <label>日期 *</label>
+            <input class="input" type="date" id="leaveStartDate" value="${today}" min="${today}" />
+          </div>
+          <div class="form-row">
+            <label>时段 *</label>
+            <select class="input" id="leaveStartType">
+              <option value="all">全天</option>
+              <option value="morning">上午（08:00-12:00）</option>
+              <option value="afternoon">下午（13:00-18:00）</option>
+              <option value="custom">自定义时间</option>
+            </select>
+          </div>
+          <div class="form-row" id="leaveStartTimeRow" style="display:none;">
+            <label>具体时间</label>
+            <input class="input" type="time" id="leaveStartTime" value="08:00" />
+          </div>
+        </div>
+        <div class="leave-time-arrow">→</div>
+        <div class="leave-time-group">
+          <h4 style="margin:0 0 12px 0;font-size:14px;color:var(--danger)">📅 结束时间</h4>
+          <div class="form-row">
+            <label>日期 *</label>
+            <input class="input" type="date" id="leaveEndDate" value="${tomorrow}" min="${today}" />
+          </div>
+          <div class="form-row">
+            <label>时段 *</label>
+            <select class="input" id="leaveEndType">
+              <option value="all">全天</option>
+              <option value="morning">上午（08:00-12:00）</option>
+              <option value="afternoon">下午（13:00-18:00）</option>
+              <option value="custom">自定义时间</option>
+            </select>
+          </div>
+          <div class="form-row" id="leaveEndTimeRow" style="display:none;">
+            <label>具体时间</label>
+            <input class="input" type="time" id="leaveEndTime" value="18:00" />
+          </div>
+        </div>
       </div>
-      <div class="form-row">
-        <label>结束时段 *</label>
-        <select class="input" id="leaveEndType">
-          <option value="all">全天</option>
-          <option value="morning">上午（08:00-12:00）</option>
-          <option value="afternoon">下午（13:00-18:00）</option>
-          <option value="custom">自定义时间</option>
-        </select>
+      <div class="form-row" id="leaveDurationHint" style="background:#f0f9ff;border-left:3px solid var(--primary);padding:10px 15px;margin:12px 0;border-radius:4px;">
+        <span style="font-weight:bold;color:var(--primary)">⏱️ 请假时长：</span>
+        <span id="leaveDurationText" style="color:#6b7280;">请选择时间</span>
       </div>
-      <div class="form-row" id="leaveEndTimeRow" style="display:none;">
-        <label>结束时间</label>
-        <input class="input" type="time" id="leaveEndTime" value="18:00" />
+      <div class="form-row" id="leaveConflictHint" style="display:none;background:#fef2f2;border-left:3px solid #dc2626;padding:10px 15px;border-radius:4px;">
+        <span style="font-weight:bold;color:#dc2626">❌ 冲突提示：</span>
+        <span id="leaveConflictText" style="color:#991b1b"></span>
       </div>
       <div class="form-row">
         <label>请假原因</label>
@@ -1174,16 +1253,40 @@ function openLeaveForm(workerId) {
       </div>
       <div class="form-actions">
         <button class="btn" onclick="modal.close()">取消</button>
-        <button class="btn primary" onclick="submitLeaveForm()">提交请假</button>
+        <button class="btn primary" onclick="submitLeaveForm()">提交请假申请</button>
       </div>
     </div>`;
   modal.open("📅 请假申请", form);
   document.getElementById("leaveStartType").addEventListener("change", function() {
     document.getElementById("leaveStartTimeRow").style.display = this.value === "custom" ? "block" : "none";
+    updateLeaveDuration();
+    checkLeaveQuotaAndConflict();
   });
   document.getElementById("leaveEndType").addEventListener("change", function() {
     document.getElementById("leaveEndTimeRow").style.display = this.value === "custom" ? "block" : "none";
+    updateLeaveDuration();
+    checkLeaveQuotaAndConflict();
   });
+  document.getElementById("leaveStartDate").addEventListener("change", function() {
+    updateLeaveEndDateMin();
+    updateLeaveDuration();
+    checkLeaveQuotaAndConflict();
+  });
+  document.getElementById("leaveEndDate").addEventListener("change", function() {
+    updateLeaveDuration();
+    checkLeaveQuotaAndConflict();
+  });
+  document.getElementById("leaveStartTime").addEventListener("change", function() {
+    updateLeaveDuration();
+    checkLeaveQuotaAndConflict();
+  });
+  document.getElementById("leaveEndTime").addEventListener("change", function() {
+    updateLeaveDuration();
+    checkLeaveQuotaAndConflict();
+  });
+  document.getElementById("leaveType").addEventListener("change", checkLeaveQuotaAndConflict);
+  updateLeaveDuration();
+  checkLeaveQuotaAndConflict();
 }
 
 function updateLeaveEndDateMin() {
@@ -1194,9 +1297,209 @@ function updateLeaveEndDateMin() {
   }
 }
 
+function checkLeaveQuotaAndConflict() {
+  const workerId = document.getElementById("leaveWorkerId").value;
+  const leaveType = document.getElementById("leaveType").value;
+  const startDate = document.getElementById("leaveStartDate").value;
+  const startType = document.getElementById("leaveStartType").value;
+  const startTime = startType === "custom" ? document.getElementById("leaveStartTime").value : null;
+  const endDate = document.getElementById("leaveEndDate").value;
+  const endType = document.getElementById("leaveEndType").value;
+  const endTime = endType === "custom" ? document.getElementById("leaveEndTime").value : null;
+  
+  const quotaHint = document.getElementById("leaveQuotaHint");
+  const quotaText = document.getElementById("leaveQuotaText");
+  const conflictHint = document.getElementById("leaveConflictHint");
+  const conflictText = document.getElementById("leaveConflictText");
+  
+  quotaHint.style.display = "none";
+  conflictHint.style.display = "none";
+  
+  if (!startDate || !endDate) return;
+  
+  const conflicts = checkLeaveProjectConflict(workerId, startDate, endDate, startTime, endTime);
+  if (conflicts.length > 0) {
+    conflictHint.style.display = "block";
+    conflictText.textContent = `与 ${conflicts.length} 个项目排期冲突：${conflicts.map(p => p.name).join("、")}`;
+  }
+  
+  if (leaveType === "other") return;
+  
+  const usedDays = calculateUsedLeaveDays(workerId, leaveType);
+  const quota = getLeaveQuota(workerId);
+  const requestedDays = calculateLeaveDays(startDate, endDate);
+  
+  let quotaField = "";
+  if (leaveType === "personal") quotaField = quota.personal_days || 15;
+  else if (leaveType === "sick") quotaField = quota.sick_days || 30;
+  else if (leaveType === "annual") quotaField = quota.annual_days || 10;
+  else if (leaveType === "comp") quotaField = quota.comp_days || 0;
+  
+  const remaining = Math.max(0, quotaField - usedDays);
+  if (requestedDays > remaining) {
+    quotaHint.style.display = "block";
+    quotaText.textContent = `${LEAVE_TYPE_LABEL[leaveType]}额度不足！已使用 ${usedDays.toFixed(1)} 天，剩余 ${remaining.toFixed(1)} 天，本次申请 ${requestedDays.toFixed(1)} 天`;
+  } else if (remaining <= 3) {
+    quotaHint.style.display = "block";
+    quotaText.textContent = `${LEAVE_TYPE_LABEL[leaveType]}剩余额度较少：${remaining.toFixed(1)} 天`;
+  }
+}
+
+function checkLeaveProjectConflict(workerId, startDate, endDate, startTime = null, endTime = null) {
+  const getTimeStr = (type, time) => {
+    if (type === "all") return "08:00";
+    if (type === "morning") return "08:00";
+    if (type === "afternoon") return "13:00";
+    return time || "08:00";
+  };
+  
+  const getEndTimeStr = (type, time) => {
+    if (type === "all") return "18:00";
+    if (type === "morning") return "12:00";
+    if (type === "afternoon") return "18:00";
+    return time || "18:00";
+  };
+  
+  const startDt = new Date(`${startDate}T${startTime || "08:00"}`);
+  const endDt = new Date(`${endDate}T${endTime || "18:00"}`);
+  
+  return cache.projects.filter(p => {
+    if (!p.assignedWorkers || p.assignedWorkers.length === 0) return false;
+    if (!p.assignedWorkers.includes(workerId)) return false;
+    if (isCompleted(p)) return false;
+    
+    const pStart = projectStart(p);
+    if (!pStart) return false;
+    
+    const pEnd = projectEnd(p);
+    if (!pEnd) return false;
+    
+    return pStart < endDt && pEnd > startDt;
+  });
+}
+
+function isHoliday(dateStr) {
+  const holiday = cache.holidays.find(h => h.date === dateStr);
+  if (!holiday) return false;
+  return !holiday.is_workday;
+}
+
+function isWorkDay(dateStr) {
+  const date = new Date(dateStr);
+  const dayOfWeek = date.getDay();
+  if (dayOfWeek === 0 || dayOfWeek === 6) {
+    const holiday = cache.holidays.find(h => h.date === dateStr);
+    return holiday && holiday.is_workday;
+  }
+  return !isHoliday(dateStr);
+}
+
+function calculateLeaveDays(startDate, endDate) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  let workDays = 0;
+  const current = new Date(start);
+  
+  while (current <= end) {
+    const dateStr = current.toISOString().split("T")[0];
+    if (isWorkDay(dateStr)) {
+      workDays++;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+  
+  return workDays;
+}
+
+function calculateUsedLeaveDays(workerId, leaveType) {
+  const year = new Date().getFullYear().toString();
+  return cache.leaveRecords
+    .filter(l => l.workerId === workerId && l.status === "approved" && l.leaveType === leaveType)
+    .reduce((sum, l) => sum + calculateLeaveDays(l.startDate, l.endDate), 0);
+}
+
+function getLeaveQuota(workerId) {
+  const year = new Date().getFullYear().toString();
+  return cache.leaveQuota.find(q => q.workerId === workerId && q.year === year) || {
+    personal_days: 15,
+    sick_days: 30,
+    annual_days: 10,
+    comp_days: 0
+  };
+}
+
+function updateLeaveDuration() {
+  const startDate = document.getElementById("leaveStartDate").value;
+  const startType = document.getElementById("leaveStartType").value;
+  const startTime = document.getElementById("leaveStartTime").value;
+  const endDate = document.getElementById("leaveEndDate").value;
+  const endType = document.getElementById("leaveEndType").value;
+  const endTime = document.getElementById("leaveEndTime").value;
+  const textEl = document.getElementById("leaveDurationText");
+  const hintEl = document.getElementById("leaveDurationHint");
+  
+  if (!startDate || !endDate) {
+    textEl.textContent = "请选择日期";
+    textEl.style.color = "#6b7280";
+    hintEl.style.borderColor = "var(--primary)";
+    hintEl.style.background = "#f0f9ff";
+    return;
+  }
+  
+  const getTimeStr = (type, time) => {
+    if (type === "all") return "08:00";
+    if (type === "morning") return "08:00";
+    if (type === "afternoon") return "13:00";
+    return time || "08:00";
+  };
+  
+  const getEndTimeStr = (type, time) => {
+    if (type === "all") return "18:00";
+    if (type === "morning") return "12:00";
+    if (type === "afternoon") return "18:00";
+    return time || "18:00";
+  };
+  
+  const s = new Date(`${startDate}T${getTimeStr(startType, startTime)}`);
+  const e = new Date(`${endDate}T${getEndTimeStr(endType, endTime)}`);
+  
+  if (isNaN(s) || isNaN(e)) {
+    textEl.textContent = "时间格式错误";
+    textEl.style.color = "#dc2626";
+    hintEl.style.borderColor = "#dc2626";
+    hintEl.style.background = "#fef2f2";
+    return;
+  }
+  
+  if (e <= s) {
+    textEl.textContent = "❌ 结束时间不能早于开始时间";
+    textEl.style.color = "#dc2626";
+    hintEl.style.borderColor = "#dc2626";
+    hintEl.style.background = "#fef2f2";
+    return;
+  }
+  
+  const diffMs = e - s;
+  const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+  
+  let durationText = "";
+  if (days > 0) durationText += `${days} 天 `;
+  if (hours > 0) durationText += `${hours} 小时 `;
+  if (mins > 0 || !durationText) durationText += `${mins} 分钟`;
+  
+  const totalHours = (diffMs / (1000 * 60 * 60)).toFixed(1);
+  textEl.textContent = `${durationText.trim()}（约 ${totalHours} 工时）`;
+  textEl.style.color = "#10b981";
+  hintEl.style.borderColor = "#10b981";
+  hintEl.style.background = "#f0fdf4";
+}
+
 async function submitLeaveForm() {
   const workerId = document.getElementById("leaveWorkerId").value;
   const workerName = document.getElementById("leaveWorkerName").value;
+  const leaveType = document.getElementById("leaveType").value;
   const startDate = document.getElementById("leaveStartDate").value;
   const startType = document.getElementById("leaveStartType").value;
   const startTime = startType === "custom" ? document.getElementById("leaveStartTime").value : null;
@@ -1223,14 +1526,29 @@ async function submitLeaveForm() {
     }
   }
   
+  const conflicts = checkLeaveProjectConflict(workerId, startDate, endDate, startTime, endTime);
+  if (conflicts.length > 0) {
+    if (!confirm(`检测到 ${conflicts.length} 个项目排期冲突，确认继续提交请假申请吗？`)) {
+      return;
+    }
+  }
+  
+  const isAutoApproved = isManager() || leaveType === "comp";
+  const status = isAutoApproved ? "approved" : "pending";
+  
   await repo.saveLeaveRecord({
-    workerId, workerName, startDate, startType, startTime,
-    endDate, endType, endTime, reason, status: "approved",
+    workerId, workerName, leaveType,
+    startDate, startType, startTime,
+    endDate, endType, endTime, reason, status,
   });
   await repo.loadAll();
   modal.close();
   renderAll();
-  toast("请假记录已保存");
+  toast(status === "approved" ? "请假已批准" : "请假申请已提交，等待审批");
+  
+  if (status === "pending") {
+    notify("新的请假申请", `${workerName} 申请了 ${LEAVE_TYPE_LABEL[leaveType]}，请及时审批`);
+  }
 }
 
 async function deleteLeaveRecord(id) {
@@ -1403,6 +1721,8 @@ function refreshProjectStoreFilter() {
 function setProjectTimeFilter(days) {
   projectTimeFilterDays = days;
   
+  document.getElementById("timeFilterAll").classList.toggle("primary", days === 0);
+  document.getElementById("timeFilter3").classList.toggle("primary", days === 3);
   document.getElementById("timeFilter7").classList.toggle("primary", days === 7);
   document.getElementById("timeFilter15").classList.toggle("primary", days === 15);
   document.getElementById("timeFilter30").classList.toggle("primary", days === 30);
@@ -1562,6 +1882,12 @@ async function saveProject(id) {
   toast("已保存");
   
   if (id) {
+    logOperation("PROJECT_EDIT", name, `ID: ${id}`);
+  } else {
+    logOperation("PROJECT_CREATE", name);
+  }
+  
+  if (id) {
     const p = getProject(id);
     if (p) {
       sendNotificationForProjectChange("update", p);
@@ -1660,11 +1986,15 @@ async function completeRepair(projectId) {
 
 async function deleteProject(id) {
   if (!confirm("确定删除该项目及其施工记录？")) return;
+  const p = getProject(id);
   await repo.deleteProject(id);
   if (currentProjectId === id) currentProjectId = "";
   await repo.loadAll();
   renderAll();
   toast("已删除");
+  if (p) {
+    logOperation("PROJECT_DELETE", p.name || "项目", `ID: ${id}`);
+  }
 }
 
 /* ============================================================
@@ -2238,6 +2568,7 @@ async function addWorkLog(id) {
 }
 
 async function deleteWorkLog(pid, lid) {
+  if (!confirm("确定删除该工时记录？此操作不可撤销。")) return;
   await repo.deleteWorkLog(pid, lid);
   await repo.loadAll();
   renderAll();
@@ -2902,6 +3233,293 @@ const modal = {
   },
 };
 
+/* 全局搜索功能 */
+let globalSearchTimer = null;
+
+function initGlobalSearch() {
+  const input = document.getElementById("globalSearch");
+  const results = document.getElementById("globalSearchResults");
+  
+  if (!input || !results) return;
+  
+  input.addEventListener("input", function() {
+    clearTimeout(globalSearchTimer);
+    const query = this.value.trim().toLowerCase();
+    
+    if (!query) {
+      results.classList.remove("show");
+      return;
+    }
+    
+    globalSearchTimer = setTimeout(() => {
+      performSearch(query);
+    }, 200);
+  });
+  
+  input.addEventListener("focus", function() {
+    if (this.value.trim()) {
+      performSearch(this.value.trim().toLowerCase());
+    }
+  });
+  
+  document.addEventListener("click", function(e) {
+    if (!input.contains(e.target) && !results.contains(e.target)) {
+      results.classList.remove("show");
+    }
+  });
+}
+
+function performSearch(query) {
+  const results = document.getElementById("globalSearchResults");
+  
+  const projectResults = cache.projects.filter(p => 
+    (p.name && p.name.toLowerCase().includes(query)) ||
+    (p.storeId && getStore(p.storeId)?.name?.toLowerCase().includes(query)) ||
+    (p.assignedWorkerIds || []).some(wid => getWorker(wid)?.name?.toLowerCase().includes(query))
+  ).slice(0, 8);
+  
+  const workerResults = cache.workers.filter(w => 
+    (w.name && w.name.toLowerCase().includes(query)) ||
+    (w.phone && w.phone.includes(query))
+  ).slice(0, 8);
+  
+  const storeResults = cache.stores.filter(s => 
+    (s.name && s.name.toLowerCase().includes(query)) ||
+    (s.phone && s.phone.includes(query))
+  ).slice(0, 8);
+  
+  let html = "";
+  
+  if (projectResults.length > 0) {
+    html += `<div class="search-results-header">📋 项目 (${projectResults.length})</div>`;
+    html += projectResults.map(p => `
+      <div class="search-result-item" onclick="searchNavigateToProject('${p.id}')">
+        <div class="search-result-icon">📋</div>
+        <div class="search-result-content">
+          <div class="search-result-title">${esc(p.name)}</div>
+          <div class="search-result-subtitle">${storeName(p.storeId)} · ${p.status}</div>
+        </div>
+      </div>
+    `).join("");
+  }
+  
+  if (workerResults.length > 0) {
+    html += `<div class="search-results-header">👷 员工 (${workerResults.length})</div>`;
+    html += workerResults.map(w => `
+      <div class="search-result-item" onclick="searchNavigateToWorker('${w.id}')">
+        <div class="search-result-icon">👷</div>
+        <div class="search-result-content">
+          <div class="search-result-title">${esc(w.name)}</div>
+          <div class="search-result-subtitle">${esc(w.role || "施工人员")} · ${esc(w.phone || "")}</div>
+        </div>
+      </div>
+    `).join("");
+  }
+  
+  if (storeResults.length > 0) {
+    html += `<div class="search-results-header">🏪 门店 (${storeResults.length})</div>`;
+    html += storeResults.map(s => `
+      <div class="search-result-item" onclick="searchNavigateToStore('${s.id}')">
+        <div class="search-result-icon">🏪</div>
+        <div class="search-result-content">
+          <div class="search-result-title">${esc(s.name)}</div>
+          <div class="search-result-subtitle">${esc(s.phone || "")}</div>
+        </div>
+      </div>
+    `).join("");
+  }
+  
+  if (!html) {
+    html = `<div class="search-results-empty">未找到匹配结果</div>`;
+  }
+  
+  results.innerHTML = html;
+  results.classList.add("show");
+}
+
+function searchNavigateToProject(id) {
+  switchTab("projects");
+  document.getElementById("globalSearch").value = "";
+  document.getElementById("globalSearchResults").classList.remove("show");
+  setTimeout(() => {
+    document.getElementById("projectSearch").value = getProject(id)?.name || "";
+    renderProjects();
+  }, 100);
+}
+
+function searchNavigateToWorker(id) {
+  switchTab("workers");
+  document.getElementById("globalSearch").value = "";
+  document.getElementById("globalSearchResults").classList.remove("show");
+}
+
+function searchNavigateToStore(id) {
+  switchTab("stores");
+  document.getElementById("globalSearch").value = "";
+  document.getElementById("globalSearchResults").classList.remove("show");
+}
+
+document.addEventListener("DOMContentLoaded", initGlobalSearch);
+
+/* 操作日志功能 */
+const OPERATION_TYPES = {
+  PROJECT_CREATE: "创建项目",
+  PROJECT_EDIT: "编辑项目",
+  PROJECT_DELETE: "删除项目",
+  PROJECT_ASSIGN: "分配员工",
+  PROJECT_COMPLETE: "完成项目",
+  PROJECT_REVIEW: "审核项目",
+  LEAVE_CREATE: "提交请假",
+  LEAVE_APPROVE: "批准请假",
+  LEAVE_REJECT: "拒绝请假",
+  LEAVE_WITHDRAW: "撤回请假",
+  WORKER_CREATE: "添加员工",
+  WORKER_EDIT: "编辑员工",
+  WORKER_DELETE: "删除员工",
+  STORE_CREATE: "添加门店",
+  STORE_EDIT: "编辑门店",
+  STORE_DELETE: "删除门店",
+  WORK_LOG_ADD: "添加工时",
+  WORK_LOG_DELETE: "删除工时",
+};
+
+function logOperation(type, target, detail = "") {
+  const log = {
+    id: uid(),
+    type,
+    typeLabel: OPERATION_TYPES[type] || type,
+    target,
+    detail,
+    operator: currentProfile?.id || "system",
+    operatorName: currentProfile?.email || currentProfile?.name || "系统",
+    operatorRole: myRole(),
+    timestamp: new Date().toISOString(),
+  };
+  cache.operationLogs.unshift(log);
+  if (cache.operationLogs.length > 1000) {
+    cache.operationLogs = cache.operationLogs.slice(0, 1000);
+  }
+  saveLocal();
+}
+
+function showOperationLogs() {
+  const logs = cache.operationLogs.slice(0, 100);
+  
+  const modalContent = `
+    <div style="max-height:600px;overflow-y:auto;">
+      <h3 style="margin:0 0 16px 0;">📝 操作日志</h3>
+      ${logs.length > 0 ? logs.map(log => `
+        <div style="border-bottom:1px solid #f3f4f6;padding:12px 0;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-weight:bold;color:var(--primary)">${esc(log.typeLabel)}</span>
+            <span style="font-size:12px;color:var(--muted)">${new Date(log.timestamp).toLocaleString()}</span>
+          </div>
+          <div style="margin-top:4px;font-size:13px;">目标：${esc(log.target)}</div>
+          ${log.detail ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">详情：${esc(log.detail)}</div>` : ""}
+          <div style="margin-top:4px;font-size:12px;color:#6b7280;">操作人：${esc(log.operatorName)}（${ROLE_LABEL[log.operatorRole] || log.operatorRole}）</div>
+        </div>
+      `).join("") : `<div style="text-align:center;color:var(--muted);padding:40px;">暂无操作日志</div>`}
+    </div>
+  `;
+  
+  modal.open("操作日志", modalContent);
+}
+
+/* 数据导出功能 */
+function showExportMenu() {
+  const menu = document.getElementById("exportMenu");
+  if (menu) {
+    menu.classList.toggle("hidden");
+  }
+}
+
+function downloadCSV(filename, data) {
+  const blob = new Blob(["\ufeff" + data], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast("导出成功");
+}
+
+function exportProjects() {
+  const headers = ["项目ID", "项目名称", "门店", "状态", "预约时间", "预计工时", "实际工时", "施工人员", "创建时间"];
+  const rows = cache.projects.map(p => [
+    p.id,
+    p.name || "",
+    storeName(p.storeId) || "",
+    p.status || "",
+    p.appointmentTime || "",
+    p.estimatedHours || 0,
+    p.actualHours || 0,
+    (p.assignedWorkerIds || []).map(wid => getWorker(wid)?.name || wid).join(", ") || "",
+    p.createdAt || ""
+  ]);
+  const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
+  downloadCSV(`项目数据_${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  document.getElementById("exportMenu").classList.add("hidden");
+}
+
+function exportWorkLogs() {
+  const headers = ["日志ID", "项目ID", "项目名称", "员工", "日期", "工时", "备注", "是否外协"];
+  const rows = cache.projects.flatMap(p => 
+    (p.workLogs || []).map(l => [
+      l.id || "",
+      p.id,
+      p.name || "",
+      l.workerId ? (getWorker(l.workerId)?.name || l.workerId) : "",
+      l.date || "",
+      l.hours || 0,
+      l.note || "",
+      l.isOutsourced ? "是" : "否"
+    ])
+  );
+  const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
+  downloadCSV(`工时记录_${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  document.getElementById("exportMenu").classList.add("hidden");
+}
+
+function exportLeaveRecords() {
+  const headers = ["请假ID", "员工", "请假类型", "开始日期", "开始时段", "结束日期", "结束时段", "原因", "状态", "审批人", "审批意见", "创建时间"];
+  const rows = cache.leaveRecords.map(l => [
+    l.id,
+    l.workerName || "",
+    LEAVE_TYPE_LABEL[l.leaveType] || l.leaveType || "",
+    l.startDate || "",
+    formatLeaveTimeType(l.startType) || "",
+    l.endDate || "",
+    formatLeaveTimeType(l.endType) || "",
+    l.reason || "",
+    LEAVE_STATUS_LABEL[l.status] || l.status || "",
+    l.reviewerName || "",
+    l.reviewNote || "",
+    l.createdAt || ""
+  ]);
+  const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
+  downloadCSV(`请假记录_${new Date().toISOString().slice(0, 10)}.csv`, csv);
+  document.getElementById("exportMenu").classList.add("hidden");
+}
+
+function exportAllData() {
+  const timestamp = new Date().toISOString().slice(0, 10);
+  exportProjects();
+  setTimeout(() => exportWorkLogs(), 500);
+  setTimeout(() => exportLeaveRecords(), 1000);
+  document.getElementById("exportMenu").classList.add("hidden");
+}
+
+document.addEventListener("click", function(e) {
+  const exportBtn = document.getElementById("btnExport");
+  const exportMenu = document.getElementById("exportMenu");
+  if (exportMenu && exportBtn && !exportBtn.contains(e.target) && !exportMenu.contains(e.target)) {
+    exportMenu.classList.add("hidden");
+  }
+});
+
 function switchTab(name) {
   const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
   if (btn && btn.classList.contains("hidden")) return;
@@ -2949,6 +3567,7 @@ function applyPermissions() {
     stats: perm.viewStats(),
     storeStats: perm.viewStoreStats(),
     workers: perm.manageWorkers() || myRole() === ROLE.WORKER,
+    leaves: role != null,
     stores: perm.manageStores(),
     accounts: perm.manageAccounts() && MODE === "cloud",
     rolePerms: perm.manageAccounts() && MODE === "cloud",
@@ -2970,6 +3589,7 @@ function applyPermissions() {
     calendar: role != null,
     construction: role != null,
     workers: role != null,
+    leaves: role != null,
     stats: perm.viewStats(),
     storeStats: perm.viewStoreStats(),
   };
@@ -2999,7 +3619,462 @@ function renderAll() {
   renderStores();
   renderAccounts();
   renderRolePermissions();
+  renderLeaves();
 }
+
+/* ============================================================
+ * 请假管理
+ * ============================================================ */
+function renderLeaves() {
+  refreshLeaveWorkerFilter();
+  
+  const statsEl = document.getElementById("leaveStats");
+  const pendingList = document.getElementById("leavePendingList");
+  const recordList = document.getElementById("leaveRecordList");
+  const statusFilter = document.getElementById("leaveStatusFilter");
+  const typeFilter = document.getElementById("leaveTypeFilter");
+  const workerFilter = document.getElementById("leaveWorkerFilter");
+  
+  if (!pendingList || !recordList) return;
+  
+  const status = statusFilter.value;
+  const type = typeFilter.value;
+  const workerId = workerFilter.value;
+  
+  let records = cache.leaveRecords;
+  if (status) records = records.filter(r => r.status === status);
+  if (type) records = records.filter(r => r.leaveType === type);
+  if (workerId) records = records.filter(r => r.workerId === workerId);
+  
+  records.sort((a, b) => new Date(b.createdAt || b.startDate) - new Date(a.createdAt || a.startDate));
+  
+  const pendingRecords = records.filter(r => r.status === "pending");
+  const historyRecords = records.filter(r => r.status !== "pending");
+  
+  renderLeaveStats(statsEl);
+  
+  if (pendingRecords.length > 0) {
+    pendingList.innerHTML = `
+      <h3 style="margin-bottom:12px;color:#f59e0b;">⏳ 待审批申请（${pendingRecords.length}）</h3>
+      ${pendingRecords.map(r => renderLeaveCard(r, true)).join("")}
+    `;
+  } else {
+    pendingList.innerHTML = "";
+  }
+  
+  recordList.innerHTML = `
+    ${historyRecords.length > 0 ? historyRecords.map(r => renderLeaveCard(r, false)).join("") : 
+      '<div style="text-align:center;color:var(--muted);padding:40px;">暂无请假记录</div>'}
+  `;
+  
+  const holidayEl = document.getElementById("holidayManage");
+  if (holidayEl) renderHolidayManage(holidayEl);
+}
+
+function renderLeaveStats(container) {
+  if (!container) return;
+  
+  const year = new Date().getFullYear();
+  const approvedRecords = cache.leaveRecords.filter(r => r.status === "approved");
+  
+  const typeStats = {};
+  let totalDays = 0;
+  Object.keys(LEAVE_TYPE_LABEL).forEach(type => {
+    typeStats[type] = { days: 0, count: 0 };
+  });
+  
+  approvedRecords.forEach(r => {
+    const days = calculateLeaveDays(r.startDate, r.endDate);
+    totalDays += days;
+    if (typeStats[r.leaveType]) {
+      typeStats[r.leaveType].days += days;
+      typeStats[r.leaveType].count++;
+    }
+  });
+  
+  const pendingCount = cache.leaveRecords.filter(r => r.status === "pending").length;
+  const rejectedCount = cache.leaveRecords.filter(r => r.status === "rejected").length;
+  
+  const workerStats = cache.workers.map(w => {
+    const workerLeaves = approvedRecords.filter(r => r.workerId === w.id);
+    const workerDays = workerLeaves.reduce((sum, r) => sum + calculateLeaveDays(r.startDate, r.endDate), 0);
+    return { name: w.name, days: workerDays, count: workerLeaves.length };
+  }).sort((a, b) => b.days - a.days);
+  
+  container.innerHTML = `
+    <div class="card" style="grid-column:1/-1;">
+      <h3 style="margin-bottom:12px;">📊 ${year}年 请假统计概览</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;">
+        <div style="text-align:center;padding:12px;background:#f0fdf4;border-radius:8px;">
+          <div style="font-size:24px;font-weight:bold;color:#10b981;">${totalDays.toFixed(1)}</div>
+          <div style="font-size:12px;color:var(--muted);">总请假天数</div>
+        </div>
+        <div style="text-align:center;padding:12px;background:#fef3c7;border-radius:8px;">
+          <div style="font-size:24px;font-weight:bold;color:#f59e0b;">${pendingCount}</div>
+          <div style="font-size:12px;color:var(--muted);">待审批</div>
+        </div>
+        <div style="text-align:center;padding:12px;background:#fee2e2;border-radius:8px;">
+          <div style="font-size:24px;font-weight:bold;color:#dc2626;">${rejectedCount}</div>
+          <div style="font-size:12px;color:var(--muted);">已拒绝</div>
+        </div>
+        <div style="text-align:center;padding:12px;background:#e0e7ff;border-radius:8px;">
+          <div style="font-size:24px;font-weight:bold;color:#4338ca;">${approvedRecords.length}</div>
+          <div style="font-size:12px;color:var(--muted);">已批准</div>
+        </div>
+      </div>
+      
+      <div style="margin-top:16px;">
+        <h4 style="font-size:13px;margin-bottom:8px;color:var(--muted);">类型分布</h4>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${Object.entries(typeStats).map(([type, stats]) => `
+            <div style="display:flex;align-items:center;gap:4px;padding:6px 12px;background:#f9fafb;border-radius:6px;">
+              <span style="color:#4338ca;font-weight:bold;">${LEAVE_TYPE_LABEL[type]}</span>
+              <span style="color:var(--muted);font-size:12px;">${stats.count}次 / ${stats.days.toFixed(1)}天</span>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+      
+      <div style="margin-top:16px;">
+        <h4 style="font-size:13px;margin-bottom:8px;color:var(--muted);">人员排行</h4>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr style="border-bottom:1px solid #e5e7eb;">
+                <th style="text-align:left;padding:6px 8px;font-size:12px;color:var(--muted);">姓名</th>
+                <th style="text-align:right;padding:6px 8px;font-size:12px;color:var(--muted);">请假天数</th>
+                <th style="text-align:right;padding:6px 8px;font-size:12px;color:var(--muted);">请假次数</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${workerStats.map(w => `
+                <tr style="border-bottom:1px solid #f3f4f6;">
+                  <td style="padding:6px 8px;font-size:13px;">${esc(w.name)}</td>
+                  <td style="text-align:right;padding:6px 8px;font-size:13px;">${w.days.toFixed(1)}</td>
+                  <td style="text-align:right;padding:6px 8px;font-size:13px;color:var(--muted);">${w.count}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderHolidayManage(container) {
+  if (!container) return;
+  
+  if (!perm.manageLeaves()) {
+    container.innerHTML = "";
+    return;
+  }
+  
+  const holidays = cache.holidays.sort((a, b) => a.date.localeCompare(b.date));
+  
+  container.innerHTML = `
+    <div class="card" style="grid-column:1/-1;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3>🎊 节假日管理</h3>
+        <button class="btn small primary" onclick="openHolidayForm()">+ 添加节假日</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <th style="text-align:left;padding:8px;font-size:12px;color:var(--muted);">日期</th>
+              <th style="text-align:left;padding:8px;font-size:12px;color:var(--muted);">名称</th>
+              <th style="text-align:center;padding:8px;font-size:12px;color:var(--muted);">类型</th>
+              <th style="text-align:right;padding:8px;font-size:12px;color:var(--muted);">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${holidays.map(h => `
+              <tr style="border-bottom:1px solid #f3f4f6;">
+                <td style="padding:8px;font-size:13px;">${esc(h.date)}</td>
+                <td style="padding:8px;font-size:13px;">${esc(h.name)}</td>
+                <td style="text-align:center;padding:8px;">
+                  <span style="padding:2px 8px;border-radius:4px;font-size:12px;${h.isWorkday ? 'background:#fef3c7;color:#92400e;' : 'background:#e0e7ff;color:#4338ca;'}">
+                    ${h.isWorkday ? '调休上班' : '节假日'}
+                  </span>
+                </td>
+                <td style="text-align:right;padding:8px;">
+                  <button class="btn small" onclick="deleteHoliday('${h.id}')">删除</button>
+                </td>
+              </tr>
+            `).join("")}
+            ${holidays.length === 0 ? `
+              <tr>
+                <td colspan="4" style="text-align:center;padding:20px;color:var(--muted);">暂无节假日设置</td>
+              </tr>
+            ` : ""}
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-top:12px;">
+        💡 提示：节假日会在计算请假天数时自动排除；调休上班日视为工作日。
+      </p>
+    </div>
+  `;
+}
+
+function openHolidayForm() {
+  const today = new Date().toISOString().slice(0, 10);
+  const form = `
+    <div class="repair-form">
+      <div class="form-row">
+        <label>日期 *</label>
+        <input class="input" type="date" id="holidayDate" value="${today}" />
+      </div>
+      <div class="form-row">
+        <label>名称 *</label>
+        <input class="input" type="text" id="holidayName" placeholder="如：春节、元旦等" />
+      </div>
+      <div class="form-row">
+        <label>类型</label>
+        <select class="input" id="holidayIsWorkday">
+          <option value="false">节假日（休息）</option>
+          <option value="true">调休上班</option>
+        </select>
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="modal.close()">取消</button>
+        <button class="btn primary" onclick="submitHolidayForm()">保存</button>
+      </div>
+    </div>
+  `;
+  modal.open("添加节假日", form);
+}
+
+async function submitHolidayForm() {
+  const date = document.getElementById("holidayDate").value;
+  const name = document.getElementById("holidayName").value.trim();
+  const isWorkday = document.getElementById("holidayIsWorkday").value === "true";
+  
+  if (!date) { toast("请选择日期"); return; }
+  if (!name) { toast("请输入名称"); return; }
+  
+  const existing = cache.holidays.find(h => h.date === date);
+  if (existing) {
+    if (!confirm("该日期已存在节假日设置，确定覆盖吗？")) return;
+  }
+  
+  await repo.saveHoliday({ date, name, isWorkday });
+  await repo.loadAll();
+  renderLeaves();
+  modal.close();
+  toast("节假日已保存");
+}
+
+async function deleteHoliday(id) {
+  if (!confirm("确定删除该节假日设置？")) return;
+  
+  await repo.deleteHoliday(id);
+  await repo.loadAll();
+  renderLeaves();
+  toast("节假日已删除");
+}
+
+function refreshLeaveWorkerFilter() {
+  const filter = document.getElementById("leaveWorkerFilter");
+  if (!filter) return;
+  
+  const currentValue = filter.value;
+  filter.innerHTML = '<option value="">全部人员</option>' +
+    cache.workers.map(w => 
+      `<option value="${esc(w.id)}" ${w.id === currentValue ? "selected" : ""}>${esc(w.name)}</option>`
+    ).join("");
+}
+
+function renderLeaveCard(record, showActions) {
+  const typeLabel = LEAVE_TYPE_LABEL[record.leaveType] || record.leaveType;
+  const statusLabel = LEAVE_STATUS_LABEL[record.status] || record.status;
+  
+  let statusClass = "";
+  if (record.status === "pending") statusClass = "background:#fef3c7;color:#92400e;border-color:#f59e0b";
+  else if (record.status === "approved") statusClass = "background:#d1fae5;color:#065f46;border-color:#10b981";
+  else if (record.status === "rejected") statusClass = "background:#fee2e2;color:#991b1b;border-color:#dc2626";
+  
+  const conflicts = checkLeaveProjectConflict(record.workerId, record.startDate, record.endDate);
+  const conflictBadge = conflicts.length > 0 ? 
+    `<span style="background:#fef2f2;color:#dc2626;padding:2px 6px;border-radius:4px;font-size:12px;margin-left:8px;">⚠ ${conflicts.length}冲突</span>` : "";
+  
+  return `
+    <div class="card" style="position:relative;">
+      <div class="card-row">
+        <span style="font-weight:bold;font-size:15px;">${esc(record.workerName)}</span>
+        <span style="${statusClass};padding:3px 8px;border-radius:4px;font-size:12px;font-weight:bold;">${statusLabel}</span>
+        <span style="background:#e0e7ff;color:#4338ca;padding:3px 8px;border-radius:4px;font-size:12px;">${typeLabel}</span>
+        ${conflictBadge}
+      </div>
+      <div class="card-row">
+        <span>📅 ${esc(record.startDate)} ${formatLeaveTimeType(record.startType)} → ${esc(record.endDate)} ${formatLeaveTimeType(record.endType)}</span>
+      </div>
+      ${record.reason ? `<div class="card-row" style="color:var(--muted);font-size:13px;">📝 ${esc(record.reason)}</div>` : ""}
+      ${record.reviewNote ? `<div class="card-row" style="color:#f59e0b;font-size:13px;">💬 ${esc(record.reviewNote)}</div>` : ""}
+      ${record.reviewerName ? `<div class="card-row" style="color:var(--muted);font-size:12px;">审批人：${esc(record.reviewerName)}</div>` : ""}
+      <div class="card-actions">
+        ${showActions && perm.manageLeaves() ? `
+          ${record.status === "pending" ? `
+            <button class="btn small" onclick="approveLeave('${record.id}')">批准</button>
+            <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
+          ` : ""}
+        ` : ""}
+        ${record.status === "pending" && record.workerId === currentProfile.id ? `
+          <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回</button>
+        ` : ""}
+        <button class="btn small" onclick="showLeaveDetail('${record.id}')">详情</button>
+      </div>
+    </div>
+  `;
+}
+
+function formatLeaveTimeType(type) {
+  if (type === "all") return "全天";
+  if (type === "morning") return "上午";
+  if (type === "afternoon") return "下午";
+  return "自定义";
+}
+
+async function approveLeave(id) {
+  const record = getLeaveRecord(id);
+  if (!record) return;
+  
+  if (!perm.manageLeaves()) {
+    toast("权限不足，无法审批请假");
+    return;
+  }
+  
+  await repo.saveLeaveRecord({
+    ...record,
+    status: "approved",
+    reviewerId: currentUser?.id || null,
+    reviewerName: currentUser?.email || "系统",
+    reviewedAt: new Date().toISOString(),
+  }, id);
+  await repo.loadAll();
+  logOperation("LEAVE_APPROVE", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `时间段：${record.startDate}~${record.endDate}`);
+  renderLeaves();
+  toast(`已批准 ${record.workerName} 的请假申请`);
+  
+  notify("请假审批结果", `${record.workerName} 的 ${LEAVE_TYPE_LABEL[record.leaveType]} 已被批准`);
+}
+
+async function rejectLeave(id) {
+  const record = getLeaveRecord(id);
+  if (!record) return;
+  
+  if (!perm.manageLeaves()) {
+    toast("权限不足，无法审批请假");
+    return;
+  }
+  
+  const note = prompt("请输入拒绝原因：");
+  if (note === null) return;
+  
+  await repo.saveLeaveRecord({
+    ...record,
+    status: "rejected",
+    reviewNote: note,
+    reviewerId: currentUser?.id || null,
+    reviewerName: currentUser?.email || "系统",
+    reviewedAt: new Date().toISOString(),
+  }, id);
+  await repo.loadAll();
+  logOperation("LEAVE_REJECT", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `时间段：${record.startDate}~${record.endDate}，原因：${note}`);
+  renderLeaves();
+  toast(`已拒绝 ${record.workerName} 的请假申请`);
+  
+  notify("请假审批结果", `${record.workerName} 的 ${LEAVE_TYPE_LABEL[record.leaveType]} 已被拒绝`);
+}
+
+async function withdrawLeave(id) {
+  const record = getLeaveRecord(id);
+  if (!record) return;
+  
+  if (!confirm(`确定要撤回您的 ${LEAVE_TYPE_LABEL[record.leaveType]} 申请吗？`)) return;
+  
+  await repo.deleteLeaveRecord(id);
+  await repo.loadAll();
+  logOperation("LEAVE_WITHDRAW", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `时间段：${record.startDate}~${record.endDate}`);
+  renderLeaves();
+  toast("请假申请已撤回");
+}
+
+function showLeaveDetail(id) {
+  const record = getLeaveRecord(id);
+  if (!record) return;
+  
+  const typeLabel = LEAVE_TYPE_LABEL[record.leaveType] || record.leaveType;
+  const statusLabel = LEAVE_STATUS_LABEL[record.status] || record.status;
+  
+  const conflicts = checkLeaveProjectConflict(record.workerId, record.startDate, record.endDate);
+  
+  const modalContent = `
+    <div class="repair-form">
+      <div class="form-row">
+        <label>施工人员</label>
+        <div class="input" style="background:#f3f4f6;">${esc(record.workerName)}</div>
+      </div>
+      <div class="form-row">
+        <label>请假类型</label>
+        <div class="input" style="background:#f3f4f6;">${typeLabel}</div>
+      </div>
+      <div class="form-row">
+        <label>状态</label>
+        <div class="input" style="background:#f3f4f6;">${statusLabel}</div>
+      </div>
+      <div class="form-row">
+        <label>请假时间</label>
+        <div class="input" style="background:#f3f4f6;">${esc(record.startDate)} ${formatLeaveTimeType(record.startType)} → ${esc(record.endDate)} ${formatLeaveTimeType(record.endType)}</div>
+      </div>
+      ${record.startTime ? `
+      <div class="form-row">
+        <label>具体开始时间</label>
+        <div class="input" style="background:#f3f4f6;">${esc(record.startTime)}</div>
+      </div>` : ""}
+      ${record.endTime ? `
+      <div class="form-row">
+        <label>具体结束时间</label>
+        <div class="input" style="background:#f3f4f6;">${esc(record.endTime)}</div>
+      </div>` : ""}
+      <div class="form-row">
+        <label>请假原因</label>
+        <div class="input" style="background:#f3f4f6;min-height:60px;">${record.reason || "未填写"}</div>
+      </div>
+      ${conflicts.length > 0 ? `
+      <div class="form-row" style="background:#fef2f2;border-left:3px solid #dc2626;padding:10px;border-radius:4px;">
+        <span style="font-weight:bold;color:#dc2626;">⚠️ 项目排期冲突：</span>
+        <div>${conflicts.map(p => `• ${esc(p.name)}`).join("<br/>")}</div>
+      </div>` : ""}
+      ${record.reviewNote ? `
+      <div class="form-row">
+        <label>审批意见</label>
+        <div class="input" style="background:#fef3c7;">${esc(record.reviewNote)}</div>
+      </div>` : ""}
+      ${record.reviewerName ? `
+      <div class="form-row">
+        <label>审批人</label>
+        <div class="input" style="background:#f3f4f6;">${esc(record.reviewerName)}</div>
+      </div>` : ""}
+      <div class="form-actions">
+        <button class="btn" onclick="modal.close()">关闭</button>
+      </div>
+    </div>
+  `;
+  
+  modal.open(`📅 ${record.workerName} 的请假详情`, modalContent);
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+  const statusFilter = document.getElementById("leaveStatusFilter");
+  const typeFilter = document.getElementById("leaveTypeFilter");
+  const workerFilter = document.getElementById("leaveWorkerFilter");
+  
+  if (statusFilter) statusFilter.addEventListener("change", renderLeaves);
+  if (typeFilter) typeFilter.addEventListener("change", renderLeaves);
+  if (workerFilter) workerFilter.addEventListener("change", renderLeaves);
+});
 
 /* ============================================================
  * 日历统计视图
