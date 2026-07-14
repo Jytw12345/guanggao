@@ -1,5 +1,5 @@
-const CACHE = "ad-install-v3";
-const VERSION = "v3";
+const CACHE = "ad-install-v5";
+const VERSION = "v5";
 
 const ASSETS = [
   "./",
@@ -8,6 +8,7 @@ const ASSETS = [
   "./app.js",
   "./config.js",
   "./manifest.webmanifest",
+  "./help.html",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
 ];
