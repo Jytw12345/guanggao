@@ -238,7 +238,6 @@
         <li><a href="#status">项目状态流程</a></li>
         <li><a href="#modules">功能模块详解</a></li>
         <li><a href="#features">特色功能</a></li>
-        <li><a href="#deployment">部署说明</a></li>
         <li><a href="#update">更新注意事项</a></li>
         <li><a href="#pwa">PWA安装指南</a></li>
         <li><a href="#notes">注意事项</a></li>
@@ -377,7 +376,8 @@
         <li>按月统计施工人员工时</li>
         <li>区分内部人员和外协人员</li>
         <li>显示每日工时明细</li>
-        <li>导出 CSV 报表</li>
+        <li>导出统计数据（Excel 格式）</li>
+        <li>工时等级分类统计（初级/中级/高级/特级）</li>
       </ul>
       <h4>统计维度：</h4>
       <ul>
@@ -385,7 +385,20 @@
         <li>出勤天数</li>
         <li>参与项目数</li>
         <li>请假记录</li>
+        <li>各等级工时（初级、中级、高级、特级）</li>
       </ul>
+      <h4>工时等级说明：</h4>
+      <table>
+        <thead>
+          <tr><th>等级</th><th>说明</th><th>用途</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>初级</strong></td><td>简单安装任务，技术要求低</td><td>基础工时结算</td></tr>
+          <tr><td><strong>中级</strong></td><td>常规安装任务，标准技术要求（默认）</td><td>标准工时结算</td></tr>
+          <tr><td><strong>高级</strong></td><td>复杂安装任务，需要专业技能</td><td>较高工时结算</td></tr>
+          <tr><td><strong>特级</strong></td><td>高难度任务，需要特殊资质或高空作业</td><td>最高工时结算</td></tr>
+        </tbody>
+      </table>
 
       <h3>5. 店面统计（总经理专属）</h3>
       <ul>
@@ -408,14 +421,23 @@
         <li>设置开始/结束时间（仅计算工作时间段）</li>
         <li>自动检测与项目排期冲突</li>
         <li>提交审批</li>
+        <li>待审批期间可自行撤回申请</li>
       </ul>
       <h4>7.2 审批流程</h4>
       <ul>
         <li>待审批列表（总经理/店长可见）</li>
         <li>批准/拒绝操作</li>
         <li>显示冲突项目提示</li>
+        <li>已批准的请假可由管理员撤回批准（状态改为待审批）</li>
+        <li>已拒绝的请假可由管理员删除</li>
       </ul>
-      <h4>7.3 节假日管理</h4>
+      <h4>7.3 状态流转</h4>
+      <div class="code">待审批 → 已批准 / 已拒绝
+   ↓              ↓
+  撤回          撤回批准 → 待审批
+                ↓
+              删除（管理员）</div>
+      <h4>7.4 节假日管理</h4>
       <ul>
         <li>添加节假日和调休日期</li>
         <li>请假计算自动排除节假日</li>
@@ -484,33 +506,22 @@
         <li>桌面端完整功能展示</li>
         <li>移动端底部导航栏</li>
       </ul>
-    </div>
 
-    <div class="section" id="deployment">
-      <h2>🌐 部署说明</h2>
-      
-      <h3>本地模式</h3>
-      <p>无需配置，直接打开 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">index.html</code> 即可使用，数据存储在浏览器本地。</p>
+      <h3>7. 工时等级管理</h3>
+      <ul>
+        <li>填写工时时选择工时等级（初级/中级/高级/特级）</li>
+        <li>月底统计按等级分类汇总工时</li>
+        <li>支持按等级导出统计数据</li>
+        <li>不同等级工时可设置不同结算标准</li>
+      </ul>
 
-      <h3>云端模式（Supabase）</h3>
-      <ol>
-        <li>注册 <a href="https://supabase.com" target="_blank" style="color:var(--primary)">Supabase</a> 账号</li>
-        <li>创建新项目</li>
-        <li>在 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">config.js</code> 中配置：
-          <ul>
-            <li><code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">SUPABASE_URL</code>：项目 URL</li>
-            <li><code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">SUPABASE_ANON_KEY</code>：匿名 API 密钥</li>
-          </ul>
-        </li>
-        <li>在 SQL Editor 执行 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">supabase_schema.sql</code> 创建数据表</li>
-        <li>执行 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">supabase_rbac_migration.sql</code> 配置角色权限</li>
-      </ol>
-
-      <h3>GitHub Pages 部署</h3>
-      <ol>
-        <li>将项目推送到 GitHub 仓库</li>
-        <li>开启 GitHub Pages 服务</li>
-      </ol>
+      <h3>8. 灵活的假期管理</h3>
+      <ul>
+        <li>员工可在待审批期间撤回请假申请</li>
+        <li>管理员可撤回已批准的假期（状态回退为待审批）</li>
+        <li>管理员可删除已拒绝的假期记录</li>
+        <li>完整的假期状态流转控制</li>
+      </ul>
     </div>
 
     <div class="section" id="update">
@@ -578,7 +589,7 @@
     </div>
 
     <div class="footer">
-      <p>文档版本：v1.0 | 更新日期：2025年7月</p>
+      <p>文档版本：v1.1 | 更新日期：2026年7月</p>
     </div>
   </div>
 </body>

@@ -209,22 +209,79 @@ function fmtTimeRange(p) {
 
 /* 表单里根据开始/结束时间实时提示现场时长，或校验结束是否晚于开始 */
 function updateSpanHint() {
-  const el = document.getElementById("pSpanHint");
-  if (!el) return;
+  const durationCard = document.getElementById("pDurationCard");
+  const durationValue = document.getElementById("pDurationValue");
+  const suggestWorkers = document.getElementById("pSuggestWorkers");
   const date = document.getElementById("pDate").value;
   const start = document.getElementById("pTime").value;
   const end = document.getElementById("pEnd").value;
-  if (!date || !start || !end) { el.textContent = ""; return; }
-  const s = new Date(`${date}T${start}`), e = new Date(`${date}T${end}`);
-  if (isNaN(s) || isNaN(e)) { el.textContent = ""; return; }
-  if (e <= s) {
-    el.innerHTML = `<span style="color:var(--danger)">结束时间需晚于开始时间</span>`;
+  const estHours = Number(document.getElementById("pEst")?.value) || 0;
+  const crossDayEl = document.getElementById("pCrossDay");
+  
+  if (!date || !start || !end) {
+    if (durationCard) durationCard.style.opacity = "0.5";
+    if (durationValue) durationValue.textContent = "--";
+    if (suggestWorkers) suggestWorkers.textContent = "--";
     return;
   }
+  
+  let endDate = document.getElementById("pEndDate").value;
+  if (!crossDayEl?.checked || !endDate) {
+    endDate = date;
+  }
+  
+  const s = new Date(`${date}T${start}`), e = new Date(`${endDate}T${end}`);
+  if (isNaN(s) || isNaN(e)) {
+    if (durationCard) durationCard.style.opacity = "0.5";
+    if (durationValue) durationValue.textContent = "--";
+    if (suggestWorkers) suggestWorkers.textContent = "--";
+    return;
+  }
+  
+  if (e <= s) {
+    if (durationCard) durationCard.style.opacity = "1";
+    if (durationValue) durationValue.innerHTML = `<span style="color:var(--danger);font-size:14px;">结束时间需晚于开始时间</span>`;
+    if (suggestWorkers) suggestWorkers.textContent = "--";
+    return;
+  }
+  
+  if (durationCard) durationCard.style.opacity = "1";
+  
   const mins = Math.round((e - s) / 60000);
-  const h = Math.floor(mins / 60), m = mins % 60;
-  const span = `${h ? h + " 小时 " : ""}${m || !h ? m + " 分钟" : ""}`.trim();
-  el.textContent = `现场占用时长：${span}`;
+  const days = Math.floor(mins / (24 * 60));
+  const h = Math.floor((mins % (24 * 60)) / 60);
+  const m = mins % 60;
+  
+  let durationText = "";
+  if (days > 0) {
+    if (h > 0 && m > 0) {
+      durationText = `${days}天${h}小时${m}分钟`;
+    } else if (h > 0) {
+      durationText = `${days}天${h}小时`;
+    } else if (m > 0) {
+      durationText = `${days}天${m}分钟`;
+    } else {
+      durationText = `${days}天`;
+    }
+  } else if (h > 0 && m > 0) {
+    durationText = `${h}小时${m}分钟`;
+  } else if (h > 0) {
+    durationText = `${h}小时`;
+  } else {
+    durationText = `${m}分钟`;
+  }
+  
+  if (durationValue) {
+    durationValue.innerHTML = `<span style="color:#1e293b;">${durationText}</span>`;
+  }
+  
+  if (suggestWorkers && estHours > 0) {
+    const hoursPerPerson = mins / 60;
+    const suggested = Math.max(1, Math.ceil(estHours / hoursPerPerson));
+    suggestWorkers.innerHTML = `<span style="color:#2563eb;">${suggested}人</span> <span style="font-size:11px;color:#64748b;">(总工时÷时长)</span>`;
+  } else if (suggestWorkers) {
+    suggestWorkers.textContent = "--";
+  }
 }
 
 function sumHours(project) {
@@ -640,8 +697,13 @@ const repo = {
       const row = {
         id: uid(), project_id: pid, worker_id: log.workerId,
         worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note || null,
+        level: log.level || "中级",
       };
-      const { error } = await sb.from("work_logs").insert(row);
+      let { error } = await sb.from("work_logs").insert(row);
+      if (error && error.message && error.message.includes('level')) {
+        const { level, ...rowWithoutLevel } = row;
+        ({ error } = await sb.from("work_logs").insert(rowWithoutLevel));
+      }
       if (error) return fail(error);
     } else {
       const p = getProject(pid);
@@ -1613,6 +1675,12 @@ function setPTimeRange(type) {
   }
   const timeSel = document.getElementById("pTime");
   const endSel = document.getElementById("pEnd");
+  const endDateEl = document.getElementById("pEndDate");
+  const crossDayEl = document.getElementById("pCrossDay");
+  
+  if (crossDayEl) crossDayEl.checked = false;
+  if (endDateEl) endDateEl.style.display = "none";
+  
   if (type === "morning") {
     timeSel.value = "08:00";
     endSel.value = "12:00";
@@ -1622,11 +1690,43 @@ function setPTimeRange(type) {
   } else if (type === "full") {
     timeSel.value = "08:00";
     endSel.value = "18:00";
+  } else if (type === "twohour") {
+    const currentTime = timeSel.value;
+    if (currentTime) {
+      const [h, m] = currentTime.split(":").map(Number);
+      const endH = String((h + 2) % 24).padStart(2, "0");
+      const endM = String(m).padStart(2, "0");
+      endSel.value = `${endH}:${endM}`;
+    } else {
+      timeSel.value = "09:00";
+      endSel.value = "11:00";
+    }
   }
+  
+  if (endDateEl) endDateEl.value = date;
   updateSpanHint();
 }
 
 function updatePTimeOptions() {
+}
+
+function toggleCrossDay() {
+  const crossDayEl = document.getElementById("pCrossDay");
+  const endDateEl = document.getElementById("pEndDate");
+  const dateEl = document.getElementById("pDate");
+  
+  if (crossDayEl && endDateEl && dateEl) {
+    if (crossDayEl.checked) {
+      endDateEl.style.display = "inline-block";
+      const nextDate = new Date(dateEl.value);
+      nextDate.setDate(nextDate.getDate() + 1);
+      endDateEl.value = nextDate.toISOString().slice(0, 10);
+    } else {
+      endDateEl.style.display = "none";
+      endDateEl.value = dateEl.value;
+    }
+    updateSpanHint();
+  }
 }
 
 function autoCalcEndTime() {
@@ -1646,9 +1746,22 @@ function autoCalcEndTime() {
   }
   
   const hoursNeeded = Math.ceil(estHours / workerCount * 2) / 2;
-  const [h, m] = time.split(":").map(Number);
   const startTime = new Date(`${date}T${time}`);
   const endTime = new Date(startTime.getTime() + hoursNeeded * 60 * 60 * 1000);
+  
+  const endDateEl = document.getElementById("pEndDate");
+  const crossDayEl = document.getElementById("pCrossDay");
+  const isCrossDay = endTime.toDateString() !== startTime.toDateString();
+  
+  if (crossDayEl) crossDayEl.checked = isCrossDay;
+  if (endDateEl) {
+    endDateEl.value = endTime.toISOString().slice(0, 10);
+    endDateEl.style.display = isCrossDay ? "inline-block" : "none";
+  }
+  
+  if (!isCrossDay && endDateEl) {
+    endDateEl.value = date;
+  }
   
   const endH = String(endTime.getHours()).padStart(2, "0");
   const endM = String(endTime.getMinutes()).padStart(2, "0");
@@ -1797,114 +1910,144 @@ function projectForm(p = {}) {
   const storeOpts = `<option value="">未指定门店</option>` +
     cache.stores.map((s) =>
       `<option value="${s.id}" ${s.id === selectedStore ? "selected" : ""}>${esc(s.name)}</option>`).join("");
+  const startDate = p.appointmentTime ? new Date(p.appointmentTime) : new Date();
+  const endDateVal = p.endTime ? new Date(p.endTime) : startDate;
+  const isCrossDay = p.endTime && endDateVal.toDateString() !== startDate.toDateString();
   return `
-    <div class="form-row">
-      <label>项目名称 *</label>
-      <input class="input" id="pName" value="${esc(p.name || "")}" placeholder="如：某某商场门头广告安装" />
-    </div>
-    <div class="form-row">
-      <label>所属门店</label>
-      <select class="input" id="pStore" ${storeLocked ? "disabled" : ""}>
-        ${storeOpts}
-      </select>
-      ${storeLocked ? `<small class="hint">店长只能创建本门店（${esc(storeName(myStore()))}）的预约</small>` : ""}
+    <div style="display:flex;align-items:flex-start;gap:10px;width:100%;">
+      <div style="flex-shrink:0;">
+        <label style="display:block;margin-bottom:4px;"><span style="color:var(--primary)">🏪</span> 所属门店</label>
+        <select class="input" id="pStore" ${storeLocked ? "disabled" : ""} style="width:auto;max-width:160px;">
+          ${storeOpts}
+        </select>
+        ${storeLocked ? `<small class="hint" style="color:#6b7280;display:block;margin-top:2px;">店长只能创建本门店（${esc(storeName(myStore()))}）的预约</small>` : ""}
+      </div>
+      <div style="flex:1;min-width:0;">
+        <label style="display:block;margin-bottom:4px;"><span style="color:var(--primary)">📋</span> 项目名称 *</label>
+        <input class="input" id="pName" value="${esc(p.name || "")}" placeholder="如：某某商场门头广告安装" style="width:100%;" />
+      </div>
     </div>
     <div class="form-grid">
       <div class="form-row">
-        <label>客户名称</label>
+        <label><span style="color:#0891b2">👤</span> 客户名称</label>
         <input class="input" id="pCustomer" value="${esc(p.customer || "")}" placeholder="客户 / 单位" />
       </div>
       <div class="form-row">
-        <label>联系电话</label>
+        <label><span style="color:#0891b2">📞</span> 联系电话</label>
         <input class="input" id="pPhone" value="${esc(p.phone || "")}" placeholder="客户电话" />
       </div>
     </div>
     <div class="form-row">
-      <label>安装地址</label>
+      <label><span style="color:#0891b2">📍</span> 安装地址</label>
       <input class="input" id="pAddress" value="${esc(p.address || "")}" placeholder="施工现场地址" />
     </div>
     <div class="form-row">
-      <label>预约日期 *</label>
-      <input class="input" type="date" id="pDate" value="${p.appointmentTime ? new Date(p.appointmentTime).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10)}" onchange="updatePTimeOptions()" />
+      <label style="width:100%;margin-bottom:8px;"><span style="color:var(--warn)">📅</span> 预约时间 *</label>
+      <div style="display:flex;align-items:center;gap:6px;width:100%;flex-wrap:wrap;">
+        <input class="input" type="date" id="pDate" value="${startDate.toISOString().slice(0, 10)}" onchange="updateSpanHint()" style="width:auto;" />
+        <select class="input" id="pTime" onchange="updateSpanHint()" style="width:auto;max-width:100px;">
+          ${(() => {
+            const times = [];
+            for (let h = 7; h <= 21; h++) {
+              for (let m = 0; m < 60; m += 10) {
+                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+              }
+            }
+            times.push('22:00');
+            const curTime = p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '09:00';
+            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
+          })()}
+        </select>
+        <span style="font-size:16px;color:#94a3b8;">→</span>
+        <input class="input" type="date" id="pEndDate" value="${endDateVal.toISOString().slice(0, 10)}" onchange="updateSpanHint()" style="width:auto;display:${isCrossDay ? 'inline-block' : 'none'};" />
+        <select class="input" id="pEnd" onchange="updateSpanHint()" style="width:auto;max-width:100px;">
+          ${(() => {
+            const times = [];
+            for (let h = 7; h <= 21; h++) {
+              for (let m = 0; m < 60; m += 10) {
+                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+              }
+            }
+            times.push('22:00');
+            const curTime = p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '12:00';
+            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
+          })()}
+        </select>
+      </div>
     </div>
     <div class="form-row">
-      <label>快捷时段</label>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn small" onclick="setPTimeRange('morning')">🌅 上午 08:00-12:00</button>
-        <button class="btn small" onclick="setPTimeRange('afternoon')">☀️ 下午 13:00-18:00</button>
-        <button class="btn small" onclick="setPTimeRange('full')">📅 全天 08:00-18:00</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <button class="btn small" onclick="setPTimeRange('morning')" style="background:#e0f2fe;color:#0891b2;border-color:#7dd3fc;border-radius:6px;padding:4px 12px;">🌅 上午</button>
+        <button class="btn small" onclick="setPTimeRange('afternoon')" style="background:#fef3c7;color:#d97706;border-color:#fcd34d;border-radius:6px;padding:4px 12px;">☀️ 下午</button>
+        <button class="btn small" onclick="setPTimeRange('full')" style="background:#dcfce7;color:#16a34a;border-color:#86efac;border-radius:6px;padding:4px 12px;">📅 全天</button>
+        <button class="btn small" onclick="setPTimeRange('twohour')" style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:6px;padding:4px 12px;">⏱️ 2小时</button>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;margin-left:8px;padding:4px 8px;background:#f1f5f9;border-radius:6px;">
+          <input type="checkbox" id="pCrossDay" ${isCrossDay ? 'checked' : ''} onchange="toggleCrossDay()" style="width:14px;height:14px;" />
+          <span style="font-size:12px;color:#64748b;">📆 跨天</span>
+        </label>
+      </div>
+    </div>
+    <div id="pDurationCard" style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:24px;">⏳</span>
+        <div>
+          <div style="font-size:12px;color:#64748b;">施工时长</div>
+          <div id="pDurationValue" style="font-size:20px;font-weight:700;color:#1e293b;">--</div>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:12px;color:#64748b;">建议人数</div>
+        <div id="pSuggestWorkers" style="font-size:16px;font-weight:600;color:#2563eb;">--</div>
       </div>
     </div>
     <div class="form-grid">
       <div class="form-row">
-        <label>开始时间 *</label>
-        <select class="input" id="pTime" onchange="updateSpanHint()">
-          ${(() => {
-            const times = [];
-            for (let h = 7; h <= 21; h++) {
-              for (let m = 0; m < 60; m += 10) {
-                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-              }
-            }
-            times.push('22:00');
-            const current = p.appointmentTime ? new Date(p.appointmentTime) : null;
-            const curTime = current ? `${String(current.getHours()).padStart(2, '0')}:${String(current.getMinutes()).padStart(2, '0')}` : '09:00';
-            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
-          })()}
-        </select>
+        <label><span style="color:var(--success)">⚙️</span> 预计总工时</label>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input class="input" type="number" min="0" step="0.5" id="pEst" value="${esc(p.estimatedHours ?? "")}" placeholder="0" style="width:auto;max-width:100px;" oninput="updateSpanHint()" />
+          <span style="font-size:12px;color:var(--muted)">人·小时</span>
+        </div>
+        <small class="hint" style="font-size:11px;margin:2px 0 0;color:#16a34a;">先填写总工时，方便计算结束时间</small>
       </div>
       <div class="form-row">
-        <label>结束时间 *</label>
-        <select class="input" id="pEnd" onchange="updateSpanHint()">
-          ${(() => {
-            const times = [];
-            for (let h = 7; h <= 21; h++) {
-              for (let m = 0; m < 60; m += 10) {
-                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-              }
-            }
-            times.push('22:00');
-            const current = p.endTime ? new Date(p.endTime) : null;
-            const curTime = current ? `${String(current.getHours()).padStart(2, '0')}:${String(current.getMinutes()).padStart(2, '0')}` : '12:00';
-            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
-          })()}
-        </select>
+        <label><span style="color:var(--success)">👷</span> 施工人数</label>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <select class="input" id="pWorkers" onchange="autoCalcEndTime()" style="width:auto;max-width:100px;">
+            <option value="1" ${(p.workerCount === 1 || (!p.workerCount && (!p.assignedWorkerIds || p.assignedWorkerIds.length === 1))) ? 'selected' : ''}>1人</option>
+            <option value="2" ${(p.workerCount === 2 || (p.assignedWorkerIds && p.assignedWorkerIds.length === 2)) ? 'selected' : ''}>2人</option>
+            <option value="3" ${(p.workerCount === 3 || (p.assignedWorkerIds && p.assignedWorkerIds.length === 3)) ? 'selected' : ''}>3人</option>
+            <option value="4" ${(p.workerCount >= 4 || (p.assignedWorkerIds && p.assignedWorkerIds.length >= 4)) ? 'selected' : ''}>4人+</option>
+          </select>
+          <button class="btn small" onclick="autoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">⏱️ 自动计算</button>
+        </div>
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="form-row">
+        <label><span style="color:#8b5cf6;">👤</span> 外协人数</label>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <select class="input" id="pOutsourcedCount" style="width:auto;max-width:100px;">
+            <option value="0" ${(p.outsourcedCount === 0 || !p.outsourcedCount) ? 'selected' : ''}>0人</option>
+            <option value="1" ${p.outsourcedCount === 1 ? 'selected' : ''}>1人</option>
+            <option value="2" ${p.outsourcedCount === 2 ? 'selected' : ''}>2人</option>
+            <option value="3" ${p.outsourcedCount === 3 ? 'selected' : ''}>3人</option>
+            <option value="4" ${p.outsourcedCount >= 4 ? 'selected' : ''}>4人+</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <label><span style="color:#8b5cf6;">⏰</span> 外协工时</label>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input class="input" type="number" min="0" step="0.5" id="pOutsourcedHours" value="${esc(p.outsourcedHours ?? "")}" placeholder="0" style="width:auto;max-width:100px;" />
+          <span style="font-size:12px;color:#8b5cf6;font-weight:500;">人·小时</span>
+        </div>
       </div>
     </div>
     <div class="form-row">
-      <label>施工人数</label>
-      <select class="input" id="pWorkers" onchange="autoCalcEndTime()">
-        <option value="1" ${(p.workerCount === 1 || (!p.workerCount && (!p.assignedWorkerIds || p.assignedWorkerIds.length === 1))) ? 'selected' : ''}>1 人</option>
-        <option value="2" ${(p.workerCount === 2 || (p.assignedWorkerIds && p.assignedWorkerIds.length === 2)) ? 'selected' : ''}>2 人</option>
-        <option value="3" ${(p.workerCount === 3 || (p.assignedWorkerIds && p.assignedWorkerIds.length === 3)) ? 'selected' : ''}>3 人</option>
-        <option value="4" ${(p.workerCount >= 4 || (p.assignedWorkerIds && p.assignedWorkerIds.length >= 4)) ? 'selected' : ''}>4 人以上</option>
-      </select>
-      <button class="btn small" onclick="autoCalcEndTime()" style="margin-left:8px">⏱️ 自动计算结束时间</button>
+      <label><span style="color:#6b7280;">💬</span> 备注</label>
+      <textarea class="input" id="pNote" placeholder="施工内容 / 注意事项" style="min-height:50px;">${esc(p.note || "")}</textarea>
     </div>
-    <div class="form-row" style="margin-top:-6px">
-      <small class="hint" id="pSpanHint" style="margin:0"></small>
-    </div>
-    <div class="form-row">
-      <label>预计工时（人·小时，用于统计）</label>
-      <input class="input" type="number" min="0" step="0.5" id="pEst" value="${esc(p.estimatedHours ?? "")}" placeholder="0" />
-      <small class="hint" style="margin:2px 0 0">按人工总量填写，与现场时长无关。例：6 人·小时的活，2 人同时施工约 3 小时完工。</small>
-    </div>
-    <div class="form-row">
-      <label>外协工时（人·小时，用于统计）</label>
-      <input class="input" type="number" min="0" step="0.5" id="pOutsourcedHours" value="${esc(p.outsourcedHours ?? "")}" placeholder="0" />
-      <small class="hint" style="margin:2px 0 0">外协人员完成的工时，与预计工时分开统计。</small>
-    </div>
-    <div class="form-row">
-      <label>项目状态</label>
-      <select class="input" id="pStatus">
-        ${Object.values(STATUS).map((s) =>
-          `<option value="${s}" ${p.status === s ? "selected" : ""}>${s}</option>`).join("")}
-      </select>
-    </div>
-    <div class="form-row">
-      <label>备注</label>
-      <textarea class="input" id="pNote" placeholder="施工内容 / 注意事项">${esc(p.note || "")}</textarea>
-    </div>
+    <input type="hidden" id="pStatus" value="${p.status || STATUS.BOOKED}" />
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
       <button class="btn primary" onclick="saveProject('${p.id || ""}')">保存</button>
@@ -1923,17 +2066,25 @@ async function saveProject(id) {
   const date = document.getElementById("pDate").value;
   const time = document.getElementById("pTime").value;
   const end = document.getElementById("pEnd").value;
+  const crossDayEl = document.getElementById("pCrossDay");
   if (!name) { toast("请填写项目名称"); return; }
   if (!date) { toast("请选择预约日期"); return; }
   if (!time) { toast("请选择开始时间"); return; }
   if (!end) { toast("请选择结束时间"); return; }
+  
+  let endDate = document.getElementById("pEndDate").value;
+  if (!crossDayEl?.checked || !endDate) {
+    endDate = date;
+  }
+  
   const fullTime = `${date}T${time}`;
-  const fullEnd = `${date}T${end}`;
+  const fullEnd = `${endDate}T${end}`;
   if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
   const storeEl = document.getElementById("pStore");
   let storeId = storeEl ? storeEl.value : "";
   if (isStoreManager()) storeId = myStore();          // 店长强制本门店
   const workerCount = Number(document.getElementById("pWorkers").value) || 1;
+  const outsourcedCount = Number(document.getElementById("pOutsourcedCount").value) || 0;
   const payload = {
     name,
     customer: document.getElementById("pCustomer").value.trim(),
@@ -1943,6 +2094,7 @@ async function saveProject(id) {
     endTime: fullEnd,
     estimatedHours: Number(document.getElementById("pEst").value) || 0,
     outsourcedHours: Number(document.getElementById("pOutsourcedHours").value) || 0,
+    outsourcedCount,
     workerCount,
     status: document.getElementById("pStatus").value,
     note: document.getElementById("pNote").value.trim(),
@@ -2158,11 +2310,12 @@ function renderConstruction() {
           <td>${esc(l.workerName)}${isOutsourced ? ` <span style="color:#8b5cf6;font-size:12px">(外协)</span>` : ""}</td>
           <td>${fmtDate(l.date)}</td>
           <td>${l.hours} 小时</td>
+          <td>${esc(l.level || "中级")}</td>
           <td>${esc(l.note || "—")}</td>
           <td>${canEdit ? `<button class="btn small danger" onclick="deleteWorkLog('${p.id}','${l.id}')">删除</button>` : ""}</td>
         </tr>`;
       }).join("")
-    : `<tr><td colspan="5" style="color:var(--muted)">暂无施工工时记录</td></tr>`;
+    : `<tr><td colspan="6" style="color:var(--muted)">暂无施工工时记录</td></tr>`;
 
   const workerOptions = cache.workers.map((w) =>
     `<option value="${w.id}">${esc(w.name)}</option>`).join("");
@@ -2299,11 +2452,11 @@ function renderConstruction() {
       <h3>👷 施工人员工时（分人填写）</h3>
       <table class="data">
         <thead>
-          <tr><th>施工人员</th><th>施工日期</th><th>施工工时</th><th>说明</th><th></th></tr>
+          <tr><th>施工人员</th><th>施工日期</th><th>施工工时</th><th>等级</th><th>说明</th><th></th></tr>
         </thead>
         <tbody>${logsRows}</tbody>
         <tfoot>
-          <tr><td colspan="2">合计施工工时</td><td colspan="3">${totalHours} 小时</td></tr>
+          <tr><td colspan="3">合计施工工时</td><td colspan="3">${totalHours} 小时</td></tr>
         </tfoot>
       </table>
 
@@ -2333,6 +2486,15 @@ function renderConstruction() {
         <div class="field">
           <label>施工工时(小时)</label>
           <input class="input" type="number" min="0" step="0.5" id="logHours" placeholder="0" style="width:120px" />
+        </div>
+        <div class="field">
+          <label>工时等级</label>
+          <select class="input" id="logLevel" style="width:100px">
+            <option value="初级">初级</option>
+            <option value="中级" selected>中级</option>
+            <option value="高级">高级</option>
+            <option value="特级">特级</option>
+          </select>
         </div>
         <div class="field" style="flex:1;min-width:150px">
           <label>说明</label>
@@ -2668,6 +2830,7 @@ async function addWorkLog(id) {
   const hours = Number(document.getElementById("logHours").value);
   const date = document.getElementById("logDate").value;
   const note = document.getElementById("logNote").value.trim();
+  const level = document.getElementById("logLevel").value;
   
   if (!hours || hours <= 0) { toast("请填写有效工时"); return; }
   if (!date) { toast("请选择施工日期"); return; }
@@ -2684,7 +2847,7 @@ async function addWorkLog(id) {
     workerId = "outsourced:" + workerName;
   }
   
-  await repo.addWorkLog(id, { workerId, workerName, hours, date, note, isOutsourced: type === "outsourced" });
+  await repo.addWorkLog(id, { workerId, workerName, hours, date, note, level, isOutsourced: type === "outsourced" });
   if (p.status === STATUS.BOOKED) await repo.patchProject(id, { status: STATUS.WORKING, started_at: new Date().toISOString() });
   await repo.loadAll();
   renderAll();
@@ -3098,6 +3261,12 @@ function openCompleteProjectForm(id) {
         <div style="display:flex;gap:12px;align-items:center;width:100%;">
           <span style="min-width:100px;font-weight:500;">${esc(w.name)}</span>
           <input type="number" id="workerHours_${idx}" placeholder="工时" step="0.5" min="0" max="24" class="input" style="flex:1;">
+          <select id="workerLevel_${idx}" class="input" style="width:100px;">
+            <option value="初级">初级</option>
+            <option value="中级" selected>中级</option>
+            <option value="高级">高级</option>
+            <option value="特级">特级</option>
+          </select>
           <input type="text" id="workerNote_${idx}" placeholder="备注（可选）" class="input" style="flex:2;">
         </div>
       </div>`;
@@ -3115,6 +3284,12 @@ function openCompleteProjectForm(id) {
         <div style="display:flex;gap:12px;align-items:center;width:100%;">
           <span style="min-width:100px;font-weight:500;">${esc(name)}</span>
           <input type="number" id="outsourcedHours_${idx}" placeholder="工时" step="0.5" min="0" max="24" class="input" style="flex:1;">
+          <select id="outsourcedLevel_${idx}" class="input" style="width:100px;">
+            <option value="初级">初级</option>
+            <option value="中级" selected>中级</option>
+            <option value="高级">高级</option>
+            <option value="特级">特级</option>
+          </select>
           <input type="text" id="outsourcedNote_${idx}" placeholder="备注（可选）" class="input" style="flex:2;">
         </div>
       </div>`;
@@ -3137,6 +3312,7 @@ function openCompleteProjectForm(id) {
       
       workers.forEach((w, idx) => {
         const hours = parseFloat(document.getElementById(`workerHours_${idx}`)?.value);
+        const level = document.getElementById(`workerLevel_${idx}`)?.value || "中级";
         const note = document.getElementById(`workerNote_${idx}`)?.value;
         if (hours && hours > 0) {
           totalHours += hours;
@@ -3144,6 +3320,7 @@ function openCompleteProjectForm(id) {
             workerId: w.id,
             workerName: w.name,
             hours: hours,
+            level: level,
             date: dateStr,
             note: note || null
           });
@@ -3152,6 +3329,7 @@ function openCompleteProjectForm(id) {
       
       outsourcedWorkers.forEach((name, idx) => {
         const hours = parseFloat(document.getElementById(`outsourcedHours_${idx}`)?.value);
+        const level = document.getElementById(`outsourcedLevel_${idx}`)?.value || "中级";
         const note = document.getElementById(`outsourcedNote_${idx}`)?.value;
         if (hours && hours > 0) {
           totalHours += hours;
@@ -3159,6 +3337,7 @@ function openCompleteProjectForm(id) {
             workerId: "",
             workerName: name,
             hours: hours,
+            level: level,
             date: dateStr,
             note: note || null
           });
@@ -3324,16 +3503,18 @@ function collectStats() {
       if (workerFilter && l.workerId !== workerFilter) return;
       const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
       if (!rows[l.workerId]) {
-        rows[l.workerId] = { name: l.workerName, hours: 0, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced };
+        rows[l.workerId] = { name: l.workerName, hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced };
       }
+      const level = l.level || "中级";
       rows[l.workerId].hours += Number(l.hours) || 0;
+      rows[l.workerId].levelHours[level] += Number(l.hours) || 0;
       rows[l.workerId].days.add(fmtDate(l.date));
       rows[l.workerId].projects.add(p.name);
       const dayKey = l.date;
       if (!rows[l.workerId].daily[dayKey]) {
-        rows[l.workerId].daily[dayKey] = 0;
+        rows[l.workerId].daily[dayKey] = [];
       }
-      rows[l.workerId].daily[dayKey] += Number(l.hours) || 0;
+      rows[l.workerId].daily[dayKey].push({ hours: Number(l.hours) || 0, level: level });
     });
   });
   
@@ -3359,6 +3540,7 @@ function collectStats() {
   return Object.values(rows).map((r) => ({
     name: r.name,
     hours: r.hours,
+    levelHours: r.levelHours,
     days: r.days.size,
     projects: r.projects.size,
     daily: r.daily,
@@ -3379,24 +3561,30 @@ function collectProjectStats() {
       // 按施工人员汇总工时（区分内部和外协）
       const workerMap = {};
       const outsourcedWorkerMap = {};
+      const levelHours = {初级:0, 中级:0, 高级:0, 特级:0};
       (p.workLogs || []).forEach((l) => {
         if (workerFilter && l.workerId !== workerFilter) return;
         const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
         const nm = l.workerName || "未知";
+        const level = l.level || "中级";
+        const hours = Number(l.hours) || 0;
+        levelHours[level] += hours;
         if (isOutsourced) {
-          if (!outsourcedWorkerMap[nm]) outsourcedWorkerMap[nm] = 0;
-          outsourcedWorkerMap[nm] += Number(l.hours) || 0;
+          if (!outsourcedWorkerMap[nm]) outsourcedWorkerMap[nm] = { hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0} };
+          outsourcedWorkerMap[nm].hours += hours;
+          outsourcedWorkerMap[nm].levelHours[level] += hours;
         } else {
-          if (!workerMap[nm]) workerMap[nm] = 0;
-          workerMap[nm] += Number(l.hours) || 0;
+          if (!workerMap[nm]) workerMap[nm] = { hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0} };
+          workerMap[nm].hours += hours;
+          workerMap[nm].levelHours[level] += hours;
         }
       });
       const workerHours = Object.entries(workerMap)
-        .sort((a, b) => b[1] - a[1])
-        .map(([name, hours]) => ({ name, hours, isOutsourced: false }));
+        .sort((a, b) => b[1].hours - a[1].hours)
+        .map(([name, data]) => ({ name, hours: data.hours, levelHours: data.levelHours, isOutsourced: false }));
       const outsourcedWorkerHours = Object.entries(outsourcedWorkerMap)
-        .sort((a, b) => b[1] - a[1])
-        .map(([name, hours]) => ({ name, hours, isOutsourced: true }));
+        .sort((a, b) => b[1].hours - a[1].hours)
+        .map(([name, data]) => ({ name, hours: data.hours, levelHours: data.levelHours, isOutsourced: true }));
       // 外协人员数量
       const outsourcedCount = (p.outsourcedWorkers || "").split(',').map(w => w.trim()).filter(w => w.length > 0).length;
       const totalOutsourcedHoursFromLogs = Object.values(outsourcedWorkerMap).reduce((sum, h) => sum + h, 0);
@@ -3410,6 +3598,7 @@ function collectProjectStats() {
         hasActual, 
         workerHours, 
         outsourcedWorkerHours,
+        levelHours,
         outsourcedCount, 
         hasOutsourced: outsourcedCount > 0, 
         outsourcedHours: p.outsourcedHours || 0, 
@@ -3468,7 +3657,8 @@ function renderStats() {
           
           for (let day = 1; day <= daysInMonth; day++) {
             const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-            const hours = r.daily[dateKey];
+            const dayLogs = r.daily[dateKey] || [];
+            const hours = dayLogs.length > 0 ? dayLogs.reduce((sum, log) => sum + log.hours, 0) : 0;
             const isLeaveDay = r.leaveRecords.some((lr) => dateKey >= lr.startDate && dateKey <= lr.endDate);
             calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""}">
               <div class="day-num">${day}</div>
@@ -3492,8 +3682,8 @@ function renderStats() {
             <div class="worker-cal">${calGrid}</div>
           </div>` : `
           <div class="daily-hours-list">
-            ${Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, hours]) => 
-              `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${hours}h</span></div>`
+            ${Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).flatMap(([date, logs]) => 
+              logs.map((log) => `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${log.hours}h</span><span class="daily-level">${esc(log.level)}</span></div>`)
             ).join("")}
           </div>`;
           
@@ -3502,12 +3692,16 @@ function renderStats() {
         <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
           <table class="data">
             <thead>
-              <tr><th>施工人员</th><th>安装工时(小时)</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>
+              <tr><th>施工人员</th><th>安装工时(小时)</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>
             </thead>
             <tbody>
               <tr>
                 <td style="${rowColor}">${esc(r.name)}${r.isOutsourced ? ' (外协)' : ''}</td>
                 <td style="${rowColor}"><b>${r.hours}</b></td>
+                <td style="color:#6b7280">${r.levelHours?.初级 || 0}</td>
+                <td style="color:#3b82f6">${r.levelHours?.中级 || 0}</td>
+                <td style="color:#f59e0b">${r.levelHours?.高级 || 0}</td>
+                <td style="color:#dc2626">${r.levelHours?.特级 || 0}</td>
                 <td>${r.days}</td>
                 <td>${r.leaveDays > 0 ? `<span style="color:#ef4444;font-weight:600">${r.leaveDays}天</span>` : "0"}</td>
                 <td>${r.projects}</td>
@@ -3532,7 +3726,13 @@ function renderStats() {
       <div class="detail-block" style="padding:0;overflow:hidden">
         <table class="data">
           <tbody>
-            <tr><td><b>合计</b></td><td><b>${totalHours}</b></td><td colspan="2"></td></tr>
+            <tr><td><b>合计</b></td><td><b>${totalHours}</b></td>
+              <td>${rows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0)}</td>
+              <td>${rows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0)}</td>
+              <td>${rows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0)}</td>
+              <td>${rows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0)}</td>
+              <td colspan="3"></td>
+            </tr>
           </tbody>
         </table>
       </div>`;
@@ -3543,7 +3743,7 @@ function renderStats() {
     <div class="detail-block" style="padding:0;overflow:hidden">
       <table class="data">
         <thead>
-          <tr><th>日期</th><th>店面</th><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异(实际−预计)</th><th>施工人员工时</th><th style="color:#8b5cf6">外协人数</th></tr>
+          <tr><th>日期</th><th>店面</th><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异(实际−预计)</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工人员工时</th><th style="color:#8b5cf6">外协人数</th></tr>
         </thead>
         <tbody>
           ${projRows.map((r) => {
@@ -3560,13 +3760,23 @@ function renderStats() {
               <td>${r.est}</td>
               <td>${r.hasActual ? r.act : "—"}</td>
               <td style="color:${r.hasActual ? diffColor(r.diff) : "var(--muted)"};font-weight:600">${r.hasActual ? fmtSignedDiff(r.diff) : "未登记"}</td>
+              <td style="color:#6b7280">${r.levelHours?.初级 || 0}</td>
+              <td style="color:#3b82f6">${r.levelHours?.中级 || 0}</td>
+              <td style="color:#f59e0b">${r.levelHours?.高级 || 0}</td>
+              <td style="color:#dc2626">${r.levelHours?.特级 || 0}</td>
               <td style="white-space:normal;max-width:320px">${workerText || `<span style="color:var(--muted)">—</span>`}</td>
               <td style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
             </tr>`;
           }).join("")}
         </tbody>
         <tfoot>
-          <tr><td colspan="4">合计（已登记实际）</td><td>${totalEst}</td><td>${totalAct}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td><td></td><td style="color:#8b5cf6;font-weight:600">${totalOutsourcedWorkers}人</td></tr>
+          <tr><td colspan="4">合计（已登记实际）</td><td>${totalEst}</td><td>${totalAct}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td>
+            <td>${projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0)}</td>
+            <td>${projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0)}</td>
+            <td>${projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0)}</td>
+            <td>${projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0)}</td>
+            <td></td><td style="color:#8b5cf6;font-weight:600">${totalOutsourcedWorkers}人</td>
+          </tr>
         </tfoot>
       </table>
     </div>`;
@@ -3584,60 +3794,80 @@ function exportStats() {
   if (rows.length === 0 && projRows.length === 0) { toast("暂无数据可导出"); return; }
   const month = document.getElementById("statsMonth").value || "全部";
 
-  const workerHeader = ["施工人员", "安装工时(小时)", "施工天数", "请假天数", "参与项目数"];
-  const workerLines = ["【人员安装工时】", workerHeader.join(",")].concat(
-    rows.map((r) => [r.name, r.hours, r.days, r.leaveDays || 0, r.projects].join(",")));
+  let html = `
+<html xmlns:x="urn:schemas-microsoft-com:office:excel">
+<head>
+<meta charset="utf-8"/>
+<style>
+table {border-collapse:collapse;font-family:Microsoft YaHei,sans-serif;font-size:12px;margin:0 auto;}
+th {background:#4f46e5;color:#fff;font-weight:bold;text-align:center;padding:8px 12px;border:1px solid #e5e7eb;white-space:nowrap;}
+td {border:1px solid #e5e7eb;padding:8px 12px;text-align:center;}
+.num {text-align:right;}
+.title {font-size:16px;font-weight:bold;margin:16px 0 8px;color:#1f2937;text-align:center;}
+</style>
+</head>
+<body>
+`;
 
-  const dailyHeader = ["施工人员", "日期", "工时(小时)", "是否请假"];
-  const dailyLines = ["\n【每日工时明细】", dailyHeader.join(",")].concat(
-    rows.flatMap((r) => 
-      Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).map(([date, hours]) => {
-        const isLeave = r.leaveRecords && r.leaveRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
-        return [r.name, date, hours, isLeave ? "是" : ""].join(",");
-      })
-    )
-  );
+  html += '<div class="title">👷 人员安装工时</div>\n<table>\n<col width="120"/><col width="100"/><col width="80"/><col width="80"/><col width="80"/><col width="80"/><col width="80"/><col width="80"/><col width="100"/>\n<tr><th>施工人员</th><th>安装工时(小时)</th><th>初级工时</th><th>中级工时</th><th>高级工时</th><th>特级工时</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>';
 
-  const leaveHeader = ["施工人员", "请假时段", "请假原因"];
-  const leaveLines = ["\n【请假记录】", leaveHeader.join(",")].concat(
-    rows.flatMap((r) => {
-      if (!r.leaveRecords || r.leaveRecords.length === 0) return [];
-      return r.leaveRecords.map((lr) => [
-        r.name,
-        `"${formatLeaveTime(lr).replace(/"/g, '""')}"`,
-        `"${(lr.reason || "").replace(/"/g, '""')}"`,
-      ].join(","));
-    })
-  );
+  rows.forEach((r) => {
+    html += '<tr>\n<td>' + esc(r.name) + (r.isOutsourced ? ' (外协)' : '') + '</td>\n<td class="num">' + r.hours + '</td>\n<td class="num">' + (r.levelHours?.初级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.中级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.高级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.特级 || 0) + '</td>\n<td class="num">' + r.days + '</td>\n<td class="num">' + (r.leaveDays || 0) + '</td>\n<td class="num">' + r.projects + '</td>\n</tr>';
+  });
+
+  html += '<tr style="background:#f3f4f6;"><td style="font-weight:bold;">合计</td>\n<td class="num" style="font-weight:bold;">' + rows.reduce((s, r) => s + r.hours, 0) + '</td>\n<td class="num">' + rows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0) + '</td>\n<td class="num">' + rows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0) + '</td>\n<td class="num">' + rows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0) + '</td>\n<td class="num">' + rows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0) + '</td>\n<td colspan="3"></td></tr>\n</table>';
+
+  html += '<div class="title">📅 每日工时明细</div>\n<table>\n<col width="120"/><col width="100"/><col width="100"/><col width="80"/><col width="80"/>\n<tr><th>施工人员</th><th>日期</th><th>工时(小时)</th><th>工时等级</th><th>是否请假</th></tr>';
+
+  rows.forEach((r) => {
+    Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).forEach(([date, logs]) => {
+      const isLeave = r.leaveRecords && r.leaveRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
+      logs.forEach((log) => {
+        html += '<tr>\n<td>' + esc(r.name) + '</td>\n<td>' + date + '</td>\n<td class="num">' + log.hours + '</td>\n<td>' + esc(log.level) + '</td>\n<td>' + (isLeave ? '是' : '') + '</td>\n</tr>';
+      });
+    });
+  });
+
+  html += '</table>';
+
+  const hasLeaves = rows.some((r) => r.leaveRecords && r.leaveRecords.length > 0);
+  if (hasLeaves) {
+    html += '<div class="title">🏥 请假记录</div>\n<table>\n<col width="120"/><col width="180"/><col width="300"/>\n<tr><th>施工人员</th><th>请假时段</th><th>请假原因</th></tr>';
+
+    rows.forEach((r) => {
+      if (!r.leaveRecords || r.leaveRecords.length === 0) return;
+      r.leaveRecords.forEach((lr) => {
+        html += '<tr>\n<td>' + esc(r.name) + '</td>\n<td>' + formatLeaveTime(lr) + '</td>\n<td>' + esc(lr.reason || '') + '</td>\n</tr>';
+      });
+    });
+
+    html += '</table>';
+  }
+
+  html += '<div class="title">📐 项目工时差异</div>\n<table>\n<col width="100"/><col width="100"/><col width="250"/><col width="80"/><col width="80"/><col width="80"/><col width="100"/><col width="60"/><col width="60"/><col width="60"/><col width="60"/><col width="250"/><col width="80"/>\n<tr><th>日期</th><th>店面</th><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工人员工时</th><th>外协人数</th></tr>';
+
+  projRows.forEach((r) => {
+    const internalWorkers = r.workerHours.map((w) => esc(w.name) + ' ' + w.hours + 'h').join('、');
+    const outsourcedWorkers = r.outsourcedWorkerHours.map((w) => esc(w.name) + ' ' + w.hours + 'h').join('、');
+    const workerText = (internalWorkers || '') + (internalWorkers && outsourcedWorkers ? '、' : '') + (outsourcedWorkers || '');
+    const outsourcedCount = r.outsourcedWorkerHours.length;
+    html += '<tr>\n<td>' + (r.date ? fmtDate(r.date) : '') + '</td>\n<td>' + esc(r.store || '') + '</td>\n<td>' + esc(r.name) + '</td>\n<td>' + r.status + '</td>\n<td class="num">' + r.est + '</td>\n<td class="num">' + (r.hasActual ? r.act : '') + '</td>\n<td class="num">' + (r.hasActual ? fmtSignedDiff(r.diff) : '未登记') + '</td>\n<td class="num">' + (r.levelHours?.初级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.中级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.高级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.特级 || 0) + '</td>\n<td>' + workerText + '</td>\n<td class="num">' + (outsourcedCount > 0 ? outsourcedCount + '人' : '') + '</td>\n</tr>';
+  });
 
   const recorded = projRows.filter((r) => r.hasActual);
   const totalEst = recorded.reduce((s, r) => s + r.est, 0);
   const totalAct = recorded.reduce((s, r) => s + r.act, 0);
-  const projHeader = ["项目", "状态", "预计工时", "实际工时", "差异(实际-预计)", "施工人员工时"];
-  const projLines = ["\n【项目工时差异】", projHeader.join(",")].concat(
-    projRows.map((r) => {
-      const workerText = r.workerHours.length
-        ? r.workerHours.map((w) => `${w.name} ${w.hours}h`).join("、")
-        : "";
-      return [
-        `"${String(r.name).replace(/"/g, '""')}"`,
-        r.status,
-        r.est,
-        r.hasActual ? r.act : "",
-        r.hasActual ? fmtSignedDiff(r.diff) : "未登记",
-        `"${workerText.replace(/"/g, '""')}"`,
-      ].join(",");
-    })
-  ).concat(["合计(已登记实际),," + totalEst + "," + totalAct + "," + fmtSignedDiff(totalAct - totalEst) + ","]);
+  html += '<tr style="background:#f3f4f6;"><td colspan="4" style="font-weight:bold;">合计</td>\n<td class="num" style="font-weight:bold;">' + totalEst + '</td>\n<td class="num" style="font-weight:bold;">' + totalAct + '</td>\n<td class="num" style="font-weight:bold;">' + fmtSignedDiff(totalAct - totalEst) + '</td>\n<td class="num">' + projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0) + '</td>\n<td class="num">' + projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0) + '</td>\n<td class="num">' + projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0) + '</td>\n<td class="num">' + projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0) + '</td>\n<td colspan="2"></td></tr>\n</table>';
 
-  const csv = "\ufeff" + workerLines.join("\n") + dailyLines.join("\n") + leaveLines.join("\n") + projLines.join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const a = document.createElement("a");
+  html += '</body></html>';
+
+  const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+  const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `工时统计_${month}.csv`;
+  a.download = '工时统计_' + month + '.xls';
   a.click();
   URL.revokeObjectURL(a.href);
-  toast("已导出 CSV");
+  toast('已导出 Excel');
 }
 
 /* ============================================================
@@ -4170,7 +4400,7 @@ function exportProjects() {
 }
 
 function exportWorkLogs() {
-  const headers = ["日志ID", "项目ID", "项目名称", "门店", "员工ID", "员工姓名", "日期", "工时", "开始时间", "结束时间", "备注", "是否外协"];
+  const headers = ["日志ID", "项目ID", "项目名称", "门店", "员工ID", "员工姓名", "日期", "工时", "工时等级", "开始时间", "结束时间", "备注", "是否外协"];
   const rows = cache.projects.flatMap(p => 
     (p.workLogs || []).map(l => [
       l.id || "",
@@ -4181,6 +4411,7 @@ function exportWorkLogs() {
       l.workerName || (l.workerId ? (getWorker(l.workerId)?.name || "") : ""),
       l.date || "",
       l.hours || 0,
+      l.level || "中级",
       l.startTime || "",
       l.endTime || "",
       l.note || "",
@@ -4672,6 +4903,12 @@ function renderLeaveCard(record, showActions) {
             <button class="btn small" onclick="approveLeave('${record.id}')">批准</button>
             <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
           ` : ""}
+          ${record.status === "approved" ? `
+            <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回批准</button>
+          ` : ""}
+          ${record.status === "rejected" ? `
+            <button class="btn small danger" onclick="deleteLeaveRecord('${record.id}')">删除</button>
+          ` : ""}
         ` : ""}
         ${record.status === "pending" && record.workerId === currentProfile.id ? `
           <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回</button>
@@ -4758,12 +4995,24 @@ async function withdrawLeave(id) {
   const record = getLeaveRecord(id);
   if (!record) return;
   
-  if (!confirm(`确定要撤回您的 ${LEAVE_TYPE_LABEL[record.leaveType]} 申请吗？`)) return;
-  
-  await repo.deleteLeaveRecord(id);
-  logOperation("LEAVE_WITHDRAW", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `时间段：${record.startDate}~${record.endDate}`);
-  renderAll();
-  toast("请假申请已撤回");
+  if (record.status === "approved") {
+    if (!confirm(`确定要撤回 ${record.workerName} 的 ${LEAVE_TYPE_LABEL[record.leaveType]} 批准吗？`)) return;
+    record.status = "pending";
+    record.reviewNote = "";
+    record.reviewerId = "";
+    record.reviewerName = "";
+    record.reviewedAt = null;
+    await repo.saveLeaveRecord(record, id);
+    logOperation("LEAVE_WITHDRAW", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `管理员撤回批准，时间段：${record.startDate}~${record.endDate}`);
+    renderAll();
+    toast("请假批准已撤回，状态已改为待审批");
+  } else {
+    if (!confirm(`确定要撤回您的 ${LEAVE_TYPE_LABEL[record.leaveType]} 申请吗？`)) return;
+    await repo.deleteLeaveRecord(id);
+    logOperation("LEAVE_WITHDRAW", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `时间段：${record.startDate}~${record.endDate}`);
+    renderAll();
+    toast("请假申请已撤回");
+  }
 }
 
 function showLeaveDetail(id) {
@@ -6154,11 +6403,7 @@ async function startCloudSession() {
   currentUser = data.session.user;
   document.getElementById("authScreen").classList.add("hidden");
 
-  const userInfo = document.getElementById("userInfo");
-  userInfo.textContent = currentUser.email;
-  userInfo.classList.remove("hidden");
   document.getElementById("btnLogout").classList.remove("hidden");
-  document.getElementById("btnMigrate").classList.remove("hidden");
   document.getElementById("userMenu").classList.remove("hidden");
   setSyncStatus("online", "● 连接中…");
 
@@ -6166,12 +6411,28 @@ async function startCloudSession() {
   const { data: prof } = await sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
   currentProfile = { role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null };
 
-  document.getElementById("dropdownEmail").textContent = currentUser.email;
+  const userInfo = document.getElementById("userInfo");
+  userInfo.textContent = currentProfile.name || currentUser.email;
+  userInfo.classList.remove("hidden");
+  
+  document.getElementById("dropdownEmail").textContent = currentProfile.name || currentUser.email;
   document.getElementById("dropdownRole").textContent = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
+  
+  if (currentProfile.role === "admin") {
+    document.getElementById("btnMigrate").classList.remove("hidden");
+    document.getElementById("btnExportLocal").classList.remove("hidden");
+  } else {
+    document.getElementById("btnMigrateMenu").classList.add("hidden");
+    document.getElementById("btnExportLocalMenu").classList.add("hidden");
+  }
 
   document.getElementById("btnMigrateMenu").addEventListener("click", () => {
     document.getElementById("userDropdown").classList.add("hidden");
     migrateLocalToCloud();
+  });
+  document.getElementById("btnExportLocalMenu").addEventListener("click", () => {
+    document.getElementById("userDropdown").classList.add("hidden");
+    exportCloudToLocal();
   });
   document.getElementById("btnLogoutMenu").addEventListener("click", () => {
     document.getElementById("userDropdown").classList.add("hidden");
@@ -6206,6 +6467,10 @@ function showNoAccess(email) {
  * 本地数据迁移到云端
  * ============================================================ */
 async function migrateLocalToCloud() {
+  if (currentProfile.role !== "admin") {
+    toast("只有总经理可以执行此操作");
+    return;
+  }
   let local;
   try {
     local = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
@@ -6214,7 +6479,7 @@ async function migrateLocalToCloud() {
     toast("本地没有可导入的数据");
     return;
   }
-  if (!confirm("将把本机浏览器保存的历史数据上传到云端（不会删除本地数据）。确定继续？")) return;
+  if (!confirm("⚠️ 危险操作：将把本机浏览器保存的历史数据上传到云端（不会删除本地数据）。确定继续？")) return;
 
   try {
     if ((local.workers || []).length) {
@@ -6244,6 +6509,39 @@ async function migrateLocalToCloud() {
   } catch (e) {
     console.error(e);
     toast("导入失败：" + (e.message || "未知错误"));
+  }
+}
+
+/* ============================================================
+ * 导出云端数据到本地
+ * ============================================================ */
+async function exportCloudToLocal() {
+  if (currentProfile.role !== "admin") {
+    toast("只有总经理可以执行此操作");
+    return;
+  }
+  if (!confirm("⚠️ 危险操作：将把云端数据导出到本地浏览器存储，会覆盖本地已有数据。确定继续？")) return;
+  
+  try {
+    await repo.loadAll();
+    
+    const localData = {
+      workers: cache.workers,
+      projects: cache.projects,
+      stores: cache.stores,
+      leaveRecords: cache.leaveRecords,
+      leaveQuota: cache.leaveQuota,
+      holidays: cache.holidays
+    };
+    
+    localStorage.setItem(STORE_KEY, JSON.stringify(localData));
+    
+    const dataSize = (JSON.stringify(localData).length / 1024).toFixed(2);
+    toast(`已导出云端数据到本地，数据大小：${dataSize} KB`);
+    logOperation("DATA_EXPORT", "云端数据导出", `数据大小：${dataSize} KB`);
+  } catch (e) {
+    console.error(e);
+    toast("导出失败：" + (e.message || "未知错误"));
   }
 }
 
@@ -6322,6 +6620,7 @@ function bindEvents() {
   document.getElementById("btnLogout").addEventListener("click", doLogout);
   document.getElementById("btnLogout2").addEventListener("click", doLogout);
   document.getElementById("btnMigrate").addEventListener("click", migrateLocalToCloud);
+  document.getElementById("btnExportLocal").addEventListener("click", exportCloudToLocal);
 
   document.getElementById("userMenu").addEventListener("click", (e) => {
     e.stopPropagation();

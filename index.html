@@ -34,6 +34,7 @@
         <span id="roleInfo" class="role-info hidden"></span>
         <button id="btnExport" class="btn small" onclick="showExportMenu()">📥 导出数据</button>
         <button id="btnMigrate" class="btn small hidden">导入本地数据</button>
+        <button id="btnExportLocal" class="btn small hidden">导出到本地</button>
         <button id="btnLogout" class="btn small hidden">登出</button>
       </div>
       <div id="userDropdown" class="user-dropdown hidden">
@@ -47,6 +48,7 @@
         </div>
         <div class="dropdown-divider"></div>
         <button class="dropdown-item btn-link" id="btnMigrateMenu">导入本地数据</button>
+        <button class="dropdown-item btn-link" id="btnExportLocalMenu">导出到本地</button>
         <button class="dropdown-item btn-link" id="btnLogoutMenu">登出</button>
       </div>
       <div id="exportMenu" class="user-dropdown hidden">
@@ -166,7 +168,7 @@
         <select id="statsWorker" class="input">
           <option value="">全部人员</option>
         </select>
-        <button class="btn" id="btnExportStats">导出 CSV</button>
+        <button class="btn" id="btnExportStats">导出统计数据</button>
       </div>
       <div id="statsSummary" class="stats-summary"></div>
       <div id="statsTable"></div>
