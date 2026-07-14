@@ -2859,9 +2859,110 @@ function generateWorkerScheduleDescription(dateStr = null) {
     description += `</div>`;
   }
   
+  if (todayProjects.length > 0) {
+    description += `<div class="schedule-progress">`;
+    description += `<div class="schedule-section-title">📊 项目进度跟踪</div>`;
+    
+    todayProjects.forEach(p => {
+      const store = getStore(p.storeId);
+      const storeName = store ? store.name : "未知门店";
+      const pStart = projectStart(p);
+      const startTime = pStart ? `${String(pStart.getHours()).padStart(2, "0")}:${String(pStart.getMinutes()).padStart(2, "0")}` : "08:00";
+      
+      let statusText = p.status;
+      let statusColor = "#6b7280";
+      let progress = 0;
+      
+      const now = new Date();
+      const pEnd = projectEnd(p);
+      const durationMs = pStart && pEnd ? pEnd - pStart : 0;
+      const elapsedMs = pStart ? Math.max(0, now - pStart) : 0;
+      const autoProgress = durationMs > 0 ? Math.min(100, Math.round((elapsedMs / durationMs) * 100)) : 0;
+      
+      switch (p.status) {
+        case "预约中":
+          statusColor = "#3b82f6";
+          progress = now >= pStart ? Math.min(30, autoProgress) : 0;
+          break;
+        case "施工中":
+          statusColor = "#f59e0b";
+          progress = Math.max(30, Math.min(90, autoProgress));
+          break;
+        case "已完工":
+        case "已完成":
+          statusColor = "#10b981";
+          progress = 95;
+          break;
+        case "已验收":
+        case "已审核":
+          statusColor = "#06b6d4";
+          progress = 100;
+          break;
+        case "已取消":
+          statusColor = "#ef4444";
+          progress = 0;
+          break;
+        default:
+          statusColor = "#6b7280";
+          progress = 0;
+      }
+      
+      const statusActions = [];
+      if ((isManager() || isWorker()) && p.status === "预约中") {
+        statusActions.push(`<button class="btn tiny" onclick="updateProjectStatus('${p.id}', '施工中')">开始施工</button>`);
+      }
+      if ((isManager() || isWorker()) && p.status === "施工中") {
+        statusActions.push(`<button class="btn tiny" onclick="updateProjectStatus('${p.id}', '已完工')">完成安装</button>`);
+      }
+      if ((isManager() || isWorker()) && (p.status === "已完工" || p.status === "已完成")) {
+        statusActions.push(`<button class="btn tiny" onclick="updateProjectStatus('${p.id}', '已验收')">确认验收</button>`);
+      }
+      
+      description += `
+        <div class="schedule-progress-item">
+          <div class="schedule-progress-header">
+            <span class="schedule-progress-name">${esc(p.name)}</span>
+            <span class="schedule-progress-store">${esc(storeName)}</span>
+            <span class="schedule-progress-time">${startTime}</span>
+          </div>
+          <div class="schedule-progress-bar-container">
+            <div class="schedule-progress-bar" style="width: ${progress}%; background-color: ${statusColor};"></div>
+          </div>
+          <div class="schedule-progress-info">
+            <span class="schedule-progress-status" style="color: ${statusColor};">${statusText}</span>
+            <span class="schedule-progress-percent">${progress}%</span>
+          </div>
+          ${statusActions.length > 0 ? `<div class="schedule-progress-actions">${statusActions.join(" ")}</div>` : ""}
+        </div>
+      `;
+    });
+    
+    description += `</div>`;
+  }
+  
   description += `</div>`;
   
   return description;
+}
+
+function updateProjectStatus(id, newStatus) {
+  const p = getProject(id);
+  if (!p) return;
+  
+  p.status = newStatus;
+  
+  if (MODE === "cloud" && cloudConfigured()) {
+    supabase.from("projects").update({ status: newStatus, updated_at: new Date().toISOString() }).eq("id", id).then(() => {
+      toast(`项目状态已更新为：${newStatus}`);
+      renderConstruction();
+    }).catch(() => {
+      toast("更新失败");
+    });
+  } else {
+    saveProjects();
+    toast(`项目状态已更新为：${newStatus}`);
+    renderConstruction();
+  }
 }
 
 function openAcceptance(id) {

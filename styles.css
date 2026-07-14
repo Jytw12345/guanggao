@@ -665,6 +665,88 @@ textarea.input { resize: vertical; min-height: 70px; }
   padding: 6px 10px;
 }
 
+.schedule-progress {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.schedule-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 12px;
+}
+
+.schedule-progress-item {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #f9fafb;
+  border-radius: 8px;
+}
+
+.schedule-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.schedule-progress-name {
+  font-weight: 500;
+  color: #1f2937;
+}
+
+.schedule-progress-store {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.schedule-progress-time {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.schedule-progress-bar-container {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.schedule-progress-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.schedule-progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.schedule-progress-status {
+  font-weight: 500;
+}
+
+.schedule-progress-percent {
+  color: #6b7280;
+}
+
+.schedule-progress-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+}
+
+.btn.tiny {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
 .leave-calendar-day {
   width: 60px;
   text-align: center;
