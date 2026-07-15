@@ -16,7 +16,7 @@ const STATUS = {
 };
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -34,6 +34,7 @@ const getWorker = (id) => cache.workers.find((w) => w.id === id);
 const getProject = (id) => cache.projects.find((p) => p.id === id);
 const getStore = (id) => cache.stores.find((s) => s.id === id);
 const getLeaveRecord = (id) => cache.leaveRecords.find((l) => l.id === id);
+const getOutsourcedWorker = (id) => cache.outsourcedWorkers.find((w) => w.id === id);
 const storeName = (id) => (getStore(id) || {}).name || "—";
 
 /* ---------- 权限判断（前端界面控制，服务端另有 RLS 强制） ---------- */
@@ -451,6 +452,8 @@ const mapLog = (r) => ({
   hours: Number(r.hours) || 0,
   date: r.date,
   note: r.note,
+  level: r.level || "中级",
+  isOutsourced: r.is_outsourced || false,
 });
 
 /* ============================================================
@@ -461,7 +464,7 @@ const repo = {
   /* ---- 载入全部数据到 cache ---- */
   async loadAll() {
     if (MODE === "cloud") {
-      const [wRes, pRes, lRes, sRes, rpRes, lrRes, lqRes, hRes] = await Promise.all([
+      const [wRes, pRes, lRes, sRes, rpRes, lrRes, lqRes, hRes, oRes] = await Promise.all([
         sb.from("workers").select("*"),
         sb.from("projects").select("*"),
         sb.from("work_logs").select("*"),
@@ -470,6 +473,7 @@ const repo = {
         sb.from("leave_records").select("*"),
         sb.from("leave_quota").select("*"),
         sb.from("holidays").select("*"),
+        sb.from("outsourced_workers").select("*"),
       ]);
       const allErrors = [
         { name: "workers", res: wRes },
@@ -535,6 +539,14 @@ const repo = {
         isWorkday: r.is_workday || false,
         createdAt: r.created_at,
       }));
+      if (!oRes.error) {
+        cache.outsourcedWorkers = (oRes.data || []).map((r) => ({
+          id: r.id, name: r.name, phone: r.phone || "",
+        })).sort((a, b) => a.name.localeCompare(b.name, "zh"));
+      } else {
+        console.warn("outsourced_workers 表读取失败（可能尚未创建）:", oRes.error.message);
+        cache.outsourcedWorkers = [];
+      }
     } else {
       loadLocal();
     }
@@ -620,6 +632,28 @@ const repo = {
     }
   },
 
+  /* ---- 外协人员 ---- */
+  async saveOutsourcedWorker(worker, id) {
+    if (MODE === "cloud") {
+      const row = { id: id || uid(), name: worker.name, phone: worker.phone || null };
+      const { error } = await sb.from("outsourced_workers").upsert(row);
+      if (error) return fail(error);
+    } else {
+      if (id) Object.assign(getOutsourcedWorker(id), worker);
+      else cache.outsourcedWorkers.push({ id: uid(), ...worker });
+      saveLocal();
+    }
+  },
+  async deleteOutsourcedWorker(id) {
+    if (MODE === "cloud") {
+      const { error } = await sb.from("outsourced_workers").delete().eq("id", id);
+      if (error) return fail(error);
+    } else {
+      cache.outsourcedWorkers = cache.outsourcedWorkers.filter((w) => w.id !== id);
+      saveLocal();
+    }
+  },
+
   /* ---- 项目 ---- */
   async saveProject(project, id) {
     if (MODE === "cloud") {
@@ -649,6 +683,7 @@ const repo = {
   },
   async deleteProject(id) {
     if (MODE === "cloud") {
+      await sb.from("work_logs").delete().eq("project_id", id);
       const { error } = await sb.from("projects").delete().eq("id", id);
       if (error) return fail(error);
     } else {
@@ -708,11 +743,16 @@ const repo = {
         id: uid(), project_id: pid, worker_id: log.workerId,
         worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note || null,
         level: log.level || "中级",
+        is_outsourced: log.isOutsourced || false,
       };
       let { error } = await sb.from("work_logs").insert(row);
       if (error && error.message && error.message.includes('level')) {
         const { level, ...rowWithoutLevel } = row;
         ({ error } = await sb.from("work_logs").insert(rowWithoutLevel));
+      }
+      if (error && error.message && error.message.includes('is_outsourced')) {
+        const { is_outsourced, ...rowWithoutIsOutsourced } = row;
+        ({ error } = await sb.from("work_logs").insert(rowWithoutIsOutsourced));
       }
       if (error) return fail(error);
     } else {
@@ -824,6 +864,7 @@ function loadLocal() {
       cache.leaveRecords = data.leaveRecords || [];
       cache.leaveQuota = data.leaveQuota || [];
       cache.holidays = data.holidays || [];
+      cache.outsourcedWorkers = data.outsourcedWorkers || [];
     }
   } catch (e) {
     console.error("读取本地数据失败", e);
@@ -845,7 +886,8 @@ function saveLocal() {
     stores: cache.stores, 
     leaveRecords: cache.leaveRecords,
     leaveQuota: cache.leaveQuota,
-    holidays: cache.holidays
+    holidays: cache.holidays,
+    outsourcedWorkers: cache.outsourcedWorkers
   }));
 }
 
@@ -861,6 +903,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "stores" }, scheduleReload)
     .on("postgres_changes", { event: "*", schema: "public", table: "role_permissions" }, scheduleReload)
     .on("postgres_changes", { event: "*", schema: "public", table: "leave_records" }, scheduleReload)
+    .on("postgres_changes", { event: "*", schema: "public", table: "outsourced_workers" }, scheduleReload)
     .subscribe((status) => {
       if (status === "SUBSCRIBED") setSyncStatus("online", "● 实时同步中");
       else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setSyncStatus("offline", "● 同步连接异常");
@@ -1223,6 +1266,79 @@ async function deleteWorker(id) {
   if (used && !confirm("该人员已有施工工时记录，删除不会移除历史记录。确定删除该人员？")) return;
   if (!used && !confirm("确定删除该人员？")) return;
   await repo.deleteWorker(id);
+  await repo.loadAll();
+  renderAll();
+  toast("已删除");
+}
+
+/* ============================================================
+ * 外协人员管理模块
+ * ============================================================ */
+function renderOutsourcedWorkers() {
+  const list = document.getElementById("outsourcedWorkerList");
+  if (!list) return;
+  
+  if (cache.outsourcedWorkers.length === 0) {
+    list.innerHTML = `<div class="empty">暂无外协人员，点击右上角「添加外协人员」创建。</div>`;
+    return;
+  }
+  
+  list.innerHTML = cache.outsourcedWorkers.map((w) => `
+    <div class="card">
+      <div class="card-title">
+        <h3>${esc(w.name)}</h3>
+        <span class="badge" style="background:#8b5cf6;color:#fff;">外协</span>
+      </div>
+      <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
+      <div class="card-actions">
+        ${isManager() ? `<button class="btn small" onclick="editOutsourcedWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteOutsourcedWorker('${w.id}')">删除</button>` : ""}
+      </div>
+    </div>`).join("");
+}
+
+function outsourcedWorkerForm(w = {}) {
+  return `
+    <div class="form-row">
+      <label>姓名 *</label>
+      <input class="input" id="owName" value="${esc(w.name || "")}" placeholder="外协人员姓名" />
+    </div>
+    <div class="form-row">
+      <label>联系电话</label>
+      <input class="input" id="owPhone" value="${esc(w.phone || "")}" placeholder="手机号" />
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="modal.close()">取消</button>
+      <button class="btn primary" onclick="saveOutsourcedWorker('${w.id || ""}')">保存</button>
+    </div>`;
+}
+
+function newOutsourcedWorker() { 
+  if (!isManager()) { toast("权限不足"); return; }
+  modal.open("添加外协人员", outsourcedWorkerForm()); 
+}
+function editOutsourcedWorker(id) { 
+  if (!isManager()) { toast("权限不足"); return; }
+  modal.open("编辑外协人员", outsourcedWorkerForm(getOutsourcedWorker(id))); 
+}
+
+async function saveOutsourcedWorker(id) {
+  const name = document.getElementById("owName").value.trim();
+  if (!name) { toast("请填写姓名"); return; }
+  const payload = {
+    name,
+    phone: document.getElementById("owPhone").value.trim(),
+  };
+  await repo.saveOutsourcedWorker(payload, id);
+  await repo.loadAll();
+  modal.close();
+  renderAll();
+  toast("已保存");
+}
+
+async function deleteOutsourcedWorker(id) {
+  if (!isManager()) { toast("权限不足"); return; }
+  if (!confirm("确定删除该外协人员？")) return;
+  await repo.deleteOutsourcedWorker(id);
   await repo.loadAll();
   renderAll();
   toast("已删除");
@@ -2393,6 +2509,12 @@ function renderConstruction() {
       <div class="outsourced-block">
         <h4>🤝 外协人员</h4>
         <p class="hint" style="margin:0 0 8px;font-size:12px">当任务由外协人员完成时，填写外协人员姓名（多个用逗号分隔）。设置外协后，该任务不占用内部施工人员工时，时间冲突将被解除。</p>
+        <div style="margin-bottom:8px;">
+          <select class="input" id="outsourcedWorkersSelect" onchange="addOutsourcedWorkerToInput('${p.id}', this.value)">
+            <option value="">从常用外协人员列表添加</option>
+            ${cache.outsourcedWorkers.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}${w.phone ? ` (${esc(w.phone)})` : ''}</option>`).join("")}
+          </select>
+        </div>
         <div class="assign-form" style="margin-bottom:0">
           <input type="text" class="input" id="outsourcedWorkersInput" placeholder="输入外协人员姓名，多个用逗号分隔" value="${esc(p.outsourcedWorkers || "")}" style="flex:1">
           <button class="btn" onclick="saveOutsourcedWorkers('${p.id}', document.getElementById('outsourcedWorkersInput').value)">保存</button>
@@ -2501,7 +2623,14 @@ function renderConstruction() {
         </div>
         <div class="field" id="logOutsourcedField" style="display:none">
           <label>外协人员</label>
-          <input class="input" id="logOutsourcedName" placeholder="输入外协人员姓名" />
+          <div style="display:flex;gap:6px;align-items:center;">
+            <select class="input" id="logOutsourcedSelect" onchange="updateLogOutsourcedInput()">
+              <option value="">从常用列表选择</option>
+              ${cache.outsourcedWorkers.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}${w.phone ? ` (${esc(w.phone)})` : ''}</option>`).join("")}
+            </select>
+            <input class="input" id="logOutsourcedName" placeholder="或手动输入" style="flex:1;min-width:150px;" />
+          </div>
+          <small class="hint" style="font-size:11px;color:#8b5cf6;">可从常用外协人员列表选择，或手动输入新的外协人员</small>
         </div>
         <div class="field">
           <label>施工日期</label>
@@ -2846,6 +2975,28 @@ function toggleLogWorkerType() {
   const type = document.getElementById("logType").value;
   document.getElementById("logInternalWorkerField").style.display = type === "internal" ? "block" : "none";
   document.getElementById("logOutsourcedField").style.display = type === "outsourced" ? "block" : "none";
+}
+
+function updateLogOutsourcedInput() {
+  const sel = document.getElementById("logOutsourcedSelect");
+  const input = document.getElementById("logOutsourcedName");
+  if (sel && input && sel.value) {
+    input.value = sel.value;
+  }
+}
+
+function addOutsourcedWorkerToInput(pid, name) {
+  if (!name) return;
+  const input = document.getElementById("outsourcedWorkersInput");
+  const sel = document.getElementById("outsourcedWorkersSelect");
+  if (!input) return;
+  const current = input.value.trim();
+  const names = current ? current.split(",").map(n => n.trim()).filter(n => n) : [];
+  if (!names.includes(name)) {
+    names.push(name);
+    input.value = names.join(", ");
+  }
+  if (sel) sel.value = "";
 }
 
 async function addWorkLog(id) {
@@ -3640,7 +3791,7 @@ function collectProjectStats() {
         .map(([name, data]) => ({ name, hours: data.hours, levelHours: data.levelHours, isOutsourced: true }));
       // 外协人员数量
       const outsourcedCount = (p.outsourcedWorkers || "").split(',').map(w => w.trim()).filter(w => w.length > 0).length;
-      const totalOutsourcedHoursFromLogs = Object.values(outsourcedWorkerMap).reduce((sum, h) => sum + h, 0);
+      const totalOutsourcedHoursFromLogs = Object.values(outsourcedWorkerMap).reduce((sum, h) => sum + (h.hours || 0), 0);
       return { 
         id: p.id, 
         name: p.name, 
@@ -4604,6 +4755,7 @@ function applyPermissions() {
     stats: perm.viewStats(),
     storeStats: perm.viewStoreStats(),
     workers: perm.manageWorkers() || myRole() === ROLE.WORKER,
+    outsourced: perm.manageWorkers(),
     leaves: role != null,
     stores: perm.manageStores(),
     accounts: perm.manageAccounts() && MODE === "cloud",
@@ -4619,6 +4771,7 @@ function applyPermissions() {
   };
   setHidden("btnNewProject", !perm.createProject());
   setHidden("btnNewWorker", !perm.manageWorkers());
+  setHidden("btnNewOutsourced", !perm.manageWorkers());
   setHidden("btnNewStore", !perm.manageStores());
 
   const bottomNavVisible = {
@@ -4655,6 +4808,7 @@ function renderAll() {
   renderStats();
   renderStoreStats();
   renderStores();
+  renderOutsourcedWorkers();
   renderAccounts();
   renderRolePermissions();
   renderLeaves();
@@ -6714,6 +6868,7 @@ function bindEvents() {
   });
 
   document.getElementById("btnNewWorker").addEventListener("click", newWorker);
+  document.getElementById("btnNewOutsourced").addEventListener("click", newOutsourcedWorker);
   document.getElementById("btnNewProject").addEventListener("click", newProject);
   document.getElementById("btnNewStore").addEventListener("click", newStore);
   document.getElementById("projectSearch").addEventListener("input", renderProjects);

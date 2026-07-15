@@ -70,6 +70,7 @@
       <button class="tab-btn" data-tab="stats">工时统计</button>
       <button class="tab-btn" data-tab="storeStats">店面统计</button>
       <button class="tab-btn" data-tab="workers">施工人员</button>
+      <button class="tab-btn" data-tab="outsourced">外协人员</button>
       <button class="tab-btn" data-tab="leaves">请假管理</button>
       <button class="tab-btn" data-tab="stores">门店管理</button>
       <button class="tab-btn" data-tab="accounts">账号管理</button>
@@ -193,6 +194,16 @@
         <button class="btn primary" id="btnNewWorker">+ 添加人员</button>
       </div>
       <div id="workerList"></div>
+    </section>
+
+    <!-- 外协人员管理 -->
+    <section id="outsourced" class="tab-panel">
+      <div class="section-head">
+        <h2>外协人员管理</h2>
+        <button class="btn primary" id="btnNewOutsourced">+ 添加外协人员</button>
+      </div>
+      <p class="hint">管理常用外协人员列表，在添加工时表单中可以直接选择，无需每次手动输入。</p>
+      <div id="outsourcedWorkerList" class="card-grid"></div>
     </section>
 
     <!-- 门店管理（总经理） -->
