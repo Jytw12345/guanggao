@@ -5673,6 +5673,7 @@ function renderTimelineInDetail() {
 
 let draggedTask = null;
 let timelineMouseDown = null;
+let mouseDragEnded = false;
 
 /* 记录鼠标按下位置，用于区分点击和拖拽 */
 function timelineTaskMouseDown(e) {
@@ -6116,6 +6117,8 @@ function timelineTouchEnd(e) {
     timelineMouseDown = null;
     return;
   }
+  
+  mouseDragEnded = true;
 
   const timelineMain = document.getElementById("timelineMain");
   if (!timelineMain) { touchDragTask = null; timelineMouseDown = null; return; }
