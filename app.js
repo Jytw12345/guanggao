@@ -1525,6 +1525,7 @@ async function deleteOutsourcedWorker(id) {
  * ============================================================ */
 const SCHEDULE_TYPE_LABEL = {
   personal: "个人事务",
+  company: "公司安排",
   training: "培训学习",
   standby: "待命",
   equipment: "设备维护",
@@ -1534,6 +1535,7 @@ const SCHEDULE_TYPE_LABEL = {
 
 const SCHEDULE_TYPE_COLOR = {
   personal: "#ef4444",
+  company: "#2563eb",
   training: "#8b5cf6",
   standby: "#6b7280",
   equipment: "#0891b2",
