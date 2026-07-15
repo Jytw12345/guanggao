@@ -4566,7 +4566,10 @@ function showOperationLogs() {
   
   const modalContent = `
     <div style="max-height:600px;overflow-y:auto;">
-      <h3 style="margin:0 0 16px 0;">📝 操作日志</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0;">📝 操作日志</h3>
+        ${logs.length > 0 ? `<button class="btn small" onclick="clearOperationLogs()" style="background:#ef4444;color:#fff;border:none">🗑️ 清除日志</button>` : ""}
+      </div>
       ${logs.length > 0 ? logs.map(log => `
         <div style="border-bottom:1px solid #f3f4f6;padding:12px 0;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -4584,8 +4587,30 @@ function showOperationLogs() {
   modal.open("操作日志", modalContent);
 }
 
+async function clearOperationLogs() {
+  if (!confirm("确定要清除所有操作日志吗？此操作不可撤销。")) return;
+  
+  cache.operationLogs = [];
+  saveLocal();
+  
+  if (sb) {
+    try {
+      await sb.from("operation_logs").delete().neq("id", "");
+    } catch (e) {
+      console.warn("清除云端操作日志失败:", e);
+    }
+  }
+  
+  toast("已清除所有操作日志");
+  showOperationLogs();
+}
+
 /* 数据导出功能 */
 function showExportMenu() {
+  if (currentProfile.role !== ROLE.MANAGER) {
+    toast("只有总经理可以执行此操作");
+    return;
+  }
   const menu = document.getElementById("exportMenu");
   if (menu) {
     menu.classList.toggle("hidden");
@@ -4759,14 +4784,14 @@ function parseCSV(csvText) {
 function showImportModal() {
   const modal = document.createElement("div");
   modal.id = "importModal";
-  modal.className = "modal-overlay";
+  modal.className = "modal-mask";
   modal.innerHTML = `
-    <div class="modal" style="width:500px">
-      <div class="modal-header">
+    <div class="modal">
+      <div class="modal-head">
         <h3>数据导入</h3>
-        <button class="btn-close" onclick="document.getElementById('importModal').remove()">&times;</button>
+        <button class="modal-close" onclick="document.getElementById('importModal').remove()">✕</button>
       </div>
-      <div class="modal-body" style="padding:20px">
+      <div class="modal-body">
         <div style="margin-bottom:16px">
           <label style="display:block;margin-bottom:8px;font-weight:600">选择要导入的文件类型</label>
           <div style="display:flex;flex-wrap:wrap;gap:8px">
@@ -5903,22 +5928,25 @@ function renderTimelineInDetail() {
            startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
   }).length;
   
-  const statConflict = items.filter((p) => {
-    if (!hasInternalWorker(p)) return false;
-    if (isCompleted(p)) return false;
-    const start = projectStart(p);
-    const end = projectEnd(p) || new Date((start || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
-    if (!start) return false;
-    return items.filter((other) => {
-      if (other.id === p.id) return false;
-      if (isCompleted(other)) return false;
-      if (!hasInternalWorker(other)) return false;
-      const os = projectStart(other);
-      const oe = projectEnd(other) || os;
-      if (!os) return false;
-      return intervalsOverlap(start, end, os, oe);
-    }).length >= 2;
-  }).length;
+  const conflictInfo = {};
+  let statConflict = 0;
+  items.forEach((p) => {
+    if (!hasInternalWorker(p)) return;
+    if (isCompleted(p)) return;
+    const conflicts = (p.assignedWorkerIds || []).reduce((total, wid) => {
+      return total + assignConflicts(p, wid).length;
+    }, 0);
+    if (conflicts > 0) {
+      statConflict++;
+      const conflictWorkers = (p.assignedWorkerIds || []).filter((wid) => {
+        return assignConflicts(p, wid).length > 0;
+      }).map((wid) => {
+        const w = getWorker(wid);
+        return w ? w.name : wid;
+      });
+      conflictInfo[p.id] = conflictWorkers;
+    }
+  });
 
   let timelineHtml = "";
   if (!items.length) {
@@ -6043,7 +6071,7 @@ function renderTimelineInDetail() {
           <span class="tl-stat-item"><span class="tl-stat-label">外协人员</span><span class="tl-stat-value outsourced">${statOutsourcedWorkers}人</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">实际工时</span><span class="tl-stat-value">${statActHours}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">加班项目</span><span class="tl-stat-value ${statOvertime > 0 ? 'warn' : ''}">${statOvertime}个</span></span>
-          <span class="tl-stat-item"><span class="tl-stat-label">人员冲突</span><span class="tl-stat-value ${statConflict > 0 ? 'danger' : ''}">${statConflict}个</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">人员冲突</span><span class="tl-stat-value ${statConflict > 0 ? 'danger' : ''}">${statConflict > 0 ? statConflict + '个 (' + [...new Set(Object.values(conflictInfo).flat())].join('、') + ')' : statConflict + '个'}</span></span>
         </div>
         <div class="tl-legend">
           <span class="tl-legend-item"><span class="tl-legend-box work"></span>工作时间 8:00-18:00</span>
@@ -6999,12 +7027,10 @@ async function startCloudSession() {
   document.getElementById("dropdownEmail").textContent = currentProfile.name || currentUser.email;
   document.getElementById("dropdownRole").textContent = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
   
-  if (currentProfile.role === ROLE.MANAGER) {
-    document.getElementById("btnMigrate").classList.remove("hidden");
-    document.getElementById("btnExportLocal").classList.remove("hidden");
-  } else {
+  if (currentProfile.role !== ROLE.MANAGER) {
     document.getElementById("btnMigrateMenu").classList.add("hidden");
     document.getElementById("btnExportLocalMenu").classList.add("hidden");
+    document.getElementById("btnExport").classList.add("hidden");
   }
 
   document.getElementById("btnMigrateMenu").addEventListener("click", () => {
@@ -7031,7 +7057,6 @@ async function startCloudSession() {
   await repo.loadAll();
   renderRoleInfo();
   applyPermissions();
-  document.getElementById("btnMigrate").classList.toggle("hidden", !isManager());
   renderAll();
   subscribeRealtime();
 }
@@ -7201,8 +7226,6 @@ function bindEvents() {
   document.getElementById("btnSignup").addEventListener("click", doSignup);
   document.getElementById("btnLogout").addEventListener("click", doLogout);
   document.getElementById("btnLogout2").addEventListener("click", doLogout);
-  document.getElementById("btnMigrate").addEventListener("click", migrateLocalToCloud);
-  document.getElementById("btnExportLocal").addEventListener("click", exportCloudToLocal);
 
   document.getElementById("userMenu").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -7254,17 +7277,6 @@ if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("sw.js").then((registration) => {
       registration.update();
-      
-      registration.addEventListener("updatefound", () => {
-        const newWorker = registration.installing;
-        newWorker.addEventListener("statechange", () => {
-          if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-            if (confirm("发现新版本！是否立即刷新以获取最新功能？")) {
-              window.location.reload();
-            }
-          }
-        });
-      });
       
       navigator.serviceWorker.addEventListener("controllerchange", () => {
         window.location.reload();
