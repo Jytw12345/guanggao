@@ -307,6 +307,29 @@ function hoursDiff(project) {
   return { est, act, diff: act - est, hasActual: act > 0 };
 }
 
+/* 计算项目进度百分比 */
+function getProjectProgress(p, est, act, hasActual, done) {
+  if (est <= 0) return 0;
+  
+  if (hasActual) {
+    return Math.min(100, (act / est) * 100);
+  }
+  
+  if (p.status === "施工中" && p.started_at) {
+    const started = new Date(p.started_at);
+    const now = new Date();
+    const elapsedHours = (now - started) / (1000 * 60 * 60);
+    const timeProgress = (elapsedHours / est) * 100;
+    return Math.min(100, Math.max(0, timeProgress));
+  }
+  
+  if (done > 0) {
+    return Math.min(100, (done / est) * 100);
+  }
+  
+  return 0;
+}
+
 function diffColor(diff) {
   if (diff > 0) return "var(--danger)";
   if (diff < 0) return "var(--success)";
@@ -719,8 +742,22 @@ const repo = {
         row.repair_order = JSON.stringify(row.repairOrder);
         delete row.repairOrder;
       }
-      const { error } = await sb.from("projects").update(row).eq("id", id);
-      if (error) return fail(error);
+      
+      const project = getProject(id);
+      if (project && typeof project.version === 'number') {
+        row.version = project.version + 1;
+        const { error, count } = await sb.from("projects").update(row).eq("id", id).eq("version", project.version);
+        if (error) return fail(error);
+        if (count === 0) {
+          toast("⚠️ 数据冲突：该项目已被其他用户修改，请刷新后重试");
+          await repo.loadAll();
+          renderAll();
+          return false;
+        }
+      } else {
+        const { error } = await sb.from("projects").update(row).eq("id", id);
+        if (error) return fail(error);
+      }
     } else {
       const p = getProject(id);
       for (const [key, value] of Object.entries(patch)) {
@@ -732,6 +769,7 @@ const repo = {
           p[key] = value;
         }
       }
+      p.version = (p.version || 0) + 1;
       saveLocal();
     }
   },
@@ -1276,8 +1314,8 @@ async function saveWorker(id) {
 async function deleteWorker(id) {
   if (!isManager()) { toast("权限不足"); return; }
   const used = cache.projects.some((p) => (p.workLogs || []).some((l) => l.workerId === id));
-  if (used && !confirm("该人员已有施工工时记录，删除不会移除历史记录。确定删除该人员？")) return;
-  if (!used && !confirm("确定删除该人员？")) return;
+  if (used && !(await confirmDialog("该人员已有施工工时记录，删除不会移除历史记录。确定删除该人员？", "删除人员"))) return;
+  if (!used && !(await confirmDialog("确定删除该人员？", "删除人员"))) return;
   await repo.deleteWorker(id);
   await repo.loadAll();
   renderAll();
@@ -1350,7 +1388,7 @@ async function saveOutsourcedWorker(id) {
 
 async function deleteOutsourcedWorker(id) {
   if (!isManager()) { toast("权限不足"); return; }
-  if (!confirm("确定删除该外协人员？")) return;
+  if (!(await confirmDialog("确定删除该外协人员？", "删除外协人员"))) return;
   await repo.deleteOutsourcedWorker(id);
   await repo.loadAll();
   renderAll();
@@ -2019,6 +2057,17 @@ function renderProjects() {
         <div class="card-row"><span>预计 / 实际工时</span><b>${est} / ${hasActual ? act : "—"} 小时</b></div>
         <div class="card-row"><span>工时差异</span><b>${diffLabel(p)}</b></div>
         <div class="card-row"><span>已填施工工时</span><b>${done} 小时</b></div>
+        ${est > 0 ? `
+          <div class="card-row">
+            <span>进度</span>
+            <div style="flex:1;display:flex;align-items:center;gap:8px;">
+              <div style="flex:1;height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+                <div style="height:100%;width:${Math.min(100, getProjectProgress(p, est, act, hasActual, done))}%;background:${getProjectProgress(p, est, act, hasActual, done) >= 100 ? '#10b981' : '#3b82f6'};border-radius:4px;"></div>
+              </div>
+              <span style="font-weight:bold;font-size:12px;">${Math.round(getProjectProgress(p, est, act, hasActual, done))}%</span>
+            </div>
+          </div>
+        ` : ""}
         <div class="card-row"><span>开始施工</span><b>${p.started_at ? esc(fmtDateTime(p.started_at)) : "—"}</b></div>
         <div class="card-row"><span>完工时间</span><b>${p.finished_at ? esc(fmtDateTime(p.finished_at)) : "—"}</b></div>
         <div class="card-row"><span>施工时长</span><b>${p.started_at && p.finished_at ? esc(calcDuration(p.started_at, p.finished_at)) : "—"}</b></div>
@@ -2341,7 +2390,7 @@ async function completeRepair(projectId) {
 }
 
 async function deleteProject(id) {
-  if (!confirm("确定删除该项目及其施工记录？")) return;
+  if (!(await confirmDialog("确定删除该项目及其施工记录？", "删除项目"))) return;
   const p = getProject(id);
   await repo.deleteProject(id);
   if (currentProjectId === id) currentProjectId = "";
@@ -4230,7 +4279,7 @@ async function removeStore(id) {
   const msg = used
     ? "该门店下已有预约，删除后这些预约将变为「未指定门店」。确定删除？"
     : "确定删除该门店？";
-  if (!confirm(msg)) return;
+  if (!(await confirmDialog(msg, "删除门店"))) return;
   await repo.deleteStore(id);
   await repo.loadAll();
   renderAll();
@@ -4340,8 +4389,23 @@ async function toggleRolePerm(role, cap, checked) {
  * 弹窗 & Tab
  * ============================================================ */
 let modalOnConfirm = null;
-
 let modalOnClose = null;
+
+function confirmDialog(message, title = "确认操作") {
+  return new Promise((resolve) => {
+    modal.open(title, `<p>${message}</p>`, {
+      confirmText: "确定",
+      cancelText: "取消",
+      onConfirm: () => {
+        modal.close();
+        resolve(true);
+      },
+      onClose: () => {
+        resolve(false);
+      }
+    });
+  });
+}
 
 const modal = {
   open(title, bodyHtml, options = {}) {
