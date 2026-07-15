@@ -72,6 +72,7 @@
       <button class="tab-btn" data-tab="workers">施工人员</button>
       <button class="tab-btn" data-tab="outsourced">外协人员</button>
       <button class="tab-btn" data-tab="leaves">请假管理</button>
+      <button class="tab-btn" data-tab="schedules">日程管理</button>
       <button class="tab-btn" data-tab="stores">门店管理</button>
       <button class="tab-btn" data-tab="accounts">账号管理</button>
       <button class="tab-btn" data-tab="rolePerms">角色权限</button>
@@ -84,6 +85,7 @@
     <button class="bottom-nav-item" data-tab="construction" title="施工管理">🏗️</button>
     <button class="bottom-nav-item" data-tab="workers" title="施工人员">👷</button>
     <button class="bottom-nav-item" data-tab="leaves" title="请假管理">🏥</button>
+    <button class="bottom-nav-item" data-tab="schedules" title="日程管理">📝</button>
     <button class="bottom-nav-item" data-tab="stats" title="工时统计">📊</button>
   </nav>
 
@@ -262,6 +264,25 @@
       <div id="leavePendingList" class="card-grid" style="margin-bottom:20px;"></div>
       <div id="leaveRecordList" class="card-grid" style="margin-bottom:20px;"></div>
       <div id="holidayManage" class="card-grid"></div>
+    </section>
+
+    <!-- 日程管理 -->
+    <section id="schedules" class="tab-panel">
+      <div class="section-head">
+        <h2>日程管理</h2>
+        <button class="btn primary" id="btnNewSchedule" onclick="newWorkerSchedule()">+ 添加日程</button>
+      </div>
+      <p class="hint">管理施工人员的个人日程安排，支持施工人员自己添加或管理员统一安排。日程会显示在时间线视图中，便于协调工作安排。</p>
+      <div class="toolbar">
+        <select id="scheduleWorkerFilter" class="input" style="width:auto;">
+          <option value="">全部人员</option>
+        </select>
+        <select id="scheduleTypeFilter" class="input" style="width:auto;">
+          <option value="">全部类型</option>
+        </select>
+        <input type="date" id="scheduleDateFilter" class="input" style="width:auto;" />
+      </div>
+      <div id="scheduleList" class="card-grid"></div>
     </section>
   </main>
 

@@ -16,7 +16,7 @@ const STATUS = {
 };
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -35,6 +35,7 @@ const getProject = (id) => cache.projects.find((p) => p.id === id);
 const getStore = (id) => cache.stores.find((s) => s.id === id);
 const getLeaveRecord = (id) => cache.leaveRecords.find((l) => l.id === id);
 const getOutsourcedWorker = (id) => cache.outsourcedWorkers.find((w) => w.id === id);
+const getWorkerSchedule = (id) => cache.workerSchedules.find((s) => s.id === id);
 const storeName = (id) => (getStore(id) || {}).name || "—";
 
 /* ---------- 权限判断（前端界面控制，服务端另有 RLS 强制） ---------- */
@@ -488,7 +489,7 @@ const repo = {
   /* ---- 载入全部数据到 cache ---- */
   async loadAll() {
     if (MODE === "cloud") {
-      const [wRes, pRes, lRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes] = await Promise.all([
+      const [wRes, pRes, lRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes] = await Promise.all([
         sb.from("workers").select("*"),
         sb.from("projects").select("*"),
         sb.from("work_logs").select("*"),
@@ -499,6 +500,7 @@ const repo = {
         sb.from("holidays").select("*"),
         sb.from("outsourced_workers").select("*"),
         sb.from("operation_logs").select("*").order("timestamp", { ascending: false }).limit(200),
+        sb.from("worker_schedules").select("*"),
       ]);
       const allErrors = [
         { name: "workers", res: wRes },
@@ -583,6 +585,19 @@ const repo = {
       } else {
         console.warn("operation_logs 表读取失败（可能尚未创建）:", opRes.error.message);
         cache.operationLogs = [];
+      }
+      if (!wsRes.error) {
+        cache.workerSchedules = (wsRes.data || []).map((r) => ({
+          id: r.id, workerId: r.worker_id, workerName: r.worker_name,
+          title: r.title, startDate: r.start_date, startTime: r.start_time,
+          endDate: r.end_date, endTime: r.end_time,
+          type: r.type || "personal", description: r.description || "",
+          createdBy: r.created_by, createdByName: r.created_by_name,
+          createdAt: r.created_at,
+        }));
+      } else {
+        console.warn("worker_schedules 表读取失败（可能尚未创建）:", wsRes.error.message);
+        cache.workerSchedules = [];
       }
     } else {
       loadLocal();
@@ -687,6 +702,34 @@ const repo = {
       if (error) return fail(error);
     } else {
       cache.outsourcedWorkers = cache.outsourcedWorkers.filter((w) => w.id !== id);
+      saveLocal();
+    }
+  },
+
+  /* ---- 施工人员日程 ---- */
+  async saveWorkerSchedule(schedule, id) {
+    if (MODE === "cloud") {
+      const row = {
+        id: id || uid(), worker_id: schedule.workerId, worker_name: schedule.workerName,
+        title: schedule.title, start_date: schedule.startDate, start_time: schedule.startTime,
+        end_date: schedule.endDate, end_time: schedule.endTime,
+        type: schedule.type || "personal", description: schedule.description || null,
+        created_by: schedule.createdBy || null, created_by_name: schedule.createdByName || null,
+      };
+      const { error } = await sb.from("worker_schedules").upsert(row);
+      if (error) return fail(error);
+    } else {
+      if (id) Object.assign(getWorkerSchedule(id), schedule);
+      else cache.workerSchedules.push({ id: uid(), ...schedule });
+      saveLocal();
+    }
+  },
+  async deleteWorkerSchedule(id) {
+    if (MODE === "cloud") {
+      const { error } = await sb.from("worker_schedules").delete().eq("id", id);
+      if (error) return fail(error);
+    } else {
+      cache.workerSchedules = cache.workerSchedules.filter((s) => s.id !== id);
       saveLocal();
     }
   },
@@ -922,6 +965,7 @@ function loadLocal() {
       cache.leaveQuota = data.leaveQuota || [];
       cache.holidays = data.holidays || [];
       cache.outsourcedWorkers = data.outsourcedWorkers || [];
+      cache.workerSchedules = data.workerSchedules || [];
     }
   } catch (e) {
     console.error("读取本地数据失败", e);
@@ -944,7 +988,8 @@ function saveLocal() {
     leaveRecords: cache.leaveRecords,
     leaveQuota: cache.leaveQuota,
     holidays: cache.holidays,
-    outsourcedWorkers: cache.outsourcedWorkers
+    outsourcedWorkers: cache.outsourcedWorkers,
+    workerSchedules: cache.workerSchedules
   }));
 }
 
@@ -962,6 +1007,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "leave_records" }, scheduleReload)
     .on("postgres_changes", { event: "*", schema: "public", table: "outsourced_workers" }, scheduleReload)
     .on("postgres_changes", { event: "*", schema: "public", table: "holidays" }, scheduleReload)
+    .on("postgres_changes", { event: "*", schema: "public", table: "worker_schedules" }, scheduleReload)
     .subscribe((status) => {
       if (status === "SUBSCRIBED") setSyncStatus("online", "● 实时同步中");
       else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setSyncStatus("offline", "● 同步连接异常");
@@ -1106,6 +1152,11 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       return today >= sd && today <= ed;
     });
     
+    const workerSchedules = cache.workerSchedules.filter((s) => {
+      if (s.workerId !== w.id) return false;
+      return s.startDate === dateStr;
+    });
+    
     let leaveBg = "";
     workerLeaves.forEach((lr) => {
       let leaveLeft = 0, leaveWidth = 0;
@@ -1129,6 +1180,26 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
         }
       }
       leaveBg += `<div class="tl-bg-leave" style="left:${leaveLeft}px; width:${Math.max(10, leaveWidth)}px; height:100%;"></div>`;
+    });
+    
+    let scheduleBg = "";
+    workerSchedules.forEach((s) => {
+      let sLeft = 0, sWidth = 0;
+      if (s.startTime) {
+        const [sh, sm] = s.startTime.split(":").map(Number);
+        sLeft = ((sh + sm / 60) - 6) * hourWidth;
+        if (s.endTime) {
+          const [eh, em] = s.endTime.split(":").map(Number);
+          sWidth = ((eh + em / 60) - (sh + sm / 60)) * hourWidth;
+        } else {
+          sWidth = totalWidth - sLeft;
+        }
+      } else {
+        sLeft = 0;
+        sWidth = totalWidth;
+      }
+      const typeColor = SCHEDULE_TYPE_COLOR[s.type] || "#6b7280";
+      scheduleBg += `<div class="tl-bg-schedule" style="left:${sLeft}px; width:${Math.max(10, sWidth)}px; height:100%; background:${typeColor}20;"></div>`;
     });
     
     let tasksHtml = "";
@@ -1158,16 +1229,63 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
         </div>`;
     });
     
+    workerSchedules.forEach(s => {
+      let sStart, sEnd;
+      if (s.startTime) {
+        const [sh, sm] = s.startTime.split(":").map(Number);
+        sStart = new Date(dateStr);
+        sStart.setHours(sh, sm, 0, 0);
+      } else {
+        sStart = new Date(dateStr);
+        sStart.setHours(8, 0, 0, 0);
+      }
+      
+      if (s.endTime) {
+        const [eh, em] = s.endTime.split(":").map(Number);
+        sEnd = new Date(dateStr);
+        sEnd.setHours(eh, em, 0, 0);
+      } else if (s.endDate && s.endDate !== dateStr) {
+        sEnd = new Date(dateStr);
+        sEnd.setHours(18, 0, 0, 0);
+      } else {
+        sEnd = new Date(dateStr);
+        sEnd.setHours(18, 0, 0, 0);
+      }
+      
+      const startMinutes = (sStart.getHours() - 6) * 60 + sStart.getMinutes();
+      const endMinutes = (sEnd.getHours() - 6) * 60 + sEnd.getMinutes();
+      const left = (startMinutes / 60) * hourWidth;
+      const width = ((endMinutes - startMinutes) / 60) * hourWidth;
+      
+      const typeColor = SCHEDULE_TYPE_COLOR[s.type] || "#6b7280";
+      const pad = (n) => String(n).padStart(2, "0");
+      const timeStr = s.startTime && s.endTime 
+        ? `${pad(sStart.getHours())}:${pad(sStart.getMinutes())} ~ ${pad(sEnd.getHours())}:${pad(sEnd.getMinutes())}`
+        : "全天";
+      
+      tasksHtml += `
+        <div class="timeline-task timeline-task-schedule" style="left:${left}px; width:${width}px; height:48px; background:${typeColor}20; border-color:${typeColor}; border-width:1px;">
+          <div class="timeline-task-header">
+            <span class="timeline-task-name" style="font-size:11px; color:${typeColor};">📝 ${esc(s.title)}</span>
+          </div>
+          <div class="timeline-task-body" style="font-size:9px; color:${typeColor};">
+            ${SCHEDULE_TYPE_LABEL[s.type] || s.type} · ${timeStr}
+          </div>
+        </div>`;
+    });
+    
     const leaveBadge = workerLeaves.length > 0 ? `<span class="tl-lane-leave-badge">🏥</span>` : "";
+    const scheduleBadge = workerSchedules.length > 0 ? `<span class="tl-lane-schedule-badge">📅</span>` : "";
     
     lanesHtml += `
       <div class="tl-lane" style="height:58px; border-bottom:1px solid #eee; display:flex;">
-        <div class="tl-lane-label" style="width:60px; flex-shrink:0; padding:5px; font-size:12px; font-weight:bold;">${esc(w.name)}${leaveBadge}</div>
+        <div class="tl-lane-label" style="width:60px; flex-shrink:0; padding:5px; font-size:12px; font-weight:bold;">${esc(w.name)}${leaveBadge}${scheduleBadge}</div>
         <div class="tl-lane-body" style="flex:1; position:relative; height:58px;">
           <div class="tl-bg-work" style="left:${workBgLeft}px; width:${workBgWidth}px; height:100%;"></div>
           <div class="tl-bg-overtime" style="width:${workBgLeft}px; height:100%;"></div>
           <div class="tl-bg-overtime" style="left:${workBgLeft + workBgWidth}px; width:${totalWidth - workBgLeft - workBgWidth}px; height:100%;"></div>
           ${leaveBg}
+          ${scheduleBg}
           <div class="tl-tasks">${tasksHtml}</div>
         </div>
       </div>`;
@@ -1400,6 +1518,223 @@ async function deleteOutsourcedWorker(id) {
   await repo.loadAll();
   renderAll();
   toast("已删除");
+}
+
+/* ============================================================
+ * 施工人员日程管理模块
+ * ============================================================ */
+const SCHEDULE_TYPE_LABEL = {
+  personal: "个人事务",
+  training: "培训学习",
+  standby: "待命",
+  equipment: "设备维护",
+  meeting: "会议",
+  other: "其他"
+};
+
+const SCHEDULE_TYPE_COLOR = {
+  personal: "#ef4444",
+  training: "#8b5cf6",
+  standby: "#6b7280",
+  equipment: "#0891b2",
+  meeting: "#d97706",
+  other: "#16a34a"
+};
+
+function renderWorkerSchedules() {
+  const list = document.getElementById("scheduleList");
+  if (!list) return;
+
+  const today = new Date();
+  const todayStr = fmtDate(today);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = fmtDate(tomorrow);
+
+  let filteredSchedules = cache.workerSchedules;
+  
+  const workerFilter = document.getElementById("scheduleWorkerFilter");
+  const typeFilter = document.getElementById("scheduleTypeFilter");
+  const dateFilter = document.getElementById("scheduleDateFilter");
+  
+  if (workerFilter && workerFilter.value) {
+    filteredSchedules = filteredSchedules.filter(s => s.workerId === workerFilter.value);
+  }
+  if (typeFilter && typeFilter.value) {
+    filteredSchedules = filteredSchedules.filter(s => s.type === typeFilter.value);
+  }
+  if (dateFilter && dateFilter.value) {
+    filteredSchedules = filteredSchedules.filter(s => s.startDate === dateFilter.value);
+  }
+
+  filteredSchedules.sort((a, b) => {
+    const dateCompare = (a.startDate || "").localeCompare(b.startDate || "");
+    if (dateCompare !== 0) return dateCompare;
+    return (a.startTime || "00:00").localeCompare(b.startTime || "00:00");
+  });
+
+  if (filteredSchedules.length === 0) {
+    list.innerHTML = `<div class="empty">暂无日程安排，点击右上角「添加日程」创建。</div>`;
+    return;
+  }
+
+  list.innerHTML = filteredSchedules.map((s) => {
+    const w = getWorker(s.workerId);
+    const typeColor = SCHEDULE_TYPE_COLOR[s.type] || "#6b7280";
+    return `
+      <div class="card">
+        <div class="card-title">
+          <h3>${esc(s.title)}</h3>
+          <span class="badge" style="background:${typeColor}20;color:${typeColor};">${SCHEDULE_TYPE_LABEL[s.type] || s.type}</span>
+        </div>
+        <div class="card-row"><span>施工人员</span><b>${esc(w ? w.name : s.workerName || "—")}</b></div>
+        <div class="card-row"><span>开始时间</span><b>${esc(s.startDate || "—")} ${esc(s.startTime || "全天")}</b></div>
+        <div class="card-row"><span>结束时间</span><b>${esc(s.endDate || "—")} ${esc(s.endTime || "全天")}</b></div>
+        ${s.description ? `<div class="card-row"><span>备注</span><b>${esc(s.description)}</b></div>` : ""}
+        ${s.createdByName ? `<div class="card-row"><span>创建人</span><b>${esc(s.createdByName)}</b></div>` : ""}
+        <div class="card-actions">
+          <button class="btn small" onclick="editWorkerSchedule('${s.id}')">编辑</button>
+          <button class="btn small danger" onclick="deleteWorkerSchedule('${s.id}')">删除</button>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function workerScheduleForm(s = {}) {
+  const workerOptions = cache.workers.map(w => 
+    `<option value="${esc(w.id)}" ${s.workerId === w.id ? 'selected' : ''}>${esc(w.name)}</option>`
+  ).join("");
+  
+  const typeOptions = Object.entries(SCHEDULE_TYPE_LABEL).map(([key, label]) =>
+    `<option value="${key}" ${s.type === key ? 'selected' : ''}>${label}</option>`
+  ).join("");
+
+  return `
+    <div class="form-row">
+      <label>施工人员 *</label>
+      <select class="input" id="wsWorkerId">
+        ${workerOptions}
+      </select>
+    </div>
+    <div class="form-row">
+      <label>日程标题 *</label>
+      <input class="input" id="wsTitle" value="${esc(s.title || "")}" placeholder="如：培训、体检、待命等" />
+    </div>
+    <div class="form-row">
+      <label>日程类型</label>
+      <select class="input" id="wsType">
+        ${typeOptions}
+      </select>
+    </div>
+    <div class="form-grid">
+      <div class="form-row">
+        <label>开始日期 *</label>
+        <input class="input" type="date" id="wsStartDate" value="${esc(s.startDate || "")}" />
+      </div>
+      <div class="form-row">
+        <label>开始时间</label>
+        <input class="input" type="time" id="wsStartTime" value="${esc(s.startTime || "")}" />
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="form-row">
+        <label>结束日期 *</label>
+        <input class="input" type="date" id="wsEndDate" value="${esc(s.endDate || "")}" />
+      </div>
+      <div class="form-row">
+        <label>结束时间</label>
+        <input class="input" type="time" id="wsEndTime" value="${esc(s.endTime || "")}" />
+      </div>
+    </div>
+    <div class="form-row">
+      <label>备注</label>
+      <textarea class="input" id="wsDescription" placeholder="备注信息">${esc(s.description || "")}</textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="modal.close()">取消</button>
+      <button class="btn primary" onclick="saveWorkerSchedule('${s.id || ""}')">保存</button>
+    </div>`;
+}
+
+function newWorkerSchedule() {
+  modal.open("添加日程", workerScheduleForm());
+}
+
+function newWorkerScheduleForWorker(workerId) {
+  const w = getWorker(workerId);
+  if (!w) return;
+  modal.open(`为 ${w.name} 添加日程`, workerScheduleForm({ workerId, workerName: w.name }));
+}
+
+function editWorkerSchedule(id) {
+  const s = getWorkerSchedule(id);
+  if (!s) return;
+  modal.open("编辑日程", workerScheduleForm(s));
+}
+
+async function saveWorkerSchedule(id) {
+  const workerId = document.getElementById("wsWorkerId").value;
+  const title = document.getElementById("wsTitle").value.trim();
+  const startDate = document.getElementById("wsStartDate").value;
+  const endDate = document.getElementById("wsEndDate").value;
+  
+  if (!title) { toast("请填写日程标题"); return; }
+  if (!startDate) { toast("请填写开始日期"); return; }
+  if (!endDate) { toast("请填写结束日期"); return; }
+  
+  const w = getWorker(workerId);
+  
+  const payload = {
+    workerId,
+    workerName: w ? w.name : "",
+    title,
+    type: document.getElementById("wsType").value,
+    startDate,
+    startTime: document.getElementById("wsStartTime").value,
+    endDate,
+    endTime: document.getElementById("wsEndTime").value,
+    description: document.getElementById("wsDescription").value.trim(),
+    createdBy: currentUser ? currentUser.id : null,
+    createdByName: currentProfile.name || currentUser?.email || null,
+  };
+  
+  await repo.saveWorkerSchedule(payload, id);
+  await repo.loadAll();
+  modal.close();
+  renderAll();
+  toast("已保存");
+}
+
+async function deleteWorkerSchedule(id) {
+  if (!(await confirmDialog("确定删除该日程？", "删除日程"))) return;
+  await repo.deleteWorkerSchedule(id);
+  await repo.loadAll();
+  renderAll();
+  toast("已删除");
+}
+
+function initScheduleFilters() {
+  const workerFilter = document.getElementById("scheduleWorkerFilter");
+  const typeFilter = document.getElementById("scheduleTypeFilter");
+  const dateFilter = document.getElementById("scheduleDateFilter");
+  
+  if (workerFilter) {
+    workerFilter.innerHTML = `<option value="">全部人员</option>` + 
+      cache.workers.map(w => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join("");
+    workerFilter.onchange = renderWorkerSchedules;
+  }
+  
+  if (typeFilter) {
+    typeFilter.innerHTML = `<option value="">全部类型</option>` + 
+      Object.entries(SCHEDULE_TYPE_LABEL).map(([key, label]) => 
+        `<option value="${key}">${label}</option>`
+      ).join("");
+    typeFilter.onchange = renderWorkerSchedules;
+  }
+  
+  if (dateFilter) {
+    dateFilter.onchange = renderWorkerSchedules;
+  }
 }
 
 const LEAVE_TYPE_LABEL = {
@@ -2852,6 +3187,32 @@ function isLeaveConflict(leaveRecord, projectStartTime, projectEndTime) {
   return !(leaveEnd <= projStart || leaveStart >= projEnd);
 }
 
+/* 检查施工人员在项目时段内是否有日程冲突 */
+function getProjectScheduleConflict(workerId, projectStartDate, projectEndDate, projectStartTime, projectEndTime) {
+  if (!workerId || !projectStartDate || !projectEndDate) return null;
+  
+  const start = new Date(projectStartDate);
+  const end = new Date(projectEndDate);
+  
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const dateStr = fmtDate(d);
+    const schedules = cache.workerSchedules.filter(s => s.workerId === workerId && s.startDate === dateStr);
+    
+    for (const schedule of schedules) {
+      const scheduleStart = schedule.startTime || "00:00";
+      const scheduleEnd = schedule.endTime || "23:59";
+      const projStart = projectStartTime || "08:00";
+      const projEnd = projectEndTime || "18:00";
+      
+      if (!(scheduleEnd <= projStart || scheduleStart >= projEnd)) {
+        return schedule;
+      }
+    }
+  }
+  
+  return null;
+}
+
 /* 获取工人的所有请假记录 */
 function getWorkerLeaveRecords(workerId) {
   return cache.leaveRecords.filter((l) => l.workerId === workerId && l.status === "approved");
@@ -2978,6 +3339,13 @@ async function assignWorker(pid) {
   if (hasLeaveConflict) {
     const w = getWorker(wid);
     toast(`${w ? w.name : "该人员"} 在此时间段正在请假，无法分配！\n请假时段：${formatLeaveTime(leaveRecord)}`);
+    return;
+  }
+  
+  const scheduleConflict = startDateStr ? getProjectScheduleConflict(wid, startDateStr, endDateStr || startDateStr, projStartTime, projEndTime) : null;
+  if (scheduleConflict) {
+    const w = getWorker(wid);
+    toast(`${w ? w.name : "该人员"} 在此时间段已有日程安排，无法分配！\n日程：${scheduleConflict.title}（${scheduleConflict.startDate} ${scheduleConflict.startTime || "全天"} ~ ${scheduleConflict.endDate} ${scheduleConflict.endTime || "全天"}）`);
     return;
   }
   
@@ -3328,13 +3696,52 @@ function generateWorkerScheduleDescription(dateStr = null) {
       }
     }
     
+    const workerSchedules = cache.workerSchedules.filter(s => s.workerId === wid && s.startDate === dateStr);
+    if (workerSchedules.length > 0) {
+      description += `<div class="schedule-schedules">`;
+      description += `<div class="schedule-schedules-title">📝 个人日程</div>`;
+      workerSchedules.forEach(s => {
+        const timeStr = s.startTime && s.endTime 
+          ? `${s.startTime} ~ ${s.endTime}`
+          : "全天";
+        description += `<div class="schedule-schedule-item">${SCHEDULE_TYPE_LABEL[s.type] || s.type}：${esc(s.title)}（${timeStr}）${s.description ? `· ${esc(s.description)}` : ""}</div>`;
+      });
+      description += `</div>`;
+    }
+    
     description += `</div>`;
   });
   
   if (availableWorkers.length > 0) {
     description += `<div class="schedule-item standby">`;
     description += `<div class="schedule-worker">👥 待命人员</div>`;
-    description += `<div class="schedule-task">${availableWorkers.map(w => w.name).join("、")} 今天没有安排任务，随时待命，有突发情况可以随时调配。</div>`;
+    
+    const standbyWithSchedules = availableWorkers.filter(w => 
+      cache.workerSchedules.some(s => s.workerId === w.id && s.startDate === dateStr)
+    );
+    
+    if (standbyWithSchedules.length > 0) {
+      standbyWithSchedules.forEach(w => {
+        const schedules = cache.workerSchedules.filter(s => s.workerId === w.id && s.startDate === dateStr);
+        description += `<div class="schedule-task">${w.name} 今日有个人日程安排：`;
+        schedules.forEach(s => {
+          const timeStr = s.startTime && s.endTime 
+            ? `${s.startTime} ~ ${s.endTime}`
+            : "全天";
+          description += `${SCHEDULE_TYPE_LABEL[s.type] || s.type}：${esc(s.title)}（${timeStr}）；`;
+        });
+        description += `</div>`;
+      });
+    }
+    
+    const standbyWithoutSchedules = availableWorkers.filter(w => 
+      !cache.workerSchedules.some(s => s.workerId === w.id && s.startDate === dateStr)
+    );
+    
+    if (standbyWithoutSchedules.length > 0) {
+      description += `<div class="schedule-task">${standbyWithoutSchedules.map(w => w.name).join("、")} 今天没有安排任务，随时待命，有突发情况可以随时调配。</div>`;
+    }
+    
     description += `</div>`;
   }
   
@@ -5269,6 +5676,7 @@ function applyPermissions() {
     workers: perm.manageWorkers() || myRole() === ROLE.WORKER,
     outsourced: perm.manageWorkers(),
     leaves: role != null,
+    schedules: role != null,
     stores: perm.manageStores(),
     accounts: perm.manageAccounts() && MODE === "cloud",
     rolePerms: perm.manageAccounts() && MODE === "cloud",
@@ -5292,6 +5700,7 @@ function applyPermissions() {
     construction: role != null,
     workers: role != null,
     leaves: role != null,
+    schedules: role != null,
     stats: perm.viewStats(),
     storeStats: perm.viewStoreStats(),
   };
@@ -5324,6 +5733,8 @@ function renderAll() {
   renderAccounts();
   renderRolePermissions();
   renderLeaves();
+  initScheduleFilters();
+  renderWorkerSchedules();
 }
 
 /* ============================================================
