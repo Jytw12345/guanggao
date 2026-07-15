@@ -21,7 +21,7 @@
     <div class="brand">
       <button class="menu-toggle" id="menuToggle" aria-label="菜单">☰</button>
       <span class="logo">🏗️</span>
-      <h1>广告安装施工预约管理系统</h1>
+      <h1>广告施工预约</h1>
       <div class="header-right">
         <div class="global-search">
           <input type="text" id="globalSearch" placeholder="🔍 搜索项目、员工、门店..." />
@@ -39,7 +39,7 @@
       </div>
       <div id="userDropdown" class="user-dropdown hidden">
         <div class="dropdown-item">
-          <span class="dropdown-label">邮箱</span>
+          <span class="dropdown-label">账号</span>
           <span id="dropdownEmail" class="dropdown-value"></span>
         </div>
         <div class="dropdown-item">
@@ -47,9 +47,9 @@
           <span id="dropdownRole" class="dropdown-value"></span>
         </div>
         <div class="dropdown-divider"></div>
-        <button class="dropdown-item btn-link" id="btnMigrateMenu">导入本地数据</button>
-        <button class="dropdown-item btn-link" id="btnExportLocalMenu">导出到本地</button>
-        <button class="dropdown-item btn-link" id="btnLogoutMenu">登出</button>
+        <button class="dropdown-item dropdown-btn" id="btnMigrateMenu"><span class="dropdown-btn-icon">📥</span><span class="dropdown-btn-text">导入本地数据</span></button>
+        <button class="dropdown-item dropdown-btn" id="btnExportLocalMenu"><span class="dropdown-btn-icon">📤</span><span class="dropdown-btn-text">导出到本地</span></button>
+        <button class="dropdown-item dropdown-btn dropdown-btn-danger" id="btnLogoutMenu"><span class="dropdown-btn-icon">🚪</span><span class="dropdown-btn-text">登出</span></button>
       </div>
       <div id="exportMenu" class="user-dropdown hidden">
         <div class="dropdown-item" onclick="exportProjects()">📋 导出项目数据</div>
@@ -261,7 +261,7 @@
         <button class="modal-close" id="modalClose">✕</button>
       </div>
       <div class="modal-body" id="modalBody"></div>
-      <div class="modal-footer">
+      <div class="modal-footer" id="modalFooter">
         <button class="btn" id="modalCancel">取消</button>
         <button class="btn primary" id="modalConfirm">确认</button>
       </div>

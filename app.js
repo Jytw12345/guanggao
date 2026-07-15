@@ -2095,7 +2095,8 @@ async function saveProject(id) {
   if (!time) { toast("请选择开始时间"); return; }
   if (!end) { toast("请选择结束时间"); return; }
   
-  let endDate = document.getElementById("pEndDate").value;
+  const endDateEl = document.getElementById("pEndDate");
+  let endDate = endDateEl ? endDateEl.value : "";
   if (!crossDayEl?.checked || !endDate) {
     endDate = date;
   }
@@ -4180,6 +4181,8 @@ async function toggleRolePerm(role, cap, checked) {
  * ============================================================ */
 let modalOnConfirm = null;
 
+let modalOnClose = null;
+
 const modal = {
   open(title, bodyHtml, options = {}) {
     document.getElementById("modalTitle").textContent = title;
@@ -4187,17 +4190,25 @@ const modal = {
     
     const confirmBtn = document.getElementById("modalConfirm");
     const cancelBtn = document.getElementById("modalCancel");
+    const modalFooter = document.getElementById("modalFooter");
     
-    if (options.onConfirm) {
-      modalOnConfirm = options.onConfirm;
-      confirmBtn.textContent = options.confirmText || "确认";
-      confirmBtn.classList.remove("hidden");
-      cancelBtn.textContent = options.cancelText || "取消";
-      cancelBtn.classList.remove("hidden");
+    modalOnClose = options.onClose || null;
+    
+    if (options.hideFooter) {
+      modalFooter.classList.add("hidden");
     } else {
-      modalOnConfirm = null;
-      confirmBtn.classList.add("hidden");
-      cancelBtn.classList.add("hidden");
+      modalFooter.classList.remove("hidden");
+      if (options.onConfirm) {
+        modalOnConfirm = options.onConfirm;
+        confirmBtn.textContent = options.confirmText || "确认";
+        confirmBtn.classList.remove("hidden");
+        cancelBtn.textContent = options.cancelText || "取消";
+        cancelBtn.classList.remove("hidden");
+      } else {
+        modalOnConfirm = null;
+        confirmBtn.classList.add("hidden");
+        cancelBtn.classList.add("hidden");
+      }
     }
     
     document.getElementById("modal").classList.remove("hidden");
@@ -4205,6 +4216,11 @@ const modal = {
   close() {
     document.getElementById("modal").classList.add("hidden");
     document.getElementById("modalBody").innerHTML = "";
+    document.getElementById("modalFooter").classList.remove("hidden");
+    if (modalOnClose) {
+      modalOnClose();
+      modalOnClose = null;
+    }
     modalOnConfirm = null;
   },
 };
@@ -5410,7 +5426,23 @@ function renderTimelineInDetail() {
   const totalHours = TL_VIEW_END_HOUR - TL_VIEW_START_HOUR;
   const containerWidth = window.innerWidth - 60;
   const minHourWidth = window.innerWidth < 768 ? 40 : 50;
-  const hourWidth = Math.max(minHourWidth, Math.floor(containerWidth / totalHours));
+  
+  let requiredHourWidth = Math.max(minHourWidth, Math.floor(containerWidth / totalHours));
+  
+  items.forEach((p) => {
+    const start = projectStart(p);
+    const end = projectEnd(p) || new Date((start || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
+    if (!start) return;
+    const duration = (end - start) / 3600000;
+    const effectiveDuration = Math.max(1, duration);
+    const minDisplayWidth = 100;
+    const neededHourWidth = effectiveDuration > 0 ? Math.ceil(minDisplayWidth / effectiveDuration) : minHourWidth;
+    if (neededHourWidth > requiredHourWidth) {
+      requiredHourWidth = neededHourWidth;
+    }
+  });
+  
+  const hourWidth = requiredHourWidth;
   TL_ACTUAL_HOUR_WIDTH = hourWidth;
   const totalWidth = totalHours * hourWidth;
 
@@ -5496,7 +5528,7 @@ function renderTimelineInDetail() {
       const startHourOffset = (start.getHours() + start.getMinutes() / 60) - TL_VIEW_START_HOUR;
       const duration = (end - start) / 3600000;
       const left = startHourOffset * hourWidth;
-      const width = Math.max(60, duration * hourWidth);
+      const width = Math.max(80, duration * hourWidth);
       const top = itemLane[p.id] * TL_LANE_HEIGHT;
 
       const startH = start.getHours() + start.getMinutes() / 60;
@@ -5649,6 +5681,11 @@ function timelineTaskMouseDown(e) {
 
 /* 点击任务卡片：弹出浮动操作菜单 */
 function timelineTaskClick(e, projectId) {
+  if (mouseDragEnded) {
+    mouseDragEnded = false;
+    return;
+  }
+  
   if (!timelineMouseDown) {
     openTimelineActionMenu(e.currentTarget, projectId);
     timelineMouseDown = null;
@@ -6047,6 +6084,14 @@ function timelineTouchMove(e) {
     dragHint.innerHTML = `${timeStr}${isOvertime ? " 🌙 加班" : ""}`;
     dragHint.style.left = newLeft + "px";
     dragHint.style.top = "-28px";
+    
+    const taskInfo = touchDragTask.el.querySelector(".timeline-task-info");
+    if (taskInfo) {
+      const timeSpan = taskInfo.querySelector("span:first-child");
+      if (timeSpan) {
+        timeSpan.textContent = `⏰ ${timeStr}`;
+      }
+    }
     dragHint.style.display = "block";
   }
 }
@@ -6122,12 +6167,15 @@ function timelineTouchEnd(e) {
       ${overtimeWarn}
       <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
       <div class="tl-drag-actions">
-        <button class="btn" onclick="modal.close(); document.getElementById('timelineMain').querySelector('.timeline-task[data-project-id=\"${task.dataset.projectId}\"]').style.left = '${originalLeft}px';">取消</button>
+        <button class="btn" onclick="modal.close(); cancelTimelineDrag('${task.dataset.projectId}', '${originalLeft}px');">取消</button>
         <button class="btn primary" onclick="modal.close(); saveTimelineTaskTime('${task.dataset.projectId}', new Date('${timelineStart.toISOString()}'), new Date('${newEnd.toISOString()}'));">确认调整时间</button>
       </div>
     </div>`;
 
-  modal.open("修改预约时间", modalContent);
+  modal.open("修改预约时间", modalContent, { 
+    hideFooter: true,
+    onClose: () => cancelTimelineDrag(task.dataset.projectId, originalLeft)
+  });
 }
 
 function timelineDragEnd(e) {
@@ -6199,12 +6247,15 @@ function timelineDragEnd(e) {
       ${overtimeWarn}
       <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
       <div class="tl-drag-actions">
-        <button class="btn" onclick="modal.close(); document.getElementById('timelineMain').querySelector('.timeline-task-dragging').style.left = '${originalLeft}px';">取消</button>
+        <button class="btn" onclick="modal.close(); cancelTimelineDrag('${task.dataset.projectId}', '${originalLeft}px');">取消</button>
         <button class="btn primary" onclick="modal.close(); saveTimelineTaskTime('${task.dataset.projectId}', new Date('${timelineStart.toISOString()}'), new Date('${newEnd.toISOString()}'));">确认调整时间</button>
       </div>
     </div>`;
 
-  modal.open("修改预约时间", modalContent);
+  modal.open("修改预约时间", modalContent, { 
+    hideFooter: true,
+    onClose: () => cancelTimelineDrag(task.dataset.projectId, originalLeft)
+  });
 }
 
 function timelineDragMouseDown(e) {
@@ -6283,6 +6334,14 @@ function timelineMouseMove(e) {
     dragHint.innerHTML = `${timeStr}${isOvertime ? " 🌙 加班" : ""}`;
     dragHint.style.left = newLeft + "px";
     dragHint.style.top = "-28px";
+    
+    const taskInfo = mouseDragTask.el.querySelector(".timeline-task-info");
+    if (taskInfo) {
+      const timeSpan = taskInfo.querySelector("span:first-child");
+      if (timeSpan) {
+        timeSpan.textContent = `⏰ ${timeStr}`;
+      }
+    }
     dragHint.style.display = "block";
   }
 }
@@ -6307,6 +6366,8 @@ function timelineMouseUp(e) {
     timelineMouseDown = null;
     return;
   }
+  
+  mouseDragEnded = true;
 
   const timelineMain = document.getElementById("timelineMain");
   if (!timelineMain) { mouseDragTask = null; timelineMouseDown = null; return; }
@@ -6358,12 +6419,15 @@ function timelineMouseUp(e) {
       ${overtimeWarn}
       <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
       <div class="tl-drag-actions">
-        <button class="btn" onclick="modal.close(); document.getElementById('timelineMain').querySelector('.timeline-task[data-project-id=\"${task.dataset.projectId}\"]').style.left = '${originalLeft}px';">取消</button>
+        <button class="btn" onclick="modal.close(); cancelTimelineDrag('${task.dataset.projectId}', '${originalLeft}px');">取消</button>
         <button class="btn primary" onclick="modal.close(); saveTimelineTaskTime('${task.dataset.projectId}', new Date('${timelineStart.toISOString()}'), new Date('${newEnd.toISOString()}'));">确认调整时间</button>
       </div>
     </div>`;
 
-  modal.open("修改预约时间", modalContent);
+  modal.open("修改预约时间", modalContent, { 
+    hideFooter: true,
+    onClose: () => cancelTimelineDrag(task.dataset.projectId, originalLeft)
+  });
 }
 
 async function saveTimelineTaskTime(projectId, newStart, newEnd) {
@@ -6383,6 +6447,13 @@ async function saveTimelineTaskTime(projectId, newStart, newEnd) {
   
   renderAll();
   toast("预约时间已更新");
+}
+
+function cancelTimelineDrag(projectId, originalLeft) {
+  const taskEl = document.getElementById("timelineMain").querySelector(`.timeline-task[data-project-id="${projectId}"]`);
+  if (taskEl) {
+    taskEl.style.left = originalLeft;
+  }
 }
 
 /* ============================================================
