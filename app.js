@@ -212,20 +212,30 @@ function updateSpanHint() {
   const durationCard = document.getElementById("pDurationCard");
   const durationValue = document.getElementById("pDurationValue");
   const suggestWorkers = document.getElementById("pSuggestWorkers");
-  const date = document.getElementById("pDate").value;
-  const start = document.getElementById("pTime").value;
-  const end = document.getElementById("pEnd").value;
-  const estHours = Number(document.getElementById("pEst")?.value) || 0;
-  const crossDayEl = document.getElementById("pCrossDay");
+  const dateEl = document.getElementById("pDate");
+  const timeEl = document.getElementById("pTime");
+  const endEl = document.getElementById("pEnd");
+  const estEl = document.getElementById("pEst");
   
-  if (!date || !start || !end) {
-    if (durationCard) durationCard.style.opacity = "0.5";
-    if (durationValue) durationValue.textContent = "--";
-    if (suggestWorkers) suggestWorkers.textContent = "--";
+  if (!dateEl || !timeEl || !endEl || !durationCard || !durationValue || !suggestWorkers) {
     return;
   }
   
-  let endDate = document.getElementById("pEndDate").value;
+  const date = dateEl.value;
+  const start = timeEl.value;
+  const end = endEl.value;
+  const estHours = Number(estEl?.value) || 0;
+  const crossDayEl = document.getElementById("pCrossDay");
+  
+  if (!date || !start || !end) {
+    durationCard.style.opacity = "0.5";
+    durationValue.textContent = "--";
+    suggestWorkers.textContent = "--";
+    return;
+  }
+  
+  const endDateEl = document.getElementById("pEndDate");
+  let endDate = endDateEl ? endDateEl.value : "";
   if (!crossDayEl?.checked || !endDate) {
     endDate = date;
   }
@@ -1730,10 +1740,21 @@ function toggleCrossDay() {
 }
 
 function autoCalcEndTime() {
-  const date = document.getElementById("pDate").value;
-  const time = document.getElementById("pTime").value;
-  const estHours = Number(document.getElementById("pEst").value) || 0;
-  const workerCount = Number(document.getElementById("pWorkers").value) || 1;
+  const dateEl = document.getElementById("pDate");
+  const timeEl = document.getElementById("pTime");
+  const estEl = document.getElementById("pEst");
+  const workersEl = document.getElementById("pWorkers");
+  const endSel = document.getElementById("pEnd");
+  
+  if (!dateEl || !timeEl || !estEl || !workersEl || !endSel) {
+    toast("表单元素未找到");
+    return;
+  }
+  
+  const date = dateEl.value;
+  const time = timeEl.value;
+  const estHours = Number(estEl.value) || 0;
+  const workerCount = Number(workersEl.value) || 1;
   
   if (!date || !time) {
     toast("请先选择日期和开始时间");
@@ -1767,7 +1788,6 @@ function autoCalcEndTime() {
   const endM = String(endTime.getMinutes()).padStart(2, "0");
   const endStr = `${endH}:${endM}`;
   
-  const endSel = document.getElementById("pEnd");
   const options = Array.from(endSel.options).map(o => o.value);
   if (options.includes(endStr)) {
     endSel.value = endStr;
@@ -2051,8 +2071,14 @@ function projectForm(p = {}) {
     </div>`;
 }
 
-function newProject() { modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED })); updateSpanHint(); }
-function editProject(id) { modal.open("编辑项目", projectForm(getProject(id))); updateSpanHint(); }
+function newProject() { 
+  modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED })); 
+  setTimeout(updateSpanHint, 100); 
+}
+function editProject(id) { 
+  modal.open("编辑项目", projectForm(getProject(id))); 
+  setTimeout(updateSpanHint, 100); 
+}
 
 async function saveProject(id) {
   if (id && isReviewed(getProject(id))) {
@@ -3072,14 +3098,15 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const store = getStore(p.storeId);
       const storeName = store ? store.name : "未知门店";
       const pStart = projectStart(p);
+      const pEnd = projectEnd(p);
       const startTime = pStart ? `${String(pStart.getHours()).padStart(2, "0")}:${String(pStart.getMinutes()).padStart(2, "0")}` : "08:00";
+      const endTime = pEnd ? `${String(pEnd.getHours()).padStart(2, "0")}:${String(pEnd.getMinutes()).padStart(2, "0")}` : "12:00";
       
       let statusText = p.status;
       let statusColor = "#6b7280";
       let progress = 0;
       
       const now = new Date();
-      const pEnd = projectEnd(p);
       const durationMs = pStart && pEnd ? pEnd - pStart : 0;
       const elapsedMs = pStart ? Math.max(0, now - pStart) : 0;
       const autoProgress = durationMs > 0 ? Math.min(100, Math.round((elapsedMs / durationMs) * 100)) : 0;
@@ -3131,18 +3158,28 @@ function generateWorkerScheduleDescription(dateStr = null) {
         statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'已验收\')">确认验收</button>');
       }
       
+      const workers = (p.assignedWorkerIds || []).map(wid => {
+        const w = getWorker(wid);
+        return w ? w.name : "未知";
+      });
+      const outsourcedWorkers = (p.outsourcedWorkers || "").split(",").map(n => n.trim()).filter(n => n);
+      const allWorkers = [...workers, ...outsourcedWorkers.map(n => `${n}（外协）`)];
+      
       description += `
         <div class="schedule-progress-item ${isOverdue ? 'overdue' : ''}">
           <div class="schedule-progress-header">
             <span class="schedule-progress-name">${esc(p.name)}</span>
             <span class="schedule-progress-store">${esc(storeName)}</span>
-            <span class="schedule-progress-time">${startTime} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
+            <span class="schedule-progress-time">${startTime} ~ ${endTime} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
           </div>
           <div class="schedule-progress-bar-container">
             <div class="schedule-progress-bar" style="width: ${progress}%; background-color: ${statusColor};"></div>
           </div>
           <div class="schedule-progress-info">
-            <span class="schedule-progress-status" style="color: ${statusColor};">${statusText}</span>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span class="schedule-progress-status" style="color: ${statusColor};">${statusText}</span>
+              ${allWorkers.length > 0 ? `<span style="font-size:12px;color:#6b7280;">👷 ${esc(allWorkers.join(", "))}</span>` : ""}
+            </div>
             <span class="schedule-progress-percent">${progress}%</span>
           </div>
           ${statusActions.length > 0 ? `<div class="schedule-progress-actions">${statusActions.join(" ")}</div>` : ""}
@@ -3254,17 +3291,26 @@ function openCompleteProjectForm(id) {
     </div>`;
     
     workers.forEach((w, idx) => {
-      form += `<div class="form-row" style="grid-column:1/-1;">
-        <div style="display:flex;gap:12px;align-items:center;width:100%;">
-          <span style="min-width:100px;font-weight:500;">${esc(w.name)}</span>
-          <input type="number" id="workerHours_${idx}" placeholder="工时" step="0.5" min="0" max="24" class="input" style="flex:1;">
-          <select id="workerLevel_${idx}" class="input" style="width:100px;">
-            <option value="初级">初级</option>
-            <option value="中级" selected>中级</option>
-            <option value="高级">高级</option>
-            <option value="特级">特级</option>
-          </select>
-          <input type="text" id="workerNote_${idx}" placeholder="备注（可选）" class="input" style="flex:2;">
+      form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;">
+          <span style="min-width:80px;font-weight:500;flex-shrink:0;">👷 ${esc(w.name)}</span>
+          <div style="flex:0 0 auto;">
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">工时</label>
+            <input type="number" id="workerHours_${idx}" placeholder="0" step="0.5" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
+          </div>
+          <div style="flex:0 0 auto;">
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">等级</label>
+            <select id="workerLevel_${idx}" class="input" style="width:80px;padding:4px 6px;font-size:13px;">
+              <option value="初级">初级</option>
+              <option value="中级" selected>中级</option>
+              <option value="高级">高级</option>
+              <option value="特级">特级</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:150px;">
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">备注</label>
+            <input type="text" id="workerNote_${idx}" placeholder="备注" class="input" style="width:100%;padding:4px 6px;font-size:13px;">
+          </div>
         </div>
       </div>`;
     });
@@ -3277,17 +3323,26 @@ function openCompleteProjectForm(id) {
     </div>`;
     
     outsourcedWorkers.forEach((name, idx) => {
-      form += `<div class="form-row" style="grid-column:1/-1;">
-        <div style="display:flex;gap:12px;align-items:center;width:100%;">
-          <span style="min-width:100px;font-weight:500;">${esc(name)}</span>
-          <input type="number" id="outsourcedHours_${idx}" placeholder="工时" step="0.5" min="0" max="24" class="input" style="flex:1;">
-          <select id="outsourcedLevel_${idx}" class="input" style="width:100px;">
-            <option value="初级">初级</option>
-            <option value="中级" selected>中级</option>
-            <option value="高级">高级</option>
-            <option value="特级">特级</option>
-          </select>
-          <input type="text" id="outsourcedNote_${idx}" placeholder="备注（可选）" class="input" style="flex:2;">
+      form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;">
+          <span style="min-width:80px;font-weight:500;flex-shrink:0;color:#8b5cf6;">👤 ${esc(name)}（外协）</span>
+          <div style="flex:0 0 auto;">
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">工时</label>
+            <input type="number" id="outsourcedHours_${idx}" placeholder="0" step="0.5" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
+          </div>
+          <div style="flex:0 0 auto;">
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">等级</label>
+            <select id="outsourcedLevel_${idx}" class="input" style="width:80px;padding:4px 6px;font-size:13px;">
+              <option value="初级">初级</option>
+              <option value="中级" selected>中级</option>
+              <option value="高级">高级</option>
+              <option value="特级">特级</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:150px;">
+            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">备注</label>
+            <input type="text" id="outsourcedNote_${idx}" placeholder="备注" class="input" style="width:100%;padding:4px 6px;font-size:13px;">
+          </div>
         </div>
       </div>`;
     });
