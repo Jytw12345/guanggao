@@ -465,7 +465,7 @@ const repo = {
   /* ---- 载入全部数据到 cache ---- */
   async loadAll() {
     if (MODE === "cloud") {
-      const [wRes, pRes, lRes, sRes, rpRes, lrRes, lqRes, hRes, oRes] = await Promise.all([
+      const [wRes, pRes, lRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes] = await Promise.all([
         sb.from("workers").select("*"),
         sb.from("projects").select("*"),
         sb.from("work_logs").select("*"),
@@ -475,6 +475,7 @@ const repo = {
         sb.from("leave_quota").select("*"),
         sb.from("holidays").select("*"),
         sb.from("outsourced_workers").select("*"),
+        sb.from("operation_logs").select("*").order("timestamp", { ascending: false }).limit(200),
       ]);
       const allErrors = [
         { name: "workers", res: wRes },
@@ -547,6 +548,17 @@ const repo = {
       } else {
         console.warn("outsourced_workers 表读取失败（可能尚未创建）:", oRes.error.message);
         cache.outsourcedWorkers = [];
+      }
+      if (!opRes.error) {
+        cache.operationLogs = (opRes.data || []).map((r) => ({
+          id: r.id, type: r.type, typeLabel: r.type_label,
+          target: r.target, detail: r.detail,
+          operator: r.operator, operatorName: r.operator_name,
+          operatorRole: r.operator_role, timestamp: r.timestamp,
+        }));
+      } else {
+        console.warn("operation_logs 表读取失败（可能尚未创建）:", opRes.error.message);
+        cache.operationLogs = [];
       }
     } else {
       loadLocal();
@@ -3006,18 +3018,22 @@ async function addWorkLog(id) {
   const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
   await repo.patchProject(id, { actualHours: totalHours });
   updatedProject.actualHours = totalHours;
+  await logOperation("WORK_LOG_ADD", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}`);
   renderAll();
   toast("已添加施工工时");
 }
 
 async function deleteWorkLog(pid, lid) {
   if (!confirm("确定删除该工时记录？此操作不可撤销。")) return;
+  const p = getProject(pid);
+  const log = (p.workLogs || []).find(l => l.id === lid);
   await repo.deleteWorkLog(pid, lid);
   await repo.loadAll();
   const updatedProject = getProject(pid);
   const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
   await repo.patchProject(pid, { actualHours: totalHours });
   updatedProject.actualHours = totalHours;
+  await logOperation("WORK_LOG_DELETE", `${p.name} - ${log?.workerName || ""}`, `工时：${log?.hours || 0}小时`);
   renderAll();
   toast("已删除");
 }
@@ -4519,16 +4535,16 @@ const OPERATION_TYPES = {
   WORK_LOG_DELETE: "删除工时",
 };
 
-function logOperation(type, target, detail = "") {
+async function logOperation(type, target, detail = "") {
   const log = {
     id: uid(),
     type,
-    typeLabel: OPERATION_TYPES[type] || type,
+    type_label: OPERATION_TYPES[type] || type,
     target,
     detail,
     operator: currentProfile?.id || "system",
-    operatorName: currentProfile?.email || currentProfile?.name || "系统",
-    operatorRole: myRole(),
+    operator_name: currentProfile?.email || currentProfile?.name || "系统",
+    operator_role: myRole(),
     timestamp: new Date().toISOString(),
   };
   cache.operationLogs.unshift(log);
@@ -4536,6 +4552,13 @@ function logOperation(type, target, detail = "") {
     cache.operationLogs = cache.operationLogs.slice(0, 1000);
   }
   saveLocal();
+  if (sb) {
+    try {
+      await sb.from("operation_logs").insert(log);
+    } catch (e) {
+      console.warn("保存操作日志失败:", e);
+    }
+  }
 }
 
 function showOperationLogs() {
@@ -4547,12 +4570,12 @@ function showOperationLogs() {
       ${logs.length > 0 ? logs.map(log => `
         <div style="border-bottom:1px solid #f3f4f6;padding:12px 0;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-weight:bold;color:var(--primary)">${esc(log.typeLabel)}</span>
+            <span style="font-weight:bold;color:var(--primary)">${esc(log.typeLabel || log.type_label)}</span>
             <span style="font-size:12px;color:var(--muted)">${new Date(log.timestamp).toLocaleString()}</span>
           </div>
           <div style="margin-top:4px;font-size:13px;">目标：${esc(log.target)}</div>
           ${log.detail ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">详情：${esc(log.detail)}</div>` : ""}
-          <div style="margin-top:4px;font-size:12px;color:#6b7280;">操作人：${esc(log.operatorName)}（${ROLE_LABEL[log.operatorRole] || log.operatorRole}）</div>
+          <div style="margin-top:4px;font-size:12px;color:#6b7280;">操作人：${esc(log.operatorName || log.operator_name)}（${ROLE_LABEL[log.operatorRole || log.operator_role] || log.operatorRole || log.operator_role}）</div>
         </div>
       `).join("") : `<div style="text-align:center;color:var(--muted);padding:40px;">暂无操作日志</div>`}
     </div>
@@ -4700,6 +4723,270 @@ document.addEventListener("click", function(e) {
     exportMenu.classList.add("hidden");
   }
 });
+
+function parseCSV(csvText) {
+  const lines = csvText.split("\n").filter(l => l.trim());
+  const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+  const rows = lines.slice(1).map(line => {
+    const values = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === "," && !inQuotes) {
+        values.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    values.push(current.trim());
+    return headers.reduce((obj, h, idx) => {
+      obj[h] = values[idx] || "";
+      return obj;
+    }, {});
+  });
+  return { headers, rows };
+}
+
+function showImportModal() {
+  const modal = document.createElement("div");
+  modal.id = "importModal";
+  modal.className = "modal-overlay";
+  modal.innerHTML = `
+    <div class="modal" style="width:500px">
+      <div class="modal-header">
+        <h3>数据导入</h3>
+        <button class="btn-close" onclick="document.getElementById('importModal').remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:20px">
+        <div style="margin-bottom:16px">
+          <label style="display:block;margin-bottom:8px;font-weight:600">选择要导入的文件类型</label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <button class="btn" onclick="triggerImportFile('projects')">项目数据</button>
+            <button class="btn" onclick="triggerImportFile('work_logs')">工时记录</button>
+            <button class="btn" onclick="triggerImportFile('workers')">施工人员</button>
+            <button class="btn" onclick="triggerImportFile('stores')">门店数据</button>
+            <button class="btn" onclick="triggerImportFile('leave_records')">请假记录</button>
+            <button class="btn" onclick="triggerImportFile('outsourced_workers')">外协人员</button>
+          </div>
+        </div>
+        <div style="margin-bottom:16px">
+          <label style="display:block;margin-bottom:8px;font-weight:600">或者拖拽文件到此处</label>
+          <div id="dropZone" style="border:2px dashed #ccc;border-radius:8px;padding:30px;text-align:center;color:#999" 
+               ondragover="event.preventDefault()" ondrop="handleDrop(event)">
+            <div style="font-size:24px;margin-bottom:8px">📁</div>
+            <div>拖拽CSV文件到此处</div>
+          </div>
+        </div>
+        <div id="importStatus" style="min-height:40px;padding:12px;border-radius:6px;background:#f5f5f5;display:none"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="document.getElementById('importModal').remove()">关闭</button>
+      </div>
+      <input type="file" id="importFileInput" class="hidden" accept=".csv" onchange="handleFileSelect(this)">
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function triggerImportFile(type) {
+  const input = document.getElementById("importFileInput");
+  input.dataset.type = type;
+  input.click();
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.endsWith(".csv")) {
+    guessTypeAndImport(file);
+  }
+}
+
+function handleFileSelect(input) {
+  const file = input.files[0];
+  if (file) {
+    importFile(file, input.dataset.type);
+  }
+}
+
+function guessTypeAndImport(file) {
+  const name = file.name.toLowerCase();
+  let type = "projects";
+  if (name.includes("工时")) type = "work_logs";
+  else if (name.includes("人员")) type = "workers";
+  else if (name.includes("门店")) type = "stores";
+  else if (name.includes("请假")) type = "leave_records";
+  else if (name.includes("外协")) type = "outsourced_workers";
+  importFile(file, type);
+}
+
+function importFile(file, type) {
+  const status = document.getElementById("importStatus");
+  status.style.display = "block";
+  status.innerHTML = `<div style="color:#666">正在读取文件...</div>`;
+  
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const csv = parseCSV(e.target.result);
+      const count = await importData(type, csv.rows);
+      status.innerHTML = `<div style="color:#10b981;font-weight:600">✅ 成功导入 ${count} 条记录</div>`;
+      setTimeout(() => loadData(), 1000);
+    } catch (err) {
+      status.innerHTML = `<div style="color:#ef4444">❌ 导入失败: ${err.message}</div>`;
+    }
+  };
+  reader.readAsText(file, "UTF-8");
+}
+
+async function importData(type, rows) {
+  let count = 0;
+  for (const row of rows) {
+    try {
+      switch (type) {
+        case "projects":
+          await importProject(row);
+          break;
+        case "work_logs":
+          await importWorkLog(row);
+          break;
+        case "workers":
+          await importWorker(row);
+          break;
+        case "stores":
+          await importStore(row);
+          break;
+        case "leave_records":
+          await importLeaveRecord(row);
+          break;
+        case "outsourced_workers":
+          await importOutsourcedWorker(row);
+          break;
+      }
+      count++;
+    } catch (e) {
+      console.warn("导入失败:", e);
+    }
+  }
+  return count;
+}
+
+async function importProject(row) {
+  const p = {
+    id: row["项目ID"] || row["id"] || uid(),
+    name: row["项目名称"] || row["name"] || "",
+    storeId: row["门店ID"] || row["storeId"] || "",
+    customer: row["客户"] || row["customer"] || "",
+    phone: row["联系电话"] || row["phone"] || "",
+    address: row["安装地址"] || row["address"] || "",
+    appointmentTime: row["预约时间"] || row["appointmentTime"] || "",
+    estimatedHours: parseFloat(row["预计工时"] || row["estimatedHours"] || "0"),
+    status: row["状态"] || row["status"] || "预约中",
+    assignedWorkerIds: row["分配人员ID"] ? row["分配人员ID"].split(",") : [],
+    outsourcedHours: parseFloat(row["外协工时"] || row["outsourcedHours"] || "0"),
+    outsourcedWorkers: row["外协人员"] || row["outsourcedWorkers"] || "",
+    started_at: row["开始施工时间"] || row["started_at"] || "",
+    finished_at: row["完工时间"] || row["finished_at"] || "",
+    note: row["备注"] || row["note"] || "",
+    createdAt: row["创建时间"] || row["createdAt"] || now(),
+    updatedAt: now()
+  };
+  await repo.saveProject(p);
+}
+
+async function importWorkLog(row) {
+  const projectId = row["项目ID"] || row["project_id"];
+  if (!projectId) return;
+  
+  const log = {
+    id: row["日志ID"] || row["id"] || uid(),
+    project_id: projectId,
+    workerId: row["员工ID"] || row["workerId"] || "",
+    workerName: row["员工姓名"] || row["workerName"] || "",
+    date: row["日期"] || row["date"] || "",
+    hours: parseFloat(row["工时"] || row["hours"] || "0"),
+    level: row["工时等级"] || row["level"] || "中级",
+    startTime: row["开始时间"] || row["startTime"] || "",
+    endTime: row["结束时间"] || row["endTime"] || "",
+    note: row["备注"] || row["note"] || "",
+    isOutsourced: (row["是否外协"] || row["isOutsourced"] || "否") === "是"
+  };
+  
+  if (sb) {
+    await sb.from("work_logs").upsert(log, { onConflict: "id" });
+  } else {
+    const p = cache.projects.find(p => p.id === projectId);
+    if (p) {
+      if (!p.workLogs) p.workLogs = [];
+      const existingIdx = p.workLogs.findIndex(l => l.id === log.id);
+      if (existingIdx >= 0) {
+        p.workLogs[existingIdx] = log;
+      } else {
+        p.workLogs.push(log);
+      }
+      await repo.saveProject(p);
+    }
+  }
+}
+
+async function importWorker(row) {
+  const w = {
+    id: row["员工ID"] || row["id"] || uid(),
+    name: row["姓名"] || row["name"] || "",
+    phone: row["联系电话"] || row["phone"] || "",
+    role: row["角色"] || row["role"] || "worker",
+    createdAt: row["创建时间"] || row["createdAt"] || now()
+  };
+  await repo.saveWorker(w);
+}
+
+async function importStore(row) {
+  const s = {
+    id: row["门店ID"] || row["id"] || uid(),
+    name: row["门店名称"] || row["name"] || "",
+    phone: row["联系电话"] || row["phone"] || "",
+    createdAt: row["创建时间"] || row["createdAt"] || now()
+  };
+  await repo.saveStore(s);
+}
+
+async function importLeaveRecord(row) {
+  const lr = {
+    id: row["请假ID"] || row["id"] || uid(),
+    workerId: row["员工ID"] || row["workerId"] || "",
+    workerName: row["员工姓名"] || row["workerName"] || "",
+    leaveType: row["请假类型"] || row["leaveType"] || "",
+    startDate: row["开始日期"] || row["startDate"] || "",
+    startType: row["开始时段"] || row["startType"] || "",
+    endDate: row["结束日期"] || row["endDate"] || "",
+    endType: row["结束时段"] || row["endType"] || "",
+    reason: row["原因"] || row["reason"] || "",
+    status: row["状态"] || row["status"] || "pending",
+    reviewerName: row["审批人"] || row["reviewerName"] || "",
+    reviewNote: row["审批意见"] || row["reviewNote"] || "",
+    createdAt: row["创建时间"] || row["createdAt"] || now()
+  };
+  await repo.saveLeaveRecord(lr);
+}
+
+async function importOutsourcedWorker(row) {
+  const ow = {
+    id: row["ID"] || row["id"] || uid(),
+    name: row["姓名"] || row["name"] || "",
+    phone: row["电话"] || row["phone"] || "",
+    createdAt: row["创建时间"] || row["createdAt"] || now()
+  };
+  await repo.saveOutsourcedWorker(ow);
+}
 
 function switchTab(name) {
   const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
