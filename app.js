@@ -23,7 +23,7 @@ const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
 const ROLE_LABEL = { manager: "总经理", store_manager: "店长", worker: "施工人员" };
 
 /* 运行时状态 */
-let MODE = "local";        // 'cloud' | 'local'
+let MODE = "cloud";        // 'cloud' | 'local'
 let sb = null;             // supabase client
 let sbAdmin = null;        // supabase admin client (for deleteUser)
 let currentUser = null;    // 云端登录用户
@@ -3569,17 +3569,22 @@ function openCompleteProjectForm(id) {
       p.actualHours = totalHours;
       p.finished_at = now;
       
-      p.workLogs = logs.map(log => ({ id: uid(), ...log }));
+      const newLogs = logs.map(log => ({ id: uid(), ...log }));
+      const newLogKeys = new Set(newLogs.map(l => `${l.workerId}_${l.date}`));
+      const preservedLogs = (p.workLogs || []).filter(l => !newLogKeys.has(`${l.workerId}_${l.date}`));
+      p.workLogs = [...preservedLogs, ...newLogs];
       
       if (MODE === "cloud" && cloudConfigured()) {
-        Promise.all([
-          sb.from("projects").update({ status: "已完工", actualHours: p.actualHours, finished_at: now, updated_at: now }).eq("id", id),
-          ...logs.map(log => sb.from("work_logs").insert({
-            id: log.id, project_id: id, worker_id: log.workerId,
-            worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note,
-            is_outsourced: log.isOutsourced || false
-          }))
-        ]).then(() => {
+        sb.from("work_logs").delete().eq("project_id", id).eq("date", dateStr).then(() => {
+          return Promise.all([
+            sb.from("projects").update({ status: "已完工", actualHours: p.actualHours, finished_at: now, updated_at: now }).eq("id", id),
+            ...logs.map(log => sb.from("work_logs").insert({
+              id: log.id, project_id: id, worker_id: log.workerId,
+              worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note,
+              is_outsourced: log.isOutsourced || false
+            }))
+          ]);
+        }).then(() => {
           toast(`项目已完工，总工时：${totalHours}小时`);
           renderConstruction();
         }).catch(() => {
@@ -3781,28 +3786,28 @@ function collectProjectStats() {
       (p.workLogs || []).forEach((l) => {
         if (workerFilter && l.workerId !== workerFilter) return;
         const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
+        const key = l.workerId || l.workerName || "未知";
         const nm = l.workerName || "未知";
         const level = l.level || "中级";
         const hours = Number(l.hours) || 0;
         levelHours[level] += hours;
         if (isOutsourced) {
-          if (!outsourcedWorkerMap[nm]) outsourcedWorkerMap[nm] = { hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0} };
-          outsourcedWorkerMap[nm].hours += hours;
-          outsourcedWorkerMap[nm].levelHours[level] += hours;
+          if (!outsourcedWorkerMap[key]) outsourcedWorkerMap[key] = { name: nm, hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0} };
+          outsourcedWorkerMap[key].hours += hours;
+          outsourcedWorkerMap[key].levelHours[level] += hours;
         } else {
-          if (!workerMap[nm]) workerMap[nm] = { hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0} };
-          workerMap[nm].hours += hours;
-          workerMap[nm].levelHours[level] += hours;
+          if (!workerMap[key]) workerMap[key] = { name: nm, hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0} };
+          workerMap[key].hours += hours;
+          workerMap[key].levelHours[level] += hours;
         }
       });
-      const workerHours = Object.entries(workerMap)
-        .sort((a, b) => b[1].hours - a[1].hours)
-        .map(([name, data]) => ({ name, hours: data.hours, levelHours: data.levelHours, isOutsourced: false }));
-      const outsourcedWorkerHours = Object.entries(outsourcedWorkerMap)
-        .sort((a, b) => b[1].hours - a[1].hours)
-        .map(([name, data]) => ({ name, hours: data.hours, levelHours: data.levelHours, isOutsourced: true }));
-      // 外协人员数量
-      const outsourcedCount = (p.outsourcedWorkers || "").split(',').map(w => w.trim()).filter(w => w.length > 0).length;
+      const workerHours = Object.values(workerMap)
+        .sort((a, b) => b.hours - a.hours)
+        .map((data) => ({ name: data.name, hours: data.hours, levelHours: data.levelHours, isOutsourced: false }));
+      const outsourcedWorkerHours = Object.values(outsourcedWorkerMap)
+        .sort((a, b) => b.hours - a.hours)
+        .map((data) => ({ name: data.name, hours: data.hours, levelHours: data.levelHours, isOutsourced: true }));
+      const outsourcedCount = outsourcedWorkerHours.length;
       const totalOutsourcedHoursFromLogs = Object.values(outsourcedWorkerMap).reduce((sum, h) => sum + (h.hours || 0), 0);
       return { 
         id: p.id, 
@@ -3836,8 +3841,8 @@ function renderStats() {
   const totalAct = rows.reduce((s, r) => s + r.hours, 0);
   const totalDiff = totalAct - totalEst;
   
-  const totalOutsourcedHours = projRows.reduce((s, r) => s + r.outsourcedWorkerHours.reduce((sum, w) => sum + w.hours, 0), 0);
-  const totalOutsourcedWorkers = projRows.reduce((s, r) => s + r.outsourcedWorkerHours.length, 0);
+  const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
+  const totalOutsourcedWorkers = rows.filter(r => r.isOutsourced).length;
 
   const summary = document.getElementById("statsSummary");
   summary.innerHTML = `
