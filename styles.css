@@ -687,6 +687,18 @@ textarea.input { resize: vertical; min-height: 50px; }
   margin-bottom: 2px;
 }
 
+#wsStartDate, #wsEndDate {
+  min-width: 140px;
+}
+
+#wsStartTime, #wsEndTime {
+  min-width: 100px;
+}
+
+#wsAllDay {
+  accent-color: var(--primary);
+}
+
 .schedule-item.leave {
   border-left-color: #ef4444;
   background: #fef2f2;

@@ -1609,6 +1609,21 @@ function workerScheduleForm(s = {}) {
     `<option value="${key}" ${s.type === key ? 'selected' : ''}>${label}</option>`
   ).join("");
 
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  
+  const nowHour = String(today.getHours()).padStart(2, "0");
+  const nowMinute = String(today.getMinutes()).padStart(2, "0");
+  const nowTime = `${nowHour}:${nowMinute}`;
+  
+  const endHour = String(Math.min(23, today.getHours() + 2)).padStart(2, "0");
+  const endTime = `${endHour}:${nowMinute}`;
+
+  const defaultStartDate = s.startDate || todayStr;
+  const defaultEndDate = s.endDate || s.startDate || todayStr;
+  const defaultStartTime = s.startTime || nowTime;
+  const defaultEndTime = s.endTime || endTime;
+
   return `
     <div class="form-row">
       <label>施工人员 *</label>
@@ -1629,22 +1644,29 @@ function workerScheduleForm(s = {}) {
     <div class="form-grid">
       <div class="form-row">
         <label>开始日期 *</label>
-        <input class="input" type="date" id="wsStartDate" value="${esc(s.startDate || "")}" />
+        <input class="input" type="date" id="wsStartDate" value="${esc(defaultStartDate)}" onchange="onScheduleDateChange()" />
       </div>
       <div class="form-row">
         <label>开始时间</label>
-        <input class="input" type="time" id="wsStartTime" value="${esc(s.startTime || "")}" />
+        <input class="input" type="time" id="wsStartTime" value="${esc(defaultStartTime)}" onchange="onScheduleTimeChange()" />
       </div>
     </div>
     <div class="form-grid">
       <div class="form-row">
         <label>结束日期 *</label>
-        <input class="input" type="date" id="wsEndDate" value="${esc(s.endDate || "")}" />
+        <input class="input" type="date" id="wsEndDate" value="${esc(defaultEndDate)}" />
       </div>
       <div class="form-row">
         <label>结束时间</label>
-        <input class="input" type="time" id="wsEndTime" value="${esc(s.endTime || "")}" />
+        <input class="input" type="time" id="wsEndTime" value="${esc(defaultEndTime)}" />
       </div>
+    </div>
+    <div class="form-row">
+      <label>全天日程</label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="wsAllDay" ${(!s.startTime && !s.endTime) ? 'checked' : ''} onchange="toggleAllDaySchedule()" />
+        <span>设为全天日程</span>
+      </label>
     </div>
     <div class="form-row">
       <label>备注</label>
@@ -1654,6 +1676,53 @@ function workerScheduleForm(s = {}) {
       <button class="btn" onclick="modal.close()">取消</button>
       <button class="btn primary" onclick="saveWorkerSchedule('${s.id || ""}')">保存</button>
     </div>`;
+}
+
+function onScheduleDateChange() {
+  const startDate = document.getElementById("wsStartDate");
+  const endDate = document.getElementById("wsEndDate");
+  if (startDate && endDate && endDate.value < startDate.value) {
+    endDate.value = startDate.value;
+  }
+}
+
+function onScheduleTimeChange() {
+  const startTime = document.getElementById("wsStartTime");
+  const endTime = document.getElementById("wsEndTime");
+  if (startTime && endTime) {
+    const startVal = startTime.value;
+    const endVal = endTime.value;
+    if (endVal && startVal > endVal) {
+      const [sh, sm] = startVal.split(":").map(Number);
+      let eh = sh + 2;
+      if (eh > 23) eh = 23;
+      endTime.value = `${String(eh).padStart(2, "0")}:${String(sm).padStart(2, "0")}`;
+    }
+  }
+}
+
+function toggleAllDaySchedule() {
+  const allDay = document.getElementById("wsAllDay");
+  const startTime = document.getElementById("wsStartTime");
+  const endTime = document.getElementById("wsEndTime");
+  
+  if (allDay && startTime && endTime) {
+    if (allDay.checked) {
+      startTime.value = "";
+      endTime.value = "";
+      startTime.disabled = true;
+      endTime.disabled = true;
+    } else {
+      const now = new Date();
+      const nowHour = String(now.getHours()).padStart(2, "0");
+      const nowMinute = String(now.getMinutes()).padStart(2, "0");
+      startTime.value = `${nowHour}:${nowMinute}`;
+      const endHour = String(Math.min(23, now.getHours() + 2)).padStart(2, "0");
+      endTime.value = `${endHour}:${nowMinute}`;
+      startTime.disabled = false;
+      endTime.disabled = false;
+    }
+  }
 }
 
 function newWorkerSchedule() {
