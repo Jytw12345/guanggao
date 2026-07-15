@@ -1938,11 +1938,13 @@ function renderProjects() {
   if (!kw && projectTimeFilterDays > 0) {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
+    const startDate = new Date(now);
+    startDate.setDate(startDate.getDate() - projectTimeFilterDays);
     const endDate = new Date(now);
     endDate.setDate(endDate.getDate() + projectTimeFilterDays);
     items = items.filter((p) => {
       const aptTime = new Date(p.appointmentTime);
-      return !isNaN(aptTime.getTime()) && aptTime >= now && aptTime <= endDate;
+      return !isNaN(aptTime.getTime()) && aptTime >= startDate && aptTime <= endDate;
     });
   }
 
@@ -2156,27 +2158,6 @@ function projectForm(p = {}) {
         </div>
       </div>
     </div>
-    <div class="form-grid">
-      <div class="form-row">
-        <label><span style="color:#8b5cf6;">⏰</span> 外协工时</label>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <input class="input" type="number" min="0" step="0.5" id="pOutsourcedHours" value="${esc(p.outsourcedHours ?? "")}" placeholder="0" style="width:auto;max-width:100px;" />
-          <span style="font-size:12px;color:#8b5cf6;font-weight:500;">人·小时</span>
-        </div>
-      </div>
-      <div class="form-row">
-        <label><span style="color:#8b5cf6;">👤</span> 外协人数</label>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <select class="input" id="pOutsourcedCount" style="width:auto;max-width:100px;">
-            <option value="0" ${(p.outsourcedCount === 0 || !p.outsourcedCount) ? 'selected' : ''}>0人</option>
-            <option value="1" ${p.outsourcedCount === 1 ? 'selected' : ''}>1人</option>
-            <option value="2" ${p.outsourcedCount === 2 ? 'selected' : ''}>2人</option>
-            <option value="3" ${p.outsourcedCount === 3 ? 'selected' : ''}>3人</option>
-            <option value="4" ${p.outsourcedCount >= 4 ? 'selected' : ''}>4人+</option>
-          </select>
-        </div>
-      </div>
-    </div>
     <div class="form-row">
       <label><span style="color:#6b7280;">💬</span> 备注</label>
       <textarea class="input" id="pNote" placeholder="施工内容 / 注意事项" style="min-height:50px;">${esc(p.note || "")}</textarea>
@@ -2225,7 +2206,6 @@ async function saveProject(id) {
   let storeId = storeEl ? storeEl.value : "";
   if (isStoreManager()) storeId = myStore();          // 店长强制本门店
   const workerCount = Number(document.getElementById("pWorkers").value) || 1;
-  const outsourcedCount = Number(document.getElementById("pOutsourcedCount").value) || 0;
   const payload = {
     name,
     customer: document.getElementById("pCustomer").value.trim(),
@@ -2234,8 +2214,6 @@ async function saveProject(id) {
     appointmentTime: fullTime,
     endTime: fullEnd,
     estimatedHours: Number(document.getElementById("pEst").value) || 0,
-    outsourcedHours: Number(document.getElementById("pOutsourcedHours").value) || 0,
-    outsourcedCount,
     workerCount,
     status: document.getElementById("pStatus").value,
     note: document.getElementById("pNote").value.trim(),
@@ -2540,7 +2518,7 @@ function renderConstruction() {
         <div class="info-item"><div class="k">安装地址</div><div class="v">${esc(p.address || "—")}</div></div>
         <div class="info-item"><div class="k">预约时段</div><div class="v">${fmtTimeRange(p)}</div></div>
         <div class="info-item"><div class="k">预计工时</div><div class="v">${p.estimatedHours || 0} 小时</div></div>
-        <div class="info-item"><div class="k">外协工时</div><div class="v" style="color:#8b5cf6;font-weight:600">${Math.max(p.outsourcedHours, p.outsourcedHoursFromLogs) || 0} 小时</div></div>
+        <div class="info-item"><div class="k">外协工时</div><div class="v" style="color:#8b5cf6;font-weight:600">${p.outsourcedHoursFromLogs || 0} 小时</div></div>
         <div class="info-item"><div class="k">工程实际用工时</div><div class="v">${p.actualHours || 0} 小时</div></div>
         <div class="info-item"><div class="k">工时差异（实际−预计）</div><div class="v">${diffLabel(p)}</div></div>
         ${p.started_at ? `<div class="info-item"><div class="k">⏰ 开始施工时间</div><div class="v">${esc(fmtDateTime(p.started_at))}</div></div>` : ""}
@@ -2548,20 +2526,18 @@ function renderConstruction() {
         ${p.started_at && p.finished_at ? `<div class="info-item"><div class="k">⏱️ 实际施工时长</div><div class="v"><b>${esc(calcDuration(p.started_at, p.finished_at))}</b></div></div>` : ""}
       </div>
       ${canEdit ? `
-      <div class="form-grid" style="margin-top:14px">
-        <div class="form-row" style="margin:0">
-          <label>更新项目状态</label>
-          <select class="input" id="cStatus" onchange="updateProjectStatus('${p.id}', this.value)">
+      <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:16px;align-items:center">
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="font-size:13px;color:var(--muted)">状态</label>
+          <select class="input" id="cStatus" onchange="updateProjectStatus('${p.id}', this.value)" style="width:auto;min-width:100px;">
             ${Object.values(STATUS).map((s) =>
               `<option value="${s}" ${p.status === s ? "selected" : ""}>${s}</option>`).join("")}
           </select>
         </div>
-        <div class="form-row" style="margin:0">
-          <label>工程实际用工时（小时）</label>
-          <div style="display:flex;gap:8px">
-            <input class="input" type="number" min="0" step="0.5" id="cActual" value="${p.actualHours || 0}" />
-            <button class="btn primary" onclick="saveActualHours('${p.id}')">保存</button>
-          </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="font-size:13px;color:var(--muted)">实际工时</label>
+          <input class="input" type="number" min="0" step="0.5" id="cActual" value="${p.actualHours || 0}" style="width:80px;" />
+          <button class="btn small primary" onclick="saveActualHours('${p.id}')">保存</button>
         </div>
       </div>` : ""}
       ${canReview && !reviewed ? `
