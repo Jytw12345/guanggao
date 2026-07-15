@@ -964,6 +964,11 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   gap: 14px;
   margin-bottom: 18px;
 }
+#statsSummary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
 .stat-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -1529,7 +1534,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
     padding: 10px 8px;
   }
 
-  .stats-summary {
+  #statsSummary {
     grid-template-columns: repeat(2, 1fr);
     gap: 10px;
   }

@@ -782,19 +782,23 @@ const repo = {
         .eq("id", pid);
       if (error) return fail(error);
     } else {
-      getProject(pid).assignedWorkerIds = ids;
-      saveLocal();
+      const project = getProject(pid);
+      if (project) {
+        project.assignedWorkerIds = ids;
+        saveLocal();
+      }
     }
   },
 
   /* ---- 施工工时 ---- */
   async addWorkLog(pid, log) {
     if (MODE === "cloud") {
+      clearTimeout(reloadTimer);
       const row = {
         id: uid(), project_id: pid, worker_id: log.workerId,
-        worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note || null,
+        worker_name: log.workerName, hours: Number(log.hours), date: log.date, note: log.note || null,
         level: log.level || "中级",
-        is_outsourced: log.isOutsourced || false,
+        is_outsourced: !!log.isOutsourced,
       };
       let { error } = await sb.from("work_logs").insert(row);
       if (error && error.message && error.message.includes('level')) {
@@ -955,6 +959,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "role_permissions" }, scheduleReload)
     .on("postgres_changes", { event: "*", schema: "public", table: "leave_records" }, scheduleReload)
     .on("postgres_changes", { event: "*", schema: "public", table: "outsourced_workers" }, scheduleReload)
+    .on("postgres_changes", { event: "*", schema: "public", table: "holidays" }, scheduleReload)
     .subscribe((status) => {
       if (status === "SUBSCRIBED") setSyncStatus("online", "● 实时同步中");
       else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setSyncStatus("offline", "● 同步连接异常");
@@ -2382,11 +2387,17 @@ async function submitRepairOrder(projectId) {
 }
 
 async function completeRepair(projectId) {
+  const p = getProject(projectId);
+  if (!p || !p.repairOrder) {
+    toast("维修单不存在");
+    return;
+  }
+  
   if (!confirm("确认维修已完成？")) return;
   
   await repo.patchProject(projectId, { 
     repairOrder: { 
-      ...getProject(projectId).repairOrder, 
+      ...p.repairOrder, 
       status: "已完成",
       completedAt: new Date().toISOString()
     } 
@@ -2406,6 +2417,7 @@ async function deleteProject(id) {
   try {
     await repo.deleteProject(id);
     if (currentProjectId === id) currentProjectId = "";
+    clearTimeout(reloadTimer);
     await repo.loadAll();
     renderAll();
     toast("已删除");
@@ -3076,6 +3088,7 @@ async function addWorkLog(id) {
   
   await repo.addWorkLog(id, { workerId, workerName, hours, date, note, level, isOutsourced: type === "outsourced" });
   if (p.status === STATUS.BOOKED) await repo.patchProject(id, { status: STATUS.WORKING, started_at: new Date().toISOString() });
+  clearTimeout(reloadTimer);
   await repo.loadAll();
   const updatedProject = getProject(id);
   const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
@@ -3790,16 +3803,19 @@ function collectStats() {
   const rows = {};
   cache.projects.forEach((p) => {
     (p.workLogs || []).forEach((l) => {
-      if (month && monthKey(l.date) !== month) return;
+      const logMonth = monthKey(l.date);
+      if (month && logMonth !== month) return;
       if (workerFilter && l.workerId !== workerFilter) return;
       const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
-      const key = l.id || l.workerId || l.workerName;
+      const key = l.workerId || l.workerName || l.id;
       if (!rows[key]) {
-        rows[key] = { name: l.workerName || "未知", hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced };
+        rows[key] = { name: l.workerName || "未知", hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced: false };
       }
+      if (isOutsourced) rows[key].isOutsourced = true;
       const level = l.level || "中级";
-      rows[key].hours += Number(l.hours) || 0;
-      rows[key].levelHours[level] += Number(l.hours) || 0;
+      const hours = Number(l.hours) || 0;
+      rows[key].hours += hours;
+      rows[key].levelHours[level] += hours;
       rows[key].days.add(fmtDate(l.date));
       rows[key].projects.add(p.name);
       const dayKey = l.date;
@@ -4462,15 +4478,19 @@ let modalOnClose = null;
 
 function confirmDialog(message, title = "确认操作") {
   return new Promise((resolve) => {
+    let confirmed = false;
     modal.open(title, `<p>${message}</p>`, {
       confirmText: "确定",
       cancelText: "取消",
       onConfirm: () => {
+        confirmed = true;
         modal.close();
         resolve(true);
       },
       onClose: () => {
-        resolve(false);
+        if (!confirmed) {
+          resolve(false);
+        }
       }
     });
   });
@@ -5067,7 +5087,7 @@ async function importWorkLog(row) {
   
   const log = {
     id: row["日志ID"] || row["id"] || uid(),
-    project_id: projectId,
+    projectId: projectId,
     workerId: row["员工ID"] || row["workerId"] || "",
     workerName: row["员工姓名"] || row["workerName"] || "",
     date: row["日期"] || row["date"] || "",
@@ -7094,11 +7114,9 @@ async function doLogin() {
   showAuthError("");
   if (remember) {
     localStorage.setItem("auth_email", email);
-    localStorage.setItem("auth_password", password);
     localStorage.setItem("auth_remember", "true");
   } else {
     localStorage.removeItem("auth_email");
-    localStorage.removeItem("auth_password");
     localStorage.removeItem("auth_remember");
   }
   await startCloudSession();
@@ -7124,21 +7142,10 @@ async function startCloudSession() {
   if (!data.session) {
     const remember = localStorage.getItem("auth_remember");
     const savedEmail = localStorage.getItem("auth_email");
-    const savedPassword = localStorage.getItem("auth_password");
-    if (remember === "true" && savedEmail && savedPassword) {
-      document.getElementById("authEmail").value = savedEmail;
-      document.getElementById("authPassword").value = savedPassword;
-      document.getElementById("authRemember").checked = true;
-      const { error } = await sb.auth.signInWithPassword({ email: savedEmail, password: savedPassword });
-      if (!error) {
-        await startCloudSession();
-        return;
-      }
-    }
     document.getElementById("authScreen").classList.remove("hidden");
     if (savedEmail) {
       document.getElementById("authEmail").value = savedEmail;
-      document.getElementById("authRemember").checked = true;
+      document.getElementById("authRemember").checked = remember === "true";
     }
     return;
   }
