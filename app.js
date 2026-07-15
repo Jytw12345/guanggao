@@ -23,7 +23,7 @@ const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
 const ROLE_LABEL = { manager: "总经理", store_manager: "店长", worker: "施工人员" };
 
 /* 运行时状态 */
-let MODE = "cloud";        // 'cloud' | 'local'
+let MODE = "local";        // 'cloud' | 'local'
 let sb = null;             // supabase client
 let sbAdmin = null;        // supabase admin client (for deleteUser)
 let currentUser = null;    // 云端登录用户
@@ -529,6 +529,7 @@ const repo = {
       cache.workers = (wRes.data || []).map((r) => ({
         id: r.id, name: r.name, phone: r.phone, role: r.role,
       }));
+      
       const logs = (lRes.data || []).map((r) => ({ ...mapLog(r), _pid: r.project_id }));
       cache.projects = (pRes.data || []).map((r) => {
         const p = mapProject(r);
@@ -794,7 +795,7 @@ const repo = {
   async addWorkLog(pid, log) {
     if (MODE === "cloud") {
       clearTimeout(reloadTimer);
-      const row = {
+      let row = {
         id: uid(), project_id: pid, worker_id: log.workerId,
         worker_name: log.workerName, hours: Number(log.hours), date: log.date, note: log.note || null,
         level: log.level || "中级",
@@ -803,7 +804,8 @@ const repo = {
       let { error } = await sb.from("work_logs").insert(row);
       if (error && error.message && error.message.includes('level')) {
         const { level, ...rowWithoutLevel } = row;
-        ({ error } = await sb.from("work_logs").insert(rowWithoutLevel));
+        row = rowWithoutLevel;
+        ({ error } = await sb.from("work_logs").insert(row));
       }
       if (error && error.message && error.message.includes('is_outsourced')) {
         const { is_outsourced, ...rowWithoutIsOutsourced } = row;
@@ -2066,7 +2068,7 @@ function renderProjects() {
           <div class="card-row">
             <span>进度</span>
             <div style="flex:1;display:flex;align-items:center;gap:8px;">
-              <div style="flex:1;height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+              <div style="flex:1;height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
                 <div style="height:100%;width:${Math.min(100, getProjectProgress(p, est, act, hasActual, done))}%;background:${getProjectProgress(p, est, act, hasActual, done) >= 100 ? '#10b981' : '#3b82f6'};border-radius:4px;"></div>
               </div>
               <span style="font-weight:bold;font-size:12px;">${Math.round(getProjectProgress(p, est, act, hasActual, done))}%</span>
@@ -2323,7 +2325,17 @@ function openRepairOrderForm(projectId) {
   
   const now = new Date();
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const tomorrowStr = tomorrow.toISOString().slice(0, 16);
+  const tomorrowDate = tomorrow.toISOString().slice(0, 10);
+  const roundedMinutes = Math.ceil(tomorrow.getMinutes() / 20) * 20;
+  tomorrow.setMinutes(roundedMinutes);
+  const defaultTime = `${String(tomorrow.getHours()).padStart(2, '0')}:${String(tomorrow.getMinutes()).padStart(2, '0')}`;
+  
+  const times = [];
+  for (let h = 8; h <= 22; h++) {
+    for (let m = 0; m < 60; m += 20) {
+      times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    }
+  }
   
   const form = `
     <div class="repair-form">
@@ -2336,9 +2348,17 @@ function openRepairOrderForm(projectId) {
         <label>维修原因</label>
         <textarea class="input" id="repairReason" placeholder="请填写维修原因"></textarea>
       </div>
-      <div class="form-row">
-        <label>预约维修时间</label>
-        <input class="input" type="datetime-local" id="repairTime" value="${tomorrowStr}" min="${now.toISOString().slice(0, 16)}" />
+      <div class="form-row" style="display:flex;gap:8px;align-items:center;">
+        <div style="flex:1;">
+          <label>维修日期</label>
+          <input class="input" type="date" id="repairDate" value="${tomorrowDate}" min="${now.toISOString().slice(0, 10)}" />
+        </div>
+        <div style="flex:1;">
+          <label>维修时间</label>
+          <select class="input" id="repairTime">
+            ${times.map(t => `<option value="${t}" ${t === defaultTime ? 'selected' : ''}>${t}</option>`).join('')}
+          </select>
+        </div>
       </div>
       <div class="form-actions">
         <button class="btn" onclick="modal.close()">取消</button>
@@ -2352,32 +2372,39 @@ function openRepairOrderForm(projectId) {
 async function submitRepairOrder(projectId) {
   const items = document.getElementById("repairItems").value.trim();
   const reason = document.getElementById("repairReason").value.trim();
+  const date = document.getElementById("repairDate").value;
   const time = document.getElementById("repairTime").value;
   
   if (!items) {
     toast("请填写维修项目");
     return;
   }
-  if (!time) {
+  if (!date || !time) {
     toast("请选择预约维修时间");
     return;
   }
   
+  const fullTime = `${date}T${time}`;
+  
   const repairOrder = {
     items,
     reason,
-    appointmentTime: new Date(time).toISOString(),
+    appointmentTime: new Date(fullTime).toISOString(),
     status: "待维修",
     createdAt: new Date().toISOString(),
   };
   
+  const startTime = new Date(fullTime);
+  const endTime = new Date(startTime.getTime() + 2 * 60 * 60 * 1000);
+  
   await repo.patchProject(projectId, { 
     repairOrder,
-    appointmentTime: new Date(time).toISOString()
+    appointmentTime: startTime.toISOString(),
+    endTime: endTime.toISOString()
   });
   await repo.loadAll();
   modal.close();
-  openProjectDetail(projectId);
+  gotoConstruction(projectId);
   toast("维修单已提交");
   
   const p = getProject(projectId);
@@ -2395,6 +2422,7 @@ async function completeRepair(projectId) {
   
   if (!confirm("确认维修已完成？")) return;
   
+  clearTimeout(reloadTimer);
   await repo.patchProject(projectId, { 
     repairOrder: { 
       ...p.repairOrder, 
@@ -2403,7 +2431,7 @@ async function completeRepair(projectId) {
     } 
   });
   await repo.loadAll();
-  openProjectDetail(projectId);
+  gotoConstruction(projectId);
   toast("维修已完成");
 }
 
@@ -2612,7 +2640,7 @@ function renderConstruction() {
         ${p.finished_at ? `<div class="info-item"><div class="k">✅ 完工时间</div><div class="v">${esc(fmtDateTime(p.finished_at))}</div></div>` : ""}
         ${p.started_at && p.finished_at ? `<div class="info-item"><div class="k">⏱️ 实际施工时长</div><div class="v"><b>${esc(calcDuration(p.started_at, p.finished_at))}</b></div></div>` : ""}
       </div>
-      ${canEdit ? `
+      ${canEdit || (canReview && !reviewed) ? `
       <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:16px;align-items:center">
         <div style="display:flex;align-items:center;gap:8px">
           <label style="font-size:13px;color:var(--muted)">状态</label>
@@ -2626,10 +2654,9 @@ function renderConstruction() {
           <input class="input" type="number" min="0" step="0.5" id="cActual" value="${p.actualHours || 0}" style="width:80px;" />
           <button class="btn small primary" onclick="saveActualHours('${p.id}')">保存</button>
         </div>
-      </div>` : ""}
-      ${canReview && !reviewed ? `
-      <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
-        <button class="btn primary" onclick="reviewProject('${p.id}')">✅ 审核项目</button>
+        ${canReview && !reviewed ? `
+        <button class="btn small primary" onclick="reviewProject('${p.id}')">✅ 审核项目</button>
+        ` : ""}
       </div>` : ""}
       ${reviewed && isManager() ? `
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
@@ -2685,16 +2712,16 @@ function renderConstruction() {
             ${workerOptions || `<option value="">请先添加人员</option>`}
           </select>
         </div>
-        <div class="field" id="logOutsourcedField" style="display:none">
+        <div class="field outsourced-field" id="logOutsourcedField" style="display:none">
           <label>外协人员</label>
           <div style="display:flex;gap:6px;align-items:center;">
             <select class="input" id="logOutsourcedSelect" onchange="updateLogOutsourcedInput()">
               <option value="">从常用列表选择</option>
               ${cache.outsourcedWorkers.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}${w.phone ? ` (${esc(w.phone)})` : ''}</option>`).join("")}
             </select>
-            <input class="input" id="logOutsourcedName" placeholder="或手动输入" style="flex:1;min-width:150px;" />
+            <input class="input" id="logOutsourcedName" placeholder="或手动输入" />
           </div>
-          <small class="hint" style="font-size:11px;color:#8b5cf6;">可从常用外协人员列表选择，或手动输入新的外协人员</small>
+          <small class="hint" style="font-size:11px;color:#8b5cf6;">可从常用列表选择，或手动输入新的外协人员</small>
         </div>
         <div class="field">
           <label>施工日期</label>
@@ -2987,6 +3014,11 @@ async function unassignWorker(pid, wid) {
 }
 
 async function updateProjectStatus(id, status) {
+  const p = getProject(id);
+  if (!p) {
+    toast("项目不存在");
+    return;
+  }
   const patch = { status };
   const now = new Date().toISOString();
   if (status === STATUS.WORKING) {
@@ -2994,25 +3026,29 @@ async function updateProjectStatus(id, status) {
   } else if (status === STATUS.DONE) {
     patch.finished_at = now;
   }
+  clearTimeout(reloadTimer);
   await repo.patchProject(id, patch);
   await repo.loadAll();
   renderAll();
   toast("状态已更新");
   
-  const p = getProject(id);
-  if (p) {
-    if (status === STATUS.WORKING) {
-      sendNotificationForProjectChange("start", p);
-    } else if (status === STATUS.DONE) {
-      sendNotificationForProjectChange("done", p);
-    } else if (status === STATUS.ACCEPTED) {
-      sendNotificationForProjectChange("accepted", p);
-    }
+  if (status === STATUS.WORKING) {
+    sendNotificationForProjectChange("start", p);
+  } else if (status === STATUS.DONE) {
+    sendNotificationForProjectChange("done", p);
+  } else if (status === STATUS.ACCEPTED) {
+    sendNotificationForProjectChange("accepted", p);
   }
 }
 
 async function reviewProject(id) {
+  const p = getProject(id);
+  if (!p) {
+    toast("项目不存在");
+    return;
+  }
   if (!confirm("确定审核该项目？审核后项目信息将无法更改。")) return;
+  clearTimeout(reloadTimer);
   await repo.patchProject(id, { status: STATUS.REVIEWED });
   await repo.loadAll();
   renderAll();
@@ -3020,7 +3056,13 @@ async function reviewProject(id) {
 }
 
 async function unreviewProject(id) {
+  const p = getProject(id);
+  if (!p) {
+    toast("项目不存在");
+    return;
+  }
   if (!confirm("确定取消审核？取消后项目将恢复为「已完工」状态，可继续编辑。")) return;
+  clearTimeout(reloadTimer);
   await repo.patchProject(id, { status: STATUS.DONE });
   await repo.loadAll();
   renderAll();
@@ -3071,6 +3113,8 @@ async function addWorkLog(id) {
   const note = document.getElementById("logNote").value.trim();
   const level = document.getElementById("logLevel").value;
   
+  console.log("addWorkLog: 开始添加工时", { id, type, hours, date, note, level });
+  
   if (!hours || hours <= 0) { toast("请填写有效工时"); return; }
   if (!date) { toast("请选择施工日期"); return; }
   
@@ -3091,7 +3135,9 @@ async function addWorkLog(id) {
   clearTimeout(reloadTimer);
   await repo.loadAll();
   const updatedProject = getProject(id);
+  
   const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
+  
   await repo.patchProject(id, { actualHours: totalHours });
   updatedProject.actualHours = totalHours;
   await logOperation("WORK_LOG_ADD", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}`);
@@ -3605,7 +3651,7 @@ function openCompleteProjectForm(id) {
   modal.open("完成项目 - 填写工时", form, {
     confirmText: "确认完工",
     cancelText: "取消",
-    onConfirm: () => {
+    onConfirm: async () => {
       let totalHours = 0;
       const logs = [];
       
@@ -3664,23 +3710,30 @@ function openCompleteProjectForm(id) {
         sb.from("work_logs").delete().eq("project_id", id).eq("date", dateStr).then(() => {
           return Promise.all([
             sb.from("projects").update({ status: "已完工", actual_hours: p.actualHours, finished_at: now, updated_at: now }).eq("id", id),
-            ...logs.map(log => sb.from("work_logs").insert({
-              id: log.id, project_id: id, worker_id: log.workerId,
-              worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note,
-              is_outsourced: log.isOutsourced || false
-            }))
+            ...newLogs.map(log => 
+              sb.from("work_logs").insert({
+                id: log.id, project_id: id, worker_id: log.workerId,
+                worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note,
+                level: log.level || "中级",
+                is_outsourced: log.isOutsourced || false
+              })
+            )
           ]);
-        }).then(() => {
+        }).then(async () => {
+          await repo.loadAll();
           toast(`项目已完工，总工时：${totalHours}小时`);
           renderConstruction();
+          renderAll();
         }).catch((error) => {
           console.error("标记完工失败:", error);
           toast("更新失败：" + (error.message || "未知错误"));
         });
       } else {
         saveLocal();
+        await repo.loadAll();
         toast(`项目已完工，总工时：${totalHours}小时`);
         renderConstruction();
+        renderAll();
       }
       
       return true;
@@ -6500,7 +6553,9 @@ async function timelineQuickAssignWorker(pid, wid) {
 
 /* 时间线快速移除安装人员 */
 async function timelineUnassignWorker(pid, wid) {
-  await repo.setAssignedWorkers(pid, (getProject(pid).assignedWorkerIds || []).filter((x) => x !== wid));
+  const p = getProject(pid);
+  if (!p) return;
+  await repo.setAssignedWorkers(pid, (p.assignedWorkerIds || []).filter((x) => x !== wid));
   await repo.loadAll();
   renderTimelineInDetail();
   setTimeout(() => {
@@ -7408,6 +7463,13 @@ async function init() {
     applyPermissions();
     renderAll();
   }
+
+  setInterval(() => {
+    const hasWorkingProjects = cache.projects.some(p => p.status === STATUS.WORKING);
+    if (hasWorkingProjects) {
+      renderAll();
+    }
+  }, 60000);
 }
 
 document.addEventListener("DOMContentLoaded", init);

@@ -855,7 +855,7 @@ textarea.input { resize: vertical; min-height: 50px; }
   background: #fff;
   border-radius: 14px;
   width: 90%;
-  max-width: 580px;
+  max-width: 420px;
   max-height: 88vh;
   overflow-y: auto;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
@@ -1662,17 +1662,36 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   }
 
   .worklog-form {
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
     align-items: stretch;
-    gap: 12px;
   }
 
   .worklog-form .field {
-    flex: 1;
+    flex: none;
   }
 
-  .worklog-form .field:last-child {
-    margin-bottom: 8px;
+  .worklog-form .field.outsourced-field,
+  .worklog-form .field:last-child,
+  .worklog-form button {
+    grid-column: 1/-1;
+  }
+
+  .worklog-form .field.outsourced-field > div {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+  }
+
+  .worklog-form .field.outsourced-field select,
+  .worklog-form .field.outsourced-field input {
+    box-sizing: border-box;
+    width: 50%;
+    flex: 1;
+    min-width: 0;
   }
 
   .badge {
