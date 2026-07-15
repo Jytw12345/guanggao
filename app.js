@@ -2026,7 +2026,7 @@ function renderProjects() {
     const pEnd = new Date(p.endTime || p.appointmentTime);
     const leaveConflicts = cache.leaveRecords.filter(r => {
       if (r.status !== "approved") return false;
-      if (!p.assignedWorkers || !p.assignedWorkers.includes(r.workerId)) return false;
+      if (!p.assignedWorkerIds || !p.assignedWorkerIds.includes(r.workerId)) return false;
       const leaveStart = new Date(`${r.startDate}T${r.startTime || "08:00"}`);
       const leaveEnd = new Date(`${r.endDate}T${r.endTime || "18:00"}`);
       return leaveStart < pEnd && leaveEnd > pStart;
@@ -2280,6 +2280,13 @@ async function saveProject(id) {
     note: document.getElementById("pNote").value.trim(),
     storeId,
   };
+  
+  if (id) {
+    const existingProject = getProject(id);
+    if (existingProject && existingProject.repairOrder) {
+      payload.repairOrder = existingProject.repairOrder;
+    }
+  }
   await repo.saveProject(payload, id);
   await repo.loadAll();
   modal.close();
@@ -2390,15 +2397,22 @@ async function completeRepair(projectId) {
 }
 
 async function deleteProject(id) {
-  if (!(await confirmDialog("确定删除该项目及其施工记录？", "删除项目"))) return;
   const p = getProject(id);
-  await repo.deleteProject(id);
-  if (currentProjectId === id) currentProjectId = "";
-  await repo.loadAll();
-  renderAll();
-  toast("已删除");
-  if (p) {
+  if (!p) {
+    toast("项目不存在");
+    return;
+  }
+  if (!(await confirmDialog("确定删除该项目及其施工记录？", "删除项目"))) return;
+  try {
+    await repo.deleteProject(id);
+    if (currentProjectId === id) currentProjectId = "";
+    await repo.loadAll();
+    renderAll();
+    toast("已删除");
     logOperation("PROJECT_DELETE", p.name || "项目", `ID: ${id}`);
+  } catch (error) {
+    console.error("删除项目失败:", error);
+    toast("删除失败，请重试");
   }
 }
 
@@ -3636,7 +3650,7 @@ function openCompleteProjectForm(id) {
       if (MODE === "cloud" && cloudConfigured()) {
         sb.from("work_logs").delete().eq("project_id", id).eq("date", dateStr).then(() => {
           return Promise.all([
-            sb.from("projects").update({ status: "已完工", actualHours: p.actualHours, finished_at: now, updated_at: now }).eq("id", id),
+            sb.from("projects").update({ status: "已完工", actual_hours: p.actualHours, finished_at: now, updated_at: now }).eq("id", id),
             ...logs.map(log => sb.from("work_logs").insert({
               id: log.id, project_id: id, worker_id: log.workerId,
               worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note,
@@ -3646,8 +3660,9 @@ function openCompleteProjectForm(id) {
         }).then(() => {
           toast(`项目已完工，总工时：${totalHours}小时`);
           renderConstruction();
-        }).catch(() => {
-          toast("更新失败");
+        }).catch((error) => {
+          console.error("标记完工失败:", error);
+          toast("更新失败：" + (error.message || "未知错误"));
         });
       } else {
         saveLocal();
