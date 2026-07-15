@@ -3236,6 +3236,24 @@ function generateWorkerScheduleDescription(dateStr = null) {
       description += `<div class="schedule-task">${taskDesc}</div>`;
     });
     
+    const totalEstimatedHours = projects.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+    if (totalEstimatedHours > 8) {
+      description += `<div class="schedule-warning">⚠️ <strong>工时预警</strong>：${name}今日预计工时 ${totalEstimatedHours} 小时，超过8小时标准工作时间，请注意劳逸结合！</div>`;
+    }
+    
+    for (let i = 1; i < projects.length; i++) {
+      const prevProject = projects[i - 1];
+      const currProject = projects[i];
+      const prevEnd = projectEnd(prevProject) || new Date((projectStart(prevProject) || new Date()).getTime() + (prevProject.estimatedHours || 2) * 3600000);
+      const currStart = projectStart(currProject);
+      if (currStart && prevEnd) {
+        const gapMinutes = (currStart - prevEnd) / (1000 * 60);
+        if (gapMinutes < 30) {
+          description += `<div class="schedule-warning">⏰ <strong>时间紧迫</strong>：上一个项目预计 ${prevEnd.getHours()}:${String(prevEnd.getMinutes()).padStart(2, "0")} 结束，下一个项目 ${currStart.getHours()}:${String(currStart.getMinutes()).padStart(2, "0")} 开始，间隔仅 ${Math.round(gapMinutes)} 分钟，请预留交通时间！</div>`;
+        }
+      }
+    }
+    
     description += `</div>`;
   });
   
@@ -3885,6 +3903,17 @@ function renderStats() {
   const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
   const totalOutsourcedWorkers = rows.filter(r => r.isOutsourced).length;
 
+  const internalRows = rows.filter(r => !r.isOutsourced);
+  const avgHours = internalRows.length > 0 ? (internalRows.reduce((s, r) => s + r.hours, 0) / internalRows.length).toFixed(1) : 0;
+  const topWorker = internalRows.length > 0 ? internalRows[0].name : "";
+  const topHours = internalRows.length > 0 ? internalRows[0].hours : 0;
+  
+  const efficiencyRate = totalEst > 0 ? ((totalAct / totalEst) * 100).toFixed(0) : 0;
+  let efficiencyColor = "#10b981";
+  let efficiencyLabel = "高效";
+  if (efficiencyRate < 80) { efficiencyColor = "#ef4444"; efficiencyLabel = "低效"; }
+  else if (efficiencyRate < 100) { efficiencyColor = "#f59e0b"; efficiencyLabel = "正常"; }
+  
   const summary = document.getElementById("statsSummary");
   summary.innerHTML = `
     <div class="stat-card"><div class="num">${rows.length}</div><div class="lbl">参与施工人数</div></div>
@@ -3894,6 +3923,8 @@ function renderStats() {
     <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedHours}h</div><div class="lbl">外协工时</div></div>
     <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedWorkers}人</div><div class="lbl">外协人员</div></div>
     <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
+    <div class="stat-card"><div class="num">${avgHours}</div><div class="lbl">人均工时(小时)</div></div>
+    <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
   `;
 
   const workerTable = rows.length === 0
@@ -3950,16 +3981,19 @@ function renderStats() {
           </div>`;
           
         const rowColor = r.isOutsourced ? 'color:#8b5cf6' : '';
+        const vsAvg = r.isOutsourced ? "" : ((r.hours - avgHours) >= 0 ? "+" : "") + (r.hours - avgHours).toFixed(1);
+        const vsAvgColor = r.isOutsourced ? "" : (r.hours >= avgHours ? "#10b981" : "#ef4444");
         return `
         <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
           <table class="data">
             <thead>
-              <tr><th>施工人员</th><th>安装工时(小时)</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>
+              <tr><th>施工人员</th><th>安装工时(小时)</th><th>vs平均</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>
             </thead>
             <tbody>
               <tr>
                 <td style="${rowColor}">${esc(r.name)}${r.isOutsourced ? ' (外协)' : ''}</td>
                 <td style="${rowColor}"><b>${r.hours}</b></td>
+                <td style="${vsAvgColor}">${vsAvg || "—"}</td>
                 <td style="color:#6b7280">${r.levelHours?.初级 || 0}</td>
                 <td style="color:#3b82f6">${r.levelHours?.中级 || 0}</td>
                 <td style="color:#f59e0b">${r.levelHours?.高级 || 0}</td>
@@ -3988,12 +4022,12 @@ function renderStats() {
       <div class="detail-block" style="padding:0;overflow:hidden">
         <table class="data">
           <tbody>
-            <tr><td><b>合计</b></td><td><b>${totalHours}</b></td>
+            <tr><td><b>合计</b></td><td><b>${totalHours}</b></td><td></td>
               <td>${rows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0)}</td>
               <td>${rows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0)}</td>
               <td>${rows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0)}</td>
               <td>${rows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0)}</td>
-              <td colspan="3"></td>
+              <td colspan="4"></td>
             </tr>
           </tbody>
         </table>
@@ -4043,7 +4077,27 @@ function renderStats() {
       </table>
     </div>`;
 
+  let smartAnalysis = "";
+  if (rows.length > 0) {
+    const lowEfficiencyWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
+    const highWorkloadWorkers = internalRows.filter(r => r.hours > 40);
+    
+    if (highWorkloadWorkers.length > 0) {
+      smartAnalysis += `<div class="stats-analysis warning">🔥 <strong>高负荷预警</strong>：${highWorkloadWorkers.map(w => w.name).join("、")} 本月工时超过40小时，建议关注工作强度！</div>`;
+    }
+    
+    if (lowEfficiencyWorkers.length > 0) {
+      smartAnalysis += `<div class="stats-analysis info">💡 <strong>效率建议</strong>：${lowEfficiencyWorkers.map(w => w.name).join("、")} 日均工时不足4小时，可考虑增加任务量或培训提升。</div>`;
+    }
+    
+    if (topWorker && topHours > 0) {
+      smartAnalysis += `<div class="stats-analysis success">⭐ <strong>本月之星</strong>：${topWorker} 以 ${topHours} 小时领跑全队！</div>`;
+    }
+  }
+  
   document.getElementById("statsTable").innerHTML = `
+    <h3 class="stats-subhead">🧠 智能分析</h3>
+    ${smartAnalysis || `<div class="empty" style="padding:16px">暂无分析数据</div>`}
     <h3 class="stats-subhead">👷 人员安装工时</h3>
     ${workerTable}
     <h3 class="stats-subhead">📐 项目工时差异（预计 vs 实际）</h3>
