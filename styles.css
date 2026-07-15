@@ -704,6 +704,332 @@ textarea.input { resize: vertical; min-height: 50px; }
   background: #fef2f2;
 }
 
+/* ====== 个人日程：日历视图 ====== */
+.sched-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.sched-cal {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.sched-cal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  justify-content: center;
+  position: relative;
+}
+
+.sched-cal-title {
+  font-size: 16px;
+  font-weight: 700;
+  min-width: 120px;
+  text-align: center;
+}
+
+.sched-cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: 4px;
+}
+
+.sched-cal-wd {
+  text-align: center;
+  font-size: 12px;
+  color: #9ca3af;
+  font-weight: 600;
+  padding: 4px 0;
+}
+
+.sched-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.sched-cal-cell {
+  min-height: 90px;
+  border-radius: 6px;
+  padding: 3px 4px;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  transition: background 0.15s;
+  border: 2px solid transparent;
+  overflow: hidden;
+}
+
+.sched-cal-cell:hover {
+  background: #f3f4f6;
+}
+
+.sched-cal-cell.empty {
+  cursor: default;
+}
+
+.sched-cal-cell.empty:hover {
+  background: transparent;
+}
+
+.sched-cal-cell.other-month {
+  cursor: default;
+}
+.sched-cal-cell.other-month .sched-cal-day {
+  color: #d1d5db;
+}
+.sched-cal-cell.other-month:hover {
+  background: transparent;
+}
+
+.sched-cal-cell.today .sched-cal-day {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.sched-cal-cell.today {
+  background: #eff6ff;
+}
+
+.sched-cal-cell.selected {
+  border-color: var(--primary);
+  background: #eff6ff;
+}
+
+.sched-cal-day {
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.2;
+  text-align: left;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.sched-cal-dots {
+  display: flex;
+  gap: 2px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+}
+
+.sched-cal-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.sched-cal-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 1px;
+  overflow: hidden;
+}
+
+.sched-cal-item {
+  font-size: 10px;
+  line-height: 1.3;
+  padding: 1px 3px;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #fff;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sched-cal-item-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sched-cal-item-user {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #6b7280;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.sched-cal-more-text {
+  font-size: 9px;
+  color: #9ca3af;
+  text-align: center;
+  margin-top: 1px;
+}
+
+.sched-cal-more {
+  font-size: 9px;
+  color: #9ca3af;
+  line-height: 1;
+}
+
+.sched-cal-plus {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 12px;
+  color: #d1d5db;
+  cursor: pointer;
+  display: none;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.sched-cal-cell:hover .sched-cal-plus {
+  display: block;
+}
+
+.sched-cal-plus:hover {
+  color: var(--primary);
+}
+
+@media (max-width: 768px) {
+  .sched-cal-cell {
+    min-height: 70px;
+  }
+  .sched-cal-item {
+    font-size: 9px;
+    padding: 0 2px;
+  }
+}
+
+/* ====== 个人日程：紧凑列表 ====== */
+.sched-list-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 0 2px;
+}
+
+.sched-list-date {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.sched-list-count {
+  font-size: 13px;
+  color: #9ca3af;
+  flex: 1;
+}
+
+.sched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sched-item {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-left: 3px solid #6b7280;
+  border-radius: 8px;
+  padding: 8px 10px;
+  transition: box-shadow 0.15s;
+}
+
+.sched-item:hover {
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.sched-item-time {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 64px;
+  display: flex;
+  align-items: center;
+}
+
+.sched-item-body {
+  flex: 1;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.sched-item-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 2px;
+}
+
+.sched-item-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.sched-item-type {
+  font-weight: 600;
+}
+
+.sched-item-desc {
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.sched-item-del {
+  border: none;
+  background: transparent;
+  color: #d1d5db;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  align-self: center;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.sched-item-del:hover {
+  color: #ef4444;
+  background: #fef2f2;
+}
+
+.sched-empty {
+  text-align: center;
+  padding: 24px;
+  color: #9ca3af;
+  font-size: 13px;
+  background: #f9fafb;
+  border-radius: 8px;
+}
+
 .schedule-summary {
   background: #f0f9ff;
   padding: 12px;
@@ -1359,6 +1685,29 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   .form-grid {
     grid-template-columns: 1fr 1fr;
     gap: 8px;
+  }
+
+  .sched-cal-cell {
+    height: 40px;
+    padding: 2px 3px;
+  }
+
+  .sched-cal-day {
+    font-size: 12px;
+  }
+
+  .sched-cal-dot {
+    width: 5px;
+    height: 5px;
+  }
+
+  .sched-item-time {
+    min-width: 56px;
+    font-size: 11px;
+  }
+
+  .sched-item-title {
+    font-size: 13px;
   }
 
   .modal-content .form-row {
@@ -3312,7 +3661,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   }
 }
 
-/* 日程管理样式 */
+/* 个人日程样式 */
 .schedule-type-badge {
   display: inline-block;
   padding: 2px 8px;

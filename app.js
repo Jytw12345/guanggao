@@ -6,6 +6,35 @@
  * ============================================================ */
 
 const STORE_KEY = "ad_install_system_v1";
+const CUSTOMER_HISTORY_KEY = "ad_install_customer_history";
+
+function getCustomerHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(CUSTOMER_HISTORY_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomerHistory(list) {
+  localStorage.setItem(CUSTOMER_HISTORY_KEY, JSON.stringify(list.slice(0, 50)));
+}
+
+function upsertCustomer(customer, phone, address) {
+  if (!customer) return;
+  const list = getCustomerHistory();
+  const idx = list.findIndex(c => c.customer === customer);
+  if (idx >= 0) {
+    list[idx] = { customer, phone: phone || list[idx].phone, address: address || list[idx].address, updatedAt: Date.now() };
+  } else {
+    list.unshift({ customer, phone, address, updatedAt: Date.now() });
+  }
+  saveCustomerHistory(list);
+}
+
+function findCustomer(customer) {
+  return getCustomerHistory().find(c => c.customer === customer) || null;
+}
 
 const STATUS = {
   BOOKED: "预约中",
@@ -1521,7 +1550,7 @@ async function deleteOutsourcedWorker(id) {
 }
 
 /* ============================================================
- * 施工人员日程管理模块
+ * 施工人员个人日程模块
  * ============================================================ */
 const SCHEDULE_TYPE_LABEL = {
   personal: "个人事务",
@@ -1543,63 +1572,179 @@ const SCHEDULE_TYPE_COLOR = {
   other: "#16a34a"
 };
 
-function renderWorkerSchedules() {
+let scheduleCalendarDate = (function() { const d = new Date(); d.setHours(12, 0, 0, 0); return d; })();
+let scheduleSelectedDate = null;
+
+function getFilteredSchedules() {
+  let filtered = cache.workerSchedules;
+  const workerFilter = document.getElementById("scheduleWorkerFilter");
+  const typeFilter = document.getElementById("scheduleTypeFilter");
+  if (workerFilter && workerFilter.value) {
+    filtered = filtered.filter(s => s.workerId === workerFilter.value);
+  }
+  if (typeFilter && typeFilter.value) {
+    filtered = filtered.filter(s => s.type === typeFilter.value);
+  }
+  return filtered;
+}
+
+function renderScheduleCalendar() {
+  const container = document.getElementById("scheduleCalendar");
+  if (!container) return;
+
+  const y = scheduleCalendarDate.getFullYear();
+  const m = scheduleCalendarDate.getMonth();
+  const todayKey = dateKey(new Date());
+  const selectedStr = scheduleSelectedDate || todayKey;
+
+  const startWeekday = new Date(y, m, 1).getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const daysInPrevMonth = new Date(y, m, 0).getDate();
+
+  const filtered = getFilteredSchedules();
+  const schedulesByDate = {};
+  filtered.forEach(function(s) {
+    if (!schedulesByDate[s.startDate]) schedulesByDate[s.startDate] = [];
+    schedulesByDate[s.startDate].push(s);
+  });
+
+  const monthNames = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
+  const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+
+  let cells = "";
+
+  for (let i = startWeekday - 1; i >= 0; i--) {
+    cells += '<div class="sched-cal-cell other-month"><span class="sched-cal-day">' + (daysInPrevMonth - i) + '</span></div>';
+  }
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = dateKey(new Date(y, m, d));
+    const daySchedules = schedulesByDate[dateStr] || [];
+    const isToday = dateStr === todayKey;
+    const isSelected = dateStr === selectedStr;
+    const maxShow = 3;
+    const showSchedules = daySchedules.slice(0, maxShow);
+    const itemsHtml = showSchedules.map(function(s) {
+      const color = SCHEDULE_TYPE_COLOR[s.type] || "#6b7280";
+      const timeStr = s.startTime ? s.startTime : "全天";
+      const label = SCHEDULE_TYPE_LABEL[s.type] || s.type;
+      const worker = getWorker(s.workerId);
+      const workerName = worker ? worker.name : "";
+      const surname = workerName ? workerName.charAt(0) : "";
+      return '<div class="sched-cal-item-wrap">' +
+        (surname ? '<span class="sched-cal-item-user" style="background:' + color + '">' + esc(surname) + '</span>' : '') +
+        '<div class="sched-cal-item" style="background:' + color + '" title="' + esc(s.title) + '（' + label + '）' + (workerName ? ' - ' + esc(workerName) : '') + '">' +
+        timeStr + ' ' + esc(s.title) + '</div></div>';
+    }).join("");
+    const moreLabel = daySchedules.length > maxShow ? '<div class="sched-cal-more-text">+' + (daySchedules.length - maxShow) + '更多</div>' : "";
+    const cls = "sched-cal-cell" + (isToday ? " today" : "") + (isSelected ? " selected" : "");
+    cells += '<div class="' + cls + '" onclick="selectScheduleDate(\'' + dateStr + '\')">' +
+      '<span class="sched-cal-day">' + d + '</span>' +
+      (daySchedules.length > 0 ? '<div class="sched-cal-items">' + itemsHtml + moreLabel + '</div>' : '') +
+      '<span class="sched-cal-plus" onclick="event.stopPropagation();newWorkerScheduleForDate(\'' + dateStr + '\')">+</span>' +
+      '</div>';
+  }
+
+  const totalCells = startWeekday + daysInMonth;
+  const trailing = (7 - totalCells % 7) % 7;
+  for (let i = 1; i <= trailing; i++) {
+    cells += '<div class="sched-cal-cell other-month"><span class="sched-cal-day">' + i + '</span></div>';
+  }
+
+  const wdHtml = weekdays.map(function(w) { return '<div class="sched-cal-wd">' + w + '</div>'; }).join("");
+  container.innerHTML = '<div class="sched-cal">' +
+    '<div class="sched-cal-header">' +
+      '<button class="btn small" onclick="changeScheduleMonth(-1)">&#8249;</button>' +
+      '<span class="sched-cal-title">' + y + '年 ' + monthNames[m] + '</span>' +
+      '<button class="btn small" onclick="changeScheduleMonth(1)">&#8250;</button>' +
+      '<button class="btn small" onclick="goScheduleToday()" style="margin-left:8px;">今天</button>' +
+    '</div>' +
+    '<div class="sched-cal-weekdays">' + wdHtml + '</div>' +
+    '<div class="sched-cal-grid">' + cells + '</div>' +
+  '</div>';
+}
+
+function changeScheduleMonth(delta) {
+  scheduleCalendarDate.setMonth(scheduleCalendarDate.getMonth() + delta);
+  renderScheduleCalendar();
+}
+
+function goScheduleToday() {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  scheduleCalendarDate = d;
+  scheduleSelectedDate = dateKey(new Date());
+  renderScheduleCalendar();
+  renderScheduleList();
+}
+
+function selectScheduleDate(dateStr) {
+  scheduleSelectedDate = dateStr;
+  renderScheduleCalendar();
+  renderScheduleList();
+}
+
+function newWorkerScheduleForDate(dateStr) {
+  const s = { startDate: dateStr, endDate: dateStr };
+  modal.open("添加日程", workerScheduleForm(s));
+}
+
+function renderScheduleList() {
   const list = document.getElementById("scheduleList");
   if (!list) return;
 
-  const today = new Date();
-  const todayStr = fmtDate(today);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = fmtDate(tomorrow);
+  const selectedStr = scheduleSelectedDate || dateKey(new Date());
+  const filtered = getFilteredSchedules();
+  const daySchedules = filtered.filter(s => s.startDate <= selectedStr && s.endDate >= selectedStr);
 
-  let filteredSchedules = cache.workerSchedules;
-  
-  const workerFilter = document.getElementById("scheduleWorkerFilter");
-  const typeFilter = document.getElementById("scheduleTypeFilter");
-  const dateFilter = document.getElementById("scheduleDateFilter");
-  
-  if (workerFilter && workerFilter.value) {
-    filteredSchedules = filteredSchedules.filter(s => s.workerId === workerFilter.value);
-  }
-  if (typeFilter && typeFilter.value) {
-    filteredSchedules = filteredSchedules.filter(s => s.type === typeFilter.value);
-  }
-  if (dateFilter && dateFilter.value) {
-    filteredSchedules = filteredSchedules.filter(s => s.startDate === dateFilter.value);
+  const [yy, mm, dd] = selectedStr.split("-").map(Number);
+  const dateObj = new Date(yy, mm - 1, dd);
+  const dateLabel = `${mm}月${dd}日`;
+  const weekdayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+  let html = `<div class="sched-list-header">
+    <span class="sched-list-date">📋 ${dateLabel} ${weekdayNames[dateObj.getDay()]}</span>
+    <span class="sched-list-count">${daySchedules.length} 项日程</span>
+    <button class="btn small primary" onclick="newWorkerScheduleForDate('${selectedStr}')">+ 添加</button>
+  </div>`;
+
+  if (daySchedules.length === 0) {
+    html += `<div class="sched-empty">当天暂无日程，点击「+ 添加」创建</div>`;
+  } else {
+    daySchedules.sort((a, b) => (a.startTime || "00:00").localeCompare(b.startTime || "00:00"));
+    html += `<div class="sched-list">`;
+    daySchedules.forEach(s => {
+      const w = getWorker(s.workerId);
+      const typeColor = SCHEDULE_TYPE_COLOR[s.type] || "#6b7280";
+      const timeStr = s.startTime && s.endTime
+        ? `${s.startTime}~${s.endTime}`
+        : s.startTime
+        ? `${s.startTime}起`
+        : "全天";
+      const isMultiDay = s.startDate !== s.endDate;
+      html += `
+        <div class="sched-item" style="border-left-color:${typeColor};">
+          <div class="sched-item-time">${timeStr}${isMultiDay ? " ⏶" : ""}</div>
+          <div class="sched-item-body" onclick="editWorkerSchedule('${s.id}')">
+            <div class="sched-item-title">${esc(s.title)}</div>
+            <div class="sched-item-meta">
+              <span class="sched-item-type" style="color:${typeColor};">${SCHEDULE_TYPE_LABEL[s.type] || s.type}</span>
+              <span>${esc(w ? w.name : s.workerName || "—")}</span>
+              ${s.description ? `<span class="sched-item-desc">${esc(s.description)}</span>` : ""}
+            </div>
+          </div>
+          <button class="sched-item-del" onclick="deleteWorkerSchedule('${s.id}')">✕</button>
+        </div>`;
+    });
+    html += `</div>`;
   }
 
-  filteredSchedules.sort((a, b) => {
-    const dateCompare = (a.startDate || "").localeCompare(b.startDate || "");
-    if (dateCompare !== 0) return dateCompare;
-    return (a.startTime || "00:00").localeCompare(b.startTime || "00:00");
-  });
+  list.innerHTML = html;
+}
 
-  if (filteredSchedules.length === 0) {
-    list.innerHTML = `<div class="empty">暂无日程安排，点击右上角「添加日程」创建。</div>`;
-    return;
-  }
-
-  list.innerHTML = filteredSchedules.map((s) => {
-    const w = getWorker(s.workerId);
-    const typeColor = SCHEDULE_TYPE_COLOR[s.type] || "#6b7280";
-    return `
-      <div class="card">
-        <div class="card-title">
-          <h3>${esc(s.title)}</h3>
-          <span class="badge" style="background:${typeColor}20;color:${typeColor};">${SCHEDULE_TYPE_LABEL[s.type] || s.type}</span>
-        </div>
-        <div class="card-row"><span>施工人员</span><b>${esc(w ? w.name : s.workerName || "—")}</b></div>
-        <div class="card-row"><span>开始时间</span><b>${esc(s.startDate || "—")} ${esc(s.startTime || "全天")}</b></div>
-        <div class="card-row"><span>结束时间</span><b>${esc(s.endDate || "—")} ${esc(s.endTime || "全天")}</b></div>
-        ${s.description ? `<div class="card-row"><span>备注</span><b>${esc(s.description)}</b></div>` : ""}
-        ${s.createdByName ? `<div class="card-row"><span>创建人</span><b>${esc(s.createdByName)}</b></div>` : ""}
-        <div class="card-actions">
-          <button class="btn small" onclick="editWorkerSchedule('${s.id}')">编辑</button>
-          <button class="btn small danger" onclick="deleteWorkerSchedule('${s.id}')">删除</button>
-        </div>
-      </div>`;
-  }).join("");
+function renderWorkerSchedules() {
+  renderScheduleCalendar();
+  renderScheduleList();
 }
 
 function workerScheduleForm(s = {}) {
@@ -1612,7 +1757,7 @@ function workerScheduleForm(s = {}) {
   ).join("");
 
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = dateKey(today);
   
   const nowHour = String(today.getHours()).padStart(2, "0");
   const nowMinute = String(today.getMinutes()).padStart(2, "0");
@@ -1627,21 +1772,23 @@ function workerScheduleForm(s = {}) {
   const defaultEndTime = s.endTime || endTime;
 
   return `
-    <div class="form-row">
-      <label>施工人员 *</label>
-      <select class="input" id="wsWorkerId">
-        ${workerOptions}
-      </select>
+    <div class="form-grid">
+      <div class="form-row">
+        <label>施工人员 *</label>
+        <select class="input" id="wsWorkerId">
+          ${workerOptions}
+        </select>
+      </div>
+      <div class="form-row">
+        <label>日程类型</label>
+        <select class="input" id="wsType">
+          ${typeOptions}
+        </select>
+      </div>
     </div>
     <div class="form-row">
       <label>日程标题 *</label>
       <input class="input" id="wsTitle" value="${esc(s.title || "")}" placeholder="如：培训、体检、待命等" />
-    </div>
-    <div class="form-row">
-      <label>日程类型</label>
-      <select class="input" id="wsType">
-        ${typeOptions}
-      </select>
     </div>
     <div class="form-grid">
       <div class="form-row">
@@ -1787,24 +1934,19 @@ async function deleteWorkerSchedule(id) {
 function initScheduleFilters() {
   const workerFilter = document.getElementById("scheduleWorkerFilter");
   const typeFilter = document.getElementById("scheduleTypeFilter");
-  const dateFilter = document.getElementById("scheduleDateFilter");
-  
+
   if (workerFilter) {
-    workerFilter.innerHTML = `<option value="">全部人员</option>` + 
+    workerFilter.innerHTML = `<option value="">全部人员</option>` +
       cache.workers.map(w => `<option value="${esc(w.id)}">${esc(w.name)}</option>`).join("");
     workerFilter.onchange = renderWorkerSchedules;
   }
-  
+
   if (typeFilter) {
-    typeFilter.innerHTML = `<option value="">全部类型</option>` + 
-      Object.entries(SCHEDULE_TYPE_LABEL).map(([key, label]) => 
+    typeFilter.innerHTML = `<option value="">全部类型</option>` +
+      Object.entries(SCHEDULE_TYPE_LABEL).map(([key, label]) =>
         `<option value="${key}">${label}</option>`
       ).join("");
     typeFilter.onchange = renderWorkerSchedules;
-  }
-  
-  if (dateFilter) {
-    dateFilter.onchange = renderWorkerSchedules;
   }
 }
 
@@ -1825,8 +1967,8 @@ const LEAVE_STATUS_LABEL = {
 function openLeaveForm(workerId) {
   const w = getWorker(workerId);
   if (!w) return;
-  const today = new Date().toISOString().slice(0, 10);
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const today = dateKey(new Date());
+  const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return dateKey(d); })();
   const form = `
     <div class="repair-form">
       <div class="form-row">
@@ -1971,13 +2113,13 @@ function updateLeaveCalendarPreview() {
     }
     
     dates.push({
-      date: current.toISOString().slice(0, 10),
+      date: dateKey(current),
       day: current.getDate(),
       weekday: ["日", "一", "二", "三", "四", "五", "六"][current.getDay()],
       isStart,
       isEnd,
       isWeekend: current.getDay() === 0 || current.getDay() === 6,
-      isHoliday: isHoliday(current.toISOString().slice(0, 10)),
+      isHoliday: isHoliday(dateKey(current)),
       timeInfo
     });
     current.setDate(current.getDate() + 1);
@@ -2257,6 +2399,25 @@ async function deleteLeaveRecord(id) {
 }
 
 /* 项目预约时间选择辅助函数 */
+function onCustomerInput() {
+}
+
+function fillCustomerInfo() {
+  const customerInput = document.getElementById("pCustomer");
+  const phoneInput = document.getElementById("pPhone");
+  const addressInput = document.getElementById("pAddress");
+  if (!customerInput || !phoneInput || !addressInput) return;
+  
+  const customerName = customerInput.value.trim();
+  if (!customerName) return;
+  
+  const cust = findCustomer(customerName);
+  if (cust) {
+    if (!phoneInput.value && cust.phone) phoneInput.value = cust.phone;
+    if (!addressInput.value && cust.address) addressInput.value = cust.address;
+  }
+}
+
 function setPTimeRange(type) {
   const date = document.getElementById("pDate").value;
   if (!date) {
@@ -2523,7 +2684,7 @@ function projectForm(p = {}) {
   const storeOpts = `<option value="">未指定门店</option>` +
     cache.stores.map((s) =>
       `<option value="${s.id}" ${s.id === selectedStore ? "selected" : ""}>${esc(s.name)}</option>`).join("");
-  const startDate = p.appointmentTime ? new Date(p.appointmentTime) : new Date();
+  const startDate = p.appointmentTime ? new Date(p.appointmentTime) : (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d; })();
   return `
     <div style="display:flex;align-items:flex-start;gap:10px;width:100%;">
       <div style="flex-shrink:0;">
@@ -2541,7 +2702,10 @@ function projectForm(p = {}) {
     <div class="form-grid">
       <div class="form-row">
         <label><span style="color:#0891b2">👤</span> 客户名称</label>
-        <input class="input" id="pCustomer" value="${esc(p.customer || "")}" placeholder="客户 / 单位" />
+        <input class="input" id="pCustomer" value="${esc(p.customer || "")}" placeholder="客户 / 单位" list="customerDatalist" oninput="onCustomerInput()" onblur="fillCustomerInfo()" />
+        <datalist id="customerDatalist">
+          ${getCustomerHistory().map(c => `<option value="${esc(c.customer)}" data-phone="${esc(c.phone || "")}" data-address="${esc(c.address || "")}">`).join("")}
+        </datalist>
       </div>
       <div class="form-row">
         <label><span style="color:#0891b2">📞</span> 联系电话</label>
@@ -2555,7 +2719,7 @@ function projectForm(p = {}) {
     <div class="form-row">
       <label><span style="color:var(--warn)">📅</span> 预约时间 *</label>
       <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
-        <input class="input" type="date" id="pDate" value="${startDate.toISOString().slice(0, 10)}" onchange="updateSpanHint()" style="width:100%;" />
+        <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="updateSpanHint()" style="width:100%;" />
         <div style="display:flex;align-items:center;gap:6px;width:100%;">
           <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
           <select class="input" id="pTime" onchange="updateSpanHint()" style="flex:1;max-width:90px;">
@@ -2591,10 +2755,10 @@ function projectForm(p = {}) {
     </div>
     <div class="form-row">
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+        <button class="btn small" onclick="setPTimeRange('twohour')" style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:4px;padding:3px 8px;font-size:12px;">⏱️ 2小时</button>
         <button class="btn small" onclick="setPTimeRange('morning')" style="background:#e0f2fe;color:#0891b2;border-color:#7dd3fc;border-radius:4px;padding:3px 8px;font-size:12px;">🌅 上午</button>
         <button class="btn small" onclick="setPTimeRange('afternoon')" style="background:#fef3c7;color:#d97706;border-color:#fcd34d;border-radius:4px;padding:3px 8px;font-size:12px;">☀️ 下午</button>
         <button class="btn small" onclick="setPTimeRange('full')" style="background:#dcfce7;color:#16a34a;border-color:#86efac;border-radius:4px;padding:3px 8px;font-size:12px;">📅 全天</button>
-        <button class="btn small" onclick="setPTimeRange('twohour')" style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:4px;padding:3px 8px;font-size:12px;">⏱️ 2小时</button>
       </div>
     </div>
     <div id="pDurationCard" style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">
@@ -2707,6 +2871,10 @@ async function saveProject(id) {
   renderAll();
   toast("已保存");
   
+  if (payload.customer) {
+    upsertCustomer(payload.customer, payload.phone, payload.address);
+  }
+  
   if (id) {
     logOperation("PROJECT_EDIT", name, `ID: ${id}`);
   } else {
@@ -2731,8 +2899,9 @@ function openRepairOrderForm(projectId) {
   if (!p) return;
   
   const now = new Date();
-  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const tomorrowDate = tomorrow.toISOString().slice(0, 10);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowDate = dateKey(tomorrow);
   const roundedMinutes = Math.ceil(tomorrow.getMinutes() / 20) * 20;
   tomorrow.setMinutes(roundedMinutes);
   const defaultTime = `${String(tomorrow.getHours()).padStart(2, '0')}:${String(tomorrow.getMinutes()).padStart(2, '0')}`;
@@ -2758,7 +2927,7 @@ function openRepairOrderForm(projectId) {
       <div class="form-row" style="display:flex;gap:8px;align-items:center;">
         <div style="flex:1;">
           <label>维修日期</label>
-          <input class="input" type="date" id="repairDate" value="${tomorrowDate}" min="${now.toISOString().slice(0, 10)}" />
+          <input class="input" type="date" id="repairDate" value="${tomorrowDate}" min="${dateKey(now)}" />
         </div>
         <div style="flex:1;">
           <label>维修时间</label>
@@ -2899,14 +3068,14 @@ function setViewScheduleDate(dateStr) {
 function prevDaySchedule() {
   const d = viewScheduleDate ? new Date(viewScheduleDate) : new Date();
   d.setDate(d.getDate() - 1);
-  viewScheduleDate = d.toISOString().slice(0, 10);
+  viewScheduleDate = dateKey(d);
   renderConstruction();
 }
 
 function nextDaySchedule() {
   const d = viewScheduleDate ? new Date(viewScheduleDate) : new Date();
   d.setDate(d.getDate() + 1);
-  viewScheduleDate = d.toISOString().slice(0, 10);
+  viewScheduleDate = dateKey(d);
   renderConstruction();
 }
 
@@ -2917,8 +3086,8 @@ function todaySchedule() {
 
 function renderConstruction() {
   const scheduleBox = document.getElementById("workerScheduleDescription");
-  const dateStr = viewScheduleDate || new Date().toISOString().slice(0, 10);
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const dateStr = viewScheduleDate || dateKey(new Date());
+  const todayStr = dateKey(new Date());
   const isToday = dateStr === todayStr;
   
   const dateControls = `
@@ -5716,6 +5885,10 @@ function switchTab(name) {
   } else {
     if (name === "calendar") renderCalendar();
     document.body.classList.add("timeline-view");
+  }
+
+  if (name === "schedules") {
+    renderWorkerSchedules();
   }
 }
 
