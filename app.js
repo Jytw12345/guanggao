@@ -84,7 +84,7 @@ const DEFAULT_ROLE_PERMS = {
     manage_leaves: true, review_project: true,
   },
   worker: {
-    project_create: false, project_edit: false, project_delete: false,
+    project_create: true, project_edit: false, project_delete: false,
     assign_worker: true, construction: true, view_stats: false,
     view_store_stats: false, manage_stores: false, manage_workers: false,
     manage_leaves: true, review_project: false,
@@ -2112,7 +2112,7 @@ function setProjectTimeFilter(days) {
 }
 
 function projectForm(p = {}) {
-  const storeLocked = isStoreManager();
+  const storeLocked = isStoreManager() || isWorker();
   const selectedStore = p.storeId || (storeLocked ? myStore() : "");
   const storeOpts = `<option value="">未指定门店</option>` +
     cache.stores.map((s) =>
@@ -2125,7 +2125,7 @@ function projectForm(p = {}) {
         <select class="input" id="pStore" ${storeLocked ? "disabled" : ""} style="width:auto;max-width:160px;">
           ${storeOpts}
         </select>
-        ${storeLocked ? `<small class="hint" style="color:#6b7280;display:block;margin-top:2px;">店长只能创建本门店（${esc(storeName(myStore()))}）的预约</small>` : ""}
+        ${storeLocked ? `<small class="hint" style="color:#6b7280;display:block;margin-top:2px;">${isStoreManager() ? '店长' : '施工人员'}只能创建本门店（${esc(storeName(myStore()))}）的预约</small>` : ""}
       </div>
       <div style="flex:1;min-width:0;">
         <label style="display:block;margin-bottom:4px;"><span style="color:var(--primary)">📋</span> 项目名称 *</label>
@@ -2273,6 +2273,7 @@ async function saveProject(id) {
   const storeEl = document.getElementById("pStore");
   let storeId = storeEl ? storeEl.value : "";
   if (isStoreManager()) storeId = myStore();          // 店长强制本门店
+  if (isWorker() && myStore()) storeId = myStore();   // 施工人员强制本门店
   const workerCount = Number(document.getElementById("pWorkers").value) || 1;
   const payload = {
     name,
