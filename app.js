@@ -302,7 +302,8 @@ function sumHours(project) {
 /* 工时差异：实际 - 预计。actualHours>0 视为已登记实际工时 */
 function hoursDiff(project) {
   const est = Number(project.estimatedHours) || 0;
-  const act = Number(project.actualHours) || 0;
+  const actualFromLogs = (project.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
+  const act = actualFromLogs > 0 ? actualFromLogs : (Number(project.actualHours) || 0);
   return { est, act, diff: act - est, hasActual: act > 0 };
 }
 
@@ -3025,6 +3026,10 @@ async function addWorkLog(id) {
   await repo.addWorkLog(id, { workerId, workerName, hours, date, note, level, isOutsourced: type === "outsourced" });
   if (p.status === STATUS.BOOKED) await repo.patchProject(id, { status: STATUS.WORKING, started_at: new Date().toISOString() });
   await repo.loadAll();
+  const updatedProject = getProject(id);
+  const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
+  await repo.patchProject(id, { actualHours: totalHours });
+  updatedProject.actualHours = totalHours;
   renderAll();
   toast("已添加施工工时");
 }
@@ -3033,6 +3038,10 @@ async function deleteWorkLog(pid, lid) {
   if (!confirm("确定删除该工时记录？此操作不可撤销。")) return;
   await repo.deleteWorkLog(pid, lid);
   await repo.loadAll();
+  const updatedProject = getProject(pid);
+  const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
+  await repo.patchProject(pid, { actualHours: totalHours });
+  updatedProject.actualHours = totalHours;
   renderAll();
   toast("已删除");
 }
@@ -3538,12 +3547,13 @@ function openCompleteProjectForm(id) {
         if (hours && hours > 0) {
           totalHours += hours;
           logs.push({
-            workerId: "",
+            workerId: "outsourced:" + name,
             workerName: name,
             hours: hours,
             level: level,
             date: dateStr,
-            note: note || null
+            note: note || null,
+            isOutsourced: true
           });
         }
       });
@@ -3569,7 +3579,8 @@ function openCompleteProjectForm(id) {
           sb.from("projects").update({ status: "已完工", actualHours: p.actualHours, finished_at: now, updated_at: now }).eq("id", id),
           ...logs.map(log => sb.from("work_logs").insert({
             id: log.id, project_id: id, worker_id: log.workerId,
-            worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note
+            worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note,
+            is_outsourced: log.isOutsourced || false
           }))
         ]).then(() => {
           toast(`项目已完工，总工时：${totalHours}小时`);
@@ -3706,19 +3717,20 @@ function collectStats() {
       if (month && monthKey(l.date) !== month) return;
       if (workerFilter && l.workerId !== workerFilter) return;
       const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
-      if (!rows[l.workerId]) {
-        rows[l.workerId] = { name: l.workerName, hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced };
+      const key = l.id || l.workerId || l.workerName;
+      if (!rows[key]) {
+        rows[key] = { name: l.workerName || "未知", hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced };
       }
       const level = l.level || "中级";
-      rows[l.workerId].hours += Number(l.hours) || 0;
-      rows[l.workerId].levelHours[level] += Number(l.hours) || 0;
-      rows[l.workerId].days.add(fmtDate(l.date));
-      rows[l.workerId].projects.add(p.name);
+      rows[key].hours += Number(l.hours) || 0;
+      rows[key].levelHours[level] += Number(l.hours) || 0;
+      rows[key].days.add(fmtDate(l.date));
+      rows[key].projects.add(p.name);
       const dayKey = l.date;
-      if (!rows[l.workerId].daily[dayKey]) {
-        rows[l.workerId].daily[dayKey] = [];
+      if (!rows[key].daily[dayKey]) {
+        rows[key].daily[dayKey] = [];
       }
-      rows[l.workerId].daily[dayKey].push({ hours: Number(l.hours) || 0, level: level });
+      rows[key].daily[dayKey].push({ hours: Number(l.hours) || 0, level: level });
     });
   });
   
@@ -3761,7 +3773,10 @@ function collectProjectStats() {
   return cache.projects
     .filter((p) => !month || monthKey(p.appointmentTime) === month)
     .map((p) => {
-      const { est, act, diff, hasActual } = hoursDiff(p);
+      const est = Number(p.estimatedHours) || 0;
+      const act = (p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
+      const diff = act - est;
+      const hasActual = act > 0;
       // 按施工人员汇总工时（区分内部和外协）
       const workerMap = {};
       const outsourcedWorkerMap = {};
@@ -3821,10 +3836,10 @@ function renderStats() {
   const projRows = collectProjectStats();
   const recorded = projRows.filter((r) => r.hasActual);
   const totalEst = recorded.reduce((s, r) => s + r.est, 0);
-  const totalAct = recorded.reduce((s, r) => s + r.act, 0);
+  const totalAct = rows.reduce((s, r) => s + r.hours, 0);
   const totalDiff = totalAct - totalEst;
   
-  const totalOutsourcedHours = projRows.reduce((s, r) => s + Math.max(r.outsourcedHours || 0, r.outsourcedHoursFromLogs || 0), 0);
+  const totalOutsourcedHours = projRows.reduce((s, r) => s + r.outsourcedWorkerHours.reduce((sum, w) => sum + w.hours, 0), 0);
   const totalOutsourcedWorkers = projRows.reduce((s, r) => s + r.outsourcedWorkerHours.length, 0);
 
   const summary = document.getElementById("statsSummary");
@@ -5938,6 +5953,13 @@ function openTimelineActionMenu(taskEl, projectId) {
       </div>` : `<div class="tl-menu-assign-empty">暂无可选人员</div>`}
       <div class="tl-menu-outsourced">
         <div class="tl-menu-assign-label">🤝 外协人员</div>
+        ${cache.outsourcedWorkers.length > 0 ? `
+        <div class="tl-menu-assign-form" style="margin-bottom:6px;">
+          <select class="input" id="tlMenuOutsourcedSelect" onchange="timelineAddOutsourcedWorker('${p.id}', this.value)">
+            <option value="">从常用外协人员列表添加</option>
+            ${cache.outsourcedWorkers.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}${w.phone ? ` (${esc(w.phone)})` : ''}</option>`).join("")}
+          </select>
+        </div>` : ""}
         <div class="tl-menu-assign-form">
           <input type="text" class="input" id="tlMenuOutsourcedInput" placeholder="输入外协姓名" value="${esc(p.outsourcedWorkers || "")}" style="flex:1">
           <button class="btn small" onclick="timelineSaveOutsourced('${p.id}', document.getElementById('tlMenuOutsourcedInput').value)">保存</button>
@@ -6042,6 +6064,20 @@ async function timelineUnassignWorker(pid, wid) {
     }
   }, 100);
   toast("已移除人员");
+}
+
+function timelineAddOutsourcedWorker(pid, name) {
+  if (!name) return;
+  const input = document.getElementById("tlMenuOutsourcedInput");
+  const sel = document.getElementById("tlMenuOutsourcedSelect");
+  if (!input) return;
+  const current = input.value.trim();
+  const names = current ? current.split(",").map(n => n.trim()).filter(n => n) : [];
+  if (!names.includes(name)) {
+    names.push(name);
+    input.value = names.join(", ");
+  }
+  if (sel) sel.value = "";
 }
 
 /* 时间线保存外协人员 */
