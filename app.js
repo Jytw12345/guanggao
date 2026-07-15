@@ -3566,13 +3566,10 @@ function openCompleteProjectForm(id) {
       const now = new Date().toISOString();
       
       p.status = "已完工";
-      p.actualHours = (p.actualHours || 0) + totalHours;
+      p.actualHours = totalHours;
       p.finished_at = now;
       
-      logs.forEach(log => {
-        if (!p.workLogs) p.workLogs = [];
-        p.workLogs.push({ id: uid(), ...log });
-      });
+      p.workLogs = logs.map(log => ({ id: uid(), ...log }));
       
       if (MODE === "cloud" && cloudConfigured()) {
         Promise.all([
