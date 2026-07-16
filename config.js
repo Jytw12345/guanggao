@@ -16,6 +16,6 @@ window.APP_CONFIG = {
   SUPABASE_URL: "https://ktejtqqcxzxkfplzhipy.supabase.co",
   SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt0ZWp0cXFjeHp4a2ZwbHpoaXB5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NDAzOTksImV4cCI6MjA5OTQxNjM5OX0.f66edfRZN4s1nfv_CUXygzm7LCNJtEhSDEtXhgmFdew",
   SUPABASE_SERVICE_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt0ZWp0cXFjeHp4a2ZwbHpoaXB5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mzg0MDM5OSwiZXhwIjoyMDk5NDE2Mzk5fQ.aVYDcihfye7StwjeHFsz4TIxhjr29i0NEcRWfc_bgY4",
-  AMAP_KEY: "",
+  AMAP_KEY: "	158d22bbe18674fa789038c2677ffec3",
   COMPANY_ADDRESS: "山东省济宁市任城区李营街道翠都国际C座",
 };
