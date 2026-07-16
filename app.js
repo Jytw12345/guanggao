@@ -44,6 +44,7 @@ const STATUS = {
   DONE: "已完工",
   ACCEPTED: "已验收",
   REVIEWED: "已审核",
+  CANCELLED: "已取消",
 };
 
 const TIGHT_GAP_MINUTES = 30;
@@ -58,7 +59,6 @@ const ROLE_LABEL = { manager: "总经理", store_manager: "店长", worker: "施
 /* 运行时状态 */
 let MODE = "local";        // 'cloud' | 'local'
 let sb = null;             // supabase client
-let sbAdmin = null;        // supabase admin client (for deleteUser)
 let currentUser = null;    // 云端登录用户
 let currentProfile = { role: null, storeId: null }; // 当前用户角色与门店
 let reloadTimer = null;    // 实时刷新去抖
@@ -207,6 +207,43 @@ function monthKey(v) {
   const d = new Date(v);
   if (isNaN(d)) return "";
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function derivePauseDuration(p) {
+  const workSessions = p.workSessions || [];
+  const originalStartedAt = p.originalStartedAt || p.startedAt;
+  if (!originalStartedAt) return 0;
+  
+  let effectiveSessions = [...workSessions];
+  if (p.status === STATUS.WORKING && p.startedAt) {
+    const now = new Date();
+    const currentDuration = (now - new Date(p.startedAt)) / (1000 * 60 * 60);
+    effectiveSessions.push({
+      startTime: p.startedAt,
+      endTime: now.toISOString(),
+      duration: currentDuration
+    });
+  }
+  
+  if (effectiveSessions.length === 0) return 0;
+  
+  const start = new Date(originalStartedAt);
+  const lastSession = effectiveSessions[effectiveSessions.length - 1];
+  const end = new Date(lastSession.endTime);
+  
+  const totalWallTime = (end - start) / (1000 * 60 * 60);
+  const totalWorkTime = effectiveSessions.reduce((sum, s) => sum + (Number(s.duration) || 0), 0);
+  
+  return Math.max(0, totalWallTime - totalWorkTime);
+}
+
+function derivePauseCount(p) {
+  const workSessions = p.workSessions || [];
+  let effectiveCount = workSessions.length;
+  if (p.status === STATUS.WORKING && p.startedAt) {
+    effectiveCount++;
+  }
+  return Math.max(0, effectiveCount - 1);
 }
 
 /* ---------- 预约时间段：开始时间 + 结束时间（均手动设置） ----------
@@ -358,16 +395,16 @@ function getProjectProgress(p, est, act, hasActual, done) {
     return Math.min(100, (act / est) * 100);
   }
   
-  if ((p.status === "施工中" || p.status === "已暂停") && p.started_at) {
-    const started = new Date(p.started_at);
+  if ((p.status === STATUS.WORKING || p.status === STATUS.PAUSED) && p.startedAt) {
+    const started = new Date(p.startedAt);
     const now = new Date();
     
-    const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+    const accumulatedWorkHours = p.accumulatedWorkHours || 0;
     
     let currentWorkDuration = 0;
     let endTime = now;
-    if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
-      endTime = new Date(p.pausedAt || p.paused_at);
+    if (p.status === STATUS.PAUSED && (p.pausedAt)) {
+      endTime = new Date(p.pausedAt);
     }
     currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
     
@@ -408,7 +445,7 @@ function calcDuration(start, end) {
 }
 
 function calcActualWorkDuration(p) {
-  const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+  const accumulatedWorkHours = p.accumulatedWorkHours || 0;
   if (accumulatedWorkHours > 0) {
     const hours = Math.floor(accumulatedWorkHours);
     const mins = Math.floor((accumulatedWorkHours - hours) * 60);
@@ -419,12 +456,12 @@ function calcActualWorkDuration(p) {
     return `${mins}分钟`;
   }
   
-  if (!p.started_at || !p.finished_at) return "—";
-  const s = new Date(p.started_at);
-  const e = new Date(p.finished_at);
+  if (!p.startedAt || !p.finishedAt) return "—";
+  const s = new Date(p.startedAt);
+  const e = new Date(p.finishedAt);
   if (isNaN(s) || isNaN(e)) return "—";
   const diffMs = e.getTime() - s.getTime();
-  const pauseDurationTotal = p.pauseDurationTotal || p.pause_duration_total || 0;
+  const pauseDurationTotal = derivePauseDuration(p);
   const actualMs = diffMs - pauseDurationTotal * 60 * 60 * 1000;
   if (actualMs <= 0) return "0分钟";
   const days = Math.floor(actualMs / (1000 * 60 * 60 * 24));
@@ -504,37 +541,38 @@ const mapProject = (r) => ({
   customer: r.customer,
   phone: r.phone,
   address: r.address,
-  appointmentTime: r.appointment_time,
-  endTime: r.end_time || "",
-  estimatedHours: Number(r.estimated_hours) || 0,
-  outsourcedHours: Number(r.outsourced_hours) || 0,
-  workerCount: Number(r.worker_count) || 1,
-  actualHours: Number(r.actual_hours) || 0,
+  appointmentTime: r.appointment_time || r.appointmentTime || "",
+  endTime: r.end_time || r.endTime || "",
+  estimatedHours: Number(r.estimated_hours) || Number(r.estimatedHours) || 0,
+  outsourcedHours: Number(r.outsourced_hours) || Number(r.outsourcedHours) || 0,
+  workerCount: Number(r.worker_count) || Number(r.workerCount) || 1,
+  actualHours: Number(r.actual_hours) || Number(r.actualHours) || 0,
   outsourcedHoursFromLogs: 0,
   status: r.status,
   note: r.note,
   acceptance: r.acceptance || null,
-  storeId: r.store_id || "",
-  createdBy: r.created_by || null,
-  assignedWorkerIds: Array.isArray(r.assigned_workers) ? r.assigned_workers : [],
-  outsourcedWorkers: r.outsourced_workers || "",
-  started_at: r.started_at || "",
-  originalStartedAt: r.original_started_at || "",
-  finished_at: r.finished_at || "",
+  storeId: r.store_id || r.storeId || "",
+  createdBy: r.created_by || r.createdBy || null,
+  assignedWorkerIds: Array.isArray(r.assigned_workers) ? r.assigned_workers : (r.assignedWorkerIds || []),
+  outsourcedWorkers: r.outsourced_workers || r.outsourcedWorkers || "",
+  startedAt: r.started_at || r.startedAt || "",
+  originalStartedAt: r.original_started_at || r.originalStartedAt || "",
+  finishedAt: r.finished_at || r.finishedAt || "",
   createdAt: r.created_at,
-  workLogs: [],
+  workLogs: r.workLogs || [],
   timeModified: modifiedProjectIds.has(r.id),
   repairOrder: r.repair_order ? (typeof r.repair_order === "string" ? JSON.parse(r.repair_order) : r.repair_order) : null,
   pausedAt: r.paused_at || null,
   pauseReason: r.pause_reason || null,
   pauseCount: Number(r.pause_count) || 0,
-  pauseDurationTotal: Number(r.pause_duration_total) || 0,
-  accumulatedWorkHours: Number(r.accumulated_work_hours) || 0,
-  resumedAt: r.resumed_at || null,
-  workSessions: r.work_sessions ? (typeof r.work_sessions === "string" ? JSON.parse(r.work_sessions) : r.work_sessions) : [],
+  accumulatedWorkHours: Number(r.accumulated_work_hours) || Number(r.accumulatedWorkHours) || 0,
+  resumedAt: r.resumed_at || r.resumedAt || null,
+  workSessions: (r.work_sessions || r.workSessions) ? (typeof (r.work_sessions || r.workSessions) === "string" ? JSON.parse(r.work_sessions || r.workSessions) : (r.work_sessions || r.workSessions)) : [],
   delayReason: r.delay_reason || null,
   delayCount: Number(r.delay_count) || 0,
-  scheduleHistory: r.schedule_history ? (typeof r.schedule_history === "string" ? JSON.parse(r.schedule_history) : r.schedule_history) : [],
+  scheduleHistory: (r.schedule_history || r.scheduleHistory) ? (typeof (r.schedule_history || r.scheduleHistory) === "string" ? JSON.parse(r.schedule_history || r.scheduleHistory) : (r.schedule_history || r.scheduleHistory)) : [],
+  cancelledAt: r.cancelled_at || r.cancelledAt || null,
+  cancelReason: r.cancel_reason || r.cancelReason || null,
 });
 
 const projectToRow = (p) => ({
@@ -555,21 +593,22 @@ const projectToRow = (p) => ({
   store_id: p.storeId || null,
   assigned_workers: p.assignedWorkerIds || [],
   outsourced_workers: p.outsourcedWorkers || "",
-  started_at: p.started_at || null,
+  started_at: p.startedAt || null,
   original_started_at: p.originalStartedAt || null,
-  finished_at: p.finished_at || null,
+  finished_at: p.finishedAt || null,
   updated_at: new Date().toISOString(),
   repair_order: p.repairOrder ? JSON.stringify(p.repairOrder) : null,
   paused_at: p.pausedAt || null,
   pause_reason: p.pauseReason || null,
   pause_count: p.pauseCount || 0,
-  pause_duration_total: p.pauseDurationTotal || 0,
   accumulated_work_hours: p.accumulatedWorkHours || 0,
   resumed_at: p.resumedAt || null,
   work_sessions: p.workSessions && Array.isArray(p.workSessions) ? JSON.stringify(p.workSessions) : null,
   delay_reason: p.delayReason || null,
   delay_count: p.delayCount || 0,
   schedule_history: p.scheduleHistory && p.scheduleHistory.length > 0 ? JSON.stringify(p.scheduleHistory) : null,
+  cancelled_at: p.cancelledAt || null,
+  cancel_reason: p.cancelReason || null,
 });
 
 const mapLog = (r) => ({
@@ -747,11 +786,6 @@ const repo = {
     if (MODE !== "cloud") return;
     const { error } = await sb.from("profiles").delete().eq("id", userId);
     if (error) return fail(error);
-    if (sbAdmin) {
-      await sbAdmin.auth.admin.deleteUser(userId);
-    } else {
-      fail("未配置服务端密钥，无法删除认证账号");
-    }
   },
 
   /* ---- 角色权限模板（总经理配置每个角色可做的操作） ---- */
@@ -894,6 +928,10 @@ const repo = {
       if (row.scheduleHistory && Array.isArray(row.scheduleHistory)) {
         row.schedule_history = JSON.stringify(row.scheduleHistory);
         delete row.scheduleHistory;
+      }
+      if (row.workSessions && Array.isArray(row.workSessions)) {
+        row.work_sessions = JSON.stringify(row.workSessions);
+        delete row.workSessions;
       }
       
       const project = getProject(id);
@@ -1067,11 +1105,12 @@ function loadLocal() {
       const data = JSON.parse(raw);
       cache.workers = data.workers || [];
       cache.projects = (data.projects || []).map((p) => {
-        p.outsourcedHoursFromLogs = (p.workLogs || []).reduce((sum, l) => {
+        const mapped = mapProject(p);
+        mapped.outsourcedHoursFromLogs = (mapped.workLogs || []).reduce((sum, l) => {
           const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
           return sum + (isOutsourced ? (Number(l.hours) || 0) : 0);
         }, 0);
-        return p;
+        return mapped;
       });
       cache.stores = data.stores || [];
       cache.leaveRecords = data.leaveRecords || [];
@@ -1328,11 +1367,14 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       const width = ((endMinutes - startMinutes) / 60) * hourWidth;
       
       let statusClass, statusIcon;
-      if (p.status === "预约中") { statusClass = "booked"; statusIcon = "📅"; }
-      else if (p.status === "施工中") { statusClass = "working"; statusIcon = "🔨"; }
-      else if (p.status === "已暂停") { statusClass = "paused"; statusIcon = "⏸️"; }
-      else if (p.status === "已延期") { statusClass = "delayed"; statusIcon = "⚠️"; }
-      else if (p.status === "已完工") { statusClass = "done"; statusIcon = "✅"; }
+      if (p.status === STATUS.BOOKED) { statusClass = "booked"; statusIcon = "📅"; }
+      else if (p.status === STATUS.WORKING) { statusClass = "working"; statusIcon = "🔨"; }
+      else if (p.status === STATUS.PAUSED) { statusClass = "paused"; statusIcon = "⏸️"; }
+      else if (p.status === STATUS.DELAYED) { statusClass = "delayed"; statusIcon = "⚠️"; }
+      else if (p.status === STATUS.DONE) { statusClass = "done"; statusIcon = "✅"; }
+      else if (p.status === STATUS.ACCEPTED) { statusClass = "accepted"; statusIcon = "✅"; }
+      else if (p.status === STATUS.REVIEWED) { statusClass = "reviewed"; statusIcon = "✅"; }
+      else if (p.status === STATUS.CANCELLED) { statusClass = "cancelled"; statusIcon = "❌"; }
       else { statusClass = ""; statusIcon = ""; }
       
       const pad = (n) => String(n).padStart(2, "0");
@@ -1394,7 +1436,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
         </div>`;
     });
     
-    const leaveBadge = workerLeaves.length > 0 ? `<span class="tl-lane-leave-badge">🏥</span>` : "";
+    const leaveBadge = workerLeaves.length > 0 ? `<span class="tl-lane-leave-badge">🩹</span>` : "";
     const scheduleBadge = workerSchedules.length > 0 ? `<span class="tl-lane-schedule-badge">📅</span>` : "";
     
     lanesHtml += `
@@ -1426,7 +1468,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   if (dayLeaveRecords.length > 0) {
     leaveSection = `
       <div class="tl-leave-section" style="margin-top:16px; padding:12px; background:#fef2f2; border-radius:8px; border-left:4px solid #ef4444;">
-        <div style="font-weight:600; color:#dc2626; margin-bottom:8px;">🏥 ${dateStr} 请假人员</div>
+        <div style="font-weight:600; color:#dc2626; margin-bottom:8px;">🌴 ${dateStr} 请假人员</div>
         <div style="display:flex; flex-direction:column; gap:6px;">
           ${dayLeaveRecords.map((lr) => {
             const w = getWorker(lr.workerId);
@@ -1484,7 +1526,7 @@ function renderWorkerScheduleForWorker(dateStr) {
           <button class="btn small ${isToday ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${todayStr}')">今天</button>
           <button class="btn small ${isTomorrow ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${tomorrowStr}')">明天</button>
           <button class="btn small ${isDayAfter ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${dayAfterStr}')">后天</button>
-          ${workerId ? `<button class="btn small" onclick="openLeaveForm('${workerId}')" style="background:#ef4444;color:#fff">🏥 请假</button>` : ""}
+          ${workerId ? `<button class="btn small" onclick="openLeaveForm('${workerId}')" style="background:#ef4444;color:#fff">🌴 请假</button>` : ""}
         </div>
       </div>
     </div>
@@ -1713,6 +1755,8 @@ function renderScheduleCalendar() {
     const daySchedules = schedulesByDate[dateStr] || [];
     const isToday = dateStr === todayKey;
     const isSelected = dateStr === selectedStr;
+    const isWeekend = new Date(y, m, d).getDay() === 0 || new Date(y, m, d).getDay() === 6;
+    const isHolidayDate = isHoliday(dateStr);
     const maxShow = 3;
     const showSchedules = daySchedules.slice(0, maxShow);
     const itemsHtml = showSchedules.map(function(s) {
@@ -1728,7 +1772,7 @@ function renderScheduleCalendar() {
         timeStr + ' ' + esc(s.title) + '</div></div>';
     }).join("");
     const moreLabel = daySchedules.length > maxShow ? '<div class="sched-cal-more-text">+' + (daySchedules.length - maxShow) + '更多</div>' : "";
-    const cls = "sched-cal-cell" + (isToday ? " today" : "") + (isSelected ? " selected" : "");
+    const cls = "sched-cal-cell" + (isToday ? " today" : "") + (isSelected ? " selected" : "") + (isWeekend ? " weekend" : "") + (isHolidayDate ? " holiday" : "") + (daySchedules.length > 0 ? " has" : "");
     cells += '<div class="' + cls + '" onclick="selectScheduleDate(\'' + dateStr + '\')">' +
       '<span class="sched-cal-day">' + d + '</span>' +
       (daySchedules.length > 0 ? '<div class="sched-cal-items">' + itemsHtml + moreLabel + '</div>' : '') +
@@ -2458,7 +2502,7 @@ async function submitLeaveForm() {
   
   const conflicts = checkLeaveProjectConflict(workerId, startDate, endDate, startTime, endTime);
   if (conflicts.length > 0) {
-    if (!confirm(`检测到 ${conflicts.length} 个项目排期冲突，确认继续提交请假申请吗？`)) {
+    if (!(await confirmDialog(`检测到 ${conflicts.length} 个项目排期冲突，确认继续提交请假申请吗？`, "排期冲突"))) {
       return;
     }
   }
@@ -2483,7 +2527,7 @@ async function submitLeaveForm() {
 
 async function deleteLeaveRecord(id) {
   if (!perm.manageLeaves()) { toast("权限不足"); return; }
-  if (!confirm("确定删除该请假记录？")) return;
+  if (!(await confirmDialog("确定删除该请假记录？", "删除请假记录"))) return;
   await repo.deleteLeaveRecord(id);
   renderAll();
   toast("请假记录已删除");
@@ -2685,7 +2729,7 @@ function renderProjects() {
     const canUnreview = reviewed && isManager();
     
     const end = new Date(p.endTime || p.startTime);
-    const isOverdue = p.status === "预约中" && !p.started_at && new Date() > end;
+    const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
     
     const pStart = new Date(p.appointmentTime || p.startTime);
     const pEnd = new Date(p.endTime || p.appointmentTime);
@@ -2733,9 +2777,9 @@ function renderProjects() {
             </div>
           </div>
         ` : ""}
-        <div class="card-row"><span>开始施工</span><b>${p.started_at ? esc(fmtDateTime(p.started_at)) : "—"}</b></div>
-        <div class="card-row"><span>完工时间</span><b>${p.finished_at ? esc(fmtDateTime(p.finished_at)) : "—"}</b></div>
-        <div class="card-row"><span>施工时长</span><b>${p.started_at && p.finished_at ? esc(calcActualWorkDuration(p)) : "—"}</b></div>
+        <div class="card-row"><span>开始施工</span><b>${p.startedAt ? esc(fmtDateTime(p.startedAt)) : "—"}</b></div>
+        <div class="card-row"><span>完工时间</span><b>${p.finishedAt ? esc(fmtDateTime(p.finishedAt)) : "—"}</b></div>
+        <div class="card-row"><span>施工时长</span><b>${p.startedAt && p.finishedAt ? esc(calcActualWorkDuration(p)) : "—"}</b></div>
         <div class="card-actions">
           <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
           ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">编辑</button>` : ""}
@@ -2955,32 +2999,38 @@ async function saveProject(id) {
       payload.repairOrder = existingProject.repairOrder;
     }
   }
-  await repo.saveProject(payload, id);
-  await repo.loadAll();
-  modal.close();
-  renderAll();
-  toast("已保存");
   
-  if (payload.customer) {
-    upsertCustomer(payload.customer, payload.phone, payload.address);
-  }
-  
-  if (id) {
-    logOperation("PROJECT_EDIT", name, `ID: ${id}`);
-  } else {
-    logOperation("PROJECT_CREATE", name);
-  }
-  
-  if (id) {
-    const p = getProject(id);
-    if (p) {
-      sendNotificationForProjectChange("update", p);
+  try {
+    await repo.saveProject(payload, id);
+    await repo.loadAll();
+    modal.close();
+    renderAll();
+    toast("已保存");
+    
+    if (payload.customer) {
+      upsertCustomer(payload.customer, payload.phone, payload.address);
     }
-  } else {
-    const newProject = cache.projects[cache.projects.length - 1];
-    if (newProject) {
-      sendNotificationForProjectChange("new", newProject);
+    
+    if (id) {
+      logOperation("PROJECT_EDIT", name, `ID: ${id}`);
+    } else {
+      logOperation("PROJECT_CREATE", name);
     }
+    
+    if (id) {
+      const p = getProject(id);
+      if (p) {
+        sendNotificationForProjectChange("update", p);
+      }
+    } else {
+      const newProject = cache.projects[cache.projects.length - 1];
+      if (newProject) {
+        sendNotificationForProjectChange("new", newProject);
+      }
+    }
+  } catch (error) {
+    console.error("保存项目失败:", error);
+    toast("保存失败：" + (error.message || "未知错误"));
   }
 }
 
@@ -3086,7 +3136,7 @@ async function completeRepair(projectId) {
     return;
   }
   
-  if (!confirm("确认维修已完成？")) return;
+  if (!(await confirmDialog("确认维修已完成？", "维修完成"))) return;
   
   clearTimeout(reloadTimer);
   await repo.patchProject(projectId, { 
@@ -3122,6 +3172,42 @@ async function deleteProject(id) {
   }
 }
 
+async function cancelProject(id) {
+  const p = getProject(id);
+  if (!p) {
+    toast("项目不存在");
+    return;
+  }
+  if (p.status === STATUS.CANCELLED) {
+    toast("项目已取消");
+    return;
+  }
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) {
+    toast("已完工、已验收或已审核的项目无法取消");
+    return;
+  }
+  
+  const reason = await promptDialog("请输入取消原因：<br><br>1. 客户取消订单<br>2. 材料问题<br>3. 人员调配<br>4. 其他", "取消项目", "客户取消订单");
+  if (!reason) return;
+  
+  try {
+    const now = new Date().toISOString();
+    await repo.patchProject(id, { 
+      status: STATUS.CANCELLED, 
+      cancelledAt: now,
+      cancelReason: reason 
+    });
+    clearTimeout(reloadTimer);
+    await repo.loadAll();
+    renderAll();
+    toast("项目已取消");
+    logOperation("PROJECT_CANCEL", p.name || "项目", `ID: ${id}, 原因: ${reason}`);
+  } catch (error) {
+    console.error("取消项目失败:", error);
+    toast("取消失败，请重试");
+  }
+}
+
 /* ============================================================
  * 施工管理模块
  * ============================================================ */
@@ -3133,11 +3219,11 @@ function refreshProjectSelector() {
   const sel = document.getElementById("constructionProjectSelect");
   const prev = currentProjectId;
   const items = cache.projects.slice()
-    .filter(p => p.status !== "已审核" && p.status !== "已验收")
+    .filter(p => p.status !== STATUS.REVIEWED && p.status !== STATUS.ACCEPTED)
     .sort((a, b) =>
     new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0));
   sel.innerHTML = `<option value="">— 请选择项目 —</option>` +
-    items.map((p) => `<option value="${p.id}">${esc(p.name)}（${p.status}）</option>`).join("");
+    items.map((p) => `<option value="${p.id}">${p.storeName ? esc(p.storeName) + ' · ' : ''}${esc(p.name)}${p.appointmentTime ? ` · ${fmtDate(p.appointmentTime)}` : ''}</option>`).join("");
   if (prev && getProject(prev) && items.some(i => i.id === prev)) sel.value = prev;
 }
 
@@ -3146,6 +3232,12 @@ function gotoConstruction(id) {
   switchTab("construction");
   document.getElementById("constructionProjectSelect").value = id;
   renderConstruction();
+  setTimeout(() => {
+    const detail = document.getElementById("constructionDetail");
+    if (detail) {
+      detail.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, 100);
 }
 
 let viewScheduleDate = null;
@@ -3249,7 +3341,7 @@ function renderConstruction() {
       const leaveRecord = startDateStr ? getProjectLeaveConflict(w.id, startDateStr, endDateStr || startDateStr) : null;
       const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
       const disabledAttr = hasLeaveConflict ? ` disabled` : "";
-      return `<option value="${w.id}"${disabledAttr}>${esc(w.name)}${hasLeaveConflict ? " 🏥 请假中" : ""}</option>`;
+      return `<option value="${w.id}"${disabledAttr}>${esc(w.name)}${hasLeaveConflict ? " 🌴 请假中" : ""}</option>`;
     }).join("");
   const assignBlock = `
     <div class="detail-block">
@@ -3284,7 +3376,7 @@ function renderConstruction() {
     </div>`;
 
   const end = new Date(p.endTime || p.startTime);
-  const isOverdue = p.status === "预约中" && !p.started_at && new Date() > end;
+  const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
   
   box.innerHTML = `
     <div class="detail-block">
@@ -3302,9 +3394,9 @@ function renderConstruction() {
         <div class="info-item"><div class="k">外协工时</div><div class="v" style="color:#8b5cf6;font-weight:600">${p.outsourcedHoursFromLogs || 0} 小时</div></div>
         <div class="info-item"><div class="k">工程实际用工时</div><div class="v">${p.actualHours || 0} 小时</div></div>
         <div class="info-item"><div class="k">工时差异（实际−预计）</div><div class="v">${diffLabel(p)}</div></div>
-        ${p.started_at ? `<div class="info-item"><div class="k">⏰ 开始施工时间</div><div class="v">${esc(fmtDateTime(p.started_at))}</div></div>` : ""}
-        ${p.finished_at ? `<div class="info-item"><div class="k">✅ 完工时间</div><div class="v">${esc(fmtDateTime(p.finished_at))}</div></div>` : ""}
-        ${p.started_at && p.finished_at ? `<div class="info-item"><div class="k">⏱️ 实际施工时长</div><div class="v"><b>${esc(calcActualWorkDuration(p))}</b></div></div>` : ""}
+        ${p.startedAt ? `<div class="info-item"><div class="k">⏰ 开始施工时间</div><div class="v">${esc(fmtDateTime(p.startedAt))}</div></div>` : ""}
+        ${p.finishedAt ? `<div class="info-item"><div class="k">✅ 完工时间</div><div class="v">${esc(fmtDateTime(p.finishedAt))}</div></div>` : ""}
+        ${p.startedAt && p.finishedAt ? `<div class="info-item"><div class="k">⏱️ 实际施工时长</div><div class="v"><b>${esc(calcActualWorkDuration(p))}</b></div></div>` : ""}
       </div>
       ${canEdit || (canReview && !reviewed) ? `
       <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:16px;align-items:center">
@@ -3336,12 +3428,15 @@ function renderConstruction() {
         <button class="btn small primary" onclick="updateProjectStatus('${p.id}', '${STATUS.BOOKED}')">🔄 转为预约</button>
         ${p.delayReason ? `<span style="font-size:12px;color:#ef4444">延期原因：${esc(p.delayReason)}</span>` : ""}
         ` : ""}
+        ${[STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED].includes(p.status) ? `
+        <button class="btn small danger" onclick="cancelProject('${p.id}')"><span style="font-size:16px;font-weight:bold;">×</span> 取消项目</button>
+        ` : ""}
       </div>` : ""}
       ${reviewed && isManager() ? `
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn" onclick="unreviewProject('${p.id}')" style="color:var(--warn)">↩ 反审核</button>
       </div>` : ""}
-      ${(reviewed || p.status === "已验收") && (isManager() || isStoreManager()) ? `
+      ${(reviewed || p.status === STATUS.ACCEPTED) && (isManager() || isStoreManager()) ? `
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn" onclick="openRepairOrderForm('${p.id}')" style="background:#f59e0b;color:#fff">🔧 发起维修单</button>
       </div>` : ""}
@@ -3470,7 +3565,7 @@ function assignConflicts(project, workerId) {
 
 /* 判断项目是否已完成（不参与人员冲突检测） */
 function isCompleted(p) {
-  return ["已完工", "已审核", "已验收", "已取消"].includes(p.status);
+  return [STATUS.DONE, STATUS.REVIEWED, STATUS.ACCEPTED, STATUS.CANCELLED].includes(p.status);
 }
 
 /* 判断项目是否为外协任务（只有外协人员，没有内部施工人员） */
@@ -3695,10 +3790,10 @@ async function assignWorker(pid) {
   const conflicts = assignConflicts(p, wid);
   if (conflicts.length) {
     const w = getWorker(wid);
-    const msg = `${w ? w.name : "该人员"} 在此时间段已被分配到：\n` +
-      conflicts.map((c) => `· ${c.name}（${fmtTimeRange(c)}）`).join("\n") +
-      `\n\n存在时间冲突，仍要分配吗？`;
-    if (!confirm(msg)) return;
+    const msg = `${w ? w.name : "该人员"} 在此时间段已被分配到：<br>` +
+      conflicts.map((c) => `· ${c.name}（${fmtTimeRange(c)}）`).join("<br>") +
+      `<br><br>存在时间冲突，仍要分配吗？`;
+    if (!(await confirmDialog(msg, "时间冲突"))) return;
   }
   await repo.setAssignedWorkers(pid, cur.concat(wid));
   await repo.loadAll();
@@ -3745,8 +3840,8 @@ async function updateProjectStatus(id, newStatus) {
   const patch = { status: newStatus };
   const now = new Date().toISOString();
   if (newStatus === STATUS.WORKING) {
-    patch.started_at = now;
-    if (!p.originalStartedAt && !p.original_started_at) {
+    patch.startedAt = now;
+    if (!p.originalStartedAt) {
       patch.originalStartedAt = now;
     }
   }
@@ -3776,40 +3871,45 @@ async function pauseProject(id) {
     return;
   }
   
-  const reason = prompt("请输入暂停原因：\n\n1. 客户原因\n2. 材料不足\n3. 天气原因\n4. 其他", "客户原因");
+  const reason = await promptDialog("请输入暂停原因：<br><br>1. 客户原因<br>2. 材料不足<br>3. 天气原因<br>4. 其他", "暂停项目", "客户原因");
   if (!reason) return;
   
-  const now = new Date();
-  const nowStr = now.toISOString();
-  
-  const started = new Date(p.started_at);
-  const workDuration = (now - started) / (1000 * 60 * 60);
-  const accumulatedWorkHours = (p.accumulatedWorkHours || p.accumulated_work_hours || 0) + workDuration;
-  
-  const workSessions = [...(p.workSessions || [])];
-  workSessions.push({
-    startTime: p.started_at,
-    endTime: nowStr,
-    duration: workDuration
-  });
-  
-  const pauseCount = (p.pauseCount || p.pause_count || 0) + 1;
-  
-  const patch = {
-    status: STATUS.PAUSED,
-    pausedAt: nowStr,
-    pauseReason: reason,
-    pauseCount: pauseCount,
-    accumulatedWorkHours: accumulatedWorkHours,
-    workSessions: workSessions
-  };
-  
-  clearTimeout(reloadTimer);
-  await repo.patchProject(id, patch);
-  await repo.loadAll();
-  renderAll();
-  toast(`项目已暂停：${reason}`);
-  sendNotificationForProjectChange("pause", getProject(id));
+  try {
+    const now = new Date();
+    const nowStr = now.toISOString();
+    
+    const started = new Date(p.startedAt);
+    const workDuration = (now - started) / (1000 * 60 * 60);
+    const accumulatedWorkHours = (p.accumulatedWorkHours || 0) + workDuration;
+    
+    const workSessions = [...(p.workSessions || [])];
+    workSessions.push({
+      startTime: p.startedAt,
+      endTime: nowStr,
+      duration: workDuration
+    });
+    
+    const pauseCount = (p.pauseCount || 0) + 1;
+    
+    const patch = {
+      status: STATUS.PAUSED,
+      pausedAt: nowStr,
+      pauseReason: reason,
+      pauseCount: pauseCount,
+      accumulatedWorkHours: accumulatedWorkHours,
+      workSessions: workSessions
+    };
+    
+    clearTimeout(reloadTimer);
+    await repo.patchProject(id, patch);
+    await repo.loadAll();
+    renderAll();
+    toast(`项目已暂停：${reason}`);
+    sendNotificationForProjectChange("pause", getProject(id));
+  } catch (error) {
+    console.error("暂停项目失败:", error);
+    toast("暂停失败：" + (error.message || "未知错误"));
+  }
 }
 
 async function resumeProject(id) {
@@ -3823,22 +3923,27 @@ async function resumeProject(id) {
     return;
   }
   
-  const now = new Date().toISOString();
-  
-  const patch = {
-    status: STATUS.WORKING,
-    started_at: now,
-    pausedAt: null,
-    pauseReason: null,
-    resumedAt: now
-  };
-  
-  clearTimeout(reloadTimer);
-  await repo.patchProject(id, patch);
-  await repo.loadAll();
-  renderAll();
-  toast("项目已恢复施工");
-  sendNotificationForProjectChange("resume", getProject(id));
+  try {
+    const now = new Date().toISOString();
+    
+    const patch = {
+      status: STATUS.WORKING,
+      startedAt: now,
+      pausedAt: null,
+      pauseReason: null,
+      resumedAt: now
+    };
+    
+    clearTimeout(reloadTimer);
+    await repo.patchProject(id, patch);
+    await repo.loadAll();
+    renderAll();
+    toast("项目已恢复施工");
+    sendNotificationForProjectChange("resume", getProject(id));
+  } catch (error) {
+    console.error("恢复项目失败:", error);
+    toast("恢复失败：" + (error.message || "未知错误"));
+  }
 }
 
 function delayProject(id) {
@@ -3915,19 +4020,19 @@ function delayProject(id) {
       }
       
       let newEndTime = "";
-      const estimatedHours = p.estimatedHours || p.estimated_hours || 0;
+      const estimatedHours = p.estimatedHours || 0;
       if (estimatedHours > 0) {
         let remainingHours = estimatedHours;
         
-        if (p.started_at) {
-          const started = new Date(p.started_at);
+        if (p.startedAt) {
+          const started = new Date(p.startedAt);
           let endTime = new Date();
           
-          if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
-            endTime = new Date(p.pausedAt || p.paused_at);
+          if (p.status === STATUS.PAUSED && (p.pausedAt)) {
+            endTime = new Date(p.pausedAt);
           }
           
-          const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+          const accumulatedWorkHours = p.accumulatedWorkHours || 0;
           const currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
           const actualWorkedHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
           remainingHours = Math.max(0, estimatedHours - actualWorkedHours);
@@ -3944,7 +4049,7 @@ function delayProject(id) {
         newEndTime = newEnd.toISOString();
       }
       
-      const existingHistory = p.scheduleHistory || p.schedule_history || [];
+      const existingHistory = p.scheduleHistory || [];
       const scheduleHistory = [...existingHistory, {
         original_time: p.appointmentTime,
         changed_at: new Date().toISOString(),
@@ -3952,7 +4057,7 @@ function delayProject(id) {
         changed_by: currentUser?.name || "系统"
       }];
       
-      const delayCount = (p.delay_count || p.delayCount || 0) + 1;
+      const delayCount = (p.delayCount || 0) + 1;
       
       const patch = {
         status: STATUS.DELAYED,
@@ -3979,7 +4084,7 @@ async function reviewProject(id) {
     toast("项目不存在");
     return;
   }
-  if (!confirm("确定审核该项目？审核后项目信息将无法更改。")) return;
+  if (!(await confirmDialog("确定审核该项目？审核后项目信息将无法更改。", "审核项目"))) return;
   clearTimeout(reloadTimer);
   await repo.patchProject(id, { status: STATUS.REVIEWED });
   await repo.loadAll();
@@ -3993,7 +4098,7 @@ async function unreviewProject(id) {
     toast("项目不存在");
     return;
   }
-  if (!confirm("确定取消审核？取消后项目将恢复为「已完工」状态，可继续编辑。")) return;
+  if (!(await confirmDialog("确定取消审核？取消后项目将恢复为「已完工」状态，可继续编辑。", "取消审核"))) return;
   clearTimeout(reloadTimer);
   await repo.patchProject(id, { status: STATUS.DONE });
   await repo.loadAll();
@@ -4045,8 +4150,6 @@ async function addWorkLog(id) {
   const note = document.getElementById("logNote").value.trim();
   const level = document.getElementById("logLevel").value;
   
-  console.log("addWorkLog: 开始添加工时", { id, type, hours, date, note, level });
-  
   if (!hours || hours <= 0) { toast("请填写有效工时"); return; }
   if (!date) { toast("请选择施工日期"); return; }
   
@@ -4065,7 +4168,7 @@ async function addWorkLog(id) {
   await repo.addWorkLog(id, { workerId, workerName, hours, date, note, level, isOutsourced: type === "outsourced" });
   if (p.status === STATUS.BOOKED) {
       const now = new Date().toISOString();
-      await repo.patchProject(id, { status: STATUS.WORKING, started_at: now, originalStartedAt: now });
+      await repo.patchProject(id, { status: STATUS.WORKING, startedAt: now, originalStartedAt: now });
     }
   clearTimeout(reloadTimer);
   await repo.loadAll();
@@ -4081,7 +4184,7 @@ async function addWorkLog(id) {
 }
 
 async function deleteWorkLog(pid, lid) {
-  if (!confirm("确定删除该工时记录？此操作不可撤销。")) return;
+  if (!(await confirmDialog("确定删除该工时记录？此操作不可撤销。", "删除工时"))) return;
   const p = getProject(pid);
   const log = (p.workLogs || []).find(l => l.id === lid);
   await repo.deleteWorkLog(pid, lid);
@@ -4404,7 +4507,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
   
   if (onLeaveWorkers.length > 0) {
     description += `<div class="schedule-item leave">`;
-    description += `<div class="schedule-worker">🏥 请假人员</div>`;
+    description += `<div class="schedule-worker">🌴 请假人员</div>`;
     description += `<div class="schedule-task">${onLeaveWorkers.map(w => w.name).join("、")} 今天请假，不在岗，请大家注意人手安排。</div>`;
     description += `</div>`;
   }
@@ -4415,29 +4518,31 @@ function generateWorkerScheduleDescription(dateStr = null) {
   });
   const totalProjects = allTodayProjects.length;
   const statusCounts = {
-    "预约中": allTodayProjects.filter(p => p.status === "预约中").length,
-    "施工中": allTodayProjects.filter(p => p.status === "施工中").length,
-    "已完工": allTodayProjects.filter(p => p.status === "已完工").length,
-    "已验收": allTodayProjects.filter(p => p.status === "已验收").length,
-    "已审核": allTodayProjects.filter(p => p.status === "已审核").length,
-    "已取消": allTodayProjects.filter(p => p.status === "已取消").length,
+    [STATUS.BOOKED]: allTodayProjects.filter(p => p.status === STATUS.BOOKED).length,
+    [STATUS.WORKING]: allTodayProjects.filter(p => p.status === STATUS.WORKING).length,
+    [STATUS.PAUSED]: allTodayProjects.filter(p => p.status === STATUS.PAUSED).length,
+    [STATUS.DELAYED]: allTodayProjects.filter(p => p.status === STATUS.DELAYED).length,
+    [STATUS.DONE]: allTodayProjects.filter(p => p.status === STATUS.DONE).length,
+    [STATUS.ACCEPTED]: allTodayProjects.filter(p => p.status === STATUS.ACCEPTED).length,
+    [STATUS.REVIEWED]: allTodayProjects.filter(p => p.status === STATUS.REVIEWED).length,
+    [STATUS.CANCELLED]: allTodayProjects.filter(p => p.status === STATUS.CANCELLED).length,
   };
-  const completedProjects = statusCounts["已完工"] + statusCounts["已验收"] + statusCounts["已审核"];
-  const inProgressProjects = statusCounts["预约中"] + statusCounts["施工中"];
+  const completedProjects = statusCounts[STATUS.DONE] + statusCounts[STATUS.ACCEPTED] + statusCounts[STATUS.REVIEWED];
+  const inProgressProjects = statusCounts[STATUS.BOOKED] + statusCounts[STATUS.WORKING] + statusCounts[STATUS.PAUSED] + statusCounts[STATUS.DELAYED];
   const totalWorkers = allWorkerIds.size;
   const onJobWorkers = workersWithProjects.length;
   const totalAvailable = cache.workers.length;
   
   const unassignedProjects = allTodayProjects.filter(p => 
-      (p.status === "预约中" || p.status === "施工中") && 
+      (p.status === STATUS.BOOKED || p.status === STATUS.WORKING) && 
       (!p.assignedWorkerIds || p.assignedWorkerIds.length === 0)
     );
     
     if (totalProjects > 0) {
     description += `<div class="schedule-summary">`;
-    description += `<div class="schedule-summary-item">📋 今日项目：${totalProjects} 个（进行中 ${inProgressProjects} 个，已完工 ${statusCounts["已完工"]} 个，已验收 ${statusCounts["已验收"]} 个，已审核 ${statusCounts["已审核"]} 个${statusCounts["已取消"] > 0 ? `，已取消 ${statusCounts["已取消"]} 个` : ``}）</div>`;
+    description += `<div class="schedule-summary-item">📋 今日项目：${totalProjects} 个（进行中 ${inProgressProjects} 个，已暂停 ${statusCounts[STATUS.PAUSED]} 个，已延期 ${statusCounts[STATUS.DELAYED]} 个，已完工 ${statusCounts[STATUS.DONE]} 个，已验收 ${statusCounts[STATUS.ACCEPTED]} 个，已审核 ${statusCounts[STATUS.REVIEWED]} 个${statusCounts[STATUS.CANCELLED] > 0 ? `，已取消 ${statusCounts[STATUS.CANCELLED]} 个` : ``}）</div>`;
     description += `<div class="schedule-summary-item">👷 出勤人员：${onJobWorkers} 人</div>`;
-    description += `<div class="schedule-summary-item">🏥 请假人员：${onLeaveWorkers.length} 人</div>`;
+    description += `<div class="schedule-summary-item">🌴 请假人员：${onLeaveWorkers.length} 人</div>`;
     description += `<div class="schedule-summary-item">👤 总人数：${totalAvailable} 人</div>`;
     
     if (unassignedProjects.length > 0) {
@@ -4515,10 +4620,10 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const elapsedMs = pStart ? Math.max(0, now - pStart) : 0;
       const autoProgress = durationMs > 0 ? Math.min(100, Math.round((elapsedMs / durationMs) * 100)) : 0;
       
-      const isOverdue = p.status === "预约中" && !p.started_at && pStart && now > pStart;
+      const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && pStart && now > pStart;
       
       switch (p.status) {
-        case "预约中":
+        case STATUS.BOOKED:
           if (isOverdue) {
             statusColor = "#ef4444";
             statusText = "预约中（已超期）";
@@ -4528,20 +4633,20 @@ function generateWorkerScheduleDescription(dateStr = null) {
             progress = now >= pStart ? Math.min(30, autoProgress) : 0;
           }
           break;
-        case "施工中":
+        case STATUS.WORKING:
           statusColor = "#f59e0b";
           progress = Math.max(30, Math.min(90, autoProgress));
           break;
-        case "已完工":
+        case STATUS.DONE:
           statusColor = "#10b981";
           progress = 95;
           break;
-        case "已验收":
-        case "已审核":
+        case STATUS.ACCEPTED:
+        case STATUS.REVIEWED:
           statusColor = "#06b6d4";
           progress = 100;
           break;
-        case "已取消":
+        case STATUS.CANCELLED:
           statusColor = "#ef4444";
           progress = 0;
           break;
@@ -4551,14 +4656,14 @@ function generateWorkerScheduleDescription(dateStr = null) {
       }
       
       const statusActions = [];
-      if ((isManager() || isWorker() || isStoreManager()) && p.status === "预约中") {
-        statusActions.push('<button class="btn tiny ' + (isOverdue ? 'danger' : '') + '" onclick="updateProjectStatus(\'' + p.id + '\', \'施工中\')">开始施工</button>');
+      if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.BOOKED) {
+        statusActions.push('<button class="btn tiny ' + (isOverdue ? 'danger' : '') + '" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">开始施工</button>');
       }
-      if ((isManager() || isWorker() || isStoreManager()) && p.status === "施工中") {
-        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'已完工\')">完成安装</button>');
+      if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.WORKING) {
+        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.DONE + '\')">完成安装</button>');
       }
-      if ((isManager() || isWorker() || isStoreManager()) && p.status === "已完工") {
-        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'已验收\')">确认验收</button>');
+      if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.DONE) {
+        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.ACCEPTED + '\')">确认验收</button>');
       }
       
       const workers = (p.assignedWorkerIds || []).map(wid => {
@@ -4611,18 +4716,18 @@ function openCompleteProjectForm(id) {
   
   const dateStr = new Date().toISOString().slice(0, 10);
   
-  const originalStartedAt = p.originalStartedAt || p.original_started_at || p.started_at;
+  const originalStartedAt = p.originalStartedAt || p.startedAt;
   const displayStartedAt = originalStartedAt ? new Date(originalStartedAt) : null;
   const now = new Date();
   
-  const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+  const accumulatedWorkHours = p.accumulatedWorkHours || 0;
   
   let currentWorkDuration = 0;
-  if (p.started_at) {
-    const sessionStartedAt = new Date(p.started_at);
+  if (p.startedAt) {
+    const sessionStartedAt = new Date(p.startedAt);
     let endTime = now;
-    if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
-      endTime = new Date(p.pausedAt || p.paused_at);
+    if (p.status === STATUS.PAUSED && (p.pausedAt)) {
+      endTime = new Date(p.pausedAt);
     }
     currentWorkDuration = (endTime - sessionStartedAt) / (1000 * 60 * 60);
   }
@@ -4662,9 +4767,9 @@ function openCompleteProjectForm(id) {
     </div>
   </div>`;
   
-  const pauseCount = p.pauseCount || p.pause_count || 0;
+  const pauseCount = derivePauseCount(p);
   if (pauseCount > 0) {
-    const pauseDurationTotal = p.pauseDurationTotal || p.pause_duration_total || 0;
+    const pauseDurationTotal = derivePauseDuration(p);
     const pauseHours = Math.floor(pauseDurationTotal);
     const pauseMins = Math.floor((pauseDurationTotal - pauseHours) * 60);
     const pauseTimeStr = pauseHours > 0 ? `${pauseHours}小时${pauseMins}分钟` : `${pauseMins}分钟`;
@@ -4680,18 +4785,18 @@ function openCompleteProjectForm(id) {
   }
   
   const workSessions = p.workSessions || [];
-  if (workSessions.length > 0 || p.started_at) {
+  if (workSessions.length > 0 || p.startedAt) {
     form += `<div class="form-row" style="grid-column:1/-1;background:#eff6ff;padding:10px;border-radius:6px;border-left:4px solid #3b82f6;margin-bottom:8px;">
       <div style="font-size:12px;color:#1d4ed8;font-weight:500;margin-bottom:6px;">🔧 施工时间段明细</div>
       <div style="display:flex;flex-direction:column;gap:4px;">`;
     
     const allSessions = [...workSessions];
-    if (p.started_at && p.status !== "已暂停") {
+    if (p.startedAt && p.status !== STATUS.PAUSED) {
       const now = new Date();
-      const sessionStarted = new Date(p.started_at);
+      const sessionStarted = new Date(p.startedAt);
       const duration = (now - sessionStarted) / (1000 * 60 * 60);
       allSessions.push({
-        startTime: p.started_at,
+        startTime: p.startedAt,
         endTime: now.toISOString(),
         duration: duration
       });
@@ -4732,25 +4837,30 @@ function openCompleteProjectForm(id) {
     </div>`;
     
     workers.forEach((w, idx) => {
+      const existingLog = (p.workLogs || []).find(l => l.workerId === w.id && l.date === dateStr);
+      const existingHours = existingLog ? existingLog.hours : "";
+      const existingLevel = existingLog ? existingLog.level : "中级";
+      const existingNote = existingLog ? existingLog.note : "";
+      
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;">
           <span style="min-width:80px;font-weight:500;flex-shrink:0;">👷 ${esc(w.name)}</span>
           <div style="flex:0 0 auto;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">工时</label>
-            <input type="number" id="workerHours_${idx}" placeholder="0" step="0.5" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
+            <input type="number" id="workerHours_${idx}" value="${existingHours}" placeholder="0" step="0.5" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
           </div>
           <div style="flex:0 0 auto;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">等级</label>
             <select id="workerLevel_${idx}" class="input" style="width:80px;padding:4px 6px;font-size:13px;">
-              <option value="初级">初级</option>
-              <option value="中级" selected>中级</option>
-              <option value="高级">高级</option>
-              <option value="特级">特级</option>
+              <option value="初级"${existingLevel === "初级" ? " selected" : ""}>初级</option>
+              <option value="中级"${existingLevel === "中级" ? " selected" : ""}>中级</option>
+              <option value="高级"${existingLevel === "高级" ? " selected" : ""}>高级</option>
+              <option value="特级"${existingLevel === "特级" ? " selected" : ""}>特级</option>
             </select>
           </div>
           <div style="flex:1;min-width:150px;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">备注</label>
-            <input type="text" id="workerNote_${idx}" placeholder="备注" class="input" style="width:100%;padding:4px 6px;font-size:13px;">
+            <input type="text" id="workerNote_${idx}" value="${esc(existingNote)}" placeholder="备注" class="input" style="width:100%;padding:4px 6px;font-size:13px;">
           </div>
         </div>
       </div>`;
@@ -4764,25 +4874,31 @@ function openCompleteProjectForm(id) {
     </div>`;
     
     outsourcedWorkers.forEach((name, idx) => {
+      const workerId = "outsourced:" + name;
+      const existingLog = (p.workLogs || []).find(l => l.workerId === workerId && l.date === dateStr);
+      const existingHours = existingLog ? existingLog.hours : "";
+      const existingLevel = existingLog ? existingLog.level : "中级";
+      const existingNote = existingLog ? existingLog.note : "";
+      
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;">
           <span style="min-width:80px;font-weight:500;flex-shrink:0;color:#8b5cf6;">👤 ${esc(name)}（外协）</span>
           <div style="flex:0 0 auto;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">工时</label>
-            <input type="number" id="outsourcedHours_${idx}" placeholder="0" step="0.5" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
+            <input type="number" id="outsourcedHours_${idx}" value="${existingHours}" placeholder="0" step="0.5" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
           </div>
           <div style="flex:0 0 auto;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">等级</label>
             <select id="outsourcedLevel_${idx}" class="input" style="width:80px;padding:4px 6px;font-size:13px;">
-              <option value="初级">初级</option>
-              <option value="中级" selected>中级</option>
-              <option value="高级">高级</option>
-              <option value="特级">特级</option>
+              <option value="初级"${existingLevel === "初级" ? " selected" : ""}>初级</option>
+              <option value="中级"${existingLevel === "中级" ? " selected" : ""}>中级</option>
+              <option value="高级"${existingLevel === "高级" ? " selected" : ""}>高级</option>
+              <option value="特级"${existingLevel === "特级" ? " selected" : ""}>特级</option>
             </select>
           </div>
           <div style="flex:1;min-width:150px;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">备注</label>
-            <input type="text" id="outsourcedNote_${idx}" placeholder="备注" class="input" style="width:100%;padding:4px 6px;font-size:13px;">
+            <input type="text" id="outsourcedNote_${idx}" value="${esc(existingNote)}" placeholder="备注" class="input" style="width:100%;padding:4px 6px;font-size:13px;">
           </div>
         </div>
       </div>`;
@@ -4800,26 +4916,15 @@ function openCompleteProjectForm(id) {
     confirmText: "确认完工",
     cancelText: "取消",
     onConfirm: async () => {
-      const pauseCount = p.pauseCount || p.pause_count || 0;
-      if (pauseCount > 0) {
-        const pauseDurationTotal = p.pauseDurationTotal || p.pause_duration_total || 0;
-        const pauseHours = Math.floor(pauseDurationTotal);
-        const pauseMins = Math.floor((pauseDurationTotal - pauseHours) * 60);
-        const pauseTimeStr = pauseHours > 0 ? `${pauseHours}小时${pauseMins}分钟` : `${pauseMins}分钟`;
-        const confirmText = `该项目施工过程中曾暂停 ${pauseCount} 次，累计暂停 ${pauseTimeStr}，已从总用时中扣除。\n\n确认要完成该项目吗？`;
-        if (!confirm(confirmText)) {
-          return false;
-        }
-      }
-      
       let totalHours = 0;
       const logs = [];
       
       workers.forEach((w, idx) => {
-        const hours = parseFloat(document.getElementById(`workerHours_${idx}`)?.value);
+        const hoursInput = document.getElementById(`workerHours_${idx}`);
+        const hours = hoursInput ? Number(hoursInput.value) : 0;
         const level = document.getElementById(`workerLevel_${idx}`)?.value || "中级";
         const note = document.getElementById(`workerNote_${idx}`)?.value;
-        if (hours && hours > 0) {
+        if (!isNaN(hours) && hours > 0) {
           totalHours += hours;
           logs.push({
             workerId: w.id,
@@ -4833,10 +4938,11 @@ function openCompleteProjectForm(id) {
       });
       
       outsourcedWorkers.forEach((name, idx) => {
-        const hours = parseFloat(document.getElementById(`outsourcedHours_${idx}`)?.value);
+        const hoursInput = document.getElementById(`outsourcedHours_${idx}`);
+        const hours = hoursInput ? Number(hoursInput.value) : 0;
         const level = document.getElementById(`outsourcedLevel_${idx}`)?.value || "中级";
         const note = document.getElementById(`outsourcedNote_${idx}`)?.value;
-        if (hours && hours > 0) {
+        if (!isNaN(hours) && hours > 0) {
           totalHours += hours;
           logs.push({
             workerId: "outsourced:" + name,
@@ -4850,42 +4956,59 @@ function openCompleteProjectForm(id) {
         }
       });
       
+      if (workers.length === 0 && outsourcedWorkers.length === 0) {
+        toast("项目未分配施工人员，无法登记工时");
+        return false;
+      }
+      
       if (totalHours <= 0) {
         toast("请至少填写一个人员的工时");
         return false;
       }
       
+      const pauseCount = derivePauseCount(p);
+      if (pauseCount > 0) {
+        const pauseDurationTotal = derivePauseDuration(p);
+        const pauseHours = Math.floor(pauseDurationTotal);
+        const pauseMins = Math.floor((pauseDurationTotal - pauseHours) * 60);
+        const pauseTimeStr = pauseHours > 0 ? `${pauseHours}小时${pauseMins}分钟` : `${pauseMins}分钟`;
+        const confirmHtml = `该项目施工过程中曾暂停 ${pauseCount} 次，累计暂停 ${pauseTimeStr}，已从总用时中扣除。<br><br>确认要完成该项目吗？`;
+        if (!(await confirmDialog(confirmHtml, "确认完工"))) {
+          return false;
+        }
+      }
+      
       const now = new Date();
       const nowStr = now.toISOString();
       
-      const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+      const accumulatedWorkHours = p.accumulatedWorkHours || 0;
       let currentWorkDuration = 0;
-      if (p.started_at) {
-        const started = new Date(p.started_at);
+      if (p.startedAt) {
+        const started = new Date(p.startedAt);
         let endTime = now;
-        if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
-          endTime = new Date(p.pausedAt || p.paused_at);
+        if (p.status === STATUS.PAUSED && (p.pausedAt)) {
+          endTime = new Date(p.pausedAt);
         }
         currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
       }
       const totalWorkHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
       
       const workSessions = [...(p.workSessions || [])];
-      if (p.started_at && currentWorkDuration > 0) {
+      if (p.startedAt && currentWorkDuration > 0) {
         let endTime = nowStr;
-        if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
-          endTime = p.pausedAt || p.paused_at;
+        if (p.status === STATUS.PAUSED && (p.pausedAt)) {
+          endTime = p.pausedAt;
         }
         workSessions.push({
-          startTime: p.started_at,
+          startTime: p.startedAt,
           endTime: endTime,
           duration: currentWorkDuration
         });
       }
       
-      p.status = "已完工";
+      p.status = STATUS.DONE;
       p.actualHours = totalHours;
-      p.finished_at = nowStr;
+      p.finishedAt = nowStr;
       p.accumulatedWorkHours = totalWorkHours;
       p.workSessions = workSessions;
       
@@ -4897,7 +5020,14 @@ function openCompleteProjectForm(id) {
       if (MODE === "cloud" && cloudConfigured()) {
         sb.from("work_logs").delete().eq("project_id", id).eq("date", dateStr).then(() => {
           return Promise.all([
-            sb.from("projects").update({ status: "已完工", actual_hours: p.actualHours, finished_at: nowStr, accumulated_work_hours: totalWorkHours, updated_at: nowStr }).eq("id", id),
+            sb.from("projects").update({ 
+              status: STATUS.DONE, 
+              actual_hours: p.actualHours, 
+              finished_at: nowStr, 
+              accumulated_work_hours: totalWorkHours, 
+              work_sessions: workSessions,
+              updated_at: nowStr 
+            }).eq("id", id),
             ...newLogs.map(log => 
               sb.from("work_logs").insert({
                 id: log.id, project_id: id, worker_id: log.workerId,
@@ -5108,9 +5238,7 @@ function collectProjectStats() {
     .map((p) => {
       const est = Number(p.estimatedHours) || 0;
       const act = (p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
-      const pauseDuration = Number(p.pauseDurationTotal) || 0;
-      const effectiveAct = Math.max(0, act - pauseDuration);
-      const diff = effectiveAct - est;
+      const diff = act - est;
       const hasActual = act > 0;
       // 按施工人员汇总工时（区分内部和外协）
       const workerMap = {};
@@ -5147,7 +5275,7 @@ function collectProjectStats() {
         name: p.name, 
         status: p.status, 
         est, 
-        act: effectiveAct, 
+        act, 
         diff, 
         hasActual, 
         workerHours, 
@@ -5230,7 +5358,7 @@ function renderStats() {
             calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""}">
               <div class="day-num">${day}</div>
               ${hours ? `<div class="day-hours">${hours}h</div>` : ""}
-              ${isLeaveDay ? `<div class="day-leave">🏥</div>` : ""}
+              ${isLeaveDay ? `<div class="day-leave">🌴</div>` : ""}
             </div>`;
           }
           
@@ -5280,7 +5408,7 @@ function renderStats() {
           </table>
           ${r.leaveRecords.length > 0 ? `
             <div style="padding:12px;border-top:1px solid var(--border);background:#fef2f2">
-              <div style="font-weight:600;color:#dc2626;margin-bottom:8px">🏥 本月请假记录</div>
+              <div style="font-weight:600;color:#dc2626;margin-bottom:8px">🌴 本月请假记录</div>
               <div style="display:flex;flex-direction:column;gap:4px">
                 ${r.leaveRecords.map((lr) => `
                   <div style="font-size:13px">
@@ -5422,7 +5550,7 @@ td {border:1px solid #e5e7eb;padding:8px 12px;text-align:center;}
 
   const hasLeaves = rows.some((r) => r.leaveRecords && r.leaveRecords.length > 0);
   if (hasLeaves) {
-    html += '<div class="title">🏥 请假记录</div>\n<table>\n<col width="120"/><col width="180"/><col width="300"/>\n<tr><th>施工人员</th><th>请假时段</th><th>请假原因</th></tr>';
+    html += '<div class="title">🌴 请假记录</div>\n<table>\n<col width="120"/><col width="180"/><col width="300"/>\n<tr><th>施工人员</th><th>请假时段</th><th>请假原因</th></tr>';
 
     rows.forEach((r) => {
       if (!r.leaveRecords || r.leaveRecords.length === 0) return;
@@ -5664,7 +5792,7 @@ async function changeAccountStore(id, storeId) {
 }
 
 async function deleteAccount(id, email) {
-  if (!confirm(`确定要删除账号 ${email} 吗？此操作不可撤销。`)) return;
+  if (!(await confirmDialog(`确定要删除账号 ${email} 吗？此操作不可撤销。`, "删除账号"))) return;
   await repo.deleteAccount(id);
   toast("账号已删除");
   renderAccounts();
@@ -5721,21 +5849,56 @@ let modalOnClose = null;
 
 function confirmDialog(message, title = "确认操作") {
   return new Promise((resolve) => {
-    let confirmed = false;
+    let resolved = false;
     modal.open(title, `<p>${message}</p>`, {
       confirmText: "确定",
       cancelText: "取消",
       onConfirm: () => {
-        confirmed = true;
-        modal.close();
+        if (resolved) return;
+        resolved = true;
         resolve(true);
+        return true;
       },
       onClose: () => {
-        if (!confirmed) {
-          resolve(false);
-        }
+        if (resolved) return;
+        resolved = true;
+        resolve(false);
       }
     });
+  });
+}
+
+function promptDialog(message, title = "输入", defaultValue = "") {
+  return new Promise((resolve) => {
+    const inputId = "promptInput_" + Date.now();
+    let resolved = false;
+    modal.open(title, `
+      <p>${message}</p>
+      <input type="text" id="${inputId}" class="input" style="width:100%;margin-top:12px;" value="${esc(defaultValue)}">
+    `, {
+      confirmText: "确定",
+      cancelText: "取消",
+      onConfirm: () => {
+        if (resolved) return;
+        resolved = true;
+        const input = document.getElementById(inputId);
+        const value = input ? input.value.trim() : "";
+        resolve(value || null);
+        return true;
+      },
+      onClose: () => {
+        if (resolved) return;
+        resolved = true;
+        resolve(null);
+      }
+    });
+    setTimeout(() => {
+      const input = document.getElementById(inputId);
+      if (input) {
+        input.focus();
+        input.select();
+      }
+    }, 100);
   });
 }
 
@@ -5984,7 +6147,7 @@ function showOperationLogs() {
 }
 
 async function clearOperationLogs() {
-  if (!confirm("确定要清除所有操作日志吗？此操作不可撤销。")) return;
+  if (!(await confirmDialog("确定要清除所有操作日志吗？此操作不可撤销。", "清除日志"))) return;
   
   cache.operationLogs = [];
   saveLocal();
@@ -6044,8 +6207,8 @@ function exportProjects() {
     p.workerCount || 1,
     (p.assignedWorkerIds || []).map(wid => getWorker(wid)?.name || wid).join(", ") || "",
     p.outsourcedWorkers || "",
-    p.started_at || "",
-    p.finished_at || "",
+    p.startedAt || "",
+    p.finishedAt || "",
     p.note || "",
     p.createdAt || "",
     p.updatedAt || ""
@@ -6311,7 +6474,7 @@ async function importProject(row) {
     address: row["安装地址"] || row["address"] || "",
     appointmentTime: row["预约时间"] || row["appointmentTime"] || "",
     estimatedHours: parseFloat(row["预计工时"] || row["estimatedHours"] || "0"),
-    status: row["状态"] || row["status"] || "预约中",
+    status: row["状态"] || row["status"] || STATUS.BOOKED,
     assignedWorkerIds: row["分配人员ID"] ? row["分配人员ID"].split(",") : [],
     outsourcedHours: parseFloat(row["外协工时"] || row["outsourcedHours"] || "0"),
     outsourcedWorkers: row["外协人员"] || row["outsourcedWorkers"] || "",
@@ -6757,7 +6920,7 @@ async function submitHolidayForm() {
   
   const existing = cache.holidays.find(h => h.date === date);
   if (existing) {
-    if (!confirm("该日期已存在节假日设置，确定覆盖吗？")) return;
+    if (!(await confirmDialog("该日期已存在节假日设置，确定覆盖吗？", "覆盖节假日"))) return;
   }
   
   await repo.saveHoliday({ date, name, isWorkday });
@@ -6768,7 +6931,7 @@ async function submitHolidayForm() {
 }
 
 async function deleteHoliday(id) {
-  if (!confirm("确定删除该节假日设置？")) return;
+  if (!(await confirmDialog("确定删除该节假日设置？", "删除节假日"))) return;
   
   await repo.deleteHoliday(id);
   await repo.loadAll();
@@ -6874,7 +7037,7 @@ async function approveLeave(id) {
       return `• ${p.name}（${storeName}）`;
     }).join("\n");
     
-    if (!confirm(`⚠️ 警告：\n\n该员工在此时间段有 ${conflicts.length} 个项目排期冲突！\n\n冲突项目：\n${conflictMsg}\n\n批准后可能导致项目延期或人员调配困难，确认批准吗？`)) {
+    if (!(await confirmDialog(`⚠️ 警告：<br><br>该员工在此时间段有 ${conflicts.length} 个项目排期冲突！<br><br>冲突项目：<br>${conflictMsg.replace(/\n/g, "<br>")}<br><br>批准后可能导致项目延期或人员调配困难，确认批准吗？`, "排期冲突"))) {
       return;
     }
   }
@@ -6903,8 +7066,8 @@ async function rejectLeave(id) {
     return;
   }
   
-  const note = prompt("请输入拒绝原因：");
-  if (note === null) return;
+  const note = await promptDialog("请输入拒绝原因：", "拒绝申请");
+  if (!note) return;
   
   await repo.saveLeaveRecord({
     ...record,
@@ -6927,7 +7090,7 @@ async function withdrawLeave(id) {
   if (!record) return;
   
   if (record.status === "approved") {
-    if (!confirm(`确定要撤回 ${record.workerName} 的 ${LEAVE_TYPE_LABEL[record.leaveType]} 批准吗？`)) return;
+    if (!(await confirmDialog(`确定要撤回 ${record.workerName} 的 ${LEAVE_TYPE_LABEL[record.leaveType]} 批准吗？`, "撤回批准"))) return;
     record.status = "pending";
     record.reviewNote = "";
     record.reviewerId = "";
@@ -6938,7 +7101,7 @@ async function withdrawLeave(id) {
     renderAll();
     toast("请假批准已撤回，状态已改为待审批");
   } else {
-    if (!confirm(`确定要撤回您的 ${LEAVE_TYPE_LABEL[record.leaveType]} 申请吗？`)) return;
+    if (!(await confirmDialog(`确定要撤回您的 ${LEAVE_TYPE_LABEL[record.leaveType]} 申请吗？`, "撤回申请"))) return;
     await repo.deleteLeaveRecord(id);
     logOperation("LEAVE_WITHDRAW", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `时间段：${record.startDate}~${record.endDate}`);
     renderAll();
@@ -7044,11 +7207,14 @@ function projectsOnDate(ds) {
 }
 
 const STATUS_DOT = {
-  "预约中": "booked",
-  "施工中": "working",
-  "已完工": "done",
-  "已验收": "accepted",
-  "已审核": "reviewed",
+  [STATUS.BOOKED]: "booked",
+  [STATUS.WORKING]: "working",
+  [STATUS.PAUSED]: "paused",
+  [STATUS.DELAYED]: "delayed",
+  [STATUS.DONE]: "done",
+  [STATUS.ACCEPTED]: "accepted",
+  [STATUS.REVIEWED]: "reviewed",
+  [STATUS.CANCELLED]: "cancelled",
 };
 
 function renderCalendar() {
@@ -7086,6 +7252,8 @@ function renderCalendar() {
     const items = projectsOnDate(ds);
     const isToday = ds === todayKey;
     const isSelected = ds === calSelectedDate;
+    const isHolidayDate = isHoliday(ds);
+    const holidayIcon = isHolidayDate ? "🎊" : "";
     const evHtml = items.slice(0, 3).map((p) => {
       const isRepair = p.repairOrder && p.repairOrder.status === "待维修";
       const dotClass = isRepair ? "repair" : (STATUS_DOT[p.status] || "");
@@ -7101,8 +7269,8 @@ function renderCalendar() {
     else if (totalHours > 32) hoursClass += " warn";
     const hoursHtml = totalHours > 0 ? `<div class="${hoursClass}" title="当天预约工时 ${totalHours}h">${totalHours}h</div>` : "";
     cells += `
-      <div class="cal-cell ${items.length ? "has" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""}" onclick="selectCalDay('${ds}');">
-        <div class="cal-daynum">${day}${countBadge}</div>
+      <div class="cal-cell ${items.length ? "has" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""} ${isHolidayDate ? "holiday" : ""}" onclick="selectCalDay('${ds}');">
+        <div class="cal-daynum">${day}${countBadge}${holidayIcon}</div>
         ${evHtml}${more}${hoursHtml}
       </div>`;
   }
@@ -7405,9 +7573,10 @@ function renderTimelineInDetail() {
       const hasInternal = (p.assignedWorkerIds || []).length > 0;
       const isOutsourcedTask = isOutsourced(p);
       const statusClass = isOutsourcedTask ? "timeline-task-outsourced" :
-                         p.status === "施工中" ? "timeline-task-working" :
-                         p.status === "已完工" ? "timeline-task-done" :
-                         p.status === "已验收" ? "timeline-task-accepted" :
+                         p.status === STATUS.WORKING ? "timeline-task-working" :
+                         p.status === STATUS.DONE ? "timeline-task-done" :
+                         p.status === STATUS.ACCEPTED ? "timeline-task-accepted" :
+                         p.status === STATUS.CANCELLED ? "timeline-task-cancelled" :
                          "timeline-task-default";
 
       const conflicts = hasInternal && !isCompleted(p) ? (p.assignedWorkerIds || []).reduce((total, wid) => {
@@ -7415,13 +7584,13 @@ function renderTimelineInDetail() {
       }, 0) : 0;
       const conflictClass = conflicts >= 1 ? "timeline-task-conflict" : "";
       const overtimeClass = isOvertime ? "timeline-task-overtime" : "";
-      const canDrag = p.status === "预约中";
+      const canDrag = p.status === STATUS.BOOKED;
       const dragAttr = canDrag
         ? `draggable="true" ondragstart="timelineDragStart(event)" ondragend="timelineDragEnd(event)" onmousedown="timelineDragMouseDown(event)"`
         : `draggable="false"`;
       const lockClass = canDrag ? "" : "timeline-task-locked";
       
-      const isOverdue = p.status === "预约中" && !p.started_at && new Date() > end;
+      const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
       const overdueClass = isOverdue ? "timeline-task-overdue" : "";
 
       const pad = (n) => String(n).padStart(2, "0");
@@ -7525,7 +7694,7 @@ function renderTimelineInDetail() {
             }
           }
           if (leaveInfo.length === 0) return "";
-          return `<div class="tl-leave-section"><div class="tl-leave-header">🏥 近期请假人员</div><div class="tl-leave-list">${leaveInfo.join("")}</div></div>`;
+          return `<div class="tl-leave-section"><div class="tl-leave-header">🌴 近期请假人员</div><div class="tl-leave-list">${leaveInfo.join("")}</div></div>`;
         })()}
       </div>`;
   }
@@ -7620,7 +7789,7 @@ function openTimelineActionMenu(taskEl, projectId) {
     const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
     const disabledAttr = hasLeaveConflict ? ' disabled' : '';
     let label = esc(w.name);
-    if (hasLeaveConflict) label += ' 🏥请假';
+    if (hasLeaveConflict) label += ' 🌴请假';
     else if (conflicts.length) label += ' ⚠冲突';
     return `<option value="${w.id}"${disabledAttr}>${label}</option>`;
   }).join("");
@@ -7729,10 +7898,10 @@ async function timelineQuickAssignWorker(pid, wid) {
   const conflicts = assignConflicts(p, wid);
   if (conflicts.length) {
     const w = getWorker(wid);
-    const msg = `${w ? w.name : "该人员"} 在此时间段已被分配到：\n` +
-      conflicts.map((c) => `· ${c.name}（${fmtTimeRange(c)}）`).join("\n") +
-      `\n\n存在时间冲突，仍要分配吗？`;
-    if (!confirm(msg)) {
+    const msg = `${w ? w.name : "该人员"} 在此时间段已被分配到：<br>` +
+      conflicts.map((c) => `· ${c.name}（${fmtTimeRange(c)}）`).join("<br>") +
+      `<br><br>存在时间冲突，仍要分配吗？`;
+    if (!(await confirmDialog(msg, "时间冲突"))) {
       document.getElementById("tlMenuAssignSel").value = "";
       return;
     }
@@ -8478,7 +8647,7 @@ async function migrateLocalToCloud() {
     toast("本地没有可导入的数据");
     return;
   }
-  if (!confirm("⚠️ 危险操作：将把本机浏览器保存的历史数据上传到云端（不会删除本地数据）。确定继续？")) return;
+  if (!(await confirmDialog("⚠️ 危险操作：将把本机浏览器保存的历史数据上传到云端（不会删除本地数据）。确定继续？", "上传到云端"))) return;
 
   try {
     if ((local.workers || []).length) {
@@ -8519,7 +8688,7 @@ async function exportCloudToLocal() {
     toast("只有总经理可以执行此操作");
     return;
   }
-  if (!confirm("⚠️ 危险操作：将把云端数据导出到本地浏览器存储，会覆盖本地已有数据。确定继续？")) return;
+  if (!(await confirmDialog("⚠️ 危险操作：将把云端数据导出到本地浏览器存储，会覆盖本地已有数据。确定继续？", "导出到本地"))) return;
   
   try {
     await repo.loadAll();
@@ -8657,9 +8826,6 @@ async function init() {
   if (cloudConfigured()) {
     MODE = "cloud";
     sb = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
-    if (window.APP_CONFIG.SUPABASE_SERVICE_KEY) {
-      sbAdmin = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_SERVICE_KEY);
-    }
     await startCloudSession();
   } else {
     MODE = "local";
@@ -8682,7 +8848,7 @@ async function init() {
 document.addEventListener("DOMContentLoaded", init);
 
 /* ---------- PWA：注册 Service Worker（离线可用 / 可安装到主屏 / 自动更新） ---------- */
-if ("serviceWorker" in navigator) {
+if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("sw.js").then((registration) => {
       registration.update();
@@ -8691,9 +8857,9 @@ if ("serviceWorker" in navigator) {
         window.location.reload();
       });
       
-      navigator.serviceWorker.addEventListener("message", (e) => {
+      navigator.serviceWorker.addEventListener("message", async (e) => {
         if (e.data && e.data.type === "VERSION_UPDATED") {
-          if (confirm(`应用已更新至新版本 ${e.data.version}！是否立即刷新？`)) {
+          if (await confirmDialog(`应用已更新至新版本 ${e.data.version}！是否立即刷新？`, "应用更新")) {
             window.location.reload();
           }
         }

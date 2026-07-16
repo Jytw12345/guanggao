@@ -3,6 +3,7 @@
   --card: #ffffff;
   --primary: #2f6fed;
   --primary-dark: #2456c0;
+  --primary-light: #dbeafe;
   --text: #1f2937;
   --muted: #6b7280;
   --border: #e5e7eb;
@@ -21,6 +22,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-size: 14px;
+  overflow-x: hidden;
 }
 
 .app-header {
@@ -367,9 +369,31 @@ body.timeline-view .container {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .section-head h2 { font-size: 18px; margin: 0; }
+
+.project-select-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.project-select-wrapper label {
+  font-size: 14px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.construction-select {
+  min-width: 280px;
+  max-width: 400px;
+  padding: 8px 14px;
+  font-size: 14px;
+}
 
 .hint {
   color: var(--muted);
@@ -502,6 +526,9 @@ body.timeline-view .container {
 .badge.已验收 { background: #ede9fe; color: #7c3aed; }
 .badge.overdue { background: #fee2e2; color: #dc2626; animation: pulse 1.5s infinite; }
 .badge.已审核 { background: #cffafe; color: #0e7490; }
+.badge.已暂停 { background: #fff7ed; color: #ea580c; }
+.badge.已延期 { background: #fee2e2; color: #dc2626; }
+.badge.已取消 { background: #fee2e2; color: #dc2626; }
 .badge.modified { background: #ede9fe; color: #7c3aed; }
 
 .empty {
@@ -758,24 +785,28 @@ textarea.input { resize: vertical; min-height: 50px; }
 
 .sched-cal-cell {
   min-height: 90px;
-  border-radius: 6px;
-  padding: 3px 4px;
+  border-radius: 8px;
+  padding: 4px 6px;
   cursor: pointer;
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  transition: background 0.15s;
-  border: 2px solid transparent;
+  transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+  border: 1px solid var(--border);
+  background: #fff;
   overflow: hidden;
 }
 
 .sched-cal-cell:hover {
-  background: #f3f4f6;
+  border-color: var(--primary);
+  background: #f8faff;
 }
 
 .sched-cal-cell.empty {
   cursor: default;
+  background: transparent;
+  border-color: transparent;
 }
 
 .sched-cal-cell.empty:hover {
@@ -784,12 +815,14 @@ textarea.input { resize: vertical; min-height: 50px; }
 
 .sched-cal-cell.other-month {
   cursor: default;
+  background: #f9fafb;
 }
 .sched-cal-cell.other-month .sched-cal-day {
-  color: #d1d5db;
+  color: #9ca3af;
 }
 .sched-cal-cell.other-month:hover {
-  background: transparent;
+  background: #f9fafb;
+  border-color: var(--border);
 }
 
 .sched-cal-cell.today .sched-cal-day {
@@ -797,11 +830,34 @@ textarea.input { resize: vertical; min-height: 50px; }
   font-weight: 700;
 }
 
+.sched-cal-cell.weekend {
+  background: #f0f9ff;
+}
+
+.sched-cal-cell.weekend .sched-cal-day {
+  color: var(--primary);
+}
+
+.sched-cal-cell.holiday {
+  background: #fdf4ff;
+  border-color: #f3d9fa;
+}
+
+.sched-cal-cell.holiday .sched-cal-day {
+  color: #8b5cf6;
+}
+
+.sched-cal-cell.has {
+  background: #f8faff;
+}
+
 .sched-cal-cell.today {
-  background: #eff6ff;
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
 }
 
 .sched-cal-cell.selected {
+  box-shadow: 0 0 0 2px var(--primary);
   border-color: var(--primary);
   background: #eff6ff;
 }
@@ -1624,6 +1680,21 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
     font-size: 17px;
   }
 
+  .project-select-wrapper {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .project-select-wrapper label {
+    display: none;
+  }
+
+  .construction-select {
+    min-width: auto;
+    width: 100%;
+    max-width: none;
+  }
+
   .card-row {
     padding: 6px 0;
     font-size: 14px;
@@ -2376,6 +2447,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 .cal-cell.has { background: #f8faff; }
 .cal-cell.today { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
 .cal-cell.selected { box-shadow: 0 0 0 2px var(--primary); border-color: var(--primary); }
+.cal-cell.holiday { background: #fef3c7; border-color: #fde68a; }
 .cal-daynum {
   font-size: 13px;
   font-weight: 600;
@@ -2627,6 +2699,9 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 .dot.done { background: var(--success); }
 .dot.accepted { background: #7c3aed; }
 .dot.reviewed { background: #0e7490; }
+.dot.paused { background: #ea580c; }
+.dot.delayed { background: #dc2626; }
+.dot.cancelled { background: #ef4444; }
 .dot.repair { background: #f59e0b; }
 
 .cal-day-detail { margin-top: 18px; }
@@ -2984,6 +3059,11 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 .timeline-task-accepted {
   background: #faf5ff;
   border-color: #7c3aed;
+}
+.timeline-task-cancelled {
+  background: #fee2e2;
+  border-color: #ef4444;
+  opacity: 0.7;
 }
 .timeline-task-outsourced {
   background: #fdf4ff;

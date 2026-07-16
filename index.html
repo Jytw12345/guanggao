@@ -65,7 +65,7 @@
     </div>
     <nav class="tabs">
       <button class="tab-btn active" data-tab="projects">项目预约</button>
-      <button class="tab-btn" data-tab="calendar">日历</button>
+      <button class="tab-btn" data-tab="calendar">预约日历</button>
       <button class="tab-btn" data-tab="construction">施工管理</button>
       <button class="tab-btn" data-tab="stats">工时统计</button>
       <button class="tab-btn" data-tab="storeStats">店面统计</button>
@@ -81,7 +81,7 @@
 
   <nav class="bottom-nav">
     <button class="bottom-nav-item active" data-tab="projects" title="项目预约">📋</button>
-    <button class="bottom-nav-item" data-tab="calendar" title="日历">📅</button>
+    <button class="bottom-nav-item" data-tab="calendar" title="预约日历">📅</button>
     <button class="bottom-nav-item" data-tab="construction" title="施工管理">🏗️</button>
     <button class="bottom-nav-item" data-tab="workers" title="施工人员">👷</button>
     <button class="bottom-nav-item" data-tab="leaves" title="请假管理">🏥</button>
@@ -102,9 +102,12 @@
           <option value="">全部状态</option>
           <option value="预约中">预约中</option>
           <option value="施工中">施工中</option>
+          <option value="已暂停">已暂停</option>
+          <option value="已延期">已延期</option>
           <option value="已完工">已完工</option>
           <option value="已验收">已验收</option>
           <option value="已审核">已审核</option>
+          <option value="已取消">已取消</option>
         </select>
         <select id="projectStoreFilter" class="input">
           <option value="">全部门店</option>
@@ -153,13 +156,14 @@
     <section id="construction" class="tab-panel">
       <div class="section-head">
         <h2>施工管理</h2>
+        <div class="project-select-wrapper">
+          <label>选择项目：</label>
+          <select id="constructionProjectSelect" class="input construction-select"></select>
+        </div>
       </div>
       <p class="hint">选择一个进入施工阶段的项目，为其分配施工人员、分人填写施工工时，并登记工程实际用的工时与验收信息。</p>
-      <div id="workerScheduleDescription"></div>
-      <div class="toolbar">
-        <select id="constructionProjectSelect" class="input wide"></select>
-      </div>
       <div id="constructionDetail" class="construction-detail"></div>
+      <div id="workerScheduleDescription"></div>
     </section>
 
     <!-- 工时统计 -->
