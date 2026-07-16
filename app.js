@@ -358,11 +358,21 @@ function getProjectProgress(p, est, act, hasActual, done) {
     return Math.min(100, (act / est) * 100);
   }
   
-  if (p.status === "施工中" && p.started_at) {
+  if ((p.status === "施工中" || p.status === "已暂停") && p.started_at) {
     const started = new Date(p.started_at);
     const now = new Date();
-    const elapsedHours = (now - started) / (1000 * 60 * 60);
-    const timeProgress = (elapsedHours / est) * 100;
+    
+    const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+    
+    let currentWorkDuration = 0;
+    let endTime = now;
+    if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
+      endTime = new Date(p.pausedAt || p.paused_at);
+    }
+    currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
+    
+    const totalWorkHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
+    const timeProgress = (totalWorkHours / est) * 100;
     return Math.min(100, Math.max(0, timeProgress));
   }
   
@@ -392,6 +402,34 @@ function calcDuration(start, end) {
   const days = Math.floor(diffMs / (1000 * 60 * 60 * 24));
   const hours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
   const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+  if (days > 0) return `${days}天 ${hours}小时 ${mins}分钟`;
+  if (hours > 0) return `${hours}小时 ${mins}分钟`;
+  return `${mins}分钟`;
+}
+
+function calcActualWorkDuration(p) {
+  const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+  if (accumulatedWorkHours > 0) {
+    const hours = Math.floor(accumulatedWorkHours);
+    const mins = Math.floor((accumulatedWorkHours - hours) * 60);
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    if (days > 0) return `${days}天 ${remainingHours}小时 ${mins}分钟`;
+    if (hours > 0) return `${hours}小时 ${mins}分钟`;
+    return `${mins}分钟`;
+  }
+  
+  if (!p.started_at || !p.finished_at) return "—";
+  const s = new Date(p.started_at);
+  const e = new Date(p.finished_at);
+  if (isNaN(s) || isNaN(e)) return "—";
+  const diffMs = e.getTime() - s.getTime();
+  const pauseDurationTotal = p.pauseDurationTotal || p.pause_duration_total || 0;
+  const actualMs = diffMs - pauseDurationTotal * 60 * 60 * 1000;
+  if (actualMs <= 0) return "0分钟";
+  const days = Math.floor(actualMs / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((actualMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const mins = Math.floor((actualMs % (1000 * 60 * 60)) / (1000 * 60));
   if (days > 0) return `${days}天 ${hours}小时 ${mins}分钟`;
   if (hours > 0) return `${hours}小时 ${mins}分钟`;
   return `${mins}分钟`;
@@ -481,6 +519,7 @@ const mapProject = (r) => ({
   assignedWorkerIds: Array.isArray(r.assigned_workers) ? r.assigned_workers : [],
   outsourcedWorkers: r.outsourced_workers || "",
   started_at: r.started_at || "",
+  originalStartedAt: r.original_started_at || "",
   finished_at: r.finished_at || "",
   createdAt: r.created_at,
   workLogs: [],
@@ -490,7 +529,9 @@ const mapProject = (r) => ({
   pauseReason: r.pause_reason || null,
   pauseCount: Number(r.pause_count) || 0,
   pauseDurationTotal: Number(r.pause_duration_total) || 0,
+  accumulatedWorkHours: Number(r.accumulated_work_hours) || 0,
   resumedAt: r.resumed_at || null,
+  workSessions: r.work_sessions ? (typeof r.work_sessions === "string" ? JSON.parse(r.work_sessions) : r.work_sessions) : [],
   delayReason: r.delay_reason || null,
   delayCount: Number(r.delay_count) || 0,
   scheduleHistory: r.schedule_history ? (typeof r.schedule_history === "string" ? JSON.parse(r.schedule_history) : r.schedule_history) : [],
@@ -515,6 +556,7 @@ const projectToRow = (p) => ({
   assigned_workers: p.assignedWorkerIds || [],
   outsourced_workers: p.outsourcedWorkers || "",
   started_at: p.started_at || null,
+  original_started_at: p.originalStartedAt || null,
   finished_at: p.finished_at || null,
   updated_at: new Date().toISOString(),
   repair_order: p.repairOrder ? JSON.stringify(p.repairOrder) : null,
@@ -522,7 +564,9 @@ const projectToRow = (p) => ({
   pause_reason: p.pauseReason || null,
   pause_count: p.pauseCount || 0,
   pause_duration_total: p.pauseDurationTotal || 0,
+  accumulated_work_hours: p.accumulatedWorkHours || 0,
   resumed_at: p.resumedAt || null,
+  work_sessions: p.workSessions && Array.isArray(p.workSessions) ? JSON.stringify(p.workSessions) : null,
   delay_reason: p.delayReason || null,
   delay_count: p.delayCount || 0,
   schedule_history: p.scheduleHistory && p.scheduleHistory.length > 0 ? JSON.stringify(p.scheduleHistory) : null,
@@ -2691,7 +2735,7 @@ function renderProjects() {
         ` : ""}
         <div class="card-row"><span>开始施工</span><b>${p.started_at ? esc(fmtDateTime(p.started_at)) : "—"}</b></div>
         <div class="card-row"><span>完工时间</span><b>${p.finished_at ? esc(fmtDateTime(p.finished_at)) : "—"}</b></div>
-        <div class="card-row"><span>施工时长</span><b>${p.started_at && p.finished_at ? esc(calcDuration(p.started_at, p.finished_at)) : "—"}</b></div>
+        <div class="card-row"><span>施工时长</span><b>${p.started_at && p.finished_at ? esc(calcActualWorkDuration(p)) : "—"}</b></div>
         <div class="card-actions">
           <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
           ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">编辑</button>` : ""}
@@ -3260,7 +3304,7 @@ function renderConstruction() {
         <div class="info-item"><div class="k">工时差异（实际−预计）</div><div class="v">${diffLabel(p)}</div></div>
         ${p.started_at ? `<div class="info-item"><div class="k">⏰ 开始施工时间</div><div class="v">${esc(fmtDateTime(p.started_at))}</div></div>` : ""}
         ${p.finished_at ? `<div class="info-item"><div class="k">✅ 完工时间</div><div class="v">${esc(fmtDateTime(p.finished_at))}</div></div>` : ""}
-        ${p.started_at && p.finished_at ? `<div class="info-item"><div class="k">⏱️ 实际施工时长</div><div class="v"><b>${esc(calcDuration(p.started_at, p.finished_at))}</b></div></div>` : ""}
+        ${p.started_at && p.finished_at ? `<div class="info-item"><div class="k">⏱️ 实际施工时长</div><div class="v"><b>${esc(calcActualWorkDuration(p))}</b></div></div>` : ""}
       </div>
       ${canEdit || (canReview && !reviewed) ? `
       <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:16px;align-items:center">
@@ -3702,6 +3746,9 @@ async function updateProjectStatus(id, newStatus) {
   const now = new Date().toISOString();
   if (newStatus === STATUS.WORKING) {
     patch.started_at = now;
+    if (!p.originalStartedAt && !p.original_started_at) {
+      patch.originalStartedAt = now;
+    }
   }
   clearTimeout(reloadTimer);
   await repo.patchProject(id, patch);
@@ -3732,14 +3779,29 @@ async function pauseProject(id) {
   const reason = prompt("请输入暂停原因：\n\n1. 客户原因\n2. 材料不足\n3. 天气原因\n4. 其他", "客户原因");
   if (!reason) return;
   
-  const now = new Date().toISOString();
+  const now = new Date();
+  const nowStr = now.toISOString();
+  
+  const started = new Date(p.started_at);
+  const workDuration = (now - started) / (1000 * 60 * 60);
+  const accumulatedWorkHours = (p.accumulatedWorkHours || p.accumulated_work_hours || 0) + workDuration;
+  
+  const workSessions = [...(p.workSessions || [])];
+  workSessions.push({
+    startTime: p.started_at,
+    endTime: nowStr,
+    duration: workDuration
+  });
+  
   const pauseCount = (p.pauseCount || p.pause_count || 0) + 1;
   
   const patch = {
     status: STATUS.PAUSED,
-    pausedAt: now,
+    pausedAt: nowStr,
     pauseReason: reason,
-    pauseCount: pauseCount
+    pauseCount: pauseCount,
+    accumulatedWorkHours: accumulatedWorkHours,
+    workSessions: workSessions
   };
   
   clearTimeout(reloadTimer);
@@ -3763,18 +3825,12 @@ async function resumeProject(id) {
   
   const now = new Date().toISOString();
   
-  let pauseDurationTotal = p.pauseDurationTotal || p.pause_duration_total || 0;
-  if (p.pausedAt || p.paused_at) {
-    const pauseDuration = (new Date(now) - new Date(p.pausedAt || p.paused_at)) / (1000 * 60 * 60);
-    pauseDurationTotal = pauseDurationTotal + pauseDuration;
-  }
-  
   const patch = {
     status: STATUS.WORKING,
+    started_at: now,
     pausedAt: null,
     pauseReason: null,
-    resumedAt: now,
-    pauseDurationTotal: pauseDurationTotal
+    resumedAt: now
   };
   
   clearTimeout(reloadTimer);
@@ -3858,6 +3914,36 @@ function delayProject(id) {
         return false;
       }
       
+      let newEndTime = "";
+      const estimatedHours = p.estimatedHours || p.estimated_hours || 0;
+      if (estimatedHours > 0) {
+        let remainingHours = estimatedHours;
+        
+        if (p.started_at) {
+          const started = new Date(p.started_at);
+          let endTime = new Date();
+          
+          if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
+            endTime = new Date(p.pausedAt || p.paused_at);
+          }
+          
+          const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+          const currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
+          const actualWorkedHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
+          remainingHours = Math.max(0, estimatedHours - actualWorkedHours);
+        }
+        
+        const newStart = new Date(newAppointmentTime);
+        const newEnd = new Date(newStart.getTime() + remainingHours * 60 * 60 * 1000);
+        newEndTime = newEnd.toISOString();
+      } else if (p.endTime) {
+        const originalStart = new Date(p.appointmentTime);
+        const originalEnd = new Date(p.endTime);
+        const durationMs = originalEnd.getTime() - originalStart.getTime();
+        const newEnd = new Date(new Date(newAppointmentTime).getTime() + durationMs);
+        newEndTime = newEnd.toISOString();
+      }
+      
       const existingHistory = p.scheduleHistory || p.schedule_history || [];
       const scheduleHistory = [...existingHistory, {
         original_time: p.appointmentTime,
@@ -3871,6 +3957,7 @@ function delayProject(id) {
       const patch = {
         status: STATUS.DELAYED,
         appointmentTime: newAppointmentTime,
+        endTime: newEndTime,
         delayReason: reason,
         delayCount: delayCount,
         scheduleHistory: scheduleHistory
@@ -3976,7 +4063,10 @@ async function addWorkLog(id) {
   }
   
   await repo.addWorkLog(id, { workerId, workerName, hours, date, note, level, isOutsourced: type === "outsourced" });
-  if (p.status === STATUS.BOOKED) await repo.patchProject(id, { status: STATUS.WORKING, started_at: new Date().toISOString() });
+  if (p.status === STATUS.BOOKED) {
+      const now = new Date().toISOString();
+      await repo.patchProject(id, { status: STATUS.WORKING, started_at: now, originalStartedAt: now });
+    }
   clearTimeout(reloadTimer);
   await repo.loadAll();
   const updatedProject = getProject(id);
@@ -4521,12 +4611,27 @@ function openCompleteProjectForm(id) {
   
   const dateStr = new Date().toISOString().slice(0, 10);
   
-  const startedAt = p.started_at ? new Date(p.started_at) : null;
-  const finishedAt = new Date();
-  const durationHours = startedAt ? ((finishedAt - startedAt) / (1000 * 60 * 60)).toFixed(1) : "未知";
+  const originalStartedAt = p.originalStartedAt || p.original_started_at || p.started_at;
+  const displayStartedAt = originalStartedAt ? new Date(originalStartedAt) : null;
+  const now = new Date();
   
-  const startTimeStr = startedAt ? `${startedAt.getFullYear()}/${String(startedAt.getMonth() + 1).padStart(2, "0")}/${String(startedAt.getDate()).padStart(2, "0")} ${String(startedAt.getHours()).padStart(2, "0")}:${String(startedAt.getMinutes()).padStart(2, "0")}` : "未记录";
-  const endTimeStr = `${finishedAt.getFullYear()}/${String(finishedAt.getMonth() + 1).padStart(2, "0")}/${String(finishedAt.getDate()).padStart(2, "0")} ${String(finishedAt.getHours()).padStart(2, "0")}:${String(finishedAt.getMinutes()).padStart(2, "0")}`;
+  const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+  
+  let currentWorkDuration = 0;
+  if (p.started_at) {
+    const sessionStartedAt = new Date(p.started_at);
+    let endTime = now;
+    if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
+      endTime = new Date(p.pausedAt || p.paused_at);
+    }
+    currentWorkDuration = (endTime - sessionStartedAt) / (1000 * 60 * 60);
+  }
+  
+  const actualHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
+  const durationHours = displayStartedAt ? actualHours.toFixed(2) : "未知";
+  
+  const startTimeStr = displayStartedAt ? `${displayStartedAt.getFullYear()}/${String(displayStartedAt.getMonth() + 1).padStart(2, "0")}/${String(displayStartedAt.getDate()).padStart(2, "0")} ${String(displayStartedAt.getHours()).padStart(2, "0")}:${String(displayStartedAt.getMinutes()).padStart(2, "0")}` : "未记录";
+  const endTimeStr = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   
   let form = `<div class="form-grid">`;
   
@@ -4556,6 +4661,69 @@ function openCompleteProjectForm(id) {
       </div>
     </div>
   </div>`;
+  
+  const pauseCount = p.pauseCount || p.pause_count || 0;
+  if (pauseCount > 0) {
+    const pauseDurationTotal = p.pauseDurationTotal || p.pause_duration_total || 0;
+    const pauseHours = Math.floor(pauseDurationTotal);
+    const pauseMins = Math.floor((pauseDurationTotal - pauseHours) * 60);
+    const pauseTimeStr = pauseHours > 0 ? `${pauseHours}小时${pauseMins}分钟` : `${pauseMins}分钟`;
+    form += `<div class="form-row" style="grid-column:1/-1;background:#fffbeb;padding:10px;border-radius:6px;border-left:4px solid #f59e0b;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:16px;">⏸️</span>
+        <div>
+          <div style="font-size:12px;color:#92400e;font-weight:500;">施工过程中有暂停记录</div>
+          <div style="font-size:11px;color:#b45309;">已暂停 ${pauseCount} 次，累计暂停 ${pauseTimeStr}，已从总用时中扣除</div>
+        </div>
+      </div>
+    </div>`;
+  }
+  
+  const workSessions = p.workSessions || [];
+  if (workSessions.length > 0 || p.started_at) {
+    form += `<div class="form-row" style="grid-column:1/-1;background:#eff6ff;padding:10px;border-radius:6px;border-left:4px solid #3b82f6;margin-bottom:8px;">
+      <div style="font-size:12px;color:#1d4ed8;font-weight:500;margin-bottom:6px;">🔧 施工时间段明细</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">`;
+    
+    const allSessions = [...workSessions];
+    if (p.started_at && p.status !== "已暂停") {
+      const now = new Date();
+      const sessionStarted = new Date(p.started_at);
+      const duration = (now - sessionStarted) / (1000 * 60 * 60);
+      allSessions.push({
+        startTime: p.started_at,
+        endTime: now.toISOString(),
+        duration: duration
+      });
+    }
+    
+    let totalDuration = 0;
+    allSessions.forEach((session, idx) => {
+      const start = new Date(session.startTime);
+      const end = new Date(session.endTime);
+      const hours = Math.floor(session.duration);
+      const mins = Math.floor((session.duration - hours) * 60);
+      const durationStr = hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
+      totalDuration += session.duration;
+      
+      const startTimeStr = `${start.getMonth() + 1}/${start.getDate()} ${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`;
+      const endTimeStr = `${end.getMonth() + 1}/${end.getDate()} ${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+      
+      form += `<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#374151;">
+        <span>第${idx + 1}段：${startTimeStr} → ${endTimeStr}</span>
+        <span style="font-weight:600;color:#1d4ed8;">${durationStr}</span>
+      </div>`;
+    });
+    
+    const totalHours = Math.floor(totalDuration);
+    const totalMins = Math.floor((totalDuration - totalHours) * 60);
+    const totalStr = totalHours > 0 ? `${totalHours}小时${totalMins}分钟` : `${totalMins}分钟`;
+    
+    form += `<div style="border-top:1px dashed #93c5fd;margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#1d4ed8;">
+        <span style="font-weight:600;">合计</span>
+        <span style="font-weight:600;">${totalStr}</span>
+      </div></div></div>`;
+  }
   
   if (workers.length > 0) {
     form += `<div class="form-row" style="grid-column:1/-1;">
@@ -4632,6 +4800,18 @@ function openCompleteProjectForm(id) {
     confirmText: "确认完工",
     cancelText: "取消",
     onConfirm: async () => {
+      const pauseCount = p.pauseCount || p.pause_count || 0;
+      if (pauseCount > 0) {
+        const pauseDurationTotal = p.pauseDurationTotal || p.pause_duration_total || 0;
+        const pauseHours = Math.floor(pauseDurationTotal);
+        const pauseMins = Math.floor((pauseDurationTotal - pauseHours) * 60);
+        const pauseTimeStr = pauseHours > 0 ? `${pauseHours}小时${pauseMins}分钟` : `${pauseMins}分钟`;
+        const confirmText = `该项目施工过程中曾暂停 ${pauseCount} 次，累计暂停 ${pauseTimeStr}，已从总用时中扣除。\n\n确认要完成该项目吗？`;
+        if (!confirm(confirmText)) {
+          return false;
+        }
+      }
+      
       let totalHours = 0;
       const logs = [];
       
@@ -4675,11 +4855,39 @@ function openCompleteProjectForm(id) {
         return false;
       }
       
-      const now = new Date().toISOString();
+      const now = new Date();
+      const nowStr = now.toISOString();
+      
+      const accumulatedWorkHours = p.accumulatedWorkHours || p.accumulated_work_hours || 0;
+      let currentWorkDuration = 0;
+      if (p.started_at) {
+        const started = new Date(p.started_at);
+        let endTime = now;
+        if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
+          endTime = new Date(p.pausedAt || p.paused_at);
+        }
+        currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
+      }
+      const totalWorkHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
+      
+      const workSessions = [...(p.workSessions || [])];
+      if (p.started_at && currentWorkDuration > 0) {
+        let endTime = nowStr;
+        if (p.status === "已暂停" && (p.pausedAt || p.paused_at)) {
+          endTime = p.pausedAt || p.paused_at;
+        }
+        workSessions.push({
+          startTime: p.started_at,
+          endTime: endTime,
+          duration: currentWorkDuration
+        });
+      }
       
       p.status = "已完工";
       p.actualHours = totalHours;
-      p.finished_at = now;
+      p.finished_at = nowStr;
+      p.accumulatedWorkHours = totalWorkHours;
+      p.workSessions = workSessions;
       
       const newLogs = logs.map(log => ({ id: uid(), ...log }));
       const newLogKeys = new Set(newLogs.map(l => `${l.workerId}_${l.date}`));
@@ -4689,7 +4897,7 @@ function openCompleteProjectForm(id) {
       if (MODE === "cloud" && cloudConfigured()) {
         sb.from("work_logs").delete().eq("project_id", id).eq("date", dateStr).then(() => {
           return Promise.all([
-            sb.from("projects").update({ status: "已完工", actual_hours: p.actualHours, finished_at: now, updated_at: now }).eq("id", id),
+            sb.from("projects").update({ status: "已完工", actual_hours: p.actualHours, finished_at: nowStr, accumulated_work_hours: totalWorkHours, updated_at: nowStr }).eq("id", id),
             ...newLogs.map(log => 
               sb.from("work_logs").insert({
                 id: log.id, project_id: id, worker_id: log.workerId,
