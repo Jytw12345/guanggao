@@ -47,6 +47,21 @@ const STATUS = {
   CANCELLED: "已取消",
 };
 
+const STATUS_TRANSITIONS = {
+  [STATUS.BOOKED]: [STATUS.WORKING, STATUS.CANCELLED],
+  [STATUS.WORKING]: [STATUS.PAUSED, STATUS.DONE, STATUS.CANCELLED],
+  [STATUS.PAUSED]: [STATUS.WORKING, STATUS.DONE, STATUS.CANCELLED],
+  [STATUS.DELAYED]: [STATUS.WORKING, STATUS.DONE, STATUS.CANCELLED],
+  [STATUS.DONE]: [STATUS.ACCEPTED],
+  [STATUS.ACCEPTED]: [STATUS.REVIEWED],
+  [STATUS.REVIEWED]: [],
+  [STATUS.CANCELLED]: [],
+};
+
+function getAllowedStatuses(currentStatus) {
+  return STATUS_TRANSITIONS[currentStatus] || [];
+}
+
 const TIGHT_GAP_MINUTES = 30;
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
@@ -3403,8 +3418,9 @@ function renderConstruction() {
         <div style="display:flex;align-items:center;gap:8px">
           <label style="font-size:13px;color:var(--muted)">状态</label>
           <select class="input" id="cStatus" onchange="updateProjectStatus('${p.id}', this.value)" style="width:auto;min-width:100px;">
-            ${Object.values(STATUS).map((s) =>
-              `<option value="${s}" ${p.status === s ? "selected" : ""}>${s}</option>`).join("")}
+            <option value="${p.status}" selected>${p.status}</option>
+            ${getAllowedStatuses(p.status).map((s) =>
+              `<option value="${s}">${s}</option>`).join("")}
           </select>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
@@ -3425,7 +3441,7 @@ function renderConstruction() {
         ${p.pauseReason ? `<span style="font-size:12px;color:#f59e0b">暂停原因：${esc(p.pauseReason)}</span>` : ""}
         ` : ""}
         ${p.status === STATUS.DELAYED ? `
-        <button class="btn small primary" onclick="updateProjectStatus('${p.id}', '${STATUS.BOOKED}')">🔄 转为预约</button>
+        <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
         ${p.delayReason ? `<span style="font-size:12px;color:#ef4444">延期原因：${esc(p.delayReason)}</span>` : ""}
         ` : ""}
         ${[STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED].includes(p.status) ? `
@@ -3827,6 +3843,17 @@ async function updateProjectStatus(id, newStatus) {
     return;
   }
   
+  if (newStatus === p.status) {
+    return;
+  }
+  
+  const allowed = getAllowedStatuses(p.status);
+  if (!allowed.includes(newStatus)) {
+    toast(`无法从「${p.status}」变更为「${newStatus}」`);
+    renderConstruction();
+    return;
+  }
+  
   if (newStatus === STATUS.DONE) {
     openCompleteProjectForm(id);
     return;
@@ -3918,8 +3945,8 @@ async function resumeProject(id) {
     toast("项目不存在");
     return;
   }
-  if (p.status !== STATUS.PAUSED) {
-    toast("只有已暂停的项目才能恢复");
+  if (![STATUS.PAUSED, STATUS.DELAYED].includes(p.status)) {
+    toast("只有已暂停或已延期的项目才能恢复施工");
     return;
   }
   
