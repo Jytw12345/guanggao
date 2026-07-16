@@ -236,90 +236,6 @@ function isAddressSimilar(addr1, addr2) {
   return addr1.includes(addr2Prefix) || addr2.includes(addr1Prefix);
 }
 
-/* ============================================================
- * 高德地图服务（地理编码 + 距离计算）
- * ============================================================ */
-const geocodeCache = {};
-const distanceCache = {};
-
-function getAmapKey() {
-  return window.APP_CONFIG && window.APP_CONFIG.AMAP_KEY || "158d22bbe18674fa789038c2677ffec3";
-}
-
-function getCompanyAddress() {
-  return window.APP_CONFIG && window.APP_CONFIG.COMPANY_ADDRESS || "";
-}
-
-async function geocodeAddress(address) {
-  const key = getAmapKey();
-  if (!key || !address || address.length < 2) return null;
-  
-  if (geocodeCache[address]) return geocodeCache[address];
-  
-  try {
-    const url = `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${key}`;
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    if (data.status === "1" && data.geocodes && data.geocodes.length > 0) {
-      const loc = data.geocodes[0].location.split(",");
-      const result = {
-        lat: parseFloat(loc[1]),
-        lng: parseFloat(loc[0]),
-        formattedAddress: data.geocodes[0].formatted_address
-      };
-      geocodeCache[address] = result;
-      return result;
-    }
-  } catch (e) {
-    console.warn("地理编码失败:", address, e);
-  }
-  
-  return null;
-}
-
-async function calculateDistance(addr1, addr2) {
-  const key = getAmapKey();
-  if (!key || !addr1 || !addr2 || addr1 === addr2) return null;
-  
-  const cacheKey = `${addr1}|||${addr2}`;
-  if (distanceCache[cacheKey]) return distanceCache[cacheKey];
-  
-  try {
-    const geo1 = await geocodeAddress(addr1);
-    const geo2 = await geocodeAddress(addr2);
-    
-    if (!geo1 || !geo2) {
-      return { distance: -1, duration: -1 };
-    }
-    
-    const url = `https://restapi.amap.com/v3/distance?origins=${geo1.lng},${geo1.lat}&destination=${geo2.lng},${geo2.lat}&type=1&key=${key}`;
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    if (data.status === "1" && data.results && data.results.length > 0) {
-      const result = {
-        distance: Number(data.results[0].distance) / 1000,
-        duration: Number(data.results[0].duration) / 60
-      };
-      distanceCache[cacheKey] = result;
-      return result;
-    }
-  } catch (e) {
-    console.warn("距离计算失败:", addr1, addr2, e);
-  }
-  
-  return { distance: -1, duration: -1 };
-}
-
-function getNavigationUrl(addr1, addr2) {
-  if (!addr2) return "";
-  if (!addr1) {
-    return `https://uri.amap.com/search?keyword=${encodeURIComponent(addr2)}`;
-  }
-  return `https://uri.amap.com/navigation?from=${encodeURIComponent(addr1)}&to=${encodeURIComponent(addr2)}&mode=car`;
-}
-
 /* 预约时间段文本："YYYY-MM-DD HH:mm ~ HH:mm"，跨日则结束显示完整日期 */
 function fmtTimeRange(p) {
   const s = projectStart(p);
@@ -3178,7 +3094,7 @@ function todaySchedule() {
   renderConstruction();
 }
 
-async function renderConstruction() {
+function renderConstruction() {
   const scheduleBox = document.getElementById("workerScheduleDescription");
   const dateStr = viewScheduleDate || dateKey(new Date());
   const todayStr = dateKey(new Date());
@@ -3193,8 +3109,7 @@ async function renderConstruction() {
     </div>
   `;
   
-  const scheduleDesc = await generateWorkerScheduleDescription(dateStr);
-  scheduleBox.innerHTML = dateControls + scheduleDesc;
+  scheduleBox.innerHTML = dateControls + generateWorkerScheduleDescription(dateStr);
   
   const box = document.getElementById("constructionDetail");
   const p = getProject(currentProjectId);
@@ -3864,7 +3779,7 @@ async function deleteWorkLog(pid, lid) {
   toast("已删除");
 }
 
-async function generateWorkerScheduleDescription(dateStr = null) {
+function generateWorkerScheduleDescription(dateStr = null) {
   const targetDate = dateStr ? new Date(dateStr) : new Date();
   const dateStrFormatted = targetDate.toISOString().slice(0, 10);
   const weekday = ["日", "一", "二", "三", "四", "五", "六"][targetDate.getDay()];
@@ -3924,7 +3839,7 @@ async function generateWorkerScheduleDescription(dateStr = null) {
   
   const workersWithProjects = Object.keys(workerSchedule).filter(wid => workerSchedule[wid].length > 0);
   
-  for (const wid of workersWithProjects) {
+  workersWithProjects.forEach(wid => {
     const worker = getWorker(wid);
     const name = worker ? worker.name : "未知人员";
     const projects = workerSchedule[wid];
@@ -3932,8 +3847,7 @@ async function generateWorkerScheduleDescription(dateStr = null) {
     description += `<div class="schedule-item">`;
     description += `<div class="schedule-worker">👤 ${name}</div>`;
     
-    for (let idx = 0; idx < projects.length; idx++) {
-      const p = projects[idx];
+    projects.forEach((p, idx) => {
       const store = getStore(p.storeId);
       const storeName = store ? store.name : "未知门店";
       const pStart = projectStart(p);
@@ -3992,18 +3906,7 @@ async function generateWorkerScheduleDescription(dateStr = null) {
       }
       
       if (p.address) {
-        let fromAddr = "";
-        if (idx === 0) {
-          fromAddr = getCompanyAddress();
-        } else if (projects[idx - 1] && projects[idx - 1].address) {
-          fromAddr = projects[idx - 1].address;
-        }
-        const navUrl = getNavigationUrl(fromAddr, p.address);
-        if (navUrl) {
-          taskDesc += `地址是 <strong>${esc(p.address)}</strong> <a href="${navUrl}" target="_blank" style="color:#3b82f6;font-size:14px;margin-left:4px;" title="点击导航">🗺️</a>，`;
-        } else {
-          taskDesc += `地址是 <strong>${esc(p.address)}</strong>，`;
-        }
+        taskDesc += `地址是 <strong>${esc(p.address)}</strong>，`;
       }
       
       taskDesc += `做 <strong>${esc(p.name)}</strong>`;
@@ -4030,7 +3933,7 @@ async function generateWorkerScheduleDescription(dateStr = null) {
       }
       
       description += `<div class="schedule-task">${taskDesc}</div>`;
-    }
+    });
     
     const totalEstimatedHours = projects.reduce((sum, p) => {
       const workerCount = Math.max(1, p.workerCount || (p.assignedWorkerIds || []).length || 1);
@@ -4040,66 +3943,42 @@ async function generateWorkerScheduleDescription(dateStr = null) {
       description += `<div class="schedule-warning">⚠️ <strong>工时预警</strong>：${name}今日预计工时 ${totalEstimatedHours.toFixed(1)} 小时，超过8小时标准工作时间，请注意劳逸结合！</div>`;
     }
     
-    for (let i = 0; i < projects.length; i++) {
-      const prevProject = i === 0 ? null : projects[i - 1];
+    for (let i = 1; i < projects.length; i++) {
+      const prevProject = projects[i - 1];
       const currProject = projects[i];
-      const prevEnd = prevProject ? (projectEnd(prevProject) || new Date((projectStart(prevProject) || new Date()).getTime() + (prevProject.estimatedHours || 2) * 3600000)) : null;
+      const prevEnd = projectEnd(prevProject) || new Date((projectStart(prevProject) || new Date()).getTime() + (prevProject.estimatedHours || 2) * 3600000);
       const currStart = projectStart(currProject);
-      
-      let gapMinutes = 0;
-      if (i === 0) {
-        gapMinutes = currStart ? (currStart - new Date(currStart.toDateString() + "T08:00")) / (1000 * 60) : 60;
-      } else if (currStart && prevEnd) {
-        gapMinutes = (currStart - prevEnd) / (1000 * 60);
-      }
-      
-      const prevAddr = prevProject ? (prevProject.address || "") : getCompanyAddress();
-      const currAddr = currProject.address || "";
-      const addressSimilar = isAddressSimilar(prevAddr, currAddr);
+      if (currStart && prevEnd) {
+        const gapMinutes = (currStart - prevEnd) / (1000 * 60);
         
-        if (gapMinutes < 0 || gapMinutes < 60) {
-          const distanceInfo = await calculateDistance(prevAddr, currAddr);
-          const navUrl = getNavigationUrl(prevAddr, currAddr);
-          
-          let distanceTip = "";
-          if (distanceInfo && distanceInfo.distance >= 0) {
-            distanceTip = `两地相距约${distanceInfo.distance.toFixed(1)}公里，预计驾车${Math.round(distanceInfo.duration)}分钟。`;
-          } else if (navUrl) {
-            distanceTip = `<a href="${navUrl}" target="_blank" style="color:#3b82f6;text-decoration:underline;">点击查看导航路线</a>`;
+        const addressSimilar = isAddressSimilar(prevProject.address || "", currProject.address || "");
+        
+        if (gapMinutes < 0) {
+          const overlapMinutes = Math.round(Math.abs(gapMinutes));
+          const overlapHours = Math.floor(overlapMinutes / 60);
+          const overlapMins = overlapMinutes % 60;
+          const overlapStr = overlapHours > 0 ? `${overlapHours}小时${overlapMins}分钟` : `${overlapMins}分钟`;
+          let suggestion = "";
+          if (addressSimilar) {
+            suggestion = "两个项目地址相近，建议合并安排或调整顺序，避免来回奔波。";
+          } else {
+            suggestion = "请及时调整项目时间或安排其他人员协助，确保施工顺利。";
           }
-          
-          if (i === 0) {
-            if (gapMinutes < 60) {
-              description += `<div class="schedule-warning" style="background:#eff6ff;border-left:4px solid #3b82f6;">📍 <strong>出发提示</strong>：从公司到${currProject.name}距离${distanceTip}，请提前出发！</div>`;
-            }
-          } else if (gapMinutes < 0) {
-            const overlapMinutes = Math.round(Math.abs(gapMinutes));
-            const overlapHours = Math.floor(overlapMinutes / 60);
-            const overlapMins = overlapMinutes % 60;
-            const overlapStr = overlapHours > 0 ? `${overlapHours}小时${overlapMins}分钟` : `${overlapMins}分钟`;
-            let suggestion = "";
-            if (addressSimilar) {
-              suggestion = "两个项目地址相近，建议合并安排或调整顺序，避免来回奔波。";
-            } else {
-              suggestion = "请及时调整项目时间或安排其他人员协助，确保施工顺利。";
-            }
-            description += `<div class="schedule-warning" style="background:#fef2f2;border-left:4px solid #ef4444;">🔴 <strong>时间冲突</strong>：上一个项目预计 ${prevEnd.getHours()}:${String(prevEnd.getMinutes()).padStart(2, "0")} 结束，下一个项目 ${currStart.getHours()}:${String(currStart.getMinutes()).padStart(2, "0")} 开始，重叠 ${overlapStr}！${distanceTip} ${suggestion}</div>`;
-          } else if (gapMinutes < TIGHT_GAP_MINUTES) {
-            let transportTip = "";
-            if (addressSimilar) {
-              transportTip = "两个项目地址相近，可顺路前往，注意提前做好衔接。";
-            } else {
-              transportTip = "两个项目地址不同，请预留充足交通时间，避免迟到。";
-            }
-            description += `<div class="schedule-warning">⏰ <strong>时间紧迫</strong>：上一个项目预计 ${prevEnd.getHours()}:${String(prevEnd.getMinutes()).padStart(2, "0")} 结束，下一个项目 ${currStart.getHours()}:${String(currStart.getMinutes()).padStart(2, "0")} 开始，间隔仅 ${Math.round(gapMinutes)} 分钟。${distanceTip} ${transportTip}</div>`;
-          } else if (gapMinutes >= TIGHT_GAP_MINUTES && gapMinutes < 60) {
-            if (addressSimilar) {
-              description += `<div class="schedule-warning" style="background:#fefce8;border-left:4px solid #eab308;">💡 <strong>顺路提示</strong>：两个项目地址相近，间隔 ${Math.round(gapMinutes)} 分钟，可考虑合并施工或快速转场。${distanceTip}</div>`;
-            } else if (distanceTip) {
-              description += `<div class="schedule-warning" style="background:#eff6ff;border-left:4px solid #3b82f6;">📍 <strong>路线提示</strong>：两个项目地址不同，间隔 ${Math.round(gapMinutes)} 分钟。${distanceTip}</div>`;
-            }
+          description += `<div class="schedule-warning" style="background:#fef2f2;border-left:4px solid #ef4444;">🔴 <strong>时间冲突</strong>：上一个项目预计 ${prevEnd.getHours()}:${String(prevEnd.getMinutes()).padStart(2, "0")} 结束，下一个项目 ${currStart.getHours()}:${String(currStart.getMinutes()).padStart(2, "0")} 开始，重叠 ${overlapStr}！${suggestion}</div>`;
+        } else if (gapMinutes < TIGHT_GAP_MINUTES) {
+          let transportTip = "";
+          if (addressSimilar) {
+            transportTip = "两个项目地址相近，可顺路前往，注意提前做好衔接。";
+          } else {
+            transportTip = "两个项目地址不同，请预留充足交通时间，避免迟到。";
+          }
+          description += `<div class="schedule-warning">⏰ <strong>时间紧迫</strong>：上一个项目预计 ${prevEnd.getHours()}:${String(prevEnd.getMinutes()).padStart(2, "0")} 结束，下一个项目 ${currStart.getHours()}:${String(currStart.getMinutes()).padStart(2, "0")} 开始，间隔仅 ${Math.round(gapMinutes)} 分钟。${transportTip}</div>`;
+        } else if (gapMinutes >= TIGHT_GAP_MINUTES && gapMinutes < 60) {
+          if (addressSimilar) {
+            description += `<div class="schedule-warning" style="background:#fefce8;border-left:4px solid #eab308;">💡 <strong>顺路提示</strong>：两个项目地址相近，间隔 ${Math.round(gapMinutes)} 分钟，可考虑合并施工或快速转场。</div>`;
           }
         }
+      }
     }
     
     let continuousWorkMinutes = 0;
@@ -4172,7 +4051,7 @@ async function generateWorkerScheduleDescription(dateStr = null) {
     }
     
     description += `</div>`;
-  }
+  });
   
   if (availableWorkers.length > 0) {
     description += `<div class="schedule-item standby">`;
@@ -4238,7 +4117,7 @@ async function generateWorkerScheduleDescription(dateStr = null) {
       (!p.assignedWorkerIds || p.assignedWorkerIds.length === 0)
     );
     
-  if (totalProjects > 0) {
+    if (totalProjects > 0) {
     description += `<div class="schedule-summary">`;
     description += `<div class="schedule-summary-item">📋 今日项目：${totalProjects} 个（进行中 ${inProgressProjects} 个，已完工 ${statusCounts["已完工"]} 个，已验收 ${statusCounts["已验收"]} 个，已审核 ${statusCounts["已审核"]} 个${statusCounts["已取消"] > 0 ? `，已取消 ${statusCounts["已取消"]} 个` : ``}）</div>`;
     description += `<div class="schedule-summary-item">👷 出勤人员：${onJobWorkers} 人</div>`;
