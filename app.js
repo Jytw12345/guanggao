@@ -443,7 +443,8 @@ function diffColor(diff) {
 
 /* 带符号的差异文本：+1 / -2 / 0 */
 function fmtSignedDiff(diff) {
-  return diff > 0 ? `+${diff}` : `${diff}`;
+  const rounded = diff.toFixed(2);
+  return diff > 0 ? `+${rounded}` : `${rounded}`;
 }
 
 function calcDuration(start, end) {
@@ -491,8 +492,9 @@ function calcActualWorkDuration(p) {
 function diffLabel(project) {
   const { diff, hasActual } = hoursDiff(project);
   if (!hasActual) return `<span style="color:var(--muted)">未登记实际工时</span>`;
-  if (diff > 0) return `<span style="color:var(--danger)">超 ${diff} 小时</span>`;
-  if (diff < 0) return `<span style="color:var(--success)">省 ${-diff} 小时</span>`;
+  const diffRounded = Math.abs(diff).toFixed(2);
+  if (diff > 0) return `<span style="color:var(--danger)">超 ${diffRounded} 小时</span>`;
+  if (diff < 0) return `<span style="color:var(--success)">省 ${diffRounded} 小时</span>`;
   return `<span style="color:var(--muted)">持平</span>`;
 }
 
