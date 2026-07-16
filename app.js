@@ -44,6 +44,8 @@ const STATUS = {
   REVIEWED: "已审核",
 };
 
+const TIGHT_GAP_MINUTES = 30;
+
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
 const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [] };
 
@@ -223,6 +225,15 @@ function projectEnd(p) {
 /* 两个时间区间是否重叠：[s1,e1) 与 [s2,e2) */
 function intervalsOverlap(s1, e1, s2, e2) {
   return s1 < e2 && s2 < e1;
+}
+
+/* 判断两个地址是否相近（通过前缀匹配） */
+function isAddressSimilar(addr1, addr2) {
+  if (!addr1 || !addr2 || addr1.length < 4 || addr2.length < 4) return false;
+  const prefixLen = Math.min(6, addr1.length, addr2.length);
+  const addr1Prefix = addr1.substring(0, prefixLen);
+  const addr2Prefix = addr2.substring(0, prefixLen);
+  return addr1.includes(addr2Prefix) || addr2.includes(addr1Prefix);
 }
 
 /* 预约时间段文本："YYYY-MM-DD HH:mm ~ HH:mm"，跨日则结束显示完整日期 */
@@ -2692,7 +2703,6 @@ function projectForm(p = {}) {
         <select class="input" id="pStore" ${storeLocked ? "disabled" : ""} style="width:auto;max-width:160px;">
           ${storeOpts}
         </select>
-        ${storeLocked ? `<small class="hint" style="color:#6b7280;display:block;margin-top:2px;">${isStoreManager() ? '店长' : '施工人员'}只能创建本门店（${esc(storeName(myStore()))}）的预约</small>` : ""}
       </div>
       <div style="flex:1;min-width:0;">
         <label style="display:block;margin-bottom:4px;"><span style="color:var(--primary)">📋</span> 项目名称 *</label>
@@ -3872,10 +3882,17 @@ function generateWorkerScheduleDescription(dateStr = null) {
       let taskDesc = "";
       if (idx === 0) {
         taskDesc = `${timePrefix}${startTime}出发，`;
-      } else if (idx === 1) {
-        taskDesc = `忙完回来后，${startTime}再去，`;
       } else {
-        taskDesc = `接着，${startTime}再去，`;
+        const prevProject = projects[idx - 1];
+        const prevEnd = projectEnd(prevProject) || new Date((projectStart(prevProject) || new Date()).getTime() + (prevProject.estimatedHours || 2) * 3600000);
+        const currStart = projectStart(p);
+        const gapMinutes = currStart && prevEnd ? (currStart - prevEnd) / (1000 * 60) : 60;
+        
+        if (gapMinutes < TIGHT_GAP_MINUTES) {
+          taskDesc = `尽快忙完，抓紧时间赶往下一个，${startTime}到达，`;
+        } else {
+          taskDesc = `忙完后，${startTime}再去，`;
+        }
       }
       
       taskDesc += `前往 <strong>${esc(storeName)}</strong>，`;
@@ -3918,9 +3935,12 @@ function generateWorkerScheduleDescription(dateStr = null) {
       description += `<div class="schedule-task">${taskDesc}</div>`;
     });
     
-    const totalEstimatedHours = projects.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+    const totalEstimatedHours = projects.reduce((sum, p) => {
+      const workerCount = Math.max(1, p.workerCount || (p.assignedWorkerIds || []).length || 1);
+      return sum + ((p.estimatedHours || 0) / workerCount);
+    }, 0);
     if (totalEstimatedHours > 8) {
-      description += `<div class="schedule-warning">⚠️ <strong>工时预警</strong>：${name}今日预计工时 ${totalEstimatedHours} 小时，超过8小时标准工作时间，请注意劳逸结合！</div>`;
+      description += `<div class="schedule-warning">⚠️ <strong>工时预警</strong>：${name}今日预计工时 ${totalEstimatedHours.toFixed(1)} 小时，超过8小时标准工作时间，请注意劳逸结合！</div>`;
     }
     
     for (let i = 1; i < projects.length; i++) {
@@ -3930,10 +3950,91 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const currStart = projectStart(currProject);
       if (currStart && prevEnd) {
         const gapMinutes = (currStart - prevEnd) / (1000 * 60);
-        if (gapMinutes < 30) {
-          description += `<div class="schedule-warning">⏰ <strong>时间紧迫</strong>：上一个项目预计 ${prevEnd.getHours()}:${String(prevEnd.getMinutes()).padStart(2, "0")} 结束，下一个项目 ${currStart.getHours()}:${String(currStart.getMinutes()).padStart(2, "0")} 开始，间隔仅 ${Math.round(gapMinutes)} 分钟，请预留交通时间！</div>`;
+        
+        const addressSimilar = isAddressSimilar(prevProject.address || "", currProject.address || "");
+        
+        if (gapMinutes < 0) {
+          const overlapMinutes = Math.round(Math.abs(gapMinutes));
+          const overlapHours = Math.floor(overlapMinutes / 60);
+          const overlapMins = overlapMinutes % 60;
+          const overlapStr = overlapHours > 0 ? `${overlapHours}小时${overlapMins}分钟` : `${overlapMins}分钟`;
+          let suggestion = "";
+          if (addressSimilar) {
+            suggestion = "两个项目地址相近，建议合并安排或调整顺序，避免来回奔波。";
+          } else {
+            suggestion = "请及时调整项目时间或安排其他人员协助，确保施工顺利。";
+          }
+          description += `<div class="schedule-warning" style="background:#fef2f2;border-left:4px solid #ef4444;">🔴 <strong>时间冲突</strong>：上一个项目预计 ${prevEnd.getHours()}:${String(prevEnd.getMinutes()).padStart(2, "0")} 结束，下一个项目 ${currStart.getHours()}:${String(currStart.getMinutes()).padStart(2, "0")} 开始，重叠 ${overlapStr}！${suggestion}</div>`;
+        } else if (gapMinutes < TIGHT_GAP_MINUTES) {
+          let transportTip = "";
+          if (addressSimilar) {
+            transportTip = "两个项目地址相近，可顺路前往，注意提前做好衔接。";
+          } else {
+            transportTip = "两个项目地址不同，请预留充足交通时间，避免迟到。";
+          }
+          description += `<div class="schedule-warning">⏰ <strong>时间紧迫</strong>：上一个项目预计 ${prevEnd.getHours()}:${String(prevEnd.getMinutes()).padStart(2, "0")} 结束，下一个项目 ${currStart.getHours()}:${String(currStart.getMinutes()).padStart(2, "0")} 开始，间隔仅 ${Math.round(gapMinutes)} 分钟。${transportTip}</div>`;
+        } else if (gapMinutes >= TIGHT_GAP_MINUTES && gapMinutes < 60) {
+          if (addressSimilar) {
+            description += `<div class="schedule-warning" style="background:#fefce8;border-left:4px solid #eab308;">💡 <strong>顺路提示</strong>：两个项目地址相近，间隔 ${Math.round(gapMinutes)} 分钟，可考虑合并施工或快速转场。</div>`;
+          }
         }
       }
+    }
+    
+    let continuousWorkMinutes = 0;
+    let lastEndTime = null;
+    let lastAddress = "";
+    
+    const sortedProjects = [...projects].sort((a, b) => {
+      const sa = projectStart(a);
+      const sb = projectStart(b);
+      return (sa || new Date()) - (sb || new Date());
+    });
+    
+    for (let i = 0; i < sortedProjects.length; i++) {
+      const p = sortedProjects[i];
+      const pStart = projectStart(p);
+      const pEnd = projectEnd(p) || new Date((pStart || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
+      const pAddress = p.address || "";
+      
+      if (!pStart) continue;
+      
+      if (lastEndTime && lastAddress) {
+        const gap = (pStart - lastEndTime) / (1000 * 60);
+        const sameAddress = isAddressSimilar(lastAddress, pAddress);
+        
+        if (gap >= 30 || !sameAddress) {
+          continuousWorkMinutes = 0;
+        }
+        
+        const effectiveStart = pStart > lastEndTime ? pStart : lastEndTime;
+        const durationMinutes = Math.max(0, (pEnd - effectiveStart) / (1000 * 60));
+        continuousWorkMinutes += durationMinutes;
+      } else {
+        continuousWorkMinutes += (pEnd - pStart) / (1000 * 60);
+      }
+      
+      lastEndTime = pEnd > lastEndTime ? pEnd : lastEndTime;
+      lastAddress = pAddress;
+    }
+    
+    if (continuousWorkMinutes > 240) {
+      const hours = Math.floor(continuousWorkMinutes / 60);
+      const mins = Math.round(continuousWorkMinutes % 60);
+      description += `<div class="schedule-warning" style="background:#fef3c7;border-left:4px solid #f59e0b;">☕ <strong>休息提醒</strong>：${name}今日连续工作预计${hours}小时${mins}分钟，建议适当休息，注意劳逸结合！</div>`;
+    }
+    
+    const nearbyProjects = [];
+    for (let i = 0; i < projects.length; i++) {
+      for (let j = i + 1; j < projects.length; j++) {
+        if (isAddressSimilar(projects[i].address || "", projects[j].address || "")) {
+          nearbyProjects.push({ p1: projects[i], p2: projects[j] });
+        }
+      }
+    }
+    
+    if (nearbyProjects.length > 0) {
+      description += `<div class="schedule-warning" style="background:#dbeafe;border-left:4px solid #3b82f6;">📍 <strong>地址相近提示</strong>：您今日有${nearbyProjects.length}组项目地址相近，建议提前规划路线，可顺路完成，提高效率。</div>`;
     }
     
     const workerSchedules = cache.workerSchedules.filter(s => s.workerId === wid && s.startDate === dateStr);
@@ -4011,12 +4112,58 @@ function generateWorkerScheduleDescription(dateStr = null) {
   const onJobWorkers = workersWithProjects.length;
   const totalAvailable = cache.workers.length;
   
-  if (totalProjects > 0) {
+  const unassignedProjects = allTodayProjects.filter(p => 
+      (p.status === "预约中" || p.status === "施工中") && 
+      (!p.assignedWorkerIds || p.assignedWorkerIds.length === 0)
+    );
+    
+    if (totalProjects > 0) {
     description += `<div class="schedule-summary">`;
     description += `<div class="schedule-summary-item">📋 今日项目：${totalProjects} 个（进行中 ${inProgressProjects} 个，已完工 ${statusCounts["已完工"]} 个，已验收 ${statusCounts["已验收"]} 个，已审核 ${statusCounts["已审核"]} 个${statusCounts["已取消"] > 0 ? `，已取消 ${statusCounts["已取消"]} 个` : ``}）</div>`;
     description += `<div class="schedule-summary-item">👷 出勤人员：${onJobWorkers} 人</div>`;
     description += `<div class="schedule-summary-item">🏥 请假人员：${onLeaveWorkers.length} 人</div>`;
     description += `<div class="schedule-summary-item">👤 总人数：${totalAvailable} 人</div>`;
+    
+    if (unassignedProjects.length > 0) {
+      const unassignedNames = unassignedProjects.slice(0, 5).map(p => p.name).join("、");
+      const moreCount = unassignedProjects.length > 5 ? `等${unassignedProjects.length}个` : "";
+      description += `<div class="schedule-summary-item warning" style="background:#fef2f2;padding:8px;border-radius:4px;">⚠️ <strong>未分配人员</strong>：${unassignedNames}${moreCount}项目尚未分配施工人员，请尽快安排！</div>`;
+    }
+    
+    const workerHours = {};
+    workersWithProjects.forEach(wid => {
+      const projects = workerSchedule[wid];
+      const totalHrs = projects.reduce((sum, p) => {
+        const workerCount = Math.max(1, p.workerCount || (p.assignedWorkerIds || []).length || 1);
+        return sum + ((p.estimatedHours || 0) / workerCount);
+      }, 0);
+      const worker = getWorker(wid);
+      workerHours[worker ? worker.name : "未知"] = totalHrs.toFixed(1);
+    });
+    
+    if (Object.keys(workerHours).length > 0) {
+      const hoursList = Object.entries(workerHours).map(([name, hrs]) => {
+        const color = parseFloat(hrs) > 8 ? "#ef4444" : parseFloat(hrs) > 6 ? "#d97706" : "#16a34a";
+        return `<span style="color:${color}">${name} ${hrs}小时</span>`;
+      }).join(" · ");
+      description += `<div class="schedule-summary-item">📊 <strong>工时分布</strong>：${hoursList}</div>`;
+    }
+    
+    const teamProjects = allTodayProjects.filter(p => 
+      p.assignedWorkerIds && p.assignedWorkerIds.length >= 2
+    );
+    
+    if (teamProjects.length > 0) {
+      const teamProjectNames = teamProjects.slice(0, 5).map(p => {
+        const workerNames = p.assignedWorkerIds.map(wid => {
+          const w = getWorker(wid);
+          return w ? w.name : "未知";
+        }).join("、");
+        return `${p.name}(${workerNames})`;
+      }).join("；");
+      const moreCount = teamProjects.length > 5 ? `等${teamProjects.length}个` : "";
+      description += `<div class="schedule-summary-item" style="background:#ecfdf5;padding:8px;border-radius:4px;">👥 <strong>协作项目</strong>：${teamProjectNames}${moreCount}需要多人配合，请提前沟通好分工！</div>`;
+    }
     
     if (totalProjects > 0 && onJobWorkers > 0) {
       const avgProjects = (totalProjects / onJobWorkers).toFixed(1);
