@@ -2968,6 +2968,15 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   background: #fffbeb;
   border-color: var(--warn);
 }
+.timeline-task-paused {
+  background: #fef3c7;
+  border-color: #f59e0b;
+  opacity: 0.8;
+}
+.timeline-task-delayed {
+  background: #fee2e2;
+  border-color: #ef4444;
+}
 .timeline-task-done {
   background: #f0fdf4;
   border-color: var(--success);
