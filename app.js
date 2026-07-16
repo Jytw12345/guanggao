@@ -39,6 +39,8 @@ function findCustomer(customer) {
 const STATUS = {
   BOOKED: "预约中",
   WORKING: "施工中",
+  PAUSED: "已暂停",
+  DELAYED: "已延期",
   DONE: "已完工",
   ACCEPTED: "已验收",
   REVIEWED: "已审核",
@@ -484,6 +486,14 @@ const mapProject = (r) => ({
   workLogs: [],
   timeModified: modifiedProjectIds.has(r.id),
   repairOrder: r.repair_order ? (typeof r.repair_order === "string" ? JSON.parse(r.repair_order) : r.repair_order) : null,
+  pausedAt: r.paused_at || null,
+  pauseReason: r.pause_reason || null,
+  pauseCount: Number(r.pause_count) || 0,
+  pauseDurationTotal: Number(r.pause_duration_total) || 0,
+  resumedAt: r.resumed_at || null,
+  delayReason: r.delay_reason || null,
+  delayCount: Number(r.delay_count) || 0,
+  scheduleHistory: r.schedule_history ? (typeof r.schedule_history === "string" ? JSON.parse(r.schedule_history) : r.schedule_history) : [],
 });
 
 const projectToRow = (p) => ({
@@ -508,6 +518,14 @@ const projectToRow = (p) => ({
   finished_at: p.finished_at || null,
   updated_at: new Date().toISOString(),
   repair_order: p.repairOrder ? JSON.stringify(p.repairOrder) : null,
+  paused_at: p.pausedAt || null,
+  pause_reason: p.pauseReason || null,
+  pause_count: p.pauseCount || 0,
+  pause_duration_total: p.pauseDurationTotal || 0,
+  resumed_at: p.resumedAt || null,
+  delay_reason: p.delayReason || null,
+  delay_count: p.delayCount || 0,
+  schedule_history: p.scheduleHistory && p.scheduleHistory.length > 0 ? JSON.stringify(p.scheduleHistory) : null,
 });
 
 const mapLog = (r) => ({
@@ -826,6 +844,13 @@ const repo = {
         row.repair_order = JSON.stringify(row.repairOrder);
         delete row.repairOrder;
       }
+      if (row.schedule_history && Array.isArray(row.schedule_history)) {
+        row.schedule_history = JSON.stringify(row.schedule_history);
+      }
+      if (row.scheduleHistory && Array.isArray(row.scheduleHistory)) {
+        row.schedule_history = JSON.stringify(row.scheduleHistory);
+        delete row.scheduleHistory;
+      }
       
       const project = getProject(id);
       if (project && typeof project.version === 'number') {
@@ -844,6 +869,10 @@ const repo = {
       }
     } else {
       const p = getProject(id);
+      if (!p) {
+        console.error("项目不存在:", id);
+        return;
+      }
       for (const [key, value] of Object.entries(patch)) {
         if (key.includes("_")) {
           const camelKey = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
@@ -1180,8 +1209,8 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   workers.forEach((w) => {
     const workerProjects = items.filter(p => p.assignedWorkerIds.includes(w.id));
     
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const viewDate = new Date(dateStr);
+    viewDate.setHours(0, 0, 0, 0);
     const workerLeaves = cache.leaveRecords.filter((lr) => {
       if (lr.workerId !== w.id) return false;
       if (lr.status === "rejected") return false;
@@ -1189,7 +1218,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       sd.setHours(0, 0, 0, 0);
       const ed = new Date(lr.endDate);
       ed.setHours(0, 0, 0, 0);
-      return today >= sd && today <= ed;
+      return viewDate >= sd && viewDate <= ed;
     });
     
     const workerSchedules = cache.workerSchedules.filter((s) => {
@@ -1254,14 +1283,21 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       const left = (startMinutes / 60) * hourWidth;
       const width = ((endMinutes - startMinutes) / 60) * hourWidth;
       
-      const statusClass = `timeline-task-${p.status === "预约中" ? "booked" : p.status === "施工中" ? "working" : p.status === "已完工" ? "done" : ""}`;
+      let statusClass, statusIcon;
+      if (p.status === "预约中") { statusClass = "booked"; statusIcon = "📅"; }
+      else if (p.status === "施工中") { statusClass = "working"; statusIcon = "🔨"; }
+      else if (p.status === "已暂停") { statusClass = "paused"; statusIcon = "⏸️"; }
+      else if (p.status === "已延期") { statusClass = "delayed"; statusIcon = "⚠️"; }
+      else if (p.status === "已完工") { statusClass = "done"; statusIcon = "✅"; }
+      else { statusClass = ""; statusIcon = ""; }
+      
       const pad = (n) => String(n).padStart(2, "0");
       const timeStr = `${pad(start.getHours())}:${pad(start.getMinutes())} ~ ${pad(end.getHours())}:${pad(end.getMinutes())}`;
       
       tasksHtml += `
-        <div class="timeline-task ${statusClass}" style="left:${left}px; width:${width}px; height:48px;">
+        <div class="timeline-task timeline-task-${statusClass}" style="left:${left}px; width:${width}px; height:48px;">
           <div class="timeline-task-header">
-            <span class="timeline-task-name" style="font-size:11px;">${esc(p.name)}</span>
+            <span class="timeline-task-name" style="font-size:11px;">${statusIcon} ${esc(p.name)}</span>
           </div>
           <div class="timeline-task-body" style="font-size:9px;">
             ${esc(storeName(p.storeId))} · ${timeStr} · 需${p.workerCount || 1}人
@@ -3243,6 +3279,19 @@ function renderConstruction() {
         ${canReview && !reviewed ? `
         <button class="btn small primary" onclick="reviewProject('${p.id}')">✅ 审核项目</button>
         ` : ""}
+        ${p.status === STATUS.WORKING ? `
+        <button class="btn small" style="background:#f59e0b;color:#fff" onclick="pauseProject('${p.id}')">⏸️ 暂停施工</button>
+        <button class="btn small" style="background:#ef4444;color:#fff" onclick="delayProject('${p.id}')">📅 项目延期</button>
+        ` : ""}
+        ${p.status === STATUS.PAUSED ? `
+        <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
+        <button class="btn small" style="background:#ef4444;color:#fff" onclick="delayProject('${p.id}')">📅 项目延期</button>
+        ${p.pauseReason ? `<span style="font-size:12px;color:#f59e0b">暂停原因：${esc(p.pauseReason)}</span>` : ""}
+        ` : ""}
+        ${p.status === STATUS.DELAYED ? `
+        <button class="btn small primary" onclick="updateProjectStatus('${p.id}', '${STATUS.BOOKED}')">🔄 转为预约</button>
+        ${p.delayReason ? `<span style="font-size:12px;color:#ef4444">延期原因：${esc(p.delayReason)}</span>` : ""}
+        ` : ""}
       </div>` : ""}
       ${reviewed && isManager() ? `
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
@@ -3377,7 +3426,7 @@ function assignConflicts(project, workerId) {
 
 /* 判断项目是否已完成（不参与人员冲突检测） */
 function isCompleted(p) {
-  return ["已完工", "已审核", "已验收"].includes(p.status);
+  return ["已完工", "已审核", "已验收", "已取消"].includes(p.status);
 }
 
 /* 判断项目是否为外协任务（只有外协人员，没有内部施工人员） */
@@ -3632,18 +3681,27 @@ async function unassignWorker(pid, wid) {
   toast("已移除");
 }
 
-async function updateProjectStatus(id, status) {
+async function updateProjectStatus(id, newStatus) {
   const p = getProject(id);
   if (!p) {
     toast("项目不存在");
     return;
   }
-  const patch = { status };
+  
+  if (newStatus === STATUS.DONE) {
+    openCompleteProjectForm(id);
+    return;
+  }
+  
+  if (newStatus === STATUS.ACCEPTED) {
+    openAcceptance(id);
+    return;
+  }
+  
+  const patch = { status: newStatus };
   const now = new Date().toISOString();
-  if (status === STATUS.WORKING) {
+  if (newStatus === STATUS.WORKING) {
     patch.started_at = now;
-  } else if (status === STATUS.DONE) {
-    patch.finished_at = now;
   }
   clearTimeout(reloadTimer);
   await repo.patchProject(id, patch);
@@ -3651,13 +3709,181 @@ async function updateProjectStatus(id, status) {
   renderAll();
   toast("状态已更新");
   
-  if (status === STATUS.WORKING) {
+  if (newStatus === STATUS.WORKING) {
     sendNotificationForProjectChange("start", p);
-  } else if (status === STATUS.DONE) {
+  } else if (newStatus === STATUS.DONE) {
     sendNotificationForProjectChange("done", p);
-  } else if (status === STATUS.ACCEPTED) {
+  } else if (newStatus === STATUS.ACCEPTED) {
     sendNotificationForProjectChange("accepted", p);
   }
+}
+
+async function pauseProject(id) {
+  const p = getProject(id);
+  if (!p) {
+    toast("项目不存在");
+    return;
+  }
+  if (p.status !== STATUS.WORKING) {
+    toast("只有施工中的项目才能暂停");
+    return;
+  }
+  
+  const reason = prompt("请输入暂停原因：\n\n1. 客户原因\n2. 材料不足\n3. 天气原因\n4. 其他", "客户原因");
+  if (!reason) return;
+  
+  const now = new Date().toISOString();
+  const pauseCount = (p.pauseCount || p.pause_count || 0) + 1;
+  
+  const patch = {
+    status: STATUS.PAUSED,
+    pausedAt: now,
+    pauseReason: reason,
+    pauseCount: pauseCount
+  };
+  
+  clearTimeout(reloadTimer);
+  await repo.patchProject(id, patch);
+  await repo.loadAll();
+  renderAll();
+  toast(`项目已暂停：${reason}`);
+  sendNotificationForProjectChange("pause", getProject(id));
+}
+
+async function resumeProject(id) {
+  const p = getProject(id);
+  if (!p) {
+    toast("项目不存在");
+    return;
+  }
+  if (p.status !== STATUS.PAUSED) {
+    toast("只有已暂停的项目才能恢复");
+    return;
+  }
+  
+  const now = new Date().toISOString();
+  
+  let pauseDurationTotal = p.pauseDurationTotal || p.pause_duration_total || 0;
+  if (p.pausedAt || p.paused_at) {
+    const pauseDuration = (new Date(now) - new Date(p.pausedAt || p.paused_at)) / (1000 * 60 * 60);
+    pauseDurationTotal = pauseDurationTotal + pauseDuration;
+  }
+  
+  const patch = {
+    status: STATUS.WORKING,
+    pausedAt: null,
+    pauseReason: null,
+    resumedAt: now,
+    pauseDurationTotal: pauseDurationTotal
+  };
+  
+  clearTimeout(reloadTimer);
+  await repo.patchProject(id, patch);
+  await repo.loadAll();
+  renderAll();
+  toast("项目已恢复施工");
+  sendNotificationForProjectChange("resume", getProject(id));
+}
+
+function delayProject(id) {
+  const p = getProject(id);
+  if (!p) {
+    toast("项目不存在");
+    return;
+  }
+  
+  const validStatuses = [STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED];
+  if (!validStatuses.includes(p.status)) {
+    toast("只有预约中、施工中或已暂停的项目才能延期");
+    return;
+  }
+  
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowDate = tomorrow.toISOString().slice(0, 10);
+  
+  const originalTime = p.appointmentTime ? new Date(p.appointmentTime) : null;
+  const originalDateStr = originalTime ? originalTime.toISOString().slice(0, 10) : "";
+  const originalTimeStr = originalTime ? `${String(originalTime.getHours()).padStart(2, '0')}:${String(originalTime.getMinutes()).padStart(2, '0')}` : "";
+  
+  let times = "";
+  for (let h = 7; h <= 21; h++) {
+    for (let m = 0; m < 60; m += 10) {
+      const t = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      times += `<option value="${t}">${t}</option>`;
+    }
+  }
+  times += '<option value="22:00">22:00</option>';
+  
+  const form = `
+    <div class="form-row">
+      <label><span style="color:#ef4444;">⚠️</span> 原预约时间</label>
+      <div style="font-weight:600;color:#6b7280;">${originalDateStr} ${originalTimeStr}</div>
+    </div>
+    <div class="form-row">
+      <label><span style="color:#f59e0b;">📝</span> 延期原因</label>
+      <textarea id="delayReason" rows="2" class="input" placeholder="请输入延期原因..."></textarea>
+    </div>
+    <div class="form-row">
+      <label><span style="color:#2563eb;">📅</span> 新预约日期</label>
+      <input type="date" id="delayDate" value="${tomorrowDate}" class="input" min="${tomorrowDate}">
+    </div>
+    <div class="form-row">
+      <label><span style="color:#2563eb;">⏰</span> 新预约时间</label>
+      <select id="delayTime" class="input">${times}</select>
+    </div>
+  `;
+  
+  modal.open("项目延期", form, {
+    confirmText: "确认延期",
+    cancelText: "取消",
+    onConfirm: async () => {
+      const reason = document.getElementById("delayReason").value.trim();
+      const newDate = document.getElementById("delayDate").value;
+      const newTime = document.getElementById("delayTime").value;
+      
+      if (!reason) {
+        toast("请填写延期原因");
+        return false;
+      }
+      if (!newDate || !newTime) {
+        toast("请选择新预约时间");
+        return false;
+      }
+      
+      const newAppointmentTime = `${newDate}T${newTime}`;
+      if (new Date(newAppointmentTime) <= new Date()) {
+        toast("新预约时间必须晚于当前时间");
+        return false;
+      }
+      
+      const existingHistory = p.scheduleHistory || p.schedule_history || [];
+      const scheduleHistory = [...existingHistory, {
+        original_time: p.appointmentTime,
+        changed_at: new Date().toISOString(),
+        reason: reason,
+        changed_by: currentUser?.name || "系统"
+      }];
+      
+      const delayCount = (p.delay_count || p.delayCount || 0) + 1;
+      
+      const patch = {
+        status: STATUS.DELAYED,
+        appointmentTime: newAppointmentTime,
+        delayReason: reason,
+        delayCount: delayCount,
+        scheduleHistory: scheduleHistory
+      };
+      
+      clearTimeout(reloadTimer);
+      await repo.patchProject(id, patch);
+      await repo.loadAll();
+      renderAll();
+      toast(`项目已延期至 ${newDate} ${newTime}`);
+      sendNotificationForProjectChange("delay", getProject(id));
+    }
+  });
 }
 
 async function reviewProject(id) {
@@ -4217,7 +4443,6 @@ function generateWorkerScheduleDescription(dateStr = null) {
           progress = Math.max(30, Math.min(90, autoProgress));
           break;
         case "已完工":
-        case "已完成":
           statusColor = "#10b981";
           progress = 95;
           break;
@@ -4242,7 +4467,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
       if ((isManager() || isWorker() || isStoreManager()) && p.status === "施工中") {
         statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'已完工\')">完成安装</button>');
       }
-      if ((isManager() || isWorker() || isStoreManager()) && (p.status === "已完工" || p.status === "已完成")) {
+      if ((isManager() || isWorker() || isStoreManager()) && p.status === "已完工") {
         statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'已验收\')">确认验收</button>');
       }
       
@@ -4281,46 +4506,6 @@ function generateWorkerScheduleDescription(dateStr = null) {
   description += `</div>`;
   
   return description;
-}
-
-function updateProjectStatus(id, newStatus) {
-  const p = getProject(id);
-  if (!p) return;
-  
-  if (newStatus === "已完工") {
-    openCompleteProjectForm(id);
-    return;
-  }
-  
-  if (newStatus === "已验收") {
-    openAcceptance(id);
-    return;
-  }
-  
-  p.status = newStatus;
-  
-  const now = new Date().toISOString();
-  
-  if (newStatus === "施工中") {
-    p.started_at = now;
-  }
-  
-  if (MODE === "cloud" && cloudConfigured()) {
-    const updateData = { status: newStatus, updated_at: now };
-    if (newStatus === "施工中") {
-      updateData.started_at = now;
-    }
-    sb.from("projects").update(updateData).eq("id", id).then(() => {
-      toast(`项目状态已更新为：${newStatus}`);
-      renderConstruction();
-    }).catch(() => {
-      toast("更新失败");
-    });
-  } else {
-    saveLocal();
-    toast(`项目状态已更新为：${newStatus}`);
-    renderConstruction();
-  }
 }
 
 function openCompleteProjectForm(id) {
@@ -4715,7 +4900,9 @@ function collectProjectStats() {
     .map((p) => {
       const est = Number(p.estimatedHours) || 0;
       const act = (p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
-      const diff = act - est;
+      const pauseDuration = Number(p.pauseDurationTotal) || 0;
+      const effectiveAct = Math.max(0, act - pauseDuration);
+      const diff = effectiveAct - est;
       const hasActual = act > 0;
       // 按施工人员汇总工时（区分内部和外协）
       const workerMap = {};
@@ -4752,7 +4939,7 @@ function collectProjectStats() {
         name: p.name, 
         status: p.status, 
         est, 
-        act, 
+        act: effectiveAct, 
         diff, 
         hasActual, 
         workerHours, 
@@ -4776,7 +4963,7 @@ function renderStats() {
   const projRows = collectProjectStats();
   const recorded = projRows.filter((r) => r.hasActual);
   const totalEst = recorded.reduce((s, r) => s + r.est, 0);
-  const totalAct = rows.reduce((s, r) => s + r.hours, 0);
+  const totalAct = recorded.reduce((s, r) => s + (r.act || 0), 0);
   const totalDiff = totalAct - totalEst;
   
   const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
@@ -8173,10 +8360,19 @@ function bindEvents() {
 
   document.getElementById("modalClose").addEventListener("click", () => modal.close());
   document.getElementById("modalCancel").addEventListener("click", () => modal.close());
-  document.getElementById("modalConfirm").addEventListener("click", () => {
+  document.getElementById("modalConfirm").addEventListener("click", async () => {
     if (modalOnConfirm) {
       const result = modalOnConfirm();
-      if (result !== false) {
+      let shouldClose = true;
+      if (result instanceof Promise) {
+        const resolvedResult = await result;
+        if (resolvedResult === false) {
+          shouldClose = false;
+        }
+      } else if (result === false) {
+        shouldClose = false;
+      }
+      if (shouldClose) {
         modal.close();
       }
     }
