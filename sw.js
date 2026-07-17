@@ -1,4 +1,4 @@
-const CACHE = "ad-install-v41;
+const CACHE = "ad-install-v41";
 const VERSION = "v41";
 
 const ASSETS = [
