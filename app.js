@@ -548,14 +548,28 @@ function calcActualWorkDuration(p) {
   return `${mins}分钟`;
 }
 
+function getProjectEffectiveEndTime(p) {
+  const now = new Date();
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && p.finishedAt) {
+    return new Date(p.finishedAt);
+  }
+  if (p.status === STATUS.CANCELLED && p.cancelledAt) {
+    return new Date(p.cancelledAt);
+  }
+  if (p.status === STATUS.PAUSED && p.pausedAt) {
+    return new Date(p.pausedAt);
+  }
+  return now;
+}
+
 function calcWorkerRealtimeHours(p, workerId, periods) {
   if (!periods || periods.length === 0) return 0;
   
-  const now = new Date();
+  const projectEndTime = getProjectEffectiveEndTime(p);
   
   return periods.reduce((sum, pr) => {
     const start = new Date(pr.start);
-    const end = pr.end ? new Date(pr.end) : now;
+    const end = pr.end ? new Date(pr.end) : projectEndTime;
     let duration = (end - start) / (1000 * 60 * 60);
     
     if (p.pauseHistory && p.pauseHistory.length > 0) {
@@ -3632,7 +3646,7 @@ function renderConstruction() {
         ${p.startedAt ? `<div style="background:#e0e7ff;border-radius:8px;padding:10px;">
           <div style="font-size:11px;color:#6366f1;margin-bottom:2px;">⏱️ 工时时长</div>
           <div style="font-size:14px;font-weight:600;color:#4338ca;">${(() => {
-            const now = new Date();
+            const projectEndTime = getProjectEffectiveEndTime(p);
             let totalHours = 0;
             (p.assignedWorkerIds || []).forEach(wid => {
               const periods = [];
@@ -3651,7 +3665,7 @@ function renderConstruction() {
               }
               periods.forEach(pr => {
                 const start = new Date(pr.start);
-                const end = pr.end ? new Date(pr.end) : now;
+                const end = pr.end ? new Date(pr.end) : projectEndTime;
                 let dur = (end - start) / (1000 * 60 * 60);
                 (p.pauseHistory || []).forEach(ph => {
                   if (ph.pauseAt && ph.resumedAt) {
@@ -3799,7 +3813,7 @@ function renderConstruction() {
           }
         });
         
-        const now = new Date();
+        const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
         (p.assignedWorkerIds || []).forEach((wid) => {
           if (!workerPeriods[wid] || workerPeriods[wid].length === 0) {
             if (p.startedAt) {
@@ -3809,7 +3823,7 @@ function renderConstruction() {
           if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
             const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
             if (!lastPeriod.end) {
-              lastPeriod.end = now.toISOString();
+              lastPeriod.end = periodEndTime;
             }
           }
         });
@@ -5448,7 +5462,7 @@ function openCompleteProjectForm(id) {
       <div>
         <div style="font-size:12px;color:#6b7280;">总用时</div>
         <div style="font-weight:600;color:#059669;">${(() => {
-          const now = new Date();
+          const projectEndTime = getProjectEffectiveEndTime(p);
           let totalHours = 0;
           (p.assignedWorkerIds || []).forEach(wid => {
             const periods = [];
@@ -5467,7 +5481,7 @@ function openCompleteProjectForm(id) {
             }
             periods.forEach(pr => {
               const start = new Date(pr.start);
-              const end = pr.end ? new Date(pr.end) : now;
+              const end = pr.end ? new Date(pr.end) : projectEndTime;
               let dur = (end - start) / (1000 * 60 * 60);
               (p.pauseHistory || []).forEach(ph => {
                 if (ph.pauseAt && ph.resumedAt) {
@@ -5511,13 +5525,22 @@ function openCompleteProjectForm(id) {
       <div style="display:flex;flex-direction:column;gap:4px;">`;
     
     const allSessions = [...workSessions];
-    if (p.startedAt && p.status !== STATUS.PAUSED) {
+    if (p.startedAt && p.status === STATUS.WORKING) {
       const now = new Date();
       const sessionStarted = new Date(p.startedAt);
       const duration = (now - sessionStarted) / (1000 * 60 * 60);
       allSessions.push({
         startTime: p.startedAt,
         endTime: now.toISOString(),
+        duration: duration
+      });
+    } else if (p.startedAt && [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && p.finishedAt && workSessions.length === 0) {
+      const endTime = new Date(p.finishedAt);
+      const sessionStarted = new Date(p.startedAt);
+      const duration = (endTime - sessionStarted) / (1000 * 60 * 60);
+      allSessions.push({
+        startTime: p.startedAt,
+        endTime: p.finishedAt,
         duration: duration
       });
     }
@@ -5568,7 +5591,7 @@ function openCompleteProjectForm(id) {
       }
     });
     
-    const now = new Date();
+    const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
     assignedWorkerIds.forEach((wid) => {
       if (!workerPeriods[wid] || workerPeriods[wid].length === 0) {
         if (p.startedAt) {
@@ -5578,7 +5601,7 @@ function openCompleteProjectForm(id) {
       if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
         const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
         if (!lastPeriod.end) {
-          lastPeriod.end = now.toISOString();
+          lastPeriod.end = periodEndTime;
         }
       }
     });
