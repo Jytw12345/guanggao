@@ -209,6 +209,23 @@
       font-size: 12px;
       margin-right: 4px;
     }
+    .flow-step {
+      background: #f3f4f6;
+      padding: 12px 16px;
+      margin: 8px 0;
+      border-radius: 8px;
+      border-left: 4px solid var(--primary);
+    }
+    .flow-step h4 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      color: var(--primary);
+    }
+    .flow-step p {
+      margin: 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
     .footer {
       text-align: center;
       padding: 20px;
@@ -244,256 +261,227 @@
   <div class="container">
     <div class="header">
       <h1>🏗️ 广告安装施工预约管理系统</h1>
-      <p>使用说明书 v2.0</p>
+      <p>使用说明书 v3.0 · 重点工作流程</p>
     </div>
 
     <div class="toc">
       <h3>📋 目录</h3>
       <ul>
-        <li><a href="#overview">系统概述</a></li>
-        <li><a href="#roles">用户角色</a></li>
-        <li><a href="#status">项目状态流程</a></li>
-        <li><a href="#modules">功能模块详解</a></li>
-        <li><a href="#features">特色功能</a></li>
-        <li><a href="#troubleshoot">常见问题</a></li>
-        <li><a href="#update">更新注意事项</a></li>
-        <li><a href="#pwa">PWA安装指南</a></li>
-        <li><a href="#notes">注意事项</a></li>
+        <li><a href="#workflow">核心工作流程</a></li>
+        <li><a href="#status">项目状态流转</a></li>
+        <li><a href="#project">项目预约流程</a></li>
+        <li><a href="#construction">施工管理流程</a></li>
+        <li><a href="#workers">人员管理流程</a></li>
+        <li><a href="#hours">工时管理流程</a></li>
+        <li><a href="#review">验收审核流程</a></li>
+        <li><a href="#records">施工记录查询</a></li>
+        <li><a href="#tips">操作技巧</a></li>
       </ul>
     </div>
 
-    <div class="section" id="overview">
-      <h2>📋 系统概述</h2>
-      <p>本系统是一款专为广告安装施工团队设计的项目预约与工时管理系统，支持<strong>本地单机模式</strong>和<strong>云端多人协作模式</strong>，采用 PWA 技术实现离线可用和桌面安装功能。</p>
-      <h3>系统架构</h3>
-      <ul>
-        <li><strong>前端技术</strong>：HTML5 + CSS3 + JavaScript（原生）</li>
-        <li><strong>数据存储</strong>：浏览器 LocalStorage（本地模式）/ Supabase（云端模式）</li>
-        <li><strong>离线支持</strong>：Service Worker 缓存机制</li>
-        <li><strong>响应式设计</strong>：支持桌面端和移动端</li>
-      </ul>
-      <h3>访问帮助</h3>
-      <p>在应用内点击页面右上角的 <span class="badge">📖 帮助</span> 按钮，可快速查看简要使用说明。</p>
-    </div>
-
-    <div class="section" id="roles">
-      <h2>👤 用户角色</h2>
-      <table>
-        <thead>
-          <tr><th>角色</th><th>权限说明</th></tr>
-        </thead>
-        <tbody>
-          <tr><td><strong>总经理</strong></td><td>拥有全部权限，可管理所有项目、人员、门店和账号</td></tr>
-          <tr><td><strong>店长</strong></td><td>管理本门店的项目和施工人员，可查看工时统计</td></tr>
-          <tr><td><strong>施工人员</strong></td><td>查看分配给自己的项目，填写施工工时，完成维修工单</td></tr>
-        </tbody>
-      </table>
+    <div class="section" id="workflow">
+      <h2>🔄 核心工作流程总览</h2>
+      <div class="code">新建预约 → 分配人员 → 开始施工 → 施工中/暂停/恢复 → 完成施工（登记工时）→ 验收 → 审核</div>
+      <p>系统围绕项目生命周期设计，从预约创建到最终审核，每个环节都有明确的操作和数据记录。</p>
+      
+      <div class="tip">
+        <h4>💡 流程特点</h4>
+        <p>系统支持灵活的人员变动管理（加人/减人），自动计算已移除人员的工时；支持多次暂停/恢复，暂停期间不计入工时；完工时自动汇总所有参与人员的工时记录。</p>
+      </div>
     </div>
 
     <div class="section" id="status">
-      <h2>📊 项目状态流程</h2>
+      <h2>📊 项目状态流转</h2>
       <div class="code">预约中 → 施工中 ↔ 已暂停 → 已完工 → 已验收 → 已审核
    ↓                ↓
   已取消           已延期</div>
+      
       <h3>状态说明</h3>
       <table>
         <thead>
-          <tr><th>状态</th><th>颜色标识</th><th>说明</th><th>可执行操作</th></tr>
+          <tr><th>状态</th><th>颜色</th><th>说明</th><th>进度条颜色</th></tr>
         </thead>
         <tbody>
-          <tr><td><strong>预约中</strong></td><td>🔵 蓝色</td><td>项目已创建，等待施工</td><td>开始施工、编辑、删除、取消</td></tr>
-          <tr><td><strong>施工中</strong></td><td>🟡 橙色</td><td>项目正在进行</td><td>暂停施工、完成安装、查看进度</td></tr>
-          <tr><td><strong>已暂停</strong></td><td>🟠 橙红色</td><td>项目暂时停止，可恢复</td><td>恢复施工、取消项目</td></tr>
-          <tr><td><strong>已延期</strong></td><td>🔴 红色</td><td>项目超出预计时间未完工</td><td>恢复施工、完成安装、取消项目</td></tr>
-          <tr><td><strong>已完工</strong></td><td>🟢 绿色</td><td>安装完成，待验收</td><td>确认验收、填写工时</td></tr>
-          <tr><td><strong>已验收</strong></td><td>🟣 紫色</td><td>验收通过</td><td>修改验收、发起维修单</td></tr>
-          <tr><td><strong>已审核</strong></td><td>🔵 青色</td><td>财务审核完成</td><td>反审核、发起维修单</td></tr>
-          <tr><td><strong>已取消</strong></td><td>🔴 红色</td><td>项目已取消</td><td>查看详情（只读）</td></tr>
+          <tr><td><strong>预约中</strong></td><td>🔵 蓝色</td><td>项目已创建，等待施工</td><td>蓝色</td></tr>
+          <tr><td><strong>施工中</strong></td><td>🟡 蓝色</td><td>项目正在进行</td><td>蓝色</td></tr>
+          <tr><td><strong>已暂停</strong></td><td>🟠 橙色</td><td>项目暂时停止，可恢复</td><td>橙色</td></tr>
+          <tr><td><strong>已延期</strong></td><td>🔴 红色</td><td>项目超出预计时间未完工</td><td>红色</td></tr>
+          <tr><td><strong>已完工</strong></td><td>🟢 绿色</td><td>安装完成，工时已登记</td><td>绿色（100%）</td></tr>
+          <tr><td><strong>已验收</strong></td><td>🟣 紫色</td><td>验收通过</td><td>绿色（100%）</td></tr>
+          <tr><td><strong>已审核</strong></td><td>🔵 青色</td><td>财务审核完成</td><td>绿色（100%）</td></tr>
+          <tr><td><strong>已取消</strong></td><td>🔴 红色</td><td>项目已取消</td><td>灰色</td></tr>
         </tbody>
       </table>
+
       <h3>状态流转规则</h3>
       <ul>
-        <li><strong>预约中 → 施工中</strong>：点击"开始施工"按钮，记录开工时间</li>
+        <li><strong>预约中 → 施工中</strong>：点击"开始施工"，必须先分配安装人员</li>
         <li><strong>施工中 ↔ 已暂停</strong>：可多次暂停和恢复，暂停期间不计入工时</li>
         <li><strong>施工中/已暂停 → 已延期</strong>：系统自动检测，超出预计结束时间自动标记</li>
-        <li><strong>已延期 → 施工中</strong>：点击"恢复施工"按钮，继续施工</li>
-        <li><strong>施工中/已暂停/已延期 → 已取消</strong>：手动取消，需填写取消原因</li>
-        <li><strong>任意状态 → 已取消</strong>：预约中、施工中、已暂停、已延期状态均可取消</li>
-        <li><strong>已完工 → 已验收 → 已审核</strong>：逐级审批流程，不可逆</li>
+        <li><strong>任意状态 → 已取消</strong>：需填写取消原因，取消后只读</li>
+        <li><strong>施工中/已暂停/已延期 → 已完工</strong>：必须登记工时</li>
+        <li><strong>已完工 → 已验收 → 已审核</strong>：逐级审批，不可逆</li>
       </ul>
     </div>
 
-    <div class="section" id="modules">
-      <h2>📱 功能模块详解</h2>
+    <div class="section" id="project">
+      <h2>📝 项目预约流程</h2>
       
-      <h3>1. 项目预约</h3>
-      <h4>主要功能：</h4>
-      <ul>
-        <li>新建项目预约</li>
-        <li>编辑/删除项目</li>
-        <li>按状态、门店、时间范围筛选</li>
-        <li>搜索项目名称、客户、地址</li>
-        <li>超期项目红色警告标识</li>
-      </ul>
-      <h4>操作步骤：</h4>
-      <ol>
-        <li>点击「新建预约」按钮</li>
-        <li>填写项目信息：项目名称、客户名称、联系电话、门店、地址、预约时间、预计工时、施工人员分配、外协人员（可选）、备注</li>
-        <li>点击「保存」完成创建</li>
-      </ol>
-      <h4>时间筛选：</h4>
-      <ul>
-        <li>全部：不限制时间范围</li>
-        <li>3天/7天/15天/30天：显示对应天数内的项目</li>
-      </ul>
-      <h4>状态筛选：</h4>
-      <ul>
-        <li>全部状态：显示所有项目</li>
-        <li>预约中/施工中/已暂停/已延期/已完工/已验收/已审核/已取消：按状态筛选</li>
-      </ul>
+      <h3>第一步：新建项目预约</h3>
+      <div class="flow-step">
+        <h4>1.1 填写项目基本信息</h4>
+        <p>项目名称、客户名称、联系电话、门店、安装地址</p>
+      </div>
+      <div class="flow-step">
+        <h4>1.2 设置预约时间</h4>
+        <p>选择日期和开始时间，结束时间自动计算（开始时间+预计工时）</p>
+      </div>
+      <div class="flow-step">
+        <h4>1.3 设置预计总工时</h4>
+        <p>预计总工时为必选项。如未填写，系统根据施工时间和施工人数自动计算并给出提示</p>
+      </div>
+      <div class="flow-step">
+        <h4>1.4 分配施工人员</h4>
+        <p>选择内部施工人员或填写外协人员（外协人员不参与时间冲突检测）</p>
+      </div>
+      <div class="flow-step">
+        <h4>1.5 保存项目</h4>
+        <p>点击"保存"完成创建，项目进入"预约中"状态</p>
+      </div>
 
-      <h3>2. 日历视图</h3>
-      <h4>主要功能：</h4>
-      <ul>
-        <li>按月查看每日预约数量</li>
-        <li>显示当天工时饱和度（正常/排满/超载）</li>
-        <li>点击日期查看详细安排</li>
-      </ul>
-      <h4>颜色标识：</h4>
-      <ul>
-        <li>🟢 预约中</li>
-        <li>🟡 施工中</li>
-        <li>🟠 已暂停</li>
-        <li>🔴 已延期</li>
-        <li>🟢 已完工</li>
-        <li>🔵 已验收</li>
-        <li>🟣 已审核</li>
-        <li>🔴 已取消</li>
-      </ul>
-      <h4>日历格子颜色：</h4>
-      <ul>
-        <li>⚪ 白色：普通工作日</li>
-        <li>⬜ 灰色：周末（周六、周日）</li>
-        <li>🟡 黄色：节假日</li>
-      </ul>
-
-      <h3>3. 施工管理（核心模块）</h3>
-      <p>从项目预约卡片点击「施工管理」按钮，可直接跳转到该项目的详细管理页面。</p>
-      <h4>3.1 页面布局</h4>
-      <p>施工管理页面从上到下依次为：</p>
-      <ol>
-        <li><strong>标题栏</strong>：显示"施工管理"标题和项目选择下拉框</li>
-        <li><strong>项目详情</strong>：项目信息、状态、地址、时间等</li>
-        <li><strong>安装人员分配</strong>：分配/移除施工人员</li>
-        <li><strong>施工工时记录</strong>：分人填写实际施工工时</li>
-        <li><strong>验收信息</strong>：填写验收表单</li>
-        <li><strong>施工人员安排</strong>：查看当日人员日程安排</li>
-      </ol>
-      <h4>3.2 工时计算逻辑</h4>
-      <p>系统采用精确的工时计算方式，支持暂停/恢复操作：</p>
-      <ul>
-        <li><strong>实际工时</strong> = 累计工时 + 当前工作时段时长</li>
-        <li><strong>累计工时</strong>：所有已完成工作时段的总和</li>
-        <li><strong>工作时段</strong>：从开始施工到暂停/完工的时间片段</li>
-      </ul>
-      <h4>3.3 暂停/恢复操作</h4>
       <div class="tip">
-        <h4>💡 操作指南</h4>
-        <p>暂停施工：当项目需要临时停止（如等待材料、天气原因等），点击"暂停施工"按钮，系统自动记录当前工作时段并暂停计时。</p>
-        <p>恢复施工：点击"恢复施工"按钮，系统从当前时间重新开始计时，之前的工作时段已保存。</p>
+        <h4>💡 快捷操作</h4>
+        <p>当选择今天日期时，开始时间自动根据当前系统时间向上取整，结束时间默认往后推2小时</p>
       </div>
-      <ol>
-        <li><strong>暂停施工</strong>：
-          <ul>
-            <li>点击「暂停施工」按钮</li>
-            <li>系统自动计算从上次开始/恢复到当前的工作时长</li>
-            <li>将该时段记录到工作时段列表</li>
-            <li>状态变为"已暂停"</li>
-          </ul>
-        </li>
-        <li><strong>恢复施工</strong>：
-          <ul>
-            <li>点击「恢复施工」按钮</li>
-            <li>系统重置开始时间为当前时间</li>
-            <li>状态变为"施工中"</li>
-            <li>继续累计工时</li>
-          </ul>
-        </li>
-      </ol>
-      <h4>3.4 取消项目</h4>
+
+      <h3>人员冲突检测</h3>
+      <p>分配人员时系统会自动检测时间冲突，如果该人员在此时间段已被分配到其他项目，会弹出提示。您可以选择是否继续分配。</p>
+    </div>
+
+    <div class="section" id="construction">
+      <h2>⚙️ 施工管理流程</h2>
+      
+      <h3>第一步：进入施工管理</h3>
+      <p>从项目预约卡片点击「施工管理」按钮，进入项目详细管理页面。</p>
+
+      <h3>第二步：分配安装人员</h3>
+      <div class="flow-step">
+        <h4>2.1 添加人员</h4>
+        <p>在"安装人员分配"区域，点击"+"按钮选择施工人员，系统自动记录分配时间</p>
+      </div>
+      <div class="flow-step">
+        <h4>2.2 移除人员</h4>
+        <p>点击人员旁边的"×"按钮移除，系统自动计算该人员从开工到移除的工时并记录</p>
+      </div>
+
+      <div class="tip">
+        <h4>💡 自动工时计算</h4>
+        <p>移除人员时，系统自动计算：工时 = 总施工时间 / 施工人数（平均分配），并自动创建工人工时记录</p>
+      </div>
+
+      <h3>第三步：开始施工</h3>
+      <div class="flow-step">
+        <h4>3.1 检查人员分配</h4>
+        <p>系统自动检查是否已分配安装人员，未分配时提示先分配人员</p>
+      </div>
+      <div class="flow-step">
+        <h4>3.2 记录开工时间</h4>
+        <p>点击"开始施工"按钮，系统记录当前时间为开工时间，项目状态变为"施工中"</p>
+      </div>
+
+      <h3>第四步：施工过程管理</h3>
+      <div class="flow-step">
+        <h4>4.1 暂停施工</h4>
+        <p>点击"暂停施工"按钮，填写暂停原因（可选，支持快速选择或手动输入），系统记录暂停时间，暂停期间不计入工时</p>
+      </div>
+      <div class="flow-step">
+        <h4>4.2 恢复施工</h4>
+        <p>点击"恢复施工"按钮，系统记录恢复时间，从当前时间重新开始计时</p>
+      </div>
+      <div class="flow-step">
+        <h4>4.3 项目延期</h4>
+        <p>点击"项目延期"按钮，设置新预约时间（默认8:00）和延期原因，系统记录延期历史</p>
+      </div>
+
+      <div class="tip">
+        <h4>💡 进度条显示规则</h4>
+        <p>施工中：蓝色进度条，根据墙钟时间（累计工时+当前工作时长）×施工人数计算进度</p>
+        <p>已暂停：橙色进度条，暂停期间进度不再增加</p>
+        <p>已延期：红色进度条，提示项目超期</p>
+        <p>已完工：绿色进度条，固定显示100%</p>
+      </div>
+
+      <h3>第五步：完成施工</h3>
+      <div class="flow-step">
+        <h4>5.1 打开完工表单</h4>
+        <p>点击"完成施工"按钮，系统自动汇总所有参与人员（包括已移除人员）</p>
+      </div>
+      <div class="flow-step">
+        <h4>5.2 登记工时</h4>
+        <p>已移除人员的工时自动填入（系统自动计算的结果），当前人员需手动填写工时、等级和备注</p>
+      </div>
+      <div class="flow-step">
+        <h4>5.3 确认完工</h4>
+        <p>确认总工时，系统自动记录完工时间，项目状态变为"已完工"</p>
+      </div>
+
+      <div class="tip">
+        <h4>💡 工时自动汇总</h4>
+        <p>完工表单会显示所有曾经参与过该项目的工人，包括：</p>
+        <ul>
+          <li>当前分配的工人（显示为正常颜色）</li>
+          <li>已移除的工人（显示为灰色，标注"已移除"）</li>
+          <li>已移除工人的工时会自动填入（基于系统自动计算）</li>
+        </ul>
+      </div>
+
+      <h3>取消项目</h3>
       <div class="warning">
-        <h4>⚠️ 注意</h4>
-        <p>取消项目为不可逆操作，项目将保留在系统中但标记为"已取消"状态，便于后续追溯。</p>
+        <h4>⚠️ 不可逆操作</h4>
+        <p>点击"取消项目"按钮，填写取消原因，项目将标记为"已取消"，保留在系统中便于追溯，但无法再进行任何操作</p>
       </div>
-      <ol>
-        <li>在项目详情页面，点击红色「× 取消项目」按钮</li>
-        <li>选择取消原因：客户取消订单、材料问题、人员调配、其他</li>
-        <li>点击「确认取消」完成操作</li>
-      </ol>
-      <h4>3.5 完成安装</h4>
-      <ol>
-        <li>点击「完成安装」按钮</li>
-        <li>填写各施工人员的实际工时</li>
-        <li>确认完工时间和总用时</li>
-        <li>点击「确认完工」，状态变为"已完工"</li>
-      </ol>
-      <h4>3.6 验收表单字段</h4>
-      <table>
-        <thead>
-          <tr><th>字段</th><th>说明</th><th>必填</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>验收人</td><td>验收负责人姓名</td><td>✓</td></tr>
-          <tr><td>验收时间</td><td>验收日期</td><td></td></tr>
-          <tr><td>验收类型</td><td>现场验收/远程验收/第三方验收/内部验收</td><td></td></tr>
-          <tr><td>验收方式</td><td>实物验收/图片验收/视频验收/混合验收</td><td></td></tr>
-          <tr><td>验收结果</td><td>合格/整改后合格/不合格</td><td></td></tr>
-          <tr><td>验收结论</td><td>通过/有条件通过/不通过</td><td></td></tr>
-          <tr><td>验收项检查</td><td>安装位置准确、安装牢固、外观整洁等</td><td></td></tr>
-          <tr><td>验收备注</td><td>现场情况、遗留问题等</td><td></td></tr>
-        </tbody>
-      </table>
+    </div>
 
-      <h3>4. 个人日程</h3>
-      <h4>主要功能：</h4>
+    <div class="section" id="workers">
+      <h2>👷 人员管理流程</h2>
+      
+      <h3>人员分配流程</h3>
+      <div class="code">添加人员 → 记录分配时间 → 参与施工 → 移除人员（自动计算工时）→ 记录移除时间</div>
+      
+      <h3>人员变动记录</h3>
+      <p>每次人员分配和移除操作都会记录到施工记录中，包括：</p>
       <ul>
-        <li>查看个人日程安排（会议、任务等）</li>
-        <li>按人员和类型筛选日程</li>
-        <li>添加新日程</li>
-        <li>日历视图显示日程分布</li>
+        <li>操作时间</li>
+        <li>操作类型（分配/移除）</li>
+        <li>人员姓名和联系方式</li>
+        <li>移除时自动计算的工时</li>
       </ul>
-      <h4>日历格子颜色：</h4>
-      <ul>
-        <li>⚪ 白色：普通工作日</li>
-        <li>⬜ 灰色：周末（周六、周日）</li>
-        <li>🟡 黄色：节假日</li>
-        <li>🔵 蓝色边框：有日程安排</li>
-      </ul>
-      <h4>操作步骤：</h4>
-      <ol>
-        <li>点击右上角「+ 添加日程」按钮</li>
-        <li>填写日程信息：标题、日期、时间、人员、类型、备注</li>
-        <li>点击「保存」完成创建</li>
-      </ol>
 
-      <h3>5. 工时统计</h3>
-      <h4>主要功能：</h4>
+      <h3>工人工时统计</h3>
+      <p>施工记录中的"工人工时统计"区块显示：</p>
       <ul>
-        <li>按月统计施工人员工时</li>
-        <li>区分内部人员和外协人员</li>
-        <li>显示每日工时明细</li>
-        <li>导出统计数据（Excel 格式）</li>
-        <li>工时等级分类统计（初级/中级/高级/特级）</li>
+        <li>每个工人的累计工时</li>
+        <li>当前施工人员（绿色）和已移除人员（灰色）</li>
+        <li>内部人员和外协人员（紫色标识）</li>
+        <li>每个工人的工作时间段</li>
+        <li>自动记录工时的标记</li>
       </ul>
-      <h4>统计维度：</h4>
+    </div>
+
+    <div class="section" id="hours">
+      <h2>⏱️ 工时管理流程</h2>
+      
+      <h3>工时计算规则</h3>
+      <div class="code">实际工时 = 所有工人工时记录之和（包括自动记录和手动登记）</div>
+      
+      <h3>工时记录方式</h3>
       <ul>
-        <li>总工时</li>
-        <li>出勤天数</li>
-        <li>参与项目数</li>
-        <li>请假记录</li>
-        <li>各等级工时（初级、中级、高级、特级）</li>
+        <li><strong>自动记录</strong>：移除工人时系统自动计算并记录工时</li>
+        <li><strong>手动登记</strong>：完工时在表单中手动填写工时</li>
+        <li><strong>外协工时</strong>：单独登记外协人员工时，以紫色标识</li>
       </ul>
-      <h4>工时等级说明：</h4>
+
+      <h3>工时等级</h3>
       <table>
         <thead>
           <tr><th>等级</th><th>说明</th><th>用途</th></tr>
@@ -506,275 +494,140 @@
         </tbody>
       </table>
 
-      <h3>6. 店面统计（总经理专属）</h3>
+      <h3>工时差异计算</h3>
+      <p>工时差异 = 实际工时 - 预计工时</p>
       <ul>
-        <li>按门店统计预约数量和工时</li>
-        <li>工时差异分析</li>
-        <li>外协人员统计</li>
-        <li>导出报表</li>
+        <li><strong>正数（超）</strong>：实际工时超过预计工时</li>
+        <li><strong>负数（省）</strong>：实际工时少于预计工时</li>
       </ul>
 
-      <h3>7. 施工人员管理</h3>
-      <ul>
-        <li>添加/编辑施工人员信息</li>
-        <li>记录人员联系方式</li>
-      </ul>
-
-      <h3>8. 请假管理</h3>
-      <h4>8.1 请假申请</h4>
-      <ul>
-        <li>选择请假类型：事假、病假、年假、调休、其他</li>
-        <li>设置开始/结束时间（仅计算工作时间段）</li>
-        <li>自动检测与项目排期冲突</li>
-        <li>提交审批</li>
-        <li>待审批期间可自行撤回申请</li>
-      </ul>
-      <h4>8.2 审批流程</h4>
-      <ul>
-        <li>待审批列表（总经理/店长可见）</li>
-        <li>批准/拒绝操作</li>
-        <li>显示冲突项目提示</li>
-        <li>已批准的请假可由管理员撤回批准（状态改为待审批）</li>
-        <li>已拒绝的请假可由管理员删除</li>
-      </ul>
-      <h4>8.3 状态流转</h4>
-      <div class="code">待审批 → 已批准 / 已拒绝
-   ↓              ↓
-  撤回          撤回批准 → 待审批
-                ↓
-              删除（管理员）</div>
-      <h4>8.4 节假日管理</h4>
-      <ul>
-        <li>添加节假日和调休日期</li>
-        <li>请假计算自动排除节假日</li>
-      </ul>
-
-      <h3>9. 门店管理</h3>
-      <ul>
-        <li>添加/编辑门店信息</li>
-        <li>记录门店地址和联系方式</li>
-      </ul>
-
-      <h3>10. 账号管理（云端模式）</h3>
-      <ul>
-        <li>查看所有注册账号</li>
-        <li>分配角色权限</li>
-        <li>管理门店权限</li>
-      </ul>
-
-      <h3>11. 角色权限配置</h3>
-      <ul>
-        <li>按角色配置可执行操作</li>
-        <li>权限包括：创建/编辑/删除项目、分配人员、审批等</li>
-        <li>总经理恒拥有全部权限</li>
-      </ul>
+      <h3>预计工时自动计算</h3>
+      <div class="tip">
+        <h4>💡 智能计算</h4>
+        <p>新建项目预约时，如果未填写预计总工时，系统会根据以下公式自动计算：</p>
+        <p>预计总工时 = 施工时长 × 施工人数</p>
+        <p>例如：施工时间2小时，2人施工，预计总工时 = 4小时</p>
+      </div>
     </div>
 
-    <div class="section" id="features">
-      <h2>🛠️ 特色功能</h2>
+    <div class="section" id="review">
+      <h2>✅ 验收审核流程</h2>
       
-      <h3>1. 人员冲突检测</h3>
-      <ul>
-        <li>分配人员时自动检测时间冲突</li>
-        <li>请假申请时检测与已安排项目的冲突</li>
-        <li>显示冲突项目详情</li>
-      </ul>
-
-      <h3>2. 外协人员管理</h3>
-      <ul>
-        <li>独立管理外协人员工时</li>
-        <li>外协人员工时以紫色标识</li>
-        <li>不参与内部人员冲突检测</li>
-      </ul>
-
-      <h3>3. 进度自动追踪</h3>
-      <ul>
-        <li>根据状态自动计算进度百分比</li>
-        <li>超期项目自动标记警告</li>
-        <li>实时更新进度显示</li>
-      </ul>
-
-      <h3>4. 暂停/恢复工时计算</h3>
-      <ul>
-        <li>支持多次暂停和恢复操作</li>
-        <li>自动记录每次工作时段</li>
-        <li>暂停期间不计入工时</li>
-        <li>工时 = 累计工时 + 当前工作时段</li>
-      </ul>
-
-      <h3>5. 项目取消功能</h3>
-      <ul>
-        <li>支持取消预约中、施工中、已暂停、已延期的项目</li>
-        <li>取消时需填写取消原因</li>
-        <li>已取消项目保留在系统中便于追溯</li>
-      </ul>
-
-      <h3>6. 离线可用</h3>
-      <ul>
-        <li>Service Worker 缓存核心资源</li>
-        <li>网络断开时仍可访问已缓存数据</li>
-      </ul>
-
-      <h3>7. 自动更新</h3>
-      <ul>
-        <li>检测到新版本时提示用户刷新</li>
-        <li>后台自动下载更新</li>
-        <li>用户确认后应用新版本</li>
-      </ul>
-
-      <h3>8. 响应式设计</h3>
-      <ul>
-        <li>桌面端完整功能展示</li>
-        <li>移动端底部导航栏</li>
-      </ul>
-
-      <h3>9. 工时等级管理</h3>
-      <ul>
-        <li>填写工时时选择工时等级（初级/中级/高级/特级）</li>
-        <li>月底统计按等级分类汇总工时</li>
-        <li>支持按等级导出统计数据</li>
-        <li>不同等级工时可设置不同结算标准</li>
-      </ul>
-
-      <h3>10. 灵活的假期管理</h3>
-      <ul>
-        <li>员工可在待审批期间撤回请假申请</li>
-        <li>管理员可撤回已批准的假期（状态回退为待审批）</li>
-        <li>管理员可删除已拒绝的假期记录</li>
-        <li>完整的假期状态流转控制</li>
-      </ul>
-    </div>
-
-    <div class="section" id="troubleshoot">
-      <h2>🔧 常见问题与故障排除</h2>
-      
-      <h3>Q1：日历背景全部变成黄色了？</h3>
-      <p><strong>A</strong>：这是因为节假日检测逻辑错误，将所有日期都判断为节假日。请检查系统日期是否正确，或联系管理员修复。</p>
-
-      <h3>Q2：点击"取消项目"提示"取消失败，请重试"？</h3>
-      <p><strong>A</strong>：这是因为数据库缺少必要字段。请登录 Supabase 控制台执行以下 SQL：</p>
-      <div class="code">alter table if exists public.projects add column if not exists cancelled_at timestamptz;
-alter table if exists public.projects add column if not exists cancel_reason text;</div>
-
-      <h3>Q3：暂停项目后，工时计算不正确？</h3>
-      <p><strong>A</strong>：请检查以下几点：</p>
-      <ul>
-        <li>确认已点击"恢复施工"按钮，而不是直接点击"完成安装"</li>
-        <li>查看项目详情中的工作时段记录，确认所有时段都已正确记录</li>
-        <li>累计工时应显示所有已完成时段的总和</li>
-      </ul>
-
-      <h3>Q4：从项目预约卡片点击"施工管理"，页面跳转到中间位置？</h3>
-      <p><strong>A</strong>：这是正常行为，系统会自动滚动到项目详情区域。如果不需要自动滚动，可以联系管理员调整。</p>
-
-      <h3>Q5：移动端出现左右滚动？</h3>
-      <p><strong>A</strong>：这是因为项目选择框的最小宽度设置导致的。请确保使用最新版本，已修复此问题。</p>
-
-      <h3>Q6：项目状态筛选下拉菜单没有"已暂停"、"已延期"、"已取消"选项？</h3>
-      <p><strong>A</strong>：请确保使用最新版本，已添加这些状态选项。</p>
-
-      <h3>Q7：云端模式下数据同步失败？</h3>
-      <p><strong>A</strong>：请检查以下几点：</p>
-      <ul>
-        <li>网络连接是否正常</li>
-        <li>数据库表是否包含所有必要字段（accumulated_work_hours, original_started_at, work_sessions, cancelled_at, cancel_reason）</li>
-        <li>Supabase 服务状态是否正常</li>
-      </ul>
-
-      <h3>Q8：本地模式下数据丢失？</h3>
-      <p><strong>A</strong>：本地模式数据存储在浏览器 localStorage 中，清除浏览器数据会导致数据丢失。建议定期导出数据备份，或使用云端模式。</p>
-
-      <h3>Q9：新注册账号无法使用？</h3>
-      <p><strong>A</strong>：新注册账号默认无权限，需总经理在「账号管理」中分配角色后才能使用。</p>
-
-      <h3>Q10：系统提示"发现新版本"，但刷新后没有变化？</h3>
-      <p><strong>A</strong>：GitHub Pages 对 sw.js 文件有约 10 分钟的缓存，等待几分钟后再刷新即可。</p>
-    </div>
-
-    <div class="section" id="update">
-      <h2>⚠️ 关键更新注意事项</h2>
-      
-      <h3>自动更新机制</h3>
-      <p>本系统通过 Service Worker 实现自动更新，但需要注意：</p>
-      
-      <div class="warning">
-        <h4>⚠️ 重要</h4>
-        <p>每次更新必须修改缓存版本号：</p>
-        <ol>
-          <li>打开 <code style="background:#fef2f2;padding:2px 6px;border-radius:4px;font-size:12px;">sw.js</code> 文件</li>
-          <li>将 <code style="background:#fef2f2;padding:2px 6px;border-radius:4px;font-size:12px;">const VERSION = "v37"</code> 的版本号递增（如 v38、v39）</li>
-          <li>推送代码到 GitHub</li>
-        </ol>
+      <h3>验收流程</h3>
+      <div class="flow-step">
+        <h4>1. 填写验收信息</h4>
+        <p>验收人、验收时间、验收类型、验收方式、验收结果、验收结论</p>
+      </div>
+      <div class="flow-step">
+        <h4>2. 验收项检查</h4>
+        <p>安装位置准确、安装牢固、外观整洁等检查项</p>
+      </div>
+      <div class="flow-step">
+        <h4>3. 提交验收</h4>
+        <p>点击"确认验收"，项目状态变为"已验收"</p>
       </div>
 
-      <h3>GitHub Pages 缓存限制</h3>
+      <h3>审核流程</h3>
+      <div class="flow-step">
+        <h4>1. 审核工时</h4>
+        <p>查看项目工时记录和工时差异</p>
+      </div>
+      <div class="flow-step">
+        <h4>2. 审核验收结果</h4>
+        <p>确认验收结论和检查项</p>
+      </div>
+      <div class="flow-step">
+        <h4>3. 提交审核</h4>
+        <p>点击"审核项目"，项目状态变为"已审核"，记录审核时间</p>
+      </div>
+
+      <h3>取消审核</h3>
+      <p>已审核项目可取消审核，恢复为"已完工"状态，可继续编辑和修改工时记录。</p>
+    </div>
+
+    <div class="section" id="records">
+      <h2>📋 施工记录查询</h2>
+      
+      <h3>施工记录包含内容</h3>
+      <div class="flow-step">
+        <h4>📅 时间记录</h4>
+        <p>开工时间、完工时间、审核时间</p>
+      </div>
+      <div class="flow-step">
+        <h4>⏱️ 工时时长</h4>
+        <p>累计施工时长、暂停次数和累计暂停时间</p>
+      </div>
+      <div class="flow-step">
+        <h4>🔧 施工时段明细</h4>
+        <p>每次施工的时间段和时长，自动扣除暂停时间</p>
+      </div>
+      <div class="flow-step">
+        <h4>👷 工人工时统计</h4>
+        <p>每个工人的累计工时、工作时间段、当前/已移除状态</p>
+      </div>
+      <div class="flow-step">
+        <h4>⏸️ 暂停/恢复记录</h4>
+        <p>每次暂停的时间、恢复时间、暂停时长和暂停原因</p>
+      </div>
+      <div class="flow-step">
+        <h4>⚠️ 延期记录</h4>
+        <p>每次延期的操作时间、原预约时间、新预约时间和延期原因</p>
+      </div>
+      <div class="flow-step">
+        <h4>👥 人员变动记录</h4>
+        <p>每次人员分配/移除的时间、人员姓名、移除时自动计算的工时</p>
+      </div>
+      <div class="flow-step">
+        <h4>📝 操作日志</h4>
+        <p>所有关键操作的记录，包括开始施工、暂停、恢复、延期、分配人员等</p>
+      </div>
+
+      <h3>进度条显示规则</h3>
+      <p>项目详情卡片中，进度条显示规则：</p>
       <ul>
-        <li>GitHub Pages 对 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">sw.js</code> 文件有约 10 分钟的 HTTP 缓存</li>
-        <li>即使推送了更新，客户端可能需要等待几分钟才能检测到</li>
+        <li><strong>已完工/已验收/已审核</strong>：进度条显示100%</li>
+        <li><strong>已暂停</strong>：橙色进度条，显示暂停时的进度</li>
+        <li><strong>已延期</strong>：红色进度条</li>
+        <li><strong>施工中</strong>：蓝色进度条，实时更新</li>
+      </ul>
+    </div>
+
+    <div class="section" id="tips">
+      <h2>💡 操作技巧</h2>
+      
+      <h3>移动端优化</h3>
+      <ul>
+        <li>底部菜单按钮间距优化，图标居中显示</li>
+        <li>暂停施工弹窗上移，避免被系统键盘遮挡</li>
+        <li>暂停原因支持快速选择和手动输入</li>
       </ul>
 
-      <h3>更新流程</h3>
-      <div class="code">你推送更新 → 用户打开应用 → Service Worker 检查更新
-→ 发现新版本 → 后台安装 → 弹出提示"发现新版本！是否立即刷新？"
-→ 用户确认 → 页面刷新 → 使用新版本</div>
+      <h3>高效操作</h3>
+      <ul>
+        <li>选择今天日期时，开始时间自动根据当前时间设置</li>
+        <li>预计工时未填写时，系统自动计算并提示</li>
+        <li>移除人员时自动计算工时，无需手动录入</li>
+        <li>完工表单自动汇总所有参与人员的工时记录</li>
+      </ul>
 
-      <h3>数据库字段更新</h3>
-      <p>使用云端模式时，每次系统更新可能需要添加新的数据库字段。请执行以下 SQL 脚本：</p>
-      <div class="code">-- 工时计算相关字段
-alter table if exists public.projects add column if not exists accumulated_work_hours numeric default 0;
-alter table if exists public.projects add column if not exists original_started_at timestamptz;
-alter table if exists public.projects add column if not exists work_sessions jsonb;
+      <h3>数据追溯</h3>
+      <ul>
+        <li>完整的施工记录，可追溯项目全过程</li>
+        <li>操作日志记录所有关键操作</li>
+        <li>人员变动记录保留所有加人/减人操作</li>
+        <li>暂停/延期记录包含详细原因</li>
+      </ul>
 
--- 延期相关字段
-alter table if exists public.projects add column if not exists delay_reason text;
-alter table if exists public.projects add column if not exists delay_count integer default 0;
-alter table if exists public.projects add column if not exists schedule_history jsonb;
-
--- 取消相关字段
-alter table if exists public.projects add column if not exists cancelled_at timestamptz;
-alter table if exists public.projects add column if not exists cancel_reason text;</div>
-    </div>
-
-    <div class="section" id="pwa">
-      <h2>📱 PWA 安装指南</h2>
-      
-      <h3>桌面端（Chrome/Edge）</h3>
-      <ol>
-        <li>打开应用后，地址栏右侧会显示安装图标</li>
-        <li>点击安装图标，确认安装</li>
-        <li>应用将添加到桌面，独立窗口运行</li>
-      </ol>
-
-      <h3>移动端（iOS Safari）</h3>
-      <ol>
-        <li>打开应用后，点击底部「分享」按钮</li>
-        <li>选择「添加到主屏幕」</li>
-        <li>确认添加，应用将安装到主屏</li>
-      </ol>
-
-      <h3>移动端（Android Chrome）</h3>
-      <ol>
-        <li>打开应用后，地址栏下方会弹出安装提示</li>
-        <li>点击「安装」按钮</li>
-        <li>应用将添加到应用列表</li>
-      </ol>
-    </div>
-
-    <div class="section" id="notes">
-      <h2>⚠️ 注意事项</h2>
-      <ol>
-        <li><strong>数据备份</strong>：本地模式下数据存储在浏览器中，清除浏览器数据会导致数据丢失，建议定期导出数据</li>
-        <li><strong>网络同步</strong>：云端模式下需要网络连接才能同步数据，离线时操作在本地缓存，联网后自动同步</li>
-        <li><strong>更新机制</strong>：每次代码更新需修改 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">sw.js</code> 中的缓存版本号，否则客户端无法检测到更新</li>
-        <li><strong>GitHub Pages 缓存</strong>：GitHub Pages 对 <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px;">sw.js</code> 有约 10 分钟的 HTTP 缓存，更新可能延迟生效</li>
-        <li><strong>角色权限</strong>：新注册账号默认无权限，需总经理在「账号管理」中分配角色后才能使用</li>
-        <li><strong>暂停操作</strong>：暂停施工时系统会自动记录当前工作时段，请确保在恢复施工后再进行其他操作</li>
-        <li><strong>取消操作</strong>：取消项目为不可逆操作，请谨慎操作</li>
-      </ol>
+      <h3>云端同步</h3>
+      <ul>
+        <li>支持本地模式和云端模式</li>
+        <li>云端模式下数据实时同步</li>
+        <li>多设备共享数据</li>
+      </ul>
     </div>
 
     <div class="footer">
-      <p>文档版本：v2.0 | 更新日期：2026年7月</p>
+      <p>文档版本：v3.0 | 更新日期：2026年7月</p>
     </div>
   </div>
 </body>
