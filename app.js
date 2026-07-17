@@ -548,6 +548,34 @@ function calcActualWorkDuration(p) {
   return `${mins}分钟`;
 }
 
+function calcWorkerRealtimeHours(p, workerId, periods) {
+  if (!periods || periods.length === 0) return 0;
+  
+  const now = new Date();
+  
+  return periods.reduce((sum, pr) => {
+    const start = new Date(pr.start);
+    const end = pr.end ? new Date(pr.end) : now;
+    let duration = (end - start) / (1000 * 60 * 60);
+    
+    if (p.pauseHistory && p.pauseHistory.length > 0) {
+      (p.pauseHistory || []).forEach((ph) => {
+        if (ph.pauseAt && ph.resumedAt) {
+          const pauseStart = new Date(ph.pauseAt);
+          const pauseEnd = new Date(ph.resumedAt);
+          const overlapStart = pauseStart > start ? pauseStart : start;
+          const overlapEnd = pauseEnd < end ? pauseEnd : end;
+          if (overlapEnd > overlapStart) {
+            duration -= (overlapEnd - overlapStart) / (1000 * 60 * 60);
+          }
+        }
+      });
+    }
+    
+    return sum + duration;
+  }, 0);
+}
+
 /* 项目工时差异的展示标签（含颜色），未登记实际工时时给出提示 */
 function diffLabel(project) {
   const { diff, hasActual } = hoursDiff(project);
@@ -2729,7 +2757,7 @@ function autoCalcEndTime() {
     return;
   }
   
-  const hoursNeeded = Math.ceil(estHours / workerCount * 2) / 2;
+  const hoursNeeded = Math.ceil(estHours / workerCount * 10) / 10;
   const startTime = new Date(`${date}T${time}`);
   const endTime = new Date(startTime.getTime() + hoursNeeded * 60 * 60 * 1000);
   
@@ -3076,7 +3104,7 @@ async function saveProject(id) {
   const startTime = new Date(fullTime);
   const endTime = new Date(fullEnd);
   const durationHours = (endTime - startTime) / (1000 * 60 * 60);
-  const autoEstHours = Math.round(durationHours * workerCount * 2) / 2;
+  const autoEstHours = Math.round(durationHours * workerCount * 10) / 10;
   
   let estimatedHours = inputEstHours;
   let autoCalculated = false;
@@ -3601,9 +3629,44 @@ function renderConstruction() {
           <div style="font-size:11px;color:#b45309;margin-bottom:2px;">🔍 审核时间</div>
           <div style="font-size:14px;font-weight:600;color:#92400e;">${esc(fmtDateTime(p.reviewedAt))}</div>
         </div>` : ""}
-        ${p.accumulatedWorkHours > 0 ? `<div style="background:#e0e7ff;border-radius:8px;padding:10px;">
+        ${p.startedAt ? `<div style="background:#e0e7ff;border-radius:8px;padding:10px;">
           <div style="font-size:11px;color:#6366f1;margin-bottom:2px;">⏱️ 工时时长</div>
-          <div style="font-size:14px;font-weight:600;color:#4338ca;">${p.accumulatedWorkHours.toFixed(2)} 小时</div>
+          <div style="font-size:14px;font-weight:600;color:#4338ca;">${(() => {
+            const now = new Date();
+            let totalHours = 0;
+            (p.assignedWorkerIds || []).forEach(wid => {
+              const periods = [];
+              (p.workerChangeHistory || []).forEach(ch => {
+                if (ch.workerId === wid) {
+                  if (ch.action === "assign") {
+                    periods.push({ start: ch.time, end: null });
+                  } else if (ch.action === "unassign") {
+                    const last = periods[periods.length - 1];
+                    if (last) last.end = ch.time;
+                  }
+                }
+              });
+              if (periods.length === 0 && p.startedAt) {
+                periods.push({ start: p.startedAt, end: null });
+              }
+              periods.forEach(pr => {
+                const start = new Date(pr.start);
+                const end = pr.end ? new Date(pr.end) : now;
+                let dur = (end - start) / (1000 * 60 * 60);
+                (p.pauseHistory || []).forEach(ph => {
+                  if (ph.pauseAt && ph.resumedAt) {
+                    const ps = new Date(ph.pauseAt);
+                    const pe = new Date(ph.resumedAt);
+                    const os = ps > start ? ps : start;
+                    const oe = pe < end ? pe : end;
+                    if (oe > os) dur -= (oe - os) / (1000 * 60 * 60);
+                  }
+                });
+                totalHours += dur;
+              });
+            });
+            return Math.round(totalHours * 10) / 10;
+          })().toFixed(1)} 小时</div>
         </div>` : ""}
       </div>
       
@@ -3738,11 +3801,25 @@ function renderConstruction() {
         
         const now = new Date();
         (p.assignedWorkerIds || []).forEach((wid) => {
+          if (!workerPeriods[wid] || workerPeriods[wid].length === 0) {
+            if (p.startedAt) {
+              workerPeriods[wid] = [{ start: p.startedAt, end: null }];
+            }
+          }
           if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
             const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
             if (!lastPeriod.end) {
               lastPeriod.end = now.toISOString();
             }
+          }
+        });
+        
+        const pauseDurations = {};
+        (p.pauseHistory || []).forEach((ph) => {
+          if (ph.pauseAt && ph.resumedAt) {
+            const pauseStart = new Date(ph.pauseAt);
+            const pauseEnd = new Date(ph.resumedAt);
+            pauseDurations[ph.pauseAt] = (pauseEnd - pauseStart) / (1000 * 60 * 60);
           }
         });
         
@@ -3754,9 +3831,20 @@ function renderConstruction() {
           const logEntry = workerLogs[wid];
           const worker = getWorker(wid);
           const name = logEntry ? logEntry.name : (worker ? worker.name : "未知");
-          const hours = logEntry ? logEntry.hours : 0;
           const isOutsourced = logEntry ? logEntry.isOutsourced : false;
           const periods = workerPeriods[wid] || [];
+          
+          let hours = 0;
+          
+          if (isAssigned && periods.length > 0) {
+            hours = calcWorkerRealtimeHours(p, wid, periods);
+          } else if (logEntry && logEntry.hours > 0) {
+            hours = logEntry.hours;
+          } else if (periods.length > 0) {
+            hours = calcWorkerRealtimeHours(p, wid, periods);
+          }
+          
+          hours = Math.round(hours * 10) / 10;
           
           workerStats.push({ name, hours, isAssigned, isOutsourced, id: wid, periods });
         });
@@ -3773,7 +3861,7 @@ function renderConstruction() {
                   <span style="color:${ws.isAssigned ? "#15803d" : "#6b7280"}">
                     ${ws.name}${ws.isOutsourced ? ` <span style="color:#8b5cf6;font-size:11px">(外协)</span>` : ""}${!ws.isAssigned ? ` <span style="color:#9ca3af;font-size:11px">(已移除)</span>` : ""}
                   </span>
-                  <span style="font-weight:600;color:${ws.isAssigned ? "#166534" : "#9ca3af"};">${ws.hours.toFixed(2)} 工时</span>
+                  <span style="font-weight:600;color:${ws.isAssigned ? "#166534" : "#9ca3af"};">${ws.hours.toFixed(1)} 工时</span>
                 </div>
                 ${ws.periods.length > 0 ? `
                   <div style="display:flex;flex-direction:column;gap:2px;padding-left:8px;">
@@ -3789,7 +3877,7 @@ function renderConstruction() {
             `).join("")}
             <div style="border-top:1px dashed #86efac;margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#166534;">
               <span style="font-weight:600;">合计</span>
-              <span style="font-weight:600;">${workerStats.reduce((sum, ws) => sum + ws.hours, 0).toFixed(2)} 工时</span>
+              <span style="font-weight:600;">${workerStats.reduce((sum, ws) => sum + ws.hours, 0).toFixed(1)} 工时</span>
             </div>
           </div>
         </div>`;
@@ -4205,7 +4293,7 @@ async function unassignWorker(pid, wid) {
     }
     const workDuration = (endTime - started) / (1000 * 60 * 60);
     const workerCount = (p.assignedWorkerIds || []).length;
-    autoHours = Math.round((workDuration / workerCount) * 2) / 2;
+    autoHours = Math.round((workDuration / workerCount) * 10) / 10;
   }
   
   workerChangeHistory.push({
@@ -4214,7 +4302,8 @@ async function unassignWorker(pid, wid) {
     workerId: wid,
     workerName: worker ? worker.name : "未知",
     workerPhone: worker ? worker.phone : "",
-    autoHours: autoHours > 0 ? autoHours : null
+    autoHours: autoHours > 0 ? autoHours : null,
+    accumulatedWorkHoursAtRemoval: p.accumulatedWorkHours || 0
   });
   
   const actionLogs = [...(p.actionLogs || [])];
@@ -4306,6 +4395,33 @@ async function updateProjectStatus(id, newStatus) {
       operator: null
     });
     patch.actionLogs = actionLogs;
+    
+    const workerChangeHistory = [...(p.workerChangeHistory || [])];
+    const assignedWorkers = p.assignedWorkerIds || [];
+    assignedWorkers.forEach(wid => {
+      let hasActiveAssign = false;
+      let lastAction = null;
+      for (let i = 0; i < workerChangeHistory.length; i++) {
+        const ch = workerChangeHistory[i];
+        if (ch.workerId === wid) {
+          lastAction = ch.action;
+        }
+      }
+      if (lastAction === "assign") {
+        hasActiveAssign = true;
+      }
+      if (!hasActiveAssign) {
+        const worker = getWorker(wid);
+        workerChangeHistory.push({
+          time: now,
+          action: "assign",
+          workerId: wid,
+          workerName: worker ? worker.name : "未知",
+          workerPhone: worker ? worker.phone : ""
+        });
+      }
+    });
+    patch.workerChangeHistory = workerChangeHistory;
   }
   clearTimeout(reloadTimer);
   await repo.patchProject(id, patch);
@@ -5331,7 +5447,42 @@ function openCompleteProjectForm(id) {
       </div>
       <div>
         <div style="font-size:12px;color:#6b7280;">总用时</div>
-        <div style="font-weight:600;color:#059669;">${esc(durationHours)} 小时</div>
+        <div style="font-weight:600;color:#059669;">${(() => {
+          const now = new Date();
+          let totalHours = 0;
+          (p.assignedWorkerIds || []).forEach(wid => {
+            const periods = [];
+            (p.workerChangeHistory || []).forEach(ch => {
+              if (ch.workerId === wid) {
+                if (ch.action === "assign") {
+                  periods.push({ start: ch.time, end: null });
+                } else if (ch.action === "unassign") {
+                  const last = periods[periods.length - 1];
+                  if (last) last.end = ch.time;
+                }
+              }
+            });
+            if (periods.length === 0 && p.startedAt) {
+              periods.push({ start: p.startedAt, end: null });
+            }
+            periods.forEach(pr => {
+              const start = new Date(pr.start);
+              const end = pr.end ? new Date(pr.end) : now;
+              let dur = (end - start) / (1000 * 60 * 60);
+              (p.pauseHistory || []).forEach(ph => {
+                if (ph.pauseAt && ph.resumedAt) {
+                  const ps = new Date(ph.pauseAt);
+                  const pe = new Date(ph.resumedAt);
+                  const os = ps > start ? ps : start;
+                  const oe = pe < end ? pe : end;
+                  if (oe > os) dur -= (oe - os) / (1000 * 60 * 60);
+                }
+              });
+              totalHours += dur;
+            });
+          });
+          return Math.round(totalHours * 10) / 10;
+        })().toFixed(1)} 小时</div>
       </div>
     </div>
   </div>`;
@@ -5400,26 +5551,81 @@ function openCompleteProjectForm(id) {
   }
   
   if (workers.length > 0) {
+    const workerPeriods = {};
+    (p.workerChangeHistory || []).forEach((ch) => {
+      const wid = ch.workerId;
+      if (!workerPeriods[wid]) {
+        workerPeriods[wid] = [];
+      }
+      if (ch.action === "assign") {
+        workerPeriods[wid].push({ start: ch.time, end: null });
+      } else if (ch.action === "unassign") {
+        const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+        if (lastPeriod) {
+          lastPeriod.end = ch.time;
+          lastPeriod.autoHours = ch.autoHours;
+        }
+      }
+    });
+    
+    const now = new Date();
+    assignedWorkerIds.forEach((wid) => {
+      if (!workerPeriods[wid] || workerPeriods[wid].length === 0) {
+        if (p.startedAt) {
+          workerPeriods[wid] = [{ start: p.startedAt, end: null }];
+        }
+      }
+      if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
+        const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+        if (!lastPeriod.end) {
+          lastPeriod.end = now.toISOString();
+        }
+      }
+    });
+    
+    let totalAutoHours = 0;
+    const workerAutoHours = {};
+    workers.forEach((w) => {
+      const periods = workerPeriods[w.id] || [];
+      const rtHours = calcWorkerRealtimeHours(p, w.id, periods);
+      workerAutoHours[w.id] = Math.round(rtHours * 10) / 10;
+      totalAutoHours += workerAutoHours[w.id];
+    });
+    
     form += `<div class="form-row" style="grid-column:1/-1;">
       <label>施工人员工时</label>
       <span style="font-size:12px;color:#6b7280;">根据实际工作时间填写</span>
     </div>`;
     
+    form += `<div class="form-row" style="grid-column:1/-1;background:#f0fdf4;padding:10px;border-radius:6px;border-left:4px solid #22c55e;margin-bottom:8px;">
+      <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:12px;">
+        <div><span style="color:#6b7280;">总工作时长：</span><span style="font-weight:600;color:#15803d;">${totalAutoHours.toFixed(1)} 小时</span></div>
+        <div><span style="color:#6b7280;">施工人数：</span><span style="font-weight:600;color:#15803d;">${workers.length} 人</span></div>
+      </div>
+      <div style="margin-top:4px;font-size:11px;color:#86efac;">💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整</div>
+    </div>`;
+    
     workers.forEach((w, idx) => {
       const isAssigned = assignedWorkerIds.includes(w.id);
       const allLogs = (p.workLogs || []).filter(l => l.workerId === w.id);
-      const totalHours = allLogs.reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
+      const loggedHours = allLogs.reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
+      
+      let autoHours = workerAutoHours[w.id] || 0;
+      if (!isAssigned && loggedHours > 0) {
+        autoHours = loggedHours;
+      }
+      
       const existingLog = allLogs.find(l => l.date === dateStr);
-      const existingHours = totalHours > 0 ? totalHours : "";
+      const existingHours = autoHours > 0 ? autoHours.toFixed(1) : "";
       const existingLevel = existingLog ? existingLog.level : "中级";
-      const existingNote = existingLog ? existingLog.note : (allLogs.length > 0 ? "系统自动记录" : "");
+      const existingNote = existingLog ? existingLog.note : (autoHours > 0 ? "系统自动计算" : "");
       
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;">
           <span style="min-width:80px;font-weight:500;flex-shrink:0;color:${isAssigned ? "#1f2937" : "#9ca3af"};">👷 ${esc(w.name)}${!isAssigned ? ` <span style="font-size:11px;color:#d1d5db;">(已移除)</span>` : ""}</span>
           <div style="flex:0 0 auto;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">工时</label>
-            <input type="number" id="workerHours_${idx}" value="${existingHours}" placeholder="0" step="0.5" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
+            <input type="number" id="workerHours_${idx}" value="${existingHours}" placeholder="0" step="0.1" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
           </div>
           <div style="flex:0 0 auto;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">等级</label>
@@ -5457,7 +5663,7 @@ function openCompleteProjectForm(id) {
           <span style="min-width:80px;font-weight:500;flex-shrink:0;color:#8b5cf6;">👤 ${esc(name)}（外协）</span>
           <div style="flex:0 0 auto;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">工时</label>
-            <input type="number" id="outsourcedHours_${idx}" value="${existingHours}" placeholder="0" step="0.5" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
+            <input type="number" id="outsourcedHours_${idx}" value="${existingHours}" placeholder="0" step="0.1" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
           </div>
           <div style="flex:0 0 auto;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">等级</label>
