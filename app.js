@@ -218,6 +218,22 @@ function fmtDate(v) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+function fmtDateShort(v) {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (isNaN(d)) return v;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function fmtTime(v) {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (isNaN(d)) return v;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 function monthKey(v) {
   const d = new Date(v);
   if (isNaN(d)) return "";
@@ -301,6 +317,44 @@ function fmtTimeRange(p) {
   const sameDay = s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth() && s.getDate() === e.getDate();
   const endStr = sameDay ? `${pad(e.getHours())}:${pad(e.getMinutes())}` : fmtDateTime(e);
   return `${startStr} ~ ${endStr}`;
+}
+
+/* 日期变化时自动设置时间 */
+function onDateChange() {
+  const dateEl = document.getElementById("pDate");
+  const timeEl = document.getElementById("pTime");
+  const endEl = document.getElementById("pEnd");
+  
+  if (!dateEl || !timeEl || !endEl) return;
+  
+  const selectedDate = dateEl.value;
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+  
+  if (selectedDate === todayStr) {
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = Math.ceil(now.getMinutes() / 10) * 10;
+    const minsStr = minutes >= 60 ? '00' : String(minutes).padStart(2, '0');
+    const hoursAdjusted = minutes >= 60 ? String((now.getHours() + 1) % 24).padStart(2, '0') : hours;
+    
+    let startTime = `${hoursAdjusted}:${minsStr}`;
+    const startH = parseInt(hoursAdjusted);
+    const startM = parseInt(minsStr);
+    let endH = startH + 2;
+    let endM = startM;
+    if (endH >= 24) {
+      endH = 23;
+      endM = 59;
+    }
+    
+    const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+    
+    timeEl.value = startTime;
+    endEl.value = endTime;
+  }
+  
+  updateSpanHint();
 }
 
 /* 表单里根据开始/结束时间实时提示现场时长，或校验结束是否晚于开始 */
@@ -406,6 +460,10 @@ function hoursDiff(project) {
 function getProjectProgress(p, est, act, hasActual, done) {
   if (est <= 0) return 0;
   
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) {
+    return 100;
+  }
+  
   if (hasActual) {
     return Math.min(100, (act / est) * 100);
   }
@@ -423,8 +481,10 @@ function getProjectProgress(p, est, act, hasActual, done) {
     }
     currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
     
-    const totalWorkHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
-    const timeProgress = (totalWorkHours / est) * 100;
+    const workerCount = (p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1;
+    
+    const totalPersonHours = Math.max(0, (accumulatedWorkHours + currentWorkDuration) * workerCount);
+    const timeProgress = (totalPersonHours / est) * 100;
     return Math.min(100, Math.max(0, timeProgress));
   }
   
@@ -493,8 +553,8 @@ function diffLabel(project) {
   const { diff, hasActual } = hoursDiff(project);
   if (!hasActual) return `<span style="color:var(--muted)">未登记实际工时</span>`;
   const diffRounded = Math.abs(diff).toFixed(2);
-  if (diff > 0) return `<span style="color:var(--danger)">超 ${diffRounded} 小时</span>`;
-  if (diff < 0) return `<span style="color:var(--success)">省 ${diffRounded} 小时</span>`;
+  if (diff > 0) return `<span style="color:var(--danger)">超 ${diffRounded} 工时</span>`;
+  if (diff < 0) return `<span style="color:var(--success)">省 ${diffRounded} 工时</span>`;
   return `<span style="color:var(--muted)">持平</span>`;
 }
 
@@ -585,6 +645,11 @@ const mapProject = (r) => ({
   accumulatedWorkHours: Number(r.accumulated_work_hours) || Number(r.accumulatedWorkHours) || 0,
   resumedAt: r.resumed_at || r.resumedAt || null,
   workSessions: (r.work_sessions || r.workSessions) ? (typeof (r.work_sessions || r.workSessions) === "string" ? JSON.parse(r.work_sessions || r.workSessions) : (r.work_sessions || r.workSessions)) : [],
+  reviewedAt: r.reviewed_at || null,
+  pauseHistory: (r.pause_history || r.pauseHistory) ? (typeof (r.pause_history || r.pauseHistory) === "string" ? JSON.parse(r.pause_history || r.pauseHistory) : (r.pause_history || r.pauseHistory)) : [],
+  delayHistory: (r.delay_history || r.delayHistory) ? (typeof (r.delay_history || r.delayHistory) === "string" ? JSON.parse(r.delay_history || r.delayHistory) : (r.delay_history || r.delayHistory)) : [],
+  workerChangeHistory: (r.worker_change_history || r.workerChangeHistory) ? (typeof (r.worker_change_history || r.workerChangeHistory) === "string" ? JSON.parse(r.worker_change_history || r.workerChangeHistory) : (r.worker_change_history || r.workerChangeHistory)) : [],
+  actionLogs: (r.action_logs || r.actionLogs) ? (typeof (r.action_logs || r.actionLogs) === "string" ? JSON.parse(r.action_logs || r.actionLogs) : (r.action_logs || r.actionLogs)) : [],
   delayReason: r.delay_reason || null,
   delayCount: Number(r.delay_count) || 0,
   scheduleHistory: (r.schedule_history || r.scheduleHistory) ? (typeof (r.schedule_history || r.scheduleHistory) === "string" ? JSON.parse(r.schedule_history || r.scheduleHistory) : (r.schedule_history || r.scheduleHistory)) : [],
@@ -621,6 +686,11 @@ const projectToRow = (p) => ({
   accumulated_work_hours: p.accumulatedWorkHours || 0,
   resumed_at: p.resumedAt || null,
   work_sessions: p.workSessions && Array.isArray(p.workSessions) ? JSON.stringify(p.workSessions) : null,
+  reviewed_at: p.reviewedAt || null,
+  pause_history: p.pauseHistory && Array.isArray(p.pauseHistory) ? JSON.stringify(p.pauseHistory) : null,
+  delay_history: p.delayHistory && Array.isArray(p.delayHistory) ? JSON.stringify(p.delayHistory) : null,
+  worker_change_history: p.workerChangeHistory && Array.isArray(p.workerChangeHistory) ? JSON.stringify(p.workerChangeHistory) : null,
+  action_logs: p.actionLogs && Array.isArray(p.actionLogs) ? JSON.stringify(p.actionLogs) : null,
   delay_reason: p.delayReason || null,
   delay_count: p.delayCount || 0,
   schedule_history: p.scheduleHistory && p.scheduleHistory.length > 0 ? JSON.stringify(p.scheduleHistory) : null,
@@ -2780,15 +2850,20 @@ function renderProjects() {
             <span style="color:#991b1b;font-size:12px;">${leaveConflicts.map(r => `${r.workerName}(${r.startDate}~${r.endDate})`).join("、")}</span>
           </div>
         ` : ""}
-        <div class="card-row"><span>预计 / 实际工时</span><b>${est} / ${hasActual ? act : "—"} 小时</b></div>
+        <div class="card-row"><span>预计 / 实际工时</span><b>${est} / ${hasActual ? act : "—"} 工时</b></div>
         <div class="card-row"><span>工时差异</span><b>${diffLabel(p)}</b></div>
-        <div class="card-row"><span>已填施工工时</span><b>${done} 小时</b></div>
+        <div class="card-row"><span>已填施工工时</span><b>${done} 工时</b></div>
         ${est > 0 ? `
           <div class="card-row">
             <span>进度</span>
             <div style="flex:1;display:flex;align-items:center;gap:8px;">
               <div style="flex:1;height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
-                <div style="height:100%;width:${Math.min(100, getProjectProgress(p, est, act, hasActual, done))}%;background:${getProjectProgress(p, est, act, hasActual, done) >= 100 ? '#10b981' : '#3b82f6'};border-radius:4px;"></div>
+                <div style="height:100%;width:${Math.min(100, getProjectProgress(p, est, act, hasActual, done))}%;background:${(() => {
+                  if (getProjectProgress(p, est, act, hasActual, done) >= 100) return '#10b981';
+                  if (p.status === STATUS.PAUSED) return '#f59e0b';
+                  if (p.status === STATUS.DELAYED) return '#dc2626';
+                  return '#3b82f6';
+                })()};border-radius:4px;"></div>
               </div>
               <span style="font-weight:bold;font-size:12px;">${Math.round(getProjectProgress(p, est, act, hasActual, done))}%</span>
             </div>
@@ -2870,7 +2945,7 @@ function projectForm(p = {}) {
     <div class="form-row">
       <label><span style="color:var(--warn)">📅</span> 预约时间 *</label>
       <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
-        <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="updateSpanHint()" style="width:100%;" />
+        <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" style="width:100%;" />
         <div style="display:flex;align-items:center;gap:6px;width:100%;">
           <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
           <select class="input" id="pTime" onchange="updateSpanHint()" style="flex:1;max-width:90px;">
@@ -2996,6 +3071,20 @@ async function saveProject(id) {
   if (isStoreManager()) storeId = myStore();          // 店长强制本门店
   if (isWorker() && myStore()) storeId = myStore();   // 施工人员强制本门店
   const workerCount = Number(document.getElementById("pWorkers").value) || 1;
+  
+  const inputEstHours = Number(document.getElementById("pEst").value) || 0;
+  const startTime = new Date(fullTime);
+  const endTime = new Date(fullEnd);
+  const durationHours = (endTime - startTime) / (1000 * 60 * 60);
+  const autoEstHours = Math.round(durationHours * workerCount * 2) / 2;
+  
+  let estimatedHours = inputEstHours;
+  let autoCalculated = false;
+  if (!id && inputEstHours <= 0) {
+    estimatedHours = autoEstHours;
+    autoCalculated = true;
+  }
+  
   const payload = {
     name,
     customer: document.getElementById("pCustomer").value.trim(),
@@ -3003,7 +3092,7 @@ async function saveProject(id) {
     address: document.getElementById("pAddress").value.trim(),
     appointmentTime: fullTime,
     endTime: fullEnd,
-    estimatedHours: Number(document.getElementById("pEst").value) || 0,
+    estimatedHours,
     workerCount,
     status: document.getElementById("pStatus").value,
     note: document.getElementById("pNote").value.trim(),
@@ -3022,7 +3111,7 @@ async function saveProject(id) {
     await repo.loadAll();
     modal.close();
     renderAll();
-    toast("已保存");
+    toast(autoCalculated ? `已保存，预计总工时已根据施工时间和人数自动计算为 ${estimatedHours} 小时` : "已保存");
     
     if (payload.customer) {
       upsertCustomer(payload.customer, payload.phone, payload.address);
@@ -3409,12 +3498,37 @@ function renderConstruction() {
         <div class="info-item"><div class="k">预约时段</div><div class="v">${fmtTimeRange(p)}</div></div>
         <div class="info-item"><div class="k">预计工时</div><div class="v">${p.estimatedHours || 0} 小时</div></div>
         <div class="info-item"><div class="k">外协工时</div><div class="v" style="color:#8b5cf6;font-weight:600">${p.outsourcedHoursFromLogs || 0} 小时</div></div>
-        <div class="info-item"><div class="k">工程实际用工时</div><div class="v">${p.actualHours || 0} 小时</div></div>
+        <div class="info-item"><div class="k">工程实际用工时</div><div class="v">${((p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0)) || 0} 小时</div></div>
         <div class="info-item"><div class="k">工时差异（实际−预计）</div><div class="v">${diffLabel(p)}</div></div>
         ${p.startedAt ? `<div class="info-item"><div class="k">⏰ 开始施工时间</div><div class="v">${esc(fmtDateTime(p.startedAt))}</div></div>` : ""}
         ${p.finishedAt ? `<div class="info-item"><div class="k">✅ 完工时间</div><div class="v">${esc(fmtDateTime(p.finishedAt))}</div></div>` : ""}
         ${p.startedAt && p.finishedAt ? `<div class="info-item"><div class="k">⏱️ 实际施工时长</div><div class="v"><b>${esc(calcActualWorkDuration(p))}</b></div></div>` : ""}
       </div>
+      ${p.estimatedHours > 0 ? `
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <span style="font-size:13px;color:var(--muted)">项目进度</span>
+          <span style="font-weight:bold;font-size:14px;">${(() => {
+            const { est, act, hasActual } = hoursDiff(p);
+            return Math.round(getProjectProgress(p, est, act, hasActual, totalHours)) + '%';
+          })()}</span>
+          ${p.status === STATUS.PAUSED && p.pauseReason ? `<span style="font-size:12px;color:#f59e0b;margin-left:8px;">暂停原因：${esc(p.pauseReason)}</span>` : ""}
+          ${p.status === STATUS.DELAYED && p.delayReason ? `<span style="font-size:12px;color:#ef4444;margin-left:8px;">延期原因：${esc(p.delayReason)}</span>` : ""}
+        </div>
+        <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
+          <div style="height:100%;width:${(() => {
+            const { est, act, hasActual } = hoursDiff(p);
+            return Math.min(100, getProjectProgress(p, est, act, hasActual, totalHours)) + '%';
+          })()};background:${(() => {
+            const { est, act, hasActual } = hoursDiff(p);
+            const progress = getProjectProgress(p, est, act, hasActual, totalHours);
+            if (progress >= 100) return '#10b981';
+            if (p.status === STATUS.PAUSED) return '#f59e0b';
+            if (p.status === STATUS.DELAYED) return '#dc2626';
+            return '#3b82f6';
+          })()};border-radius:4px;transition:width 0.3s ease;"></div>
+        </div>
+      </div>` : ""}
       ${canEdit || (canReview && !reviewed) ? `
       <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:16px;align-items:center">
         <div style="display:flex;align-items:center;gap:8px">
@@ -3425,11 +3539,7 @@ function renderConstruction() {
               `<option value="${s}">${s}</option>`).join("")}
           </select>
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <label style="font-size:13px;color:var(--muted)">实际工时</label>
-          <input class="input" type="number" min="0" step="0.5" id="cActual" value="${p.actualHours || 0}" style="width:80px;" />
-          <button class="btn small primary" onclick="saveActualHours('${p.id}')">保存</button>
-        </div>
+        
         ${canReview && !reviewed ? `
         <button class="btn small primary" onclick="reviewProject('${p.id}')">✅ 审核项目</button>
         ` : ""}
@@ -3440,11 +3550,9 @@ function renderConstruction() {
         ${p.status === STATUS.PAUSED ? `
         <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
         <button class="btn small" style="background:#ef4444;color:#fff" onclick="delayProject('${p.id}')">📅 项目延期</button>
-        ${p.pauseReason ? `<span style="font-size:12px;color:#f59e0b">暂停原因：${esc(p.pauseReason)}</span>` : ""}
         ` : ""}
         ${p.status === STATUS.DELAYED ? `
         <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
-        ${p.delayReason ? `<span style="font-size:12px;color:#ef4444">延期原因：${esc(p.delayReason)}</span>` : ""}
         ` : ""}
         ${[STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED].includes(p.status) ? `
         <button class="btn small danger" onclick="cancelProject('${p.id}')"><span style="font-size:16px;font-weight:bold;">×</span> 取消项目</button>
@@ -3477,6 +3585,235 @@ function renderConstruction() {
 
     ${assignBlock}
 
+    ${(p.startedAt || p.finishedAt || p.workSessions.length > 0 || p.pauseCount > 0 || p.reviewedAt || p.pauseHistory.length > 0 || p.delayHistory.length > 0 || p.workerChangeHistory.length > 0 || p.actionLogs.length > 0) ? `
+    <div class="detail-block">
+      <h3>📝 施工记录</h3>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">
+        ${p.startedAt ? `<div style="background:#f0f9ff;border-radius:8px;padding:10px;">
+          <div style="font-size:11px;color:#0369a1;margin-bottom:2px;">🚀 开工时间</div>
+          <div style="font-size:14px;font-weight:600;color:#1e40af;">${esc(fmtDateTime(p.startedAt))}</div>
+        </div>` : ""}
+        ${p.finishedAt ? `<div style="background:#ecfdf5;border-radius:8px;padding:10px;">
+          <div style="font-size:11px;color:#047857;margin-bottom:2px;">✅ 完工时间</div>
+          <div style="font-size:14px;font-weight:600;color:#065f46;">${esc(fmtDateTime(p.finishedAt))}</div>
+        </div>` : ""}
+        ${p.reviewedAt ? `<div style="background:#fef3c7;border-radius:8px;padding:10px;">
+          <div style="font-size:11px;color:#b45309;margin-bottom:2px;">🔍 审核时间</div>
+          <div style="font-size:14px;font-weight:600;color:#92400e;">${esc(fmtDateTime(p.reviewedAt))}</div>
+        </div>` : ""}
+        ${p.accumulatedWorkHours > 0 ? `<div style="background:#e0e7ff;border-radius:8px;padding:10px;">
+          <div style="font-size:11px;color:#6366f1;margin-bottom:2px;">⏱️ 工时时长</div>
+          <div style="font-size:14px;font-weight:600;color:#4338ca;">${p.accumulatedWorkHours.toFixed(2)} 小时</div>
+        </div>` : ""}
+      </div>
+      
+      ${p.pauseHistory.length > 0 ? `
+      <div style="background:#fffbeb;border-left:4px solid #f59e0b;border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:12px;color:#92400e;font-weight:500;margin-bottom:8px;">⏸️ 暂停/恢复明细</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${p.pauseHistory.map((ph, idx) => {
+            const pauseTime = new Date(ph.pauseAt);
+            const pauseStr = `${pauseTime.getMonth() + 1}/${pauseTime.getDate()} ${String(pauseTime.getHours()).padStart(2, "0")}:${String(pauseTime.getMinutes()).padStart(2, "0")}`;
+            const resumeStr = ph.resumedAt ? ((() => {
+              const resumeTime = new Date(ph.resumedAt);
+              return `${resumeTime.getMonth() + 1}/${resumeTime.getDate()} ${String(resumeTime.getHours()).padStart(2, "0")}:${String(resumeTime.getMinutes()).padStart(2, "0")}`;
+            })()) : "未恢复";
+            const durHours = ph.duration ? Math.floor(ph.duration) : 0;
+            const durMins = ph.duration ? Math.floor((ph.duration - durHours) * 60) : 0;
+            const durStr = ph.duration ? (durHours > 0 ? `${durHours}h${durMins}m` : `${durMins}m`) : "";
+            return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:13px;color:#78350f;">
+              <span style="font-weight:600;">第${idx + 1}次：</span>
+              <span>⏸ ${pauseStr}</span>
+              <span>→</span>
+              <span>▶ ${resumeStr}</span>
+              ${durStr ? `<span style="color:#f59e0b;font-weight:500;">(${durStr})</span>` : ""}
+              ${ph.reason ? `<span>· 原因：${esc(ph.reason)}</span>` : ""}
+            </div>`;
+          }).join("")}
+        </div>
+      </div>` : p.pauseCount > 0 ? `
+      <div style="background:#fffbeb;border-left:4px solid #f59e0b;border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:12px;color:#92400e;font-weight:500;margin-bottom:6px;">⏸️ 暂停记录</div>
+        <div style="font-size:13px;color:#78350f;">已暂停 ${p.pauseCount} 次，累计暂停 ${(() => {
+          const pauseDuration = derivePauseDuration(p);
+          const hours = Math.floor(pauseDuration);
+          const mins = Math.floor((pauseDuration - hours) * 60);
+          return hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
+        })()}，已从总用时中扣除</div>
+      </div>` : ""}
+      
+      ${p.delayHistory.length > 0 ? `
+      <div style="background:#fef2f2;border-left:4px solid #ef4444;border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:12px;color:#b91c1c;font-weight:500;margin-bottom:8px;">⚠️ 延期记录</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${p.delayHistory.map((dh, idx) => {
+            const delayTime = new Date(dh.time);
+            const timeStr = `${delayTime.getMonth() + 1}/${delayTime.getDate()} ${String(delayTime.getHours()).padStart(2, "0")}:${String(delayTime.getMinutes()).padStart(2, "0")}`;
+            return `<div style="font-size:13px;color:#991b1b;">
+              <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+                <span style="font-weight:600;">第${idx + 1}次：</span>
+                <span>${timeStr}</span>
+                <span>${dh.originalDate} ${dh.originalTime}</span>
+                <span>→</span>
+                <span style="color:#ef4444;font-weight:600;">${dh.newDate} ${dh.newTime}</span>
+              </div>
+              <div style="margin-top:2px;padding-left:8px;color:#b91c1c;">原因：${esc(dh.reason)}</div>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>` : ""}
+      
+      ${p.workerChangeHistory.length > 0 ? `
+      <div style="background:#f0fdf4;border-left:4px solid #22c55e;border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:12px;color:#166534;font-weight:500;margin-bottom:8px;">👥 人员变动</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          ${p.workerChangeHistory.map((wch, idx) => {
+            const changeTime = new Date(wch.time);
+            const timeStr = `${changeTime.getMonth() + 1}/${changeTime.getDate()} ${String(changeTime.getHours()).padStart(2, "0")}:${String(changeTime.getMinutes()).padStart(2, "0")}`;
+            return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:13px;color:#15803d;">
+              <span>${timeStr}</span>
+              <span style="font-weight:600;">${wch.action === "assign" ? "➕ 分配" : "➖ 移除"}：</span>
+              <span>${esc(wch.workerName)}</span>
+              ${wch.workerPhone ? `<span>(${wch.workerPhone})</span>` : ""}
+            </div>`;
+          }).join("")}
+        </div>
+      </div>` : ""}
+      
+      ${p.workSessions.length > 0 ? `
+      <div style="background:#eff6ff;border-left:4px solid #3b82f6;border-radius:8px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:12px;color:#1d4ed8;font-weight:500;margin-bottom:8px;">🔧 施工时段明细</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          ${p.workSessions.map((s, idx) => {
+            const start = new Date(s.startTime);
+            const end = new Date(s.endTime);
+            const hours = Math.floor(s.duration);
+            const mins = Math.floor((s.duration - hours) * 60);
+            const durationStr = hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
+            const startStr = `${start.getMonth() + 1}/${start.getDate()} ${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`;
+            const endStr = `${end.getMonth() + 1}/${end.getDate()} ${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+            return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#374151;">
+              <span>第${idx + 1}段：${startStr} → ${endStr}</span>
+              <span style="font-weight:600;color:#1d4ed8;">${durationStr}</span>
+            </div>`;
+          }).join("")}
+          <div style="border-top:1px dashed #93c5fd;margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#1d4ed8;">
+            <span style="font-weight:600;">合计</span>
+            <span style="font-weight:600;">${(() => {
+              const total = p.workSessions.reduce((sum, s) => sum + s.duration, 0);
+              const hours = Math.floor(total);
+              const mins = Math.floor((total - hours) * 60);
+              return hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
+            })()}</span>
+          </div>
+        </div>
+      </div>` : ""}
+      
+      ${(() => {
+        const workerLogs = {};
+        (p.workLogs || []).forEach((log) => {
+          const key = log.workerId || log.workerName || "unknown";
+          if (!workerLogs[key]) {
+            workerLogs[key] = { name: log.workerName, hours: 0, isOutsourced: log.isOutsourced || (log.workerId && log.workerId.startsWith("outsourced:")) };
+          }
+          workerLogs[key].hours += Number(log.hours) || 0;
+        });
+        
+        const workerPeriods = {};
+        (p.workerChangeHistory || []).forEach((ch) => {
+          const wid = ch.workerId;
+          if (!workerPeriods[wid]) {
+            workerPeriods[wid] = [];
+          }
+          if (ch.action === "assign") {
+            workerPeriods[wid].push({ start: ch.time, end: null });
+          } else if (ch.action === "unassign") {
+            const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+            if (lastPeriod) {
+              lastPeriod.end = ch.time;
+              lastPeriod.autoHours = ch.autoHours;
+            }
+          }
+        });
+        
+        const now = new Date();
+        (p.assignedWorkerIds || []).forEach((wid) => {
+          if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
+            const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+            if (!lastPeriod.end) {
+              lastPeriod.end = now.toISOString();
+            }
+          }
+        });
+        
+        const allWorkers = new Set([...(p.assignedWorkerIds || []), ...Object.keys(workerLogs), ...Object.keys(workerPeriods)]);
+        const workerStats = [];
+        
+        allWorkers.forEach((wid) => {
+          const isAssigned = (p.assignedWorkerIds || []).includes(wid);
+          const logEntry = workerLogs[wid];
+          const worker = getWorker(wid);
+          const name = logEntry ? logEntry.name : (worker ? worker.name : "未知");
+          const hours = logEntry ? logEntry.hours : 0;
+          const isOutsourced = logEntry ? logEntry.isOutsourced : false;
+          const periods = workerPeriods[wid] || [];
+          
+          workerStats.push({ name, hours, isAssigned, isOutsourced, id: wid, periods });
+        });
+        
+        if (workerStats.length === 0) return "";
+        
+        return `
+        <div style="background:#ecfdf5;border-left:4px solid #22c55e;border-radius:8px;padding:12px;margin-bottom:12px;">
+          <div style="font-size:12px;color:#166534;font-weight:500;margin-bottom:8px;">👷 工人工时统计</div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${workerStats.map((ws) => `
+              <div style="border-bottom:1px dashed #86efac;padding-bottom:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:4px;">
+                  <span style="color:${ws.isAssigned ? "#15803d" : "#6b7280"}">
+                    ${ws.name}${ws.isOutsourced ? ` <span style="color:#8b5cf6;font-size:11px">(外协)</span>` : ""}${!ws.isAssigned ? ` <span style="color:#9ca3af;font-size:11px">(已移除)</span>` : ""}
+                  </span>
+                  <span style="font-weight:600;color:${ws.isAssigned ? "#166534" : "#9ca3af"};">${ws.hours.toFixed(2)} 工时</span>
+                </div>
+                ${ws.periods.length > 0 ? `
+                  <div style="display:flex;flex-direction:column;gap:2px;padding-left:8px;">
+                    ${ws.periods.map((pr) => `
+                      <div style="font-size:11px;color:#65a30d;">
+                        ${fmtDateShort(pr.start)} ${fmtTime(pr.start)} - ${pr.end ? fmtDateShort(pr.end) + " " + fmtTime(pr.end) : "至今"}
+                        ${pr.autoHours ? ` <span style="color:#f59e0b;">(自动记录 ${pr.autoHours} 工时)</span>` : ""}
+                      </div>
+                    `).join("")}
+                  </div>
+                ` : ""}
+              </div>
+            `).join("")}
+            <div style="border-top:1px dashed #86efac;margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#166534;">
+              <span style="font-weight:600;">合计</span>
+              <span style="font-weight:600;">${workerStats.reduce((sum, ws) => sum + ws.hours, 0).toFixed(2)} 工时</span>
+            </div>
+          </div>
+        </div>`;
+      })()}
+      
+      ${p.actionLogs.length > 0 ? `
+      <div style="background:#f9fafb;border-left:4px solid #6b7280;border-radius:8px;padding:12px;">
+        <div style="font-size:12px;color:#4b5563;font-weight:500;margin-bottom:8px;">📋 操作日志</div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          ${p.actionLogs.slice().reverse().map((log) => {
+            const logTime = new Date(log.time);
+            const timeStr = `${logTime.getMonth() + 1}/${logTime.getDate()} ${String(logTime.getHours()).padStart(2, "0")}:${String(logTime.getMinutes()).padStart(2, "0")}`;
+            const iconMap = { start: "🚀", pause: "⏸️", resume: "▶️", delay: "⚠️", assign: "👥", unassign: "➖", finish: "✅", review: "🔍" };
+            const icon = iconMap[log.action] || "📋";
+            return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:#6b7280;">
+              <span>${icon}</span>
+              <span style="font-weight:500;">${timeStr}</span>
+              <span>${esc(log.description)}</span>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>` : ""}
+    </div>` : ""}
+
     <div class="detail-block">
       <h3>👷 施工人员工时（分人填写）</h3>
       <table class="data">
@@ -3506,6 +3843,7 @@ function renderConstruction() {
         </div>
         <div class="field outsourced-field" id="logOutsourcedField" style="display:none">
           <label>外协人员</label>
+          <small class="hint" style="font-size:11px;color:#8b5cf6;margin-bottom:4px;display:block;">可从常用列表选择，或手动输入新的外协人员</small>
           <div style="display:flex;gap:6px;align-items:center;">
             <select class="input" id="logOutsourcedSelect" onchange="updateLogOutsourcedInput()">
               <option value="">从常用列表选择</option>
@@ -3513,7 +3851,6 @@ function renderConstruction() {
             </select>
             <input class="input" id="logOutsourcedName" placeholder="或手动输入" />
           </div>
-          <small class="hint" style="font-size:11px;color:#8b5cf6;">可从常用列表选择，或手动输入新的外协人员</small>
         </div>
         <div class="field">
           <label>施工日期</label>
@@ -3813,7 +4150,27 @@ async function assignWorker(pid) {
       `<br><br>存在时间冲突，仍要分配吗？`;
     if (!(await confirmDialog(msg, "时间冲突"))) return;
   }
+  
+  const worker = getWorker(wid);
+  const workerChangeHistory = [...(p.workerChangeHistory || [])];
+  workerChangeHistory.push({
+    time: new Date().toISOString(),
+    action: "assign",
+    workerId: wid,
+    workerName: worker ? worker.name : "未知",
+    workerPhone: worker ? worker.phone : ""
+  });
+  
+  const actionLogs = [...(p.actionLogs || [])];
+  actionLogs.push({
+    time: new Date().toISOString(),
+    action: "assign",
+    description: `分配安装人员：${worker ? worker.name : "未知"}`,
+    operator: null
+  });
+  
   await repo.setAssignedWorkers(pid, cur.concat(wid));
+  await repo.patchProject(pid, { workerChangeHistory, actionLogs });
   await repo.loadAll();
   renderAll();
   toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
@@ -3832,10 +4189,68 @@ async function saveOutsourcedWorkers(pid, names) {
 async function unassignWorker(pid, wid) {
   const p = getProject(pid);
   const next = (p.assignedWorkerIds || []).filter((x) => x !== wid);
+  
+  const worker = getWorker(wid);
+  const workerChangeHistory = [...(p.workerChangeHistory || [])];
+  
+  const now = new Date();
+  const nowStr = now.toISOString();
+  
+  let autoHours = 0;
+  if (p.status === STATUS.WORKING && p.startedAt) {
+    const started = new Date(p.startedAt);
+    let endTime = now;
+    if (p.status === STATUS.PAUSED && p.pausedAt) {
+      endTime = new Date(p.pausedAt);
+    }
+    const workDuration = (endTime - started) / (1000 * 60 * 60);
+    const workerCount = (p.assignedWorkerIds || []).length;
+    autoHours = Math.round((workDuration / workerCount) * 2) / 2;
+  }
+  
+  workerChangeHistory.push({
+    time: nowStr,
+    action: "unassign",
+    workerId: wid,
+    workerName: worker ? worker.name : "未知",
+    workerPhone: worker ? worker.phone : "",
+    autoHours: autoHours > 0 ? autoHours : null
+  });
+  
+  const actionLogs = [...(p.actionLogs || [])];
+  let logDesc = `移除安装人员：${worker ? worker.name : "未知"}`;
+  
+  if (autoHours > 0) {
+    logDesc += `，自动记录工时 ${autoHours} 小时`;
+    
+    const workLog = {
+      id: 'log_' + Date.now() + '_' + wid,
+      projectId: pid,
+      workerId: wid,
+      workerName: worker ? worker.name : "未知",
+      hours: autoHours,
+      date: now.toISOString().slice(0, 10),
+      note: `系统自动计算：从${fmtDateTime(p.startedAt)}到${fmtDateTime(nowStr)}，共${autoHours}小时`,
+      level: "中级",
+      isOutsourced: false,
+      createdAt: nowStr
+    };
+    
+    await repo.addWorkLog(pid, workLog);
+  }
+  
+  actionLogs.push({
+    time: nowStr,
+    action: "unassign",
+    description: logDesc,
+    operator: null
+  });
+  
   await repo.setAssignedWorkers(pid, next);
+  await repo.patchProject(pid, { workerChangeHistory, actionLogs });
   await repo.loadAll();
   renderAll();
-  toast("已移除");
+  toast(autoHours > 0 ? `已移除，自动记录 ${autoHours} 工时` : "已移除");
 }
 
 async function updateProjectStatus(id, newStatus) {
@@ -3866,6 +4281,15 @@ async function updateProjectStatus(id, newStatus) {
     return;
   }
   
+  if (newStatus === STATUS.WORKING) {
+    const assignedWorkers = p.assignedWorkerIds || [];
+    if (assignedWorkers.length === 0) {
+      toast("请先分配安装人员后再开始施工");
+      renderConstruction();
+      return;
+    }
+  }
+  
   const patch = { status: newStatus };
   const now = new Date().toISOString();
   if (newStatus === STATUS.WORKING) {
@@ -3873,6 +4297,15 @@ async function updateProjectStatus(id, newStatus) {
     if (!p.originalStartedAt) {
       patch.originalStartedAt = now;
     }
+    
+    const actionLogs = [...(p.actionLogs || [])];
+    actionLogs.push({
+      time: now,
+      action: "start",
+      description: "开始施工",
+      operator: null
+    });
+    patch.actionLogs = actionLogs;
   }
   clearTimeout(reloadTimer);
   await repo.patchProject(id, patch);
@@ -3900,8 +4333,45 @@ async function pauseProject(id) {
     return;
   }
   
-  const reason = await promptDialog("请输入暂停原因：<br><br>1. 客户原因<br>2. 材料不足<br>3. 天气原因<br>4. 其他", "暂停项目", "客户原因");
-  if (!reason) return;
+  const pauseReasons = ["客户原因", "材料不足", "天气原因", "其他"];
+  
+  const form = `
+    <div class="form-row">
+      <label><span style="color:#f59e0b;">📝</span> 暂停原因（可选）</label>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+        ${pauseReasons.map(r => `<button class="btn small" onclick="document.getElementById('pauseReasonInput').value='${esc(r)}'">${esc(r)}</button>`).join("")}
+      </div>
+      <input type="text" id="pauseReasonInput" class="input" placeholder="选择快速原因或手动输入..." />
+    </div>
+  `;
+  
+  const result = await new Promise((resolve) => {
+    let resolved = false;
+    modal.open("暂停施工", form, {
+      confirmText: "确认暂停",
+      cancelText: "取消",
+      onConfirm: () => {
+        if (resolved) return;
+        resolved = true;
+        const input = document.getElementById("pauseReasonInput");
+        const value = input ? input.value.trim() : "";
+        resolve(value);
+        return true;
+      },
+      onClose: () => {
+        if (resolved) return;
+        resolved = true;
+        resolve(null);
+      }
+    });
+    setTimeout(() => {
+      const input = document.getElementById("pauseReasonInput");
+      if (input) input.focus();
+    }, 100);
+  });
+  
+  if (result === null) return;
+  const reason = result || null;
   
   try {
     const now = new Date();
@@ -3920,13 +4390,30 @@ async function pauseProject(id) {
     
     const pauseCount = (p.pauseCount || 0) + 1;
     
+    const pauseHistory = [...(p.pauseHistory || [])];
+    pauseHistory.push({
+      pauseAt: nowStr,
+      reason: reason,
+      duration: null
+    });
+    
+    const actionLogs = [...(p.actionLogs || [])];
+    actionLogs.push({
+      time: nowStr,
+      action: "pause",
+      description: `暂停施工${reason ? "，原因：" + reason : ""}`,
+      operator: null
+    });
+    
     const patch = {
       status: STATUS.PAUSED,
       pausedAt: nowStr,
       pauseReason: reason,
       pauseCount: pauseCount,
       accumulatedWorkHours: accumulatedWorkHours,
-      workSessions: workSessions
+      workSessions: workSessions,
+      pauseHistory: pauseHistory,
+      actionLogs: actionLogs
     };
     
     clearTimeout(reloadTimer);
@@ -3955,12 +4442,29 @@ async function resumeProject(id) {
   try {
     const now = new Date().toISOString();
     
+    const pauseHistory = [...(p.pauseHistory || [])];
+    if (pauseHistory.length > 0 && !pauseHistory[pauseHistory.length - 1].resumedAt) {
+      const lastPause = pauseHistory[pauseHistory.length - 1];
+      const pauseDuration = (new Date(now) - new Date(lastPause.pauseAt)) / (1000 * 60 * 60);
+      pauseHistory[pauseHistory.length - 1] = { ...lastPause, resumedAt: now, duration: pauseDuration };
+    }
+    
+    const actionLogs = [...(p.actionLogs || [])];
+    actionLogs.push({
+      time: now,
+      action: "resume",
+      description: "恢复施工",
+      operator: null
+    });
+    
     const patch = {
       status: STATUS.WORKING,
       startedAt: now,
       pausedAt: null,
       pauseReason: null,
-      resumedAt: now
+      resumedAt: now,
+      pauseHistory: pauseHistory,
+      actionLogs: actionLogs
     };
     
     clearTimeout(reloadTimer);
@@ -4001,7 +4505,8 @@ function delayProject(id) {
   for (let h = 7; h <= 21; h++) {
     for (let m = 0; m < 60; m += 10) {
       const t = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-      times += `<option value="${t}">${t}</option>`;
+      const selected = t === "08:00" ? " selected" : "";
+      times += `<option value="${t}"${selected}>${t}</option>`;
     }
   }
   times += '<option value="22:00">22:00</option>';
@@ -4088,13 +4593,33 @@ function delayProject(id) {
       
       const delayCount = (p.delayCount || 0) + 1;
       
+      const delayHistory = [...(p.delayHistory || [])];
+      delayHistory.push({
+        time: new Date().toISOString(),
+        originalDate: originalDateStr,
+        originalTime: originalTimeStr,
+        newDate: newDate,
+        newTime: newTime,
+        reason: reason
+      });
+      
+      const actionLogs = [...(p.actionLogs || [])];
+      actionLogs.push({
+        time: new Date().toISOString(),
+        action: "delay",
+        description: `项目延期，新预约时间：${newDate} ${newTime}，原因：${reason}`,
+        operator: null
+      });
+      
       const patch = {
         status: STATUS.DELAYED,
         appointmentTime: newAppointmentTime,
         endTime: newEndTime,
         delayReason: reason,
         delayCount: delayCount,
-        scheduleHistory: scheduleHistory
+        scheduleHistory: scheduleHistory,
+        delayHistory: delayHistory,
+        actionLogs: actionLogs
       };
       
       clearTimeout(reloadTimer);
@@ -4115,7 +4640,7 @@ async function reviewProject(id) {
   }
   if (!(await confirmDialog("确定审核该项目？审核后项目信息将无法更改。", "审核项目"))) return;
   clearTimeout(reloadTimer);
-  await repo.patchProject(id, { status: STATUS.REVIEWED });
+  await repo.patchProject(id, { status: STATUS.REVIEWED, reviewedAt: new Date().toISOString() });
   await repo.loadAll();
   renderAll();
   toast("已审核");
@@ -4736,7 +5261,22 @@ function openCompleteProjectForm(id) {
   const p = getProject(id);
   if (!p) return;
   
-  const workers = (p.assignedWorkerIds || []).map(wid => {
+  const assignedWorkerIds = p.assignedWorkerIds || [];
+  const allWorkerIds = new Set([...assignedWorkerIds]);
+  
+  (p.workerChangeHistory || []).forEach(ch => {
+    if (ch.workerId) {
+      allWorkerIds.add(ch.workerId);
+    }
+  });
+  
+  (p.workLogs || []).forEach(log => {
+    if (log.workerId && !log.workerId.startsWith("outsourced:")) {
+      allWorkerIds.add(log.workerId);
+    }
+  });
+  
+  const workers = Array.from(allWorkerIds).map(wid => {
     const w = getWorker(wid);
     return w ? w : { id: wid, name: "未知", phone: "" };
   });
@@ -4866,14 +5406,17 @@ function openCompleteProjectForm(id) {
     </div>`;
     
     workers.forEach((w, idx) => {
-      const existingLog = (p.workLogs || []).find(l => l.workerId === w.id && l.date === dateStr);
-      const existingHours = existingLog ? existingLog.hours : "";
+      const isAssigned = assignedWorkerIds.includes(w.id);
+      const allLogs = (p.workLogs || []).filter(l => l.workerId === w.id);
+      const totalHours = allLogs.reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
+      const existingLog = allLogs.find(l => l.date === dateStr);
+      const existingHours = totalHours > 0 ? totalHours : "";
       const existingLevel = existingLog ? existingLog.level : "中级";
-      const existingNote = existingLog ? existingLog.note : "";
+      const existingNote = existingLog ? existingLog.note : (allLogs.length > 0 ? "系统自动记录" : "");
       
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;">
-          <span style="min-width:80px;font-weight:500;flex-shrink:0;">👷 ${esc(w.name)}</span>
+          <span style="min-width:80px;font-weight:500;flex-shrink:0;color:${isAssigned ? "#1f2937" : "#9ca3af"};">👷 ${esc(w.name)}${!isAssigned ? ` <span style="font-size:11px;color:#d1d5db;">(已移除)</span>` : ""}</span>
           <div style="flex:0 0 auto;">
             <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">工时</label>
             <input type="number" id="workerHours_${idx}" value="${existingHours}" placeholder="0" step="0.5" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">

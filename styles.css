@@ -353,6 +353,8 @@ body {
   max-width: 1080px;
   margin: 0 auto;
   padding: 24px 16px 60px;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 /* 时间线模式下取消最大宽度限制 */
 body.timeline-view .container {
@@ -422,10 +424,12 @@ body.timeline-view .container {
   font-family: inherit;
   background: #fff;
   outline: none;
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 .input:focus { border-color: var(--primary); }
-.input.wide { min-width: 320px; flex: 1; }
+.input.wide { min-width: 100px; flex: 1; box-sizing: border-box; max-width: 100%; }
 
 .btn {
   padding: 8px 16px;
@@ -1308,7 +1312,7 @@ textarea.input { resize: vertical; min-height: 50px; }
 .hidden { display: none !important; }
 
 /* 施工详情 */
-.construction-detail { margin-top: 8px; }
+.construction-detail { margin-top: 8px; overflow-x: hidden; }
 .detail-block {
   background: var(--card);
   border: 1px solid var(--border);
@@ -1514,11 +1518,12 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   right: 0;
   background: #fff;
   border-top: 1px solid var(--border);
-  justify-content: space-around;
+  justify-content: center;
   align-items: center;
-  padding: 8px 0;
+  padding: 8px 12px;
   z-index: 100;
   box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+  gap: 6px;
 }
 
 .bottom-nav-item {
@@ -1529,12 +1534,12 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   background: none;
   border: none;
   font-size: 22px;
-  padding: 6px 12px;
+  padding: 6px 8px;
   color: var(--muted);
   cursor: pointer;
   border-radius: 8px;
   transition: all 0.2s;
-  min-width: 60px;
+  min-width: 48px;
 }
 
 .bottom-nav-item span {
@@ -1933,11 +1938,13 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 
   .modal-mask {
     padding: 16px;
+    align-items: flex-start;
+    padding-top: 15vh;
   }
 
   .modal {
     max-width: 100%;
-    max-height: 90vh;
+    max-height: 80vh;
     border-radius: 16px;
   }
 
@@ -1956,6 +1963,8 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   .detail-block {
     padding: 16px;
     margin-bottom: 12px;
+    overflow-x: hidden;
+    box-sizing: border-box;
   }
 
   .detail-block h3 {
@@ -1981,6 +1990,35 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
     display: block;
     overflow-x: auto;
     white-space: nowrap;
+  }
+
+  .worklog-form {
+    gap: 8px;
+  }
+
+  .worklog-form .field {
+    flex: 1;
+    min-width: 120px;
+    max-width: 100%;
+  }
+
+  .worklog-form .field input,
+  .worklog-form .field select {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .worklog-form .outsourced-field > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .worklog-form .outsourced-field select,
+  .worklog-form .outsourced-field input {
+    flex: 1;
+    min-width: 120px;
+    max-width: 100%;
   }
 
   table.data th, table.data td {
