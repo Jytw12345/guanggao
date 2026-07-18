@@ -5109,8 +5109,8 @@ function generateWorkerScheduleDescription(dateStr = null) {
       if (pStart) {
         const startHour = pStart.getHours();
         if (startHour < 8) {
-          const advanceMinutes = (8 - startHour) * 60;
-          taskDesc += `（🌅 需提前${advanceMinutes}分钟到达，请合理安排出行时间！）`;
+          const advanceHours = (8 - startHour).toFixed(1);
+          taskDesc += `（🌅 今日开工较早，请提前${advanceHours}小时出发，注意安全！）`;
         }
       }
       

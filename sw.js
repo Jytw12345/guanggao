@@ -1,5 +1,5 @@
-const CACHE = "ad-install-v48";
-const VERSION = "v48";
+const CACHE = "ad-install-v49";
+const VERSION = "v49";
 
 const ASSETS = [
   "./",
