@@ -2982,7 +2982,7 @@ function setProjectTimeFilter(days) {
 }
 
 function projectForm(p = {}) {
-  const storeLocked = (isStoreManager() && myStore()) || isWorker();
+  const storeLocked = (isStoreManager() && myStore() != null && myStore() !== "") || isWorker();
   const selectedStore = p.storeId || (storeLocked ? myStore() : "");
   const storeOpts = `<option value="">未指定门店</option>` +
     cache.stores.map((s) =>
@@ -3144,8 +3144,8 @@ async function saveProject(id) {
   if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
   const storeEl = document.getElementById("pStore");
   let storeId = storeEl ? storeEl.value : "";
-  if (isStoreManager() && myStore()) storeId = myStore();          // 有指定门店的店长强制本门店
-  if (isWorker() && myStore()) storeId = myStore();   // 施工人员强制本门店
+  if (isStoreManager() && myStore() != null && myStore() !== "") storeId = myStore();          // 有指定门店的店长强制本门店
+  if (isWorker() && myStore() != null && myStore() !== "") storeId = myStore();   // 施工人员强制本门店
   const workerCount = Number(document.getElementById("pWorkers").value) || 1;
   
   const inputEstHours = Number(document.getElementById("pEst").value) || 0;
@@ -3194,9 +3194,23 @@ async function saveProject(id) {
     }
     
     if (id) {
-      logOperation("PROJECT_EDIT", name, `ID: ${id}`);
+      const existing = getProject(id);
+      const changes = [];
+      if (existing.name !== name) changes.push(`项目名称: ${existing.name} -> ${name}`);
+      if (existing.customer !== payload.customer) changes.push(`客户: ${existing.customer || "无"} -> ${payload.customer || "无"}`);
+      if (existing.phone !== payload.phone) changes.push(`电话: ${existing.phone || "无"} -> ${payload.phone || "无"}`);
+      if (existing.address !== payload.address) changes.push(`地址: ${existing.address || "无"} -> ${payload.address || "无"}`);
+      if (existing.appointmentTime !== payload.appointmentTime) changes.push(`预约时间: ${existing.appointmentTime || "无"} -> ${payload.appointmentTime}`);
+      if (existing.endTime !== payload.endTime) changes.push(`结束时间: ${existing.endTime || "无"} -> ${payload.endTime}`);
+      if (existing.estimatedHours !== payload.estimatedHours) changes.push(`预计工时: ${existing.estimatedHours || 0} -> ${payload.estimatedHours}`);
+      if (existing.workerCount !== payload.workerCount) changes.push(`施工人数: ${existing.workerCount || 1} -> ${payload.workerCount}`);
+      if (existing.status !== payload.status) changes.push(`状态: ${existing.status || "无"} -> ${payload.status}`);
+      if (existing.note !== payload.note) changes.push(`备注: ${existing.note || "无"} -> ${payload.note || "无"}`);
+      if (existing.storeId !== payload.storeId) changes.push(`门店: ${storeName(existing.storeId) || "无"} -> ${storeName(payload.storeId) || "无"}`);
+      const changeDetail = changes.length > 0 ? changes.join("; ") : "无字段变更";
+      logOperation("PROJECT_EDIT", name, `ID: ${id}, 变更: ${changeDetail}`);
     } else {
-      logOperation("PROJECT_CREATE", name);
+      logOperation("PROJECT_CREATE", name, `客户: ${payload.customer || "无"}, 电话: ${payload.phone || "无"}, 地址: ${payload.address || "无"}, 预约时间: ${payload.appointmentTime}, 预计工时: ${payload.estimatedHours}小时, 施工人数: ${payload.workerCount}, 门店: ${storeName(payload.storeId) || "无"}`);
     }
     
     if (id) {
@@ -3542,7 +3556,7 @@ function renderConstruction() {
       ${canEdit ? `
       <div class="outsourced-block">
         <h4>🤝 外协人员</h4>
-        <p class="hint" style="margin:0 0 8px;font-size:12px">当任务由外协人员完成时，填写外协人员姓名（多个用逗号分隔）。设置外协后，该任务不占用内部施工人员工时，时间冲突将被解除。</p>
+        <p class="hint" style="margin:0 0 8px;font-size:12px">当任务由外协人员完成时，填写外协人员姓名（分别输入后按添加）。设置外协后，该任务不占用内部施工人员工时，时间冲突将被解除。</p>
         <div class="assign-list">${(p.outsourcedWorkers || "").split(/[,，]/).filter(n => n.trim()).map(n => `<span class="assign-chip outsourced"><span style="color:#8b5cf6">🤝</span> ${esc(n.trim())}<button class="chip-x" onclick="removeOutsourcedWorker('${p.id}', '${(n.trim() || "").replace(/'/g, "\\'")}')" title="移除">✕</button></span>`).join("") || `<span class="hint" style="margin:0">尚未添加外协人员</span>`}</div>
         <div style="margin-bottom:8px;">
           <select class="input" id="outsourcedWorkersSelect_${p.id}" onchange="addOutsourcedWorker('${p.id}', this.value)">
@@ -3551,8 +3565,8 @@ function renderConstruction() {
           </select>
         </div>
         <div class="assign-form" style="margin-bottom:0">
-          <input type="text" class="input" id="outsourcedWorkersInput_${p.id}" placeholder="输入外协人员姓名，回车添加" onkeydown="if(event.key==='Enter'){addOutsourcedWorkerByName('${p.id}', this.value);this.value=''}">
-          <button class="btn" onclick="addOutsourcedWorkerByName('${p.id}', document.getElementById('outsourcedWorkersInput_${p.id}').value)">添加</button>
+          <input type="text" class="input" id="outsourcedWorkersInput_${p.id}" placeholder="输入外协人员姓名" onkeydown="if(event.key==='Enter'){addOutsourcedWorkerByName('${p.id}', this.value);this.value=''}">
+          <button class="btn primary" onclick="addOutsourcedWorkerByName('${p.id}', document.getElementById('outsourcedWorkersInput_${p.id}').value)">添加</button>
         </div>
         ${p.outsourcedWorkers ? `<div class="outsourced-hint">当前任务已设置为外协</div>` : ""}
       </div>` : ""}
@@ -4285,7 +4299,8 @@ async function assignWorker(pid) {
     time: new Date().toISOString(),
     action: "assign",
     description: `分配安装人员：${worker ? worker.name : "未知"}`,
-    operator: null
+    operator: currentProfile.name || currentUser?.email || "系统",
+    operatorRole: currentProfile.role
   });
   
   await repo.setAssignedWorkers(pid, cur.concat(wid));
@@ -4293,16 +4308,30 @@ async function assignWorker(pid) {
   await repo.loadAll();
   renderAll();
   toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
+  logOperation("PROJECT_ASSIGN", p.name || "项目", `ID: ${pid}, 人员: ${worker ? worker.name : "未知"}${worker?.phone ? `(${worker.phone})` : ""}`);
 }
 
 /* 保存外协人员信息 */
 async function saveOutsourcedWorkers(pid, names) {
   const p = getProject(pid);
   if (!p) return;
+  const oldWorkers = (p.outsourcedWorkers || "").split(/[,，]/).map(n => n.trim()).filter(n => n);
+  const newWorkers = names.trim().split(/[,，]/).map(n => n.trim()).filter(n => n);
+  
+  const added = newWorkers.filter(n => !oldWorkers.includes(n));
+  const removed = oldWorkers.filter(n => !newWorkers.includes(n));
+  
   await repo.saveProject({ outsourcedWorkers: names.trim() }, pid);
   await repo.loadAll();
   renderAll();
   toast(names.trim() ? "外协人员已保存，该任务不再占用内部施工人员" : "外协人员已清除");
+  
+  added.forEach(name => {
+    logOperation("PROJECT_OUTSOURCE_ADD", p.name || "项目", `ID: ${pid}, 外协人员: ${name}`);
+  });
+  removed.forEach(name => {
+    logOperation("PROJECT_OUTSOURCE_REMOVE", p.name || "项目", `ID: ${pid}, 外协人员: ${name}`);
+  });
 }
 
 /* 添加单个外协人员 */
@@ -4394,7 +4423,8 @@ async function unassignWorker(pid, wid) {
     time: nowStr,
     action: "unassign",
     description: logDesc,
-    operator: null
+    operator: currentProfile.name || currentUser?.email || "系统",
+    operatorRole: currentProfile.role
   });
   
   await repo.setAssignedWorkers(pid, next);
@@ -4402,6 +4432,7 @@ async function unassignWorker(pid, wid) {
   await repo.loadAll();
   renderAll();
   toast(autoHours > 0 ? `已移除，自动记录 ${autoHours} 工时` : "已移除");
+  logOperation("PROJECT_UNASSIGN", p.name || "项目", `ID: ${pid}, 人员: ${worker ? worker.name : "未知"}${worker?.phone ? `(${worker.phone})` : ""}, 自动记录工时: ${autoHours}`);
 }
 
 async function updateProjectStatus(id, newStatus) {
@@ -4454,7 +4485,8 @@ async function updateProjectStatus(id, newStatus) {
       time: now,
       action: "start",
       description: "开始施工",
-      operator: null
+      operator: currentProfile.name || currentUser?.email || "系统",
+      operatorRole: currentProfile.role
     });
     patch.actionLogs = actionLogs;
     
@@ -4493,6 +4525,7 @@ async function updateProjectStatus(id, newStatus) {
   
   if (newStatus === STATUS.WORKING) {
     sendNotificationForProjectChange("start", p);
+    logOperation("PROJECT_START", p.name || "项目", `ID: ${id}`);
   } else if (newStatus === STATUS.DONE) {
     sendNotificationForProjectChange("done", p);
   } else if (newStatus === STATUS.ACCEPTED) {
@@ -4580,7 +4613,8 @@ async function pauseProject(id) {
       time: nowStr,
       action: "pause",
       description: `暂停施工${reason ? "，原因：" + reason : ""}`,
-      operator: null
+      operator: currentProfile.name || currentUser?.email || "系统",
+      operatorRole: currentProfile.role
     });
     
     const patch = {
@@ -4600,6 +4634,7 @@ async function pauseProject(id) {
     renderAll();
     toast(`项目已暂停：${reason}`);
     sendNotificationForProjectChange("pause", getProject(id));
+    logOperation("PROJECT_PAUSE", p.name || "项目", `ID: ${id}, 原因: ${reason || "未填写"}`);
   } catch (error) {
     console.error("暂停项目失败:", error);
     toast("暂停失败：" + (error.message || "未知错误"));
@@ -4632,7 +4667,8 @@ async function resumeProject(id) {
       time: now,
       action: "resume",
       description: "恢复施工",
-      operator: null
+      operator: currentProfile.name || currentUser?.email || "系统",
+      operatorRole: currentProfile.role
     });
     
     const patch = {
@@ -4651,6 +4687,7 @@ async function resumeProject(id) {
     renderAll();
     toast("项目已恢复施工");
     sendNotificationForProjectChange("resume", getProject(id));
+    logOperation("PROJECT_RESUME", p.name || "项目", `ID: ${id}`);
   } catch (error) {
     console.error("恢复项目失败:", error);
     toast("恢复失败：" + (error.message || "未知错误"));
@@ -4786,7 +4823,8 @@ function delayProject(id) {
         time: new Date().toISOString(),
         action: "delay",
         description: `项目延期，新预约时间：${newDate} ${newTime}，原因：${reason}`,
-        operator: null
+        operator: currentProfile.name || currentUser?.email || "系统",
+        operatorRole: currentProfile.role
       });
       
       const patch = {
@@ -4806,6 +4844,7 @@ function delayProject(id) {
       renderAll();
       toast(`项目已延期至 ${newDate} ${newTime}`);
       sendNotificationForProjectChange("delay", getProject(id));
+      logOperation("PROJECT_DELAY", p.name || "项目", `ID: ${id}, 原时间: ${originalDateStr} ${originalTimeStr}, 新时间: ${newDate} ${newTime}, 原因: ${reason}`);
     }
   });
 }
@@ -4822,6 +4861,7 @@ async function reviewProject(id) {
   await repo.loadAll();
   renderAll();
   toast("已审核");
+  logOperation("PROJECT_REVIEW", p.name || "项目", `ID: ${id}`);
 }
 
 async function unreviewProject(id) {
@@ -4898,7 +4938,7 @@ async function addWorkLog(id) {
   
   await repo.patchProject(id, { actualHours: totalHours });
   updatedProject.actualHours = totalHours;
-  await logOperation("WORK_LOG_ADD", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}`);
+  logOperation("WORK_LOG_ADD", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}，等级：${level}，备注：${note || "无"}，类型：${type === "outsourced" ? "外协" : "内部"}`);
   renderAll();
   toast("已添加施工工时");
 }
@@ -4913,7 +4953,7 @@ async function deleteWorkLog(pid, lid) {
   const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
   await repo.patchProject(pid, { actualHours: totalHours });
   updatedProject.actualHours = totalHours;
-  await logOperation("WORK_LOG_DELETE", `${p.name} - ${log?.workerName || ""}`, `工时：${log?.hours || 0}小时`);
+  logOperation("WORK_LOG_DELETE", `${p.name} - ${log?.workerName || ""}`, `工时：${log?.hours || 0}小时，日期：${log?.date || "未知"}，等级：${log?.level || "未知"}，类型：${log?.isOutsourced ? "外协" : "内部"}`);
   renderAll();
   toast("已删除");
 }
@@ -5066,9 +5106,25 @@ function generateWorkerScheduleDescription(dateStr = null) {
         taskDesc += `。备注：<strong>${esc(p.note)}</strong>`;
       }
       
-      const isEvening = pStart && pStart.getHours() >= 18;
-      if (isEvening) {
-        taskDesc += `（⚠️ 可能需要加班，辛苦啦！）`;
+      if (pStart) {
+        const startHour = pStart.getHours();
+        if (startHour < 8) {
+          const advanceMinutes = (8 - startHour) * 60;
+          taskDesc += `（🌅 需提前${advanceMinutes}分钟到达，请合理安排出行时间！）`;
+        }
+      }
+      
+      if (pStart) {
+        const startHour = pStart.getHours();
+        if (startHour >= 18) {
+          let overtimeHours = 0;
+          if (pEnd) {
+            overtimeHours = Math.max(0, (pEnd.getHours() - 18) + (pEnd.getMinutes() / 60));
+          } else {
+            overtimeHours = Math.max(0, startHour - 18);
+          }
+          taskDesc += `（🌙 预计加班${overtimeHours.toFixed(1)}小时，请提前做好准备！）`;
+        }
       }
       
       description += `<div class="schedule-task">${taskDesc}</div>`;
@@ -6009,6 +6065,7 @@ async function saveAcceptance(id) {
   const p = getProject(id);
   if (p) {
     sendNotificationForProjectChange("accepted", p);
+    logOperation("PROJECT_ACCEPT", p.name || "项目", `ID: ${id}, 验收人: ${by}, 结果: ${acceptance.quality}, 结论: ${acceptance.conclusion}`);
   }
 }
 
@@ -6933,7 +6990,16 @@ const OPERATION_TYPES = {
   PROJECT_EDIT: "编辑项目",
   PROJECT_DELETE: "删除项目",
   PROJECT_ASSIGN: "分配员工",
+  PROJECT_UNASSIGN: "移除员工",
+  PROJECT_OUTSOURCE_ADD: "添加外协人员",
+  PROJECT_OUTSOURCE_REMOVE: "移除外协人员",
+  PROJECT_START: "开始施工",
+  PROJECT_PAUSE: "暂停施工",
+  PROJECT_RESUME: "恢复施工",
   PROJECT_COMPLETE: "完成项目",
+  PROJECT_CANCEL: "取消项目",
+  PROJECT_DELAY: "项目延期",
+  PROJECT_ACCEPT: "验收项目",
   PROJECT_REVIEW: "审核项目",
   LEAVE_CREATE: "提交请假",
   LEAVE_APPROVE: "批准请假",
@@ -6949,7 +7015,10 @@ const OPERATION_TYPES = {
   WORK_LOG_DELETE: "删除工时",
 };
 
-async function logOperation(type, target, detail = "") {
+let logSaveTimer = null;
+let pendingLogs = [];
+
+function logOperation(type, target, detail = "") {
   const log = {
     id: uid(),
     type,
@@ -6965,40 +7034,127 @@ async function logOperation(type, target, detail = "") {
   if (cache.operationLogs.length > 1000) {
     cache.operationLogs = cache.operationLogs.slice(0, 1000);
   }
-  saveLocal();
-  if (sb) {
-    try {
-      await sb.from("operation_logs").insert(log);
-    } catch (e) {
-      console.warn("保存操作日志失败:", e);
+  
+  pendingLogs.push(log);
+  
+  if (logSaveTimer) clearTimeout(logSaveTimer);
+  logSaveTimer = setTimeout(() => {
+    saveLocal();
+    if (sb && pendingLogs.length > 0) {
+      const logsToSave = [...pendingLogs];
+      pendingLogs = [];
+      sb.from("operation_logs").insert(logsToSave).catch(e => {
+        console.warn("保存操作日志失败:", e);
+        pendingLogs = [...logsToSave, ...pendingLogs];
+      });
+    } else {
+      pendingLogs = [];
     }
-  }
+  }, 300);
 }
 
 function showOperationLogs() {
-  const logs = cache.operationLogs.slice(0, 100);
+  const allLogs = cache.operationLogs;
   
   const modalContent = `
     <div style="max-height:600px;overflow-y:auto;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <h3 style="margin:0;">📝 操作日志</h3>
-        ${logs.length > 0 ? `<button class="btn small" onclick="clearOperationLogs()" style="background:#ef4444;color:#fff;border:none">🗑️ 清除日志</button>` : ""}
-      </div>
-      ${logs.length > 0 ? logs.map(log => `
-        <div style="border-bottom:1px solid #f3f4f6;padding:12px 0;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-weight:bold;color:var(--primary)">${esc(log.typeLabel || log.type_label)}</span>
-            <span style="font-size:12px;color:var(--muted)">${new Date(log.timestamp).toLocaleString()}</span>
-          </div>
-          <div style="margin-top:4px;font-size:13px;">目标：${esc(log.target)}</div>
-          ${log.detail ? `<div style="margin-top:4px;font-size:12px;color:var(--muted)">详情：${esc(log.detail)}</div>` : ""}
-          <div style="margin-top:4px;font-size:12px;color:#6b7280;">操作人：${esc(log.operatorName || log.operator_name)}（${ROLE_LABEL[log.operatorRole || log.operator_role] || log.operatorRole || log.operator_role}）</div>
+        <div>
+          <h3 style="margin:0;">📝 操作日志</h3>
+          <div style="font-size:12px;color:var(--muted);margin-top:4px;">共 ${allLogs.length} 条记录</div>
         </div>
-      `).join("") : `<div style="text-align:center;color:var(--muted);padding:40px;">暂无操作日志</div>`}
+        ${allLogs.length > 0 ? `<button class="btn small" onclick="clearOperationLogs()" style="background:#ef4444;color:#fff;border:none">🗑️ 清除日志</button>` : ""}
+      </div>
+      <div style="margin-bottom:12px;">
+        <input type="text" id="logSearchInput" class="input" placeholder="搜索日志（关键词、操作人、目标）" style="width:100%;" />
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="btn tiny" onclick="filterLogs('all')">全部</button>
+        <button class="btn tiny" onclick="filterLogs('project')">项目操作</button>
+        <button class="btn tiny" onclick="filterLogs('worker')">人员操作</button>
+        <button class="btn tiny" onclick="filterLogs('worklog')">工时操作</button>
+      </div>
+      <div id="logList">
+        ${allLogs.length > 0 ? allLogs.slice(0, 100).map(log => renderLogItem(log)).join("") : `<div style="text-align:center;color:var(--muted);padding:40px;">暂无操作日志</div>`}
+      </div>
     </div>
   `;
   
   modal.open("操作日志", modalContent);
+  
+  setTimeout(() => {
+    const searchInput = document.getElementById("logSearchInput");
+    if (searchInput) {
+      searchInput.addEventListener("input", (e) => {
+        const keyword = e.target.value.toLowerCase();
+        const filtered = allLogs.filter(log => {
+          const target = (log.target || "").toLowerCase();
+          const detail = (log.detail || "").toLowerCase();
+          const operator = ((log.operatorName || log.operator_name) || "").toLowerCase();
+          return target.includes(keyword) || detail.includes(keyword) || operator.includes(keyword);
+        });
+        document.getElementById("logList").innerHTML = filtered.length > 0 ? 
+          filtered.slice(0, 100).map(log => renderLogItem(log)).join("") : 
+          `<div style="text-align:center;color:var(--muted);padding:40px;">未找到匹配日志</div>`;
+      });
+    }
+  }, 100);
+}
+
+function filterLogs(type) {
+  const allLogs = cache.operationLogs;
+  let filtered = allLogs;
+  
+  if (type === "project") {
+    filtered = allLogs.filter(log => log.type.startsWith("PROJECT_"));
+  } else if (type === "worker") {
+    filtered = allLogs.filter(log => log.type.startsWith("WORKER_") || log.type.startsWith("PROJECT_ASSIGN") || log.type.startsWith("PROJECT_UNASSIGN") || log.type.startsWith("PROJECT_OUTSOURCE"));
+  } else if (type === "worklog") {
+    filtered = allLogs.filter(log => log.type.startsWith("WORK_LOG_"));
+  }
+  
+  document.getElementById("logList").innerHTML = filtered.length > 0 ? 
+    filtered.slice(0, 100).map(log => renderLogItem(log)).join("") : 
+    `<div style="text-align:center;color:var(--muted);padding:40px;">未找到匹配日志</div>`;
+}
+
+function renderLogItem(log) {
+  const typeColors = {
+    PROJECT_CREATE: "#22c55e",
+    PROJECT_EDIT: "#3b82f6",
+    PROJECT_DELETE: "#ef4444",
+    PROJECT_ASSIGN: "#8b5cf6",
+    PROJECT_UNASSIGN: "#f59e0b",
+    PROJECT_OUTSOURCE_ADD: "#06b6d4",
+    PROJECT_OUTSOURCE_REMOVE: "#f97316",
+    PROJECT_START: "#10b981",
+    PROJECT_PAUSE: "#f59e0b",
+    PROJECT_RESUME: "#22c55e",
+    PROJECT_COMPLETE: "#22c55e",
+    PROJECT_CANCEL: "#ef4444",
+    PROJECT_DELAY: "#f97316",
+    PROJECT_ACCEPT: "#3b82f6",
+    PROJECT_REVIEW: "#8b5cf6",
+    WORK_LOG_ADD: "#10b981",
+    WORK_LOG_DELETE: "#ef4444",
+  };
+  
+  const color = typeColors[log.type] || "var(--primary)";
+  const timestamp = new Date(log.timestamp);
+  const dateStr = `${timestamp.getFullYear()}-${String(timestamp.getMonth()+1).padStart(2,'0')}-${String(timestamp.getDate()).padStart(2,'0')}`;
+  const timeStr = `${String(timestamp.getHours()).padStart(2,'0')}:${String(timestamp.getMinutes()).padStart(2,'0')}:${String(timestamp.getSeconds()).padStart(2,'0')}`;
+  
+  return `
+    <div style="border-bottom:1px solid #f3f4f6;padding:12px 0;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-weight:bold;color:${color};">${esc(log.typeLabel || log.type_label)}</span>
+        <span style="font-size:12px;color:var(--muted)">${dateStr} ${timeStr}</span>
+      </div>
+      <div style="margin-top:4px;font-size:13px;"><strong>目标：</strong>${esc(log.target)}</div>
+      ${log.detail ? `<div style="margin-top:4px;font-size:12px;color:#4b5563;"><strong>详情：</strong>${esc(log.detail)}</div>` : ""}
+      <div style="margin-top:4px;font-size:12px;color:#6b7280;">操作人：${esc(log.operatorName || log.operator_name || "系统")}（${ROLE_LABEL[log.operatorRole || log.operator_role] || log.operatorRole || log.operator_role || "未分配"}）</div>
+    </div>
+  `;
 }
 
 async function clearOperationLogs() {
