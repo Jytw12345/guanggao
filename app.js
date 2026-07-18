@@ -153,8 +153,8 @@ function can(cap) {
 
 const perm = {
   createProject: () => can(CAP.PROJECT_CREATE),
-  editProject: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT) && (isManager() || (p && p.storeId === myStore())),
-  deleteProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELETE) && (isManager() || (p && p.storeId === myStore())),
+  editProject: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
+  deleteProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELETE) && (isManager() || !myStore() || (p && p.storeId === myStore())),
   doConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION),
   assignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.ASSIGN_WORKER),
   viewStats: () => can(CAP.VIEW_STATS),
@@ -163,7 +163,7 @@ const perm = {
   manageWorkers: () => can(CAP.MANAGE_WORKERS),
   manageLeaves: () => can(CAP.MANAGE_LEAVES),
   manageAccounts: () => isManager(),
-  reviewProject: (p) => can(CAP.REVIEW_PROJECT) && (isManager() || (p && p.storeId === myStore())),
+  reviewProject: (p) => can(CAP.REVIEW_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
 };
 
 function isReviewed(p) {
@@ -2982,7 +2982,7 @@ function setProjectTimeFilter(days) {
 }
 
 function projectForm(p = {}) {
-  const storeLocked = isStoreManager() || isWorker();
+  const storeLocked = (isStoreManager() && myStore()) || isWorker();
   const selectedStore = p.storeId || (storeLocked ? myStore() : "");
   const storeOpts = `<option value="">未指定门店</option>` +
     cache.stores.map((s) =>
@@ -3144,7 +3144,7 @@ async function saveProject(id) {
   if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
   const storeEl = document.getElementById("pStore");
   let storeId = storeEl ? storeEl.value : "";
-  if (isStoreManager()) storeId = myStore();          // 店长强制本门店
+  if (isStoreManager() && myStore()) storeId = myStore();          // 有指定门店的店长强制本门店
   if (isWorker() && myStore()) storeId = myStore();   // 施工人员强制本门店
   const workerCount = Number(document.getElementById("pWorkers").value) || 1;
   
