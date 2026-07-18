@@ -5074,18 +5074,18 @@ function generateWorkerScheduleDescription(dateStr = null) {
         }
       }
       
-      taskDesc += `前往 <strong>${esc(storeName)}</strong>，`;
+      if (p.address) {
+        taskDesc += `前往 <strong>${esc(p.address)}</strong>，`;
+      } else if (storeName) {
+        taskDesc += `前往 <strong>${esc(storeName)}</strong>，`;
+      }
       
       if (p.customer) {
-        taskDesc += `客户名称是：<strong>${esc(p.customer)}</strong>，`;
+        taskDesc += `客户 <strong>${esc(p.customer)}</strong>，`;
       }
       
       if (p.phone) {
-        taskDesc += `联系电话：<strong>${esc(p.phone)}</strong>，`;
-      }
-      
-      if (p.address) {
-        taskDesc += `地址是 <strong>${esc(p.address)}</strong>，`;
+        taskDesc += `电话 <strong>${esc(p.phone)}</strong>，`;
       }
       
       taskDesc += `做 <strong>${esc(p.name)}</strong>`;
@@ -5103,7 +5103,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
       }
       
       if (p.note) {
-        taskDesc += `。备注：<strong>${esc(p.note)}</strong>`;
+        taskDesc += `。施工内容和注意事项：<strong>${esc(p.note)}</strong>`;
       }
       
       if (pStart) {
