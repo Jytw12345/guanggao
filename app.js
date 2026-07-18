@@ -5468,7 +5468,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
   });
   
   let description = `<div class="schedule-description">`;
-  description += `<h3>📅 ${dateStrFormatted} 周三（周${weekday}）施工人员安排</h3>`;
+  description += `<h3>📅 ${dateStrFormatted} （周${weekday}）施工人员安排</h3>`;
   
   if (todayProjects.length === 0) {
     description += `<p style="color:#6b7280">今天没有安排施工任务，大家可以休息一下~</p>`;
