@@ -3530,15 +3530,16 @@ function renderConstruction() {
       <div class="outsourced-block">
         <h4>🤝 外协人员</h4>
         <p class="hint" style="margin:0 0 8px;font-size:12px">当任务由外协人员完成时，填写外协人员姓名（多个用逗号分隔）。设置外协后，该任务不占用内部施工人员工时，时间冲突将被解除。</p>
+        <div class="assign-list">${(p.outsourcedWorkers || "").split(/[,，]/).filter(n => n.trim()).map(n => `<span class="assign-chip outsourced"><span style="color:#8b5cf6">🤝</span> ${esc(n.trim())}<button class="chip-x" onclick="removeOutsourcedWorker('${p.id}', '${(n.trim() || "").replace(/'/g, "\\'")}')" title="移除">✕</button></span>`).join("") || `<span class="hint" style="margin:0">尚未添加外协人员</span>`}</div>
         <div style="margin-bottom:8px;">
-          <select class="input" id="outsourcedWorkersSelect" onchange="addOutsourcedWorkerToInput('${p.id}', this.value)">
+          <select class="input" id="outsourcedWorkersSelect_${p.id}" onchange="addOutsourcedWorker('${p.id}', this.value)">
             <option value="">从常用外协人员列表添加</option>
             ${cache.outsourcedWorkers.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}${w.phone ? ` (${esc(w.phone)})` : ''}</option>`).join("")}
           </select>
         </div>
         <div class="assign-form" style="margin-bottom:0">
-          <input type="text" class="input" id="outsourcedWorkersInput" placeholder="输入外协人员姓名，多个用逗号分隔" value="${esc(p.outsourcedWorkers || "")}" style="flex:1">
-          <button class="btn" onclick="saveOutsourcedWorkers('${p.id}', document.getElementById('outsourcedWorkersInput').value)">保存</button>
+          <input type="text" class="input" id="outsourcedWorkersInput_${p.id}" placeholder="输入外协人员姓名，回车添加" onkeydown="if(event.key==='Enter'){addOutsourcedWorkerByName('${p.id}', this.value);this.value=''}">
+          <button class="btn" onclick="addOutsourcedWorkerByName('${p.id}', document.getElementById('outsourcedWorkersInput_${p.id}').value)">添加</button>
         </div>
         ${p.outsourcedWorkers ? `<div class="outsourced-hint">当前任务已设置为外协</div>` : ""}
       </div>` : ""}
@@ -4291,6 +4292,36 @@ async function saveOutsourcedWorkers(pid, names) {
   toast(names.trim() ? "外协人员已保存，该任务不再占用内部施工人员" : "外协人员已清除");
 }
 
+/* 添加单个外协人员 */
+async function addOutsourcedWorker(pid, name) {
+  const p = getProject(pid);
+  if (!p || !name.trim()) return;
+  const currentWorkers = (p.outsourcedWorkers || "").split(/[,，]/).map(n => n.trim()).filter(n => n);
+  if (currentWorkers.includes(name.trim())) {
+    toast("该外协人员已添加");
+    return;
+  }
+  currentWorkers.push(name.trim());
+  await saveOutsourcedWorkers(pid, currentWorkers.join(","));
+}
+
+/* 通过名称添加外协人员 */
+async function addOutsourcedWorkerByName(pid, name) {
+  const names = (name || "").split(/[,，]/).map(n => n.trim()).filter(n => n);
+  for (const n of names) {
+    await addOutsourcedWorker(pid, n);
+  }
+}
+
+/* 移除单个外协人员 */
+async function removeOutsourcedWorker(pid, name) {
+  const p = getProject(pid);
+  if (!p || !name.trim()) return;
+  const currentWorkers = (p.outsourcedWorkers || "").split(/[,，]/).map(n => n.trim()).filter(n => n);
+  const newWorkers = currentWorkers.filter(n => n !== name.trim());
+  await saveOutsourcedWorkers(pid, newWorkers.join(","));
+}
+
 async function unassignWorker(pid, wid) {
   const p = getProject(pid);
   if (isCompleted(p)) { toast("项目已完工，不允许移除人员"); return; }
@@ -4816,19 +4847,7 @@ function updateLogOutsourcedInput() {
   }
 }
 
-function addOutsourcedWorkerToInput(pid, name) {
-  if (!name) return;
-  const input = document.getElementById("outsourcedWorkersInput");
-  const sel = document.getElementById("outsourcedWorkersSelect");
-  if (!input) return;
-  const current = input.value.trim();
-  const names = current ? current.split(",").map(n => n.trim()).filter(n => n) : [];
-  if (!names.includes(name)) {
-    names.push(name);
-    input.value = names.join(", ");
-  }
-  if (sel) sel.value = "";
-}
+
 
 async function addWorkLog(id) {
   const p = getProject(id);
@@ -5334,6 +5353,11 @@ function generateWorkerScheduleDescription(dateStr = null) {
           statusColor = "#06b6d4";
           progress = 100;
           break;
+        case STATUS.PAUSED:
+          statusColor = "#f59e0b";
+          statusText = "已暂停";
+          progress = Math.max(30, Math.min(90, autoProgress));
+          break;
         case STATUS.CANCELLED:
           statusColor = "#ef4444";
           progress = 0;
@@ -5346,12 +5370,23 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const statusActions = [];
       if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.BOOKED) {
         statusActions.push('<button class="btn tiny ' + (isOverdue ? 'danger' : '') + '" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">开始施工</button>');
+        statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">人员调整</button>');
+        statusActions.push('<button class="btn tiny" onclick="delayProject(\'' + p.id + '\')">延期</button>');
+        statusActions.push('<button class="btn tiny danger" onclick="if(confirm(\'确定取消该预约项目？\')){updateProjectStatus(\'' + p.id + '\', \'' + STATUS.CANCELLED + '\')}">取消</button>');
       }
       if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.WORKING) {
         statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.DONE + '\')">完成安装</button>');
+        statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">人员调整</button>');
+        statusActions.push('<button class="btn tiny" style="background:#f59e0b;color:#fff" onclick="pauseProject(\'' + p.id + '\')">暂停施工</button>');
+        statusActions.push('<button class="btn tiny" onclick="delayProject(\'' + p.id + '\')">延期</button>');
       }
       if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.DONE) {
         statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.ACCEPTED + '\')">确认验收</button>');
+      }
+      if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.PAUSED) {
+        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">恢复施工</button>');
+        statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">人员调整</button>');
+        statusActions.push('<button class="btn tiny" onclick="delayProject(\'' + p.id + '\')">延期</button>');
       }
       
       const workers = (p.assignedWorkerIds || []).map(wid => {
@@ -8606,6 +8641,7 @@ function openTimelineActionMenu(taskEl, projectId) {
       </div>` : `<div class="tl-menu-assign-empty">暂无可选人员</div>`}
       <div class="tl-menu-outsourced">
         <div class="tl-menu-assign-label">🤝 外协人员</div>
+        <div class="tl-menu-assign-list">${(p.outsourcedWorkers || "").split(/[,，]/).filter(n => n.trim()).map(n => `<span class="assign-chip outsourced"><span style="color:#8b5cf6">🤝</span> ${esc(n.trim())}<button class="chip-x" onclick="timelineRemoveOutsourcedWorker('${p.id}', '${(n.trim() || "").replace(/'/g, "\\'")}')" title="移除">✕</button></span>`).join("") || `<span class="hint" style="margin:0;font-size:11px">尚未添加外协人员</span>`}</div>
         ${cache.outsourcedWorkers.length > 0 ? `
         <div class="tl-menu-assign-form" style="margin-bottom:6px;">
           <select class="input" id="tlMenuOutsourcedSelect" onchange="timelineAddOutsourcedWorker('${p.id}', this.value)">
@@ -8614,8 +8650,8 @@ function openTimelineActionMenu(taskEl, projectId) {
           </select>
         </div>` : ""}
         <div class="tl-menu-assign-form">
-          <input type="text" class="input" id="tlMenuOutsourcedInput" placeholder="输入外协姓名" value="${esc(p.outsourcedWorkers || "")}" style="flex:1">
-          <button class="btn small" onclick="timelineSaveOutsourced('${p.id}', document.getElementById('tlMenuOutsourcedInput').value)">保存</button>
+          <input type="text" class="input" id="tlMenuOutsourcedInput" placeholder="输入外协姓名，回车添加" onkeydown="if(event.key==='Enter'){timelineAddOutsourcedWorkerByName('${p.id}', this.value);this.value=''}">
+          <button class="btn small" onclick="timelineAddOutsourcedWorkerByName('${p.id}', document.getElementById('tlMenuOutsourcedInput').value)">添加</button>
         </div>
         ${p.outsourcedWorkers ? `<div class="tl-menu-outsourced-hint">已设置外协，不占用内部人员</div>` : ""}
       </div>
@@ -8721,26 +8757,10 @@ async function timelineUnassignWorker(pid, wid) {
   toast("已移除人员");
 }
 
-function timelineAddOutsourcedWorker(pid, name) {
-  if (!name) return;
-  const input = document.getElementById("tlMenuOutsourcedInput");
+async function timelineAddOutsourcedWorker(pid, name) {
+  await addOutsourcedWorker(pid, name);
   const sel = document.getElementById("tlMenuOutsourcedSelect");
-  if (!input) return;
-  const current = input.value.trim();
-  const names = current ? current.split(",").map(n => n.trim()).filter(n => n) : [];
-  if (!names.includes(name)) {
-    names.push(name);
-    input.value = names.join(", ");
-  }
   if (sel) sel.value = "";
-}
-
-/* 时间线保存外协人员 */
-async function timelineSaveOutsourced(pid, names) {
-  const p = getProject(pid);
-  if (!p) return;
-  await repo.saveProject({ outsourcedWorkers: names.trim() }, pid);
-  await repo.loadAll();
   renderTimelineInDetail();
   setTimeout(() => {
     const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
@@ -8748,7 +8768,34 @@ async function timelineSaveOutsourced(pid, names) {
       openTimelineActionMenu(taskEl, pid);
     }
   }, 100);
-  toast(names.trim() ? "外协已保存，不占用内部施工人员" : "外协已清除");
+}
+
+async function timelineAddOutsourcedWorkerByName(pid, name) {
+  await addOutsourcedWorkerByName(pid, name);
+  renderTimelineInDetail();
+  setTimeout(() => {
+    const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
+    if (taskEl) {
+      openTimelineActionMenu(taskEl, pid);
+    }
+  }, 100);
+}
+
+/* 时间线移除外协人员 */
+async function timelineRemoveOutsourcedWorker(pid, name) {
+  await removeOutsourcedWorker(pid, name);
+  renderTimelineInDetail();
+  setTimeout(() => {
+    const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
+    if (taskEl) {
+      openTimelineActionMenu(taskEl, pid);
+    }
+  }, 100);
+}
+
+/* 时间线保存外协人员 */
+async function timelineSaveOutsourced(pid, names) {
+  await saveOutsourcedWorkers(pid, names);
 }
 
 /* 关闭浮动操作菜单 */

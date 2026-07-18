@@ -1197,6 +1197,7 @@ textarea.input { resize: vertical; min-height: 50px; }
 .schedule-progress-actions {
   margin-top: 8px;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
