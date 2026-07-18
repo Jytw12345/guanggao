@@ -405,15 +405,17 @@ body.timeline-view .container {
 
 .toolbar {
   display: flex;
-  gap: 10px;
-  margin-bottom: 18px;
+  gap: 12px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .toolbar-time-filter {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .input {
@@ -452,6 +454,13 @@ body.timeline-view .container {
 }
 
 .btn.primary:hover { background: var(--primary-dark); }
+
+.btn.success {
+  background: #10b981;
+  border-color: #10b981;
+  color: #fff;
+}
+.btn.success:hover { background: #059669; }
 
 .btn.danger {
   background: #ef4444;
@@ -534,6 +543,23 @@ body.timeline-view .container {
 .badge.已延期 { background: #fee2e2; color: #dc2626; }
 .badge.已取消 { background: #fee2e2; color: #dc2626; }
 .badge.modified { background: #ede9fe; color: #7c3aed; }
+.badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  box-shadow: 0 2px 4px rgba(239, 68, 68, 0.4);
+}
 
 .empty {
   text-align: center;
@@ -1137,65 +1163,92 @@ textarea.input { resize: vertical; min-height: 50px; }
 }
 
 .schedule-progress-item {
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  background: #f9fafb;
-  border-radius: 8px;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  background: #ffffff;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  position: relative;
+  overflow: hidden;
+}
+
+.schedule-progress-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 10px 0 0 10px;
+  background: var(--status-color, #6b7280);
 }
 
 .schedule-progress-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
+  align-items: flex-start;
+  margin-bottom: 12px;
 }
 
 .schedule-progress-name {
-  font-weight: 500;
-  color: #1f2937;
+  font-weight: 600;
+  color: #111827;
+  font-size: 15px;
 }
 
 .schedule-progress-store {
   font-size: 12px;
   color: #6b7280;
+  background: #f3f4f6;
+  padding: 2px 8px;
+  border-radius: 12px;
+  margin-right: 6px;
 }
 
 .schedule-progress-time {
   font-size: 12px;
-  color: #6b7280;
+  color: #374151;
   font-weight: 500;
 }
 
 .schedule-progress-bar-container {
-  height: 6px;
-  background: #e5e7eb;
-  border-radius: 3px;
+  height: 10px;
+  background: #f3f4f6;
+  border-radius: 5px;
   overflow: hidden;
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
 
 .schedule-progress-bar {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 5px;
   transition: width 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .schedule-progress-info {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  align-items: center;
+  font-size: 13px;
 }
 
 .schedule-progress-status {
-  font-weight: 500;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .schedule-progress-percent {
-  color: #6b7280;
+  color: #374151;
+  font-weight: 600;
+  font-size: 14px;
 }
 
 .schedule-progress-actions {
-  margin-top: 8px;
+  margin-top: 10px;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -1213,7 +1266,11 @@ textarea.input { resize: vertical; min-height: 50px; }
 
 .schedule-progress-item.overdue {
   background: #fef2f2;
-  border-left: 3px solid #ef4444;
+  border-color: #fecaca;
+}
+
+.schedule-progress-item.overdue::before {
+  background: #ef4444;
 }
 
 .overdue-badge {
@@ -1270,6 +1327,10 @@ textarea.input { resize: vertical; min-height: 50px; }
   justify-content: center;
   z-index: 100;
   padding: 16px;
+}
+
+#modal.modal-mask {
+  z-index: 200;
 }
 .modal {
   background: #fff;
@@ -1402,6 +1463,81 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 }
 .stat-card .num { font-size: 26px; font-weight: 700; color: var(--primary); }
 .stat-card .lbl { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+.internal-log-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  gap: 12px;
+}
+.internal-log-info {
+  flex: 1;
+  min-width: 0;
+}
+.internal-log-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+}
+.internal-log-meta {
+  font-size: 12px;
+  color: #888;
+  margin-top: 2px;
+}
+.internal-log-time {
+  font-size: 12px;
+  color: #666;
+  margin-top: 4px;
+}
+.internal-log-date {
+  font-size: 13px;
+  color: #666;
+  white-space: nowrap;
+}
+.internal-log-hours {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--primary);
+  white-space: nowrap;
+}
+.internal-log-note {
+  font-size: 12px;
+  color: #666;
+  margin-top: 4px;
+  font-style: italic;
+}
+
+@media (max-width: 768px) {
+  .internal-log-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .internal-log-info {
+    width: 100%;
+  }
+  .internal-log-name {
+    font-size: 15px;
+  }
+  .internal-log-meta {
+    font-size: 13px;
+  }
+  .internal-log-date {
+    font-size: 14px;
+    color: #555;
+  }
+  .internal-log-hours {
+    font-size: 16px;
+    margin-top: 4px;
+  }
+  .internal-log-item > button {
+    align-self: flex-end;
+    margin-top: 8px;
+  }
+}
 
 .stats-subhead {
   font-size: 15px;
@@ -1624,6 +1760,38 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   .container {
     padding: 16px 12px 80px;
   }
+  
+  .toolbar {
+    gap: 6px;
+    flex-direction: column;
+  }
+  
+  .toolbar > div:first-child {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  
+  .toolbar .input {
+    min-width: calc(50% - 3px);
+    flex: 1;
+    max-width: none;
+  }
+  
+  .toolbar-time-filter {
+    gap: 3px;
+    width: 100%;
+  }
+  
+  .toolbar-time-filter .btn.small {
+    padding: 3px 8px;
+    font-size: 11px;
+    min-width: 0;
+    flex: 1;
+    max-width: 70px;
+    white-space: nowrap;
+  }
 
   .brand {
     padding: 10px 12px;
@@ -1701,7 +1869,12 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   }
 
   .card {
-    padding: 16px;
+    padding: 12px;
+  }
+  
+  #internalTaskList .card {
+    padding: 10px 12px;
+    margin-bottom: 8px;
   }
 
   .card-title h3 {
@@ -1753,15 +1926,24 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   .toolbar {
     flex-direction: row;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
   }
 
   .toolbar .input {
     flex: 1;
-    min-width: 80px;
-    max-width: 110px;
-    font-size: 12px;
-    padding: 6px 8px;
+    min-width: 100px;
+    max-width: 150px;
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+
+  .toolbar .btn {
+    flex: 1;
+    min-width: 100px;
+    max-width: 150px;
+    padding: 8px 12px;
+    font-size: 13px;
+    text-align: center;
   }
 
   .section-head {
@@ -2009,14 +2191,46 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   }
 
   table.data {
-    font-size: 13px;
+    font-size: 12px;
     display: block;
     overflow-x: auto;
     white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .detail-block {
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+
+  table.data th, table.data td {
+    padding: 8px 6px;
+    font-size: 12px;
   }
 
   .worklog-form {
     gap: 8px;
+  }
+
+  .stats-summary,
+  #statsSummary {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .stat-card {
+    min-width: auto;
+    max-width: none;
+    padding: 12px;
+  }
+
+  .stat-card .num {
+    font-size: 24px;
+  }
+
+  .stat-card .lbl {
+    font-size: 12px;
   }
 
   .worklog-form .field {
@@ -2717,6 +2931,18 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 }
 
 .worker-cal-cell .day-leave {
+  font-size: 10px;
+}
+
+.worker-cal-cell.internal-hours {
+  background: #fef3c7;
+}
+
+.worker-cal-cell.internal-hours .day-num {
+  color: #d97706;
+}
+
+.worker-cal-cell .day-internal {
   font-size: 10px;
 }
 

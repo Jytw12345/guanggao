@@ -353,6 +353,17 @@ function fmtTime(v) {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+function generateTimeOptions(selectedValue = "08:00") {
+  const options = [];
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m += 10) {
+      const time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      options.push(`<option value="${time}"${time === selectedValue ? " selected" : ""}>${time}</option>`);
+    }
+  }
+  return options.join("");
+}
+
 function monthKey(v) {
   const d = new Date(v);
   if (isNaN(d)) return "";
@@ -1703,7 +1714,12 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     return fmtDate(start) === dateStr;
   });
   
-  if (items.length === 0) {
+  const internalTasks = getInternalTasks().filter(t => {
+    if (t.status === 'verified') return false;
+    return t.date === dateStr;
+  });
+  
+  if (items.length === 0 && internalTasks.length === 0) {
     return `<div class="empty" style="padding:24px 0;">${dateStr} 暂无施工安排</div>`;
   }
   
@@ -1871,6 +1887,36 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
           </div>
           <div class="timeline-task-body" style="font-size:9px; color:${typeColor};">
             ${SCHEDULE_TYPE_LABEL[s.type] || s.type} · ${timeStr}
+          </div>
+        </div>`;
+    });
+    
+    const workerInternalTasks = internalTasks.filter(t => t.workerId === w.id);
+    workerInternalTasks.forEach(t => {
+      const displayStartTime = t.scheduledStartTime || t.actualStartTime;
+      const displayEndTime = t.scheduledEndTime || t.actualEndTime;
+      if (!displayStartTime || !displayEndTime) return;
+      
+      const [sh, sm] = displayStartTime.split(":").map(Number);
+      const [eh, em] = displayEndTime.split(":").map(Number);
+      
+      const startMinutes = (sh - 6) * 60 + sm;
+      const endMinutes = (eh - 6) * 60 + em;
+      const left = (startMinutes / 60) * hourWidth;
+      const width = ((endMinutes - startMinutes) / 60) * hourWidth;
+      
+      const statusIcon = t.status === 'in_progress' ? '🔨' : '📋';
+      const statusColor = t.status === 'in_progress' ? '#f59e0b' : '#8b5cf6';
+      const pad = (n) => String(n).padStart(2, "0");
+      const timeStr = `${pad(sh)}:${pad(sm)} ~ ${pad(eh)}:${pad(em)}`;
+      
+      tasksHtml += `
+        <div class="timeline-task" style="left:${left}px; width:${width}px; height:48px; background:${statusColor}20; border-left:3px solid ${statusColor};">
+          <div class="timeline-task-header">
+            <span class="timeline-task-name" style="font-size:11px;">${statusIcon} ${esc(t.name)}</span>
+          </div>
+          <div class="timeline-task-body" style="font-size:9px;">
+            ${esc(t.workType)} · ${timeStr} · 预计${t.estHours}h
           </div>
         </div>`;
     });
@@ -2131,6 +2177,10 @@ const SCHEDULE_TYPE_LABEL = {
   standby: "待命",
   equipment: "设备维护",
   meeting: "会议",
+  warehouse: "仓库工作",
+  delivery: "送货",
+  outsideInstall: "外出安装",
+  internalOther: "内部其他",
   other: "其他"
 };
 
@@ -2141,6 +2191,10 @@ const SCHEDULE_TYPE_COLOR = {
   standby: "#6b7280",
   equipment: "#0891b2",
   meeting: "#d97706",
+  warehouse: "#f97316",
+  delivery: "#eab308",
+  outsideInstall: "#22c55e",
+  internalOther: "#a855f7",
   other: "#16a34a"
 };
 
@@ -2334,7 +2388,7 @@ function workerScheduleForm(s = {}) {
   const todayStr = dateKey(today);
   
   const nowHour = String(today.getHours()).padStart(2, "0");
-  const nowMinute = String(today.getMinutes()).padStart(2, "0");
+  const nowMinute = String(Math.floor(today.getMinutes() / 10) * 10).padStart(2, "0");
   const nowTime = `${nowHour}:${nowMinute}`;
   
   const endHour = String(Math.min(23, today.getHours() + 2)).padStart(2, "0");
@@ -2346,58 +2400,80 @@ function workerScheduleForm(s = {}) {
   const defaultEndTime = s.endTime || endTime;
 
   return `
-    <div class="form-grid">
-      <div class="form-row">
-        <label>施工人员 *</label>
-        <select class="input" id="wsWorkerId">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label style="font-size:12px;font-weight:600;color:#333;">施工人员 *</label>
+        <select class="input" id="wsWorkerId" style="padding:4px 6px;font-size:13px;">
           ${workerOptions}
         </select>
       </div>
-      <div class="form-row">
-        <label>日程类型</label>
-        <select class="input" id="wsType">
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label style="font-size:12px;font-weight:600;color:#333;">日程类型</label>
+        <select class="input" id="wsType" style="padding:4px 6px;font-size:13px;">
           ${typeOptions}
         </select>
       </div>
     </div>
-    <div class="form-row">
-      <label>日程标题 *</label>
-      <input class="input" id="wsTitle" value="${esc(s.title || "")}" placeholder="如：培训、体检、待命等" />
+    <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:10px;">
+      <label style="font-size:12px;font-weight:600;color:#333;">日程标题 *</label>
+      <input class="input" id="wsTitle" value="${esc(s.title || "")}" placeholder="如：培训、体检、待命等" style="padding:4px 6px;font-size:13px;" />
     </div>
-    <div class="form-grid">
-      <div class="form-row">
-        <label>开始日期 *</label>
-        <input class="input" type="date" id="wsStartDate" value="${esc(defaultStartDate)}" onchange="onScheduleDateChange()" />
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label style="font-size:12px;font-weight:600;color:#333;">开始日期 *</label>
+        <input class="input" type="date" id="wsStartDate" value="${esc(defaultStartDate)}" onchange="onScheduleDateChange()" style="padding:4px 6px;font-size:13px;" />
       </div>
-      <div class="form-row">
-        <label>开始时间</label>
-        <input class="input" type="time" id="wsStartTime" value="${esc(defaultStartTime)}" onchange="onScheduleTimeChange()" />
-      </div>
-    </div>
-    <div class="form-grid">
-      <div class="form-row">
-        <label>结束日期 *</label>
-        <input class="input" type="date" id="wsEndDate" value="${esc(defaultEndDate)}" />
-      </div>
-      <div class="form-row">
-        <label>结束时间</label>
-        <input class="input" type="time" id="wsEndTime" value="${esc(defaultEndTime)}" />
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label style="font-size:12px;font-weight:600;color:#333;">开始时间</label>
+        <select class="input" id="wsStartTime" onchange="onScheduleTimeChange()" style="padding:4px 6px;font-size:13px;">
+          ${generateTimeOptions(defaultStartTime)}
+        </select>
       </div>
     </div>
-    <div class="form-row">
-      <label>全天日程</label>
-      <label class="checkbox-label">
-        <input type="checkbox" id="wsAllDay" ${(!s.startTime && !s.endTime) ? 'checked' : ''} onchange="toggleAllDaySchedule()" />
-        <span>设为全天日程</span>
-      </label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label style="font-size:12px;font-weight:600;color:#333;">结束日期 *</label>
+        <input class="input" type="date" id="wsEndDate" value="${esc(defaultEndDate)}" style="padding:4px 6px;font-size:13px;" />
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label style="font-size:12px;font-weight:600;color:#333;">结束时间</label>
+        <select class="input" id="wsEndTime" style="padding:4px 6px;font-size:13px;">
+          ${generateTimeOptions(defaultEndTime)}
+        </select>
+      </div>
     </div>
-    <div class="form-row">
-      <label>备注</label>
-      <textarea class="input" id="wsDescription" placeholder="备注信息">${esc(s.description || "")}</textarea>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <input type="checkbox" id="wsAllDay" ${(!s.startTime && !s.endTime && !s.id) ? '' : ((!s.startTime && !s.endTime) ? 'checked' : '')} onchange="toggleAllDaySchedule()" style="width:16px;height:16px;" />
+      <label for="wsAllDay" style="font-size:13px;color:#333;cursor:pointer;">设为全天日程</label>
     </div>
-    <div class="form-actions">
-      <button class="btn" onclick="modal.close()">取消</button>
-      <button class="btn primary" onclick="saveWorkerSchedule('${s.id || ""}')">保存</button>
+    <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:10px;">
+      <label style="font-size:12px;font-weight:600;color:#333;">备注</label>
+      <textarea class="input" id="wsDescription" placeholder="备注信息" rows="2" style="padding:4px 6px;font-size:13px;">${esc(s.description || "")}</textarea>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <input type="checkbox" id="wsCreateTask" onchange="toggleScheduleTaskFields()" style="width:16px;height:16px;" />
+      <label for="wsCreateTask" style="font-size:13px;color:#333;cursor:pointer;">同时生成内部任务（计入工时统计）</label>
+    </div>
+    <div id="wsTaskFields" style="display:none;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">工时等级</label>
+          <select class="input" id="wsTaskLevel" style="padding:4px 6px;font-size:13px;">
+            <option value="初级">初级</option>
+            <option value="中级" selected>中级</option>
+            <option value="高级">高级</option>
+            <option value="特级">特级</option>
+          </select>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">预计工时(小时)</label>
+          <input class="input" type="number" min="0" step="0.1" id="wsTaskEstHours" placeholder="自动计算" style="padding:4px 6px;font-size:13px;" />
+        </div>
+      </div>
+    </div>
+    <div class="form-actions" style="display:flex;gap:10px;justify-content:flex-end;">
+      <button class="btn" onclick="modal.close()" style="padding:6px 16px;font-size:13px;">取消</button>
+      <button class="btn primary" onclick="saveWorkerSchedule('${s.id || ""}')" style="padding:6px 16px;font-size:13px;">保存</button>
     </div>`;
 }
 
@@ -2424,6 +2500,36 @@ function onScheduleTimeChange() {
   }
 }
 
+function toggleScheduleTaskFields() {
+  const createTask = document.getElementById("wsCreateTask");
+  const taskFields = document.getElementById("wsTaskFields");
+  if (createTask && taskFields) {
+    taskFields.style.display = createTask.checked ? "block" : "none";
+    if (createTask.checked) {
+      calculateScheduleEstHours();
+    }
+  }
+}
+
+function calculateScheduleEstHours() {
+  const startTime = document.getElementById("wsStartTime");
+  const endTime = document.getElementById("wsEndTime");
+  const estHours = document.getElementById("wsTaskEstHours");
+  if (!startTime || !endTime || !estHours) return;
+  
+  const startVal = startTime.value;
+  const endVal = endTime.value;
+  if (!startVal || !endVal) return;
+  
+  const [startH, startM] = startVal.split(":").map(Number);
+  const [endH, endM] = endVal.split(":").map(Number);
+  
+  let diffMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+  if (diffMinutes < 0) diffMinutes += 24 * 60;
+  
+  estHours.value = (diffMinutes / 60).toFixed(1);
+}
+
 function toggleAllDaySchedule() {
   const allDay = document.getElementById("wsAllDay");
   const startTime = document.getElementById("wsStartTime");
@@ -2431,14 +2537,14 @@ function toggleAllDaySchedule() {
   
   if (allDay && startTime && endTime) {
     if (allDay.checked) {
-      startTime.value = "";
-      endTime.value = "";
+      startTime.value = "08:00";
+      endTime.value = "18:00";
       startTime.disabled = true;
       endTime.disabled = true;
     } else {
       const now = new Date();
       const nowHour = String(now.getHours()).padStart(2, "0");
-      const nowMinute = String(now.getMinutes()).padStart(2, "0");
+      const nowMinute = String(Math.floor(now.getMinutes() / 10) * 10).padStart(2, "0");
       startTime.value = `${nowHour}:${nowMinute}`;
       const endHour = String(Math.min(23, now.getHours() + 2)).padStart(2, "0");
       endTime.value = `${endHour}:${nowMinute}`;
@@ -2492,9 +2598,55 @@ async function saveWorkerSchedule(id) {
   
   await repo.saveWorkerSchedule(payload, id);
   await repo.loadAll();
+  
+  const createTask = document.getElementById("wsCreateTask");
+  if (createTask && createTask.checked) {
+    const scheduleTypeMap = {
+      warehouse: "仓库工作",
+      delivery: "送货",
+      outsideInstall: "外出安装",
+      internalOther: "其他",
+      company: "仓库工作",
+      meeting: "其他",
+      equipment: "设备维护",
+      standby: "待命",
+      training: "培训学习"
+    };
+    
+    const workType = scheduleTypeMap[payload.type] || "其他";
+    const level = document.getElementById("wsTaskLevel").value;
+    let estHours = Number(document.getElementById("wsTaskEstHours").value);
+    
+    if (!estHours || estHours <= 0) {
+      const startTime = payload.startTime || "08:00";
+      const endTime = payload.endTime || "18:00";
+      const [startH, startM] = startTime.split(":").map(Number);
+      const [endH, endM] = endTime.split(":").map(Number);
+      let diffMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+      if (diffMinutes < 0) diffMinutes += 24 * 60;
+      estHours = Math.max(0.1, diffMinutes / 60);
+    }
+    
+    addInternalTask({
+      name: payload.title,
+      workType: workType,
+      level: level,
+      workerId: payload.workerId,
+      workerName: payload.workerName,
+      date: payload.startDate,
+      scheduledStartTime: payload.startTime || "08:00",
+      scheduledEndTime: payload.endTime || "18:00",
+      estHours: estHours,
+      note: payload.description || ""
+    });
+    
+    toast("日程已保存，同时已生成内部任务");
+  } else {
+    toast("已保存");
+  }
+  
   modal.close();
   renderAll();
-  toast("已保存");
 }
 
 async function deleteWorkerSchedule(id) {
@@ -5436,11 +5588,53 @@ function generateWorkerScheduleDescription(dateStr = null) {
       description += `<div class="schedule-task">${taskDesc}</div>`;
     });
     
+    let totalActualHours = 0;
+    projects.forEach(p => {
+      if (p.startedAt) {
+        const end = p.finishedAt ? new Date(p.finishedAt) : new Date();
+        const start = new Date(p.startedAt);
+        let elapsedMs = end - start;
+        (p.pauseHistory || []).forEach(ph => {
+          if (ph.startTime && ph.endTime) {
+            const pauseStart = new Date(ph.startTime);
+            const pauseEnd = new Date(ph.endTime);
+            elapsedMs -= pauseEnd - pauseStart;
+          }
+        });
+        totalActualHours += elapsedMs / (1000 * 60 * 60);
+      }
+    });
+    
+    const workerInternalTasks = getInternalTasks().filter(t => 
+      t.workerName === name && 
+      t.date === dateStrFormatted && 
+      t.actualStartTime && 
+      ['in_progress', 'completed', 'verified'].includes(t.status)
+    );
+    workerInternalTasks.forEach(t => {
+      if (t.actualEndTime) {
+        const start = new Date(`${t.date} ${t.actualStartTime}`);
+        const end = new Date(`${t.date} ${t.actualEndTime}`);
+        totalActualHours += (end - start) / (1000 * 60 * 60);
+      } else if (t.status === 'in_progress') {
+        const start = new Date(`${t.date} ${t.actualStartTime}`);
+        const end = new Date();
+        totalActualHours += (end - start) / (1000 * 60 * 60);
+      }
+    });
+    
     const totalEstimatedHours = projects.reduce((sum, p) => {
       const workerCount = Math.max(1, p.workerCount || (p.assignedWorkerIds || []).length || 1);
       return sum + ((p.estimatedHours || 0) / workerCount);
     }, 0);
-    if (totalEstimatedHours > 8) {
+    
+    if (totalActualHours > 0) {
+      if (totalActualHours > 10) {
+        description += `<div class="schedule-warning">⚠️ <strong>工时预警</strong>：${name}今日实际工作已达 ${totalActualHours.toFixed(1)} 小时，连续工作这么长时间了，请注意休息！</div>`;
+      } else if (totalActualHours > 8) {
+        description += `<div class="schedule-warning">⚠️ <strong>工时预警</strong>：${name}今日实际工作 ${totalActualHours.toFixed(1)} 小时，已超过8小时标准工作时间，请注意劳逸结合！</div>`;
+      }
+    } else if (totalEstimatedHours > 8) {
       description += `<div class="schedule-warning">⚠️ <strong>工时预警</strong>：${name}今日预计工时 ${totalEstimatedHours.toFixed(1)} 小时，超过8小时标准工作时间，请注意劳逸结合！</div>`;
     }
     
@@ -5686,12 +5880,37 @@ function generateWorkerScheduleDescription(dateStr = null) {
       return sum + (elapsedMs / (1000 * 60 * 60)) * workerCount;
     }, 0);
     
+    const internalTasksToday = getInternalTasks().filter(t => 
+      t.date === todayStr && 
+      t.actualStartTime && 
+      ['in_progress', 'completed', 'verified'].includes(t.status)
+    );
+    const internalActualHours = internalTasksToday.reduce((sum, t) => {
+      if (t.actualEndTime) {
+        const start = new Date(`${t.date} ${t.actualStartTime}`);
+        const end = new Date(`${t.date} ${t.actualEndTime}`);
+        return sum + (end - start) / (1000 * 60 * 60);
+      } else if (t.status === 'in_progress') {
+        const start = new Date(`${t.date} ${t.actualStartTime}`);
+        const end = new Date();
+        return sum + (end - start) / (1000 * 60 * 60);
+      }
+      return sum;
+    }, 0);
+    
     const hoursRemaining = Math.max(0, totalEstimatedHours - totalActualPersonHours);
-    description += `<div class="schedule-summary-item">📈 <strong>工时预测</strong>：预计总工时 ${totalEstimatedHours.toFixed(1)} 小时，已完成 ${totalActualPersonHours.toFixed(1)} 小时，剩余 ${hoursRemaining.toFixed(1)} 小时</div>`;
+    const totalActualWithInternal = totalActualPersonHours + internalActualHours;
+    description += `<div class="schedule-summary-item">📈 <strong>工时预测</strong>：预计总工时 ${totalEstimatedHours.toFixed(1)} 小时，已完成 ${totalActualWithInternal.toFixed(1)} 小时（项目 ${totalActualPersonHours.toFixed(1)} + 内务 ${internalActualHours.toFixed(1)}），剩余 ${hoursRemaining.toFixed(1)} 小时</div>`;
+    
+    const avgActualHours = onJobWorkers > 0 ? (totalActualPersonHours / onJobWorkers).toFixed(1) : 0;
     
     if (totalProjects > 0 && onJobWorkers > 0) {
       const avgProjects = (totalProjects / onJobWorkers).toFixed(1);
-      if (avgProjects > 2) {
+      if (avgActualHours > 10) {
+        description += `<div class="schedule-summary-item warning">⚠️ 大家已经连续工作 ${avgActualHours} 小时了，注意适当休息，别太累了！</div>`;
+      } else if (avgActualHours > 8) {
+        description += `<div class="schedule-summary-item warning">⚠️ 今日平均工作已达 ${avgActualHours} 小时，请注意劳逸结合！</div>`;
+      } else if (avgProjects > 2) {
         description += `<div class="schedule-summary-item warning">⚠️ 人手有点紧张，平均每人要跑 ${avgProjects} 个项目，大家加油！需要加人的话及时说。</div>`;
       } else if (avgProjects > 1) {
         description += `<div class="schedule-summary-item">💪 任务适中，大家合理安排时间，注意安全。</div>`;
@@ -5792,8 +6011,10 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const outsourcedWorkers = (p.outsourcedWorkers || "").split(",").map(n => n.trim()).filter(n => n);
       const allWorkers = [...workers, ...outsourcedWorkers.map(n => `${n}（外协）`)];
       
+      const statusClass = isOverdue ? 'overdue' : `status-${p.status}`;
+      
       description += `
-        <div class="schedule-progress-item ${isOverdue ? 'overdue' : ''}">
+        <div class="schedule-progress-item ${statusClass}" style="--status-color: ${statusColor};">
           <div class="schedule-progress-header">
             <span class="schedule-progress-name">${esc(p.name)}</span>
             <span class="schedule-progress-store">${esc(storeName)}</span>
@@ -6389,17 +6610,31 @@ function refreshWorkerSelectors() {
 function refreshStoreSelectors() {
   const sel = document.getElementById("statsStore");
   const prev = sel.value;
-  sel.innerHTML = `<option value="">全部店面</option>` +
-    cache.stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  
+  if (!perm.viewGlobalStats() && myStore()) {
+    const myStoreId = myStore();
+    const myStoreObj = cache.stores.find(s => s.id === myStoreId);
+    sel.innerHTML = myStoreObj ? `<option value="${myStoreId}" selected>${esc(myStoreObj.name)}</option>` : `<option value="">请选择门店</option>`;
+    sel.disabled = true;
+  } else {
+    sel.innerHTML = `<option value="">全部店面</option>` +
+      cache.stores.map((s) => `<option value="${s.id}" ${s.id === myStore() ? 'selected' : ''}>${esc(s.name)}</option>`).join("");
+    sel.disabled = false;
+  }
+  
   if (prev) sel.value = prev;
 }
 
 function collectStats() {
   const period = document.getElementById("statsPeriod").value;
   const month = document.getElementById("statsMonth").value;
-  const storeFilter = document.getElementById("statsStore").value;
+  let storeFilter = document.getElementById("statsStore").value;
   const workerFilter = document.getElementById("statsWorker").value;
   const statusFilter = document.getElementById("statsStatus").value;
+  
+  if (!perm.viewGlobalStats() && myStore() && !storeFilter) {
+    storeFilter = myStore();
+  }
   
   function isInPeriod(dateStr) {
     if (!month) return true;
@@ -6444,6 +6679,27 @@ function collectStats() {
     });
   });
   
+  getInternalWorkLogs().forEach((l) => {
+    if (!isInPeriod(l.date)) return;
+    if (workerFilter && l.workerId !== workerFilter) return;
+    const key = l.workerId || l.workerName || l.id;
+    if (!rows[key]) {
+      const w = getWorker(l.workerId);
+      rows[key] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced: false };
+    }
+    const level = l.level || "中级";
+    const hours = Number(l.hours) || 0;
+    rows[key].hours += hours;
+    rows[key].levelHours[level] += hours;
+    rows[key].days.add(fmtDate(l.date));
+    rows[key].projects.add("内部工作");
+    const dayKey = l.date;
+    if (!rows[key].daily[dayKey]) {
+      rows[key].daily[dayKey] = [];
+    }
+    rows[key].daily[dayKey].push({ hours: hours, level: level, project: l.workType, isInternal: true });
+  });
+  
   cache.leaveRecords.forEach((l) => {
     if (l.status !== "approved") return;
     if (workerFilter && l.workerId !== workerFilter) return;
@@ -6480,9 +6736,13 @@ function collectStats() {
 function collectProjectStats() {
   const period = document.getElementById("statsPeriod").value;
   const month = document.getElementById("statsMonth").value;
-  const storeFilter = document.getElementById("statsStore").value;
+  let storeFilter = document.getElementById("statsStore").value;
   const workerFilter = document.getElementById("statsWorker").value;
   const statusFilter = document.getElementById("statsStatus").value;
+  
+  if (!perm.viewGlobalStats() && myStore() && !storeFilter) {
+    storeFilter = myStore();
+  }
   
   function isInPeriod(dateStr) {
     if (!month) return true;
@@ -6679,7 +6939,11 @@ function renderStats() {
   
   const period = document.getElementById("statsPeriod").value;
   const month = document.getElementById("statsMonth").value;
-  const storeFilter = document.getElementById("statsStore").value;
+  let storeFilter = document.getElementById("statsStore").value;
+  
+  if (!perm.viewGlobalStats() && myStore() && !storeFilter) {
+    storeFilter = myStore();
+  }
   
   function isInPeriod(dateStr) {
     if (!month) return true;
@@ -6722,17 +6986,27 @@ function renderStats() {
   else if (efficiencyRate < 100) { efficiencyColor = "#f59e0b"; efficiencyLabel = "正常"; }
   
   const summary = document.getElementById("statsSummary");
-  summary.innerHTML = `
-    <div class="stat-card"><div class="num">${rows.length}</div><div class="lbl">参与施工人数</div></div>
-    <div class="stat-card"><div class="num">${totalHours}</div><div class="lbl">合计安装工时(小时)</div></div>
-    <div class="stat-card"><div class="num">${totalEst}</div><div class="lbl">预计工时(小时)</div></div>
-    <div class="stat-card"><div class="num">${totalAct}</div><div class="lbl">实际工时(小时)</div></div>
-    <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedHours}h</div><div class="lbl">外协工时</div></div>
-    <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedWorkers}人</div><div class="lbl">外协人员</div></div>
-    <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
-    <div class="stat-card"><div class="num">${avgHours}</div><div class="lbl">人均工时(小时)</div></div>
-    <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
-  `;
+  
+  if (!perm.viewGlobalStats() && myStore()) {
+    summary.innerHTML = `
+      <div class="stat-card"><div class="num">${totalEst}</div><div class="lbl">预计工时(小时)</div></div>
+      <div class="stat-card"><div class="num">${totalAct}</div><div class="lbl">实际工时(小时)</div></div>
+      <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
+      <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
+    `;
+  } else {
+    summary.innerHTML = `
+      <div class="stat-card"><div class="num">${rows.length}</div><div class="lbl">参与施工人数</div></div>
+      <div class="stat-card"><div class="num">${totalHours}</div><div class="lbl">合计工时(小时)</div></div>
+      <div class="stat-card"><div class="num">${totalEst}</div><div class="lbl">预计工时(小时)</div></div>
+      <div class="stat-card"><div class="num">${totalAct}</div><div class="lbl">实际工时(小时)</div></div>
+      <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedHours}h</div><div class="lbl">外协工时</div></div>
+      <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedWorkers}人</div><div class="lbl">外协人员</div></div>
+      <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
+      <div class="stat-card"><div class="num">${avgHours}</div><div class="lbl">人均工时(小时)</div></div>
+      <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
+    `;
+  }
 
   const workerTable = rows.length === 0
     ? `<div class="empty">所选月份暂无施工工时记录。</div>`
@@ -6760,9 +7034,11 @@ function renderStats() {
             const dayLogs = r.daily[dateKey] || [];
             const hours = dayLogs.length > 0 ? dayLogs.reduce((sum, log) => sum + log.hours, 0) : 0;
             const isLeaveDay = r.leaveRecords.some((lr) => dateKey >= lr.startDate && dateKey <= lr.endDate);
-            calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""}">
+            const hasInternal = dayLogs.some(log => log.isInternal);
+            calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""} ${hasInternal ? "internal-hours" : ""}">
               <div class="day-num">${day}</div>
               ${hours ? `<div class="day-hours">${hours}h</div>` : ""}
+              ${hasInternal ? `<div class="day-internal">📋</div>` : ""}
               ${isLeaveDay ? `<div class="day-leave">🌴</div>` : ""}
             </div>`;
           }
@@ -6783,7 +7059,7 @@ function renderStats() {
           </div>` : `
           <div class="daily-hours-list">
             ${Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).flatMap(([date, logs]) => 
-              logs.map((log) => `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${log.hours}h</span><span class="daily-level">${esc(log.level)}</span></div>`)
+              logs.map((log) => `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${log.hours}h</span><span class="daily-level">${esc(log.level)}</span><span class="daily-project">${log.isInternal ? '📋 ' : ''}${esc(log.project || '')}</span></div>`)
             ).join("")}
           </div>`;
           
@@ -6794,7 +7070,7 @@ function renderStats() {
         <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
           <table class="data">
             <thead>
-              <tr><th>施工人员</th><th>安装工时(小时)</th><th>vs平均</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>
+              <tr><th>施工人员</th><th>工时(小时)</th><th>vs平均</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>
             </thead>
             <tbody>
               <tr>
@@ -6891,7 +7167,7 @@ function renderStats() {
     </div>`;
 
   let smartAnalysis = "";
-  if (rows.length > 0) {
+  if (rows.length > 0 && perm.viewGlobalStats()) {
     const lowEfficiencyWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
     const highWorkloadWorkers = internalRows.filter(r => r.hours > 40);
     
@@ -6908,13 +7184,19 @@ function renderStats() {
     }
   }
   
-  document.getElementById("statsTable").innerHTML = `
-    <h3 class="stats-subhead">🧠 智能分析</h3>
-    ${smartAnalysis || `<div class="empty" style="padding:16px">暂无分析数据</div>`}
-    <h3 class="stats-subhead">👷 人员安装工时</h3>
-    ${workerTable}
-    <h3 class="stats-subhead">📐 项目工时差异（预计 vs 实际）</h3>
-    ${projectTable}`;
+  if (!perm.viewGlobalStats() && myStore()) {
+    document.getElementById("statsTable").innerHTML = `
+      <h3 class="stats-subhead">📐 项目工时差异（预计 vs 实际）</h3>
+      ${projectTable}`;
+  } else {
+    document.getElementById("statsTable").innerHTML = `
+      <h3 class="stats-subhead">🧠 智能分析</h3>
+      ${smartAnalysis || `<div class="empty" style="padding:16px">暂无分析数据</div>`}
+      <h3 class="stats-subhead">👷 人员安装工时</h3>
+      ${workerTable}
+      <h3 class="stats-subhead">📐 项目工时差异（预计 vs 实际）</h3>
+      ${projectTable}`;
+  }
 }
 
 function getWageConfig() {
@@ -7010,6 +7292,769 @@ function saveWageConfigFromDialog() {
   saveWageConfig(config);
   closeWageConfigModal();
   toast("工时单价设置已保存");
+}
+
+function getInternalWorkLogs() {
+  const stored = localStorage.getItem("internalWorkLogs");
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch (e) {
+      console.error("Failed to parse internal work logs:", e);
+    }
+  }
+  return [];
+}
+
+function saveInternalWorkLogs(logs) {
+  localStorage.setItem("internalWorkLogs", JSON.stringify(logs));
+}
+
+function addInternalWorkLog(log) {
+  const logs = getInternalWorkLogs();
+  logs.push({
+    id: 'internal_' + Date.now(),
+    ...log,
+    createdAt: new Date().toISOString()
+  });
+  saveInternalWorkLogs(logs);
+}
+
+async function deleteInternalWorkLog(id) {
+  if (!isManager()) {
+    toast("权限不足，只有总经理可以删除");
+    return;
+  }
+  if (!(await confirmDialog("确定删除这条内部工时记录？", "删除记录"))) return;
+  const logs = getInternalWorkLogs().filter(l => l.id !== id);
+  saveInternalWorkLogs(logs);
+  toast("已删除");
+  showInternalWorkLogModal();
+}
+
+function closeInternalWorkLogModal() {
+  const mask = document.getElementById("internalWorkLogModal");
+  if (mask) mask.remove();
+}
+
+function showInternalWorkLogModal() {
+  closeInternalWorkLogModal();
+  
+  const logs = getInternalWorkLogs();
+  const workerOptions = cache.workers.map(w => `<option value="${w.id}" data-name="${esc(w.name)}">${esc(w.name)}</option>`).join("");
+  const logRows = logs.map(l => `
+    <div class="internal-log-item">
+      <div class="internal-log-info">
+        <div class="internal-log-name">${esc(l.workerName)}</div>
+        <div class="internal-log-meta">${esc(l.workType)} · ${esc(l.level)}</div>
+        <div class="internal-log-time">⏰ ${esc(l.startTime || '-')} ~ ${esc(l.endTime || '-')}</div>
+      </div>
+      <div class="internal-log-date">${esc(l.date)}</div>
+      <div class="internal-log-hours">${esc(l.hours)}h</div>
+      ${l.note ? `<div class="internal-log-note">${esc(l.note)}</div>` : ''}
+      ${isManager() ? `<button class="btn tiny danger" onclick="deleteInternalWorkLog('${l.id}')">删除</button>` : ''}
+    </div>
+  `).join("");
+  
+  const popup = document.createElement("div");
+  popup.id = "internalWorkLogModal";
+  popup.className = "modal-mask";
+  
+  let isDragging = false;
+  popup.addEventListener("mousedown", function(e) {
+    isDragging = false;
+  });
+  popup.addEventListener("mousemove", function(e) {
+    isDragging = true;
+  });
+  popup.addEventListener("mouseup", function(e) {
+    if (!isDragging && e.target === popup) {
+      closeInternalWorkLogModal();
+    }
+  });
+  popup.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:420px;width:95%;max-height:90vh;overflow:hidden;">
+      <div class="modal-head">
+        <h3>📝 内部工时记录</h3>
+        <button class="modal-close" onclick="closeInternalWorkLogModal()">×</button>
+      </div>
+      <div class="modal-body" style="padding:12px;overflow-y:auto;max-height:calc(90vh - 60px);">
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">施工人员</label>
+          <select class="input" id="iwlWorker" onchange="updateIwlWorkerName()" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
+            <option value="">请选择人员</option>
+            ${workerOptions}
+          </select>
+        </div>
+        
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">工作类型</label>
+            <select class="input" id="iwlWorkType" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
+              <option value="仓库工作">仓库工作</option>
+              <option value="送货">送货</option>
+              <option value="外出安装">外出安装</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">工时等级</label>
+            <select class="input" id="iwlLevel" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
+              <option value="初级">初级</option>
+              <option value="中级" selected>中级</option>
+              <option value="高级">高级</option>
+              <option value="特级">特级</option>
+            </select>
+          </div>
+        </div>
+        
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">工作日期</label>
+            <input class="input" type="date" id="iwlDate" value="${new Date().toISOString().slice(0,10)}" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" />
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">开始时间</label>
+            <select class="input" id="iwlStartTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="calculateIwlHours()">
+              ${generateTimeOptions("08:00")}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">结束时间</label>
+            <select class="input" id="iwlEndTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="calculateIwlHours()">
+              ${generateTimeOptions("12:00")}
+            </select>
+          </div>
+        </div>
+        
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">工时(小时) <span style="color:#999;font-weight:normal;font-size:11px;">(自动计算)</span></label>
+          <input class="input" type="number" min="0" step="0.1" id="iwlHours" placeholder="0" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+        </div>
+        
+        <div style="margin-bottom:12px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">备注说明</label>
+          <input class="input" id="iwlNote" placeholder="选填" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+        </div>
+        
+        <button class="btn primary" onclick="saveInternalWorkLog()" style="width:100%;padding:8px;font-size:14px;">保存记录</button>
+        
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee;">
+          <h4 style="font-size:13px;font-weight:600;color:#333;margin-bottom:8px;">已记录的内部工时</h4>
+          ${logs.length > 0 ? `
+            <div style="display:flex;flex-direction:column;gap:6px;">${logRows}</div>
+          ` : '<p style="color:#999;font-size:12px;text-align:center;padding:12px 0;">暂无记录</p>'}
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(popup);
+  calculateIwlHours();
+}
+
+function updateIwlWorkerName() {
+  const select = document.getElementById("iwlWorker");
+  const option = select.options[select.selectedIndex];
+  if (option) {
+    select.setAttribute("data-name", option.getAttribute("data-name") || option.text);
+  }
+}
+
+function calculateIwlHours() {
+  const startTime = document.getElementById("iwlStartTime");
+  const endTime = document.getElementById("iwlEndTime");
+  const hoursInput = document.getElementById("iwlHours");
+  if (!startTime || !endTime || !hoursInput) return;
+  
+  const startVal = startTime.value;
+  const endVal = endTime.value;
+  if (!startVal || !endVal) return;
+  
+  const [startH, startM] = startVal.split(":").map(Number);
+  const [endH, endM] = endVal.split(":").map(Number);
+  
+  let diffMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+  if (diffMinutes < 0) diffMinutes += 24 * 60;
+  
+  const hours = (diffMinutes / 60).toFixed(1);
+  hoursInput.value = hours;
+}
+
+function saveInternalWorkLog() {
+  const workerId = document.getElementById("iwlWorker").value;
+  const workerName = document.getElementById("iwlWorker").getAttribute("data-name") || 
+                     document.getElementById("iwlWorker").options[document.getElementById("iwlWorker").selectedIndex]?.text || "";
+  const workType = document.getElementById("iwlWorkType").value;
+  const date = document.getElementById("iwlDate").value;
+  const startTime = document.getElementById("iwlStartTime").value;
+  const endTime = document.getElementById("iwlEndTime").value;
+  const hours = Number(document.getElementById("iwlHours").value);
+  const level = document.getElementById("iwlLevel").value;
+  const note = document.getElementById("iwlNote").value;
+  
+  if (!workerId) { toast("请选择施工人员"); return; }
+  if (!date) { toast("请选择工作日期"); return; }
+  if (!hours || hours <= 0) { toast("请输入有效的工时"); return; }
+  
+  addInternalWorkLog({
+    workerId,
+    workerName,
+    workType,
+    date,
+    startTime,
+    endTime,
+    hours,
+    level,
+    note
+  });
+  
+  toast("内部工时记录已保存");
+  showInternalWorkLogModal();
+  renderStats();
+}
+
+function getInternalTasks() {
+  const stored = localStorage.getItem("internalTasks");
+  if (stored) {
+    try {
+      let tasks = JSON.parse(stored);
+      const migrated = localStorage.getItem("internalTasksMigrated_v2") === "true";
+      tasks = tasks.map(t => {
+        if (!t.scheduledStartTime && t.startTime && t.status === 'pending') {
+          t.scheduledStartTime = t.startTime;
+          t.scheduledEndTime = t.endTime;
+        }
+        if (!t.actualStartTime && t.startTime && (t.status === 'in_progress' || t.status === 'completed' || t.status === 'verified')) {
+          t.actualStartTime = t.startTime;
+        }
+        if (!t.actualEndTime && t.endTime && (t.status === 'completed' || t.status === 'verified')) {
+          t.actualEndTime = t.endTime;
+        }
+        if (!migrated && !t.verifiedAt && t.status === 'completed' && t.actualHours) {
+          t.status = 'verified';
+          t.verifiedAt = new Date().toLocaleString('zh-CN');
+        }
+        return t;
+      });
+      if (!migrated) {
+        localStorage.setItem("internalTasks", JSON.stringify(tasks));
+        localStorage.setItem("internalTasksMigrated_v2", "true");
+      }
+      return tasks;
+    } catch (e) {
+      console.error("Failed to parse internal tasks:", e);
+    }
+  }
+  return [];
+}
+
+function updateInternalTaskBadge() {
+  const tasks = getInternalTasks();
+  const pendingCount = tasks.filter(t => t.status === 'pending').length;
+  const needVerifyCount = tasks.filter(t => t.status === 'completed').length;
+  const totalCount = pendingCount + needVerifyCount;
+  
+  document.querySelectorAll('[data-tab="internalTasks"]').forEach(btn => {
+    btn.style.position = 'relative';
+    const existingBadge = btn.querySelector('.badge-count');
+    if (existingBadge) {
+      existingBadge.remove();
+    }
+    
+    if (totalCount > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'badge-count';
+      badge.textContent = totalCount > 99 ? '99+' : totalCount;
+      btn.appendChild(badge);
+    }
+  });
+}
+
+function saveInternalTasks(tasks) {
+  localStorage.setItem("internalTasks", JSON.stringify(tasks));
+}
+
+function addInternalTask(task) {
+  const tasks = getInternalTasks();
+  tasks.push({
+    id: 'task_' + Date.now(),
+    ...task,
+    status: 'pending',
+    createdAt: new Date().toISOString()
+  });
+  saveInternalTasks(tasks);
+}
+
+function updateInternalTask(id, updates) {
+  const tasks = getInternalTasks();
+  const idx = tasks.findIndex(t => t.id === id);
+  if (idx !== -1) {
+    tasks[idx] = { ...tasks[idx], ...updates };
+    saveInternalTasks(tasks);
+  }
+}
+
+async function deleteInternalTask(id) {
+  if (!isManager()) {
+    toast("权限不足，只有总经理可以删除");
+    return;
+  }
+  if (!(await confirmDialog("确定删除这条内部任务记录？", "删除记录"))) return;
+  const tasks = getInternalTasks().filter(t => t.id !== id);
+  saveInternalTasks(tasks);
+  toast("已删除");
+  renderInternalTasks();
+}
+
+function closeNewInternalTaskModal() {
+  const mask = document.getElementById("newInternalTaskModal");
+  if (mask) mask.remove();
+}
+
+function showNewInternalTaskModal() {
+  closeNewInternalTaskModal();
+  
+  const workerOptions = cache.workers.map(w => `<option value="${w.id}" data-name="${esc(w.name)}">${esc(w.name)}</option>`).join("");
+  
+  const popup = document.createElement("div");
+  popup.id = "newInternalTaskModal";
+  popup.className = "modal-mask";
+  
+  let isDragging = false;
+  popup.addEventListener("mousedown", function(e) {
+    isDragging = false;
+  });
+  popup.addEventListener("mousemove", function(e) {
+    isDragging = true;
+  });
+  popup.addEventListener("mouseup", function(e) {
+    if (!isDragging && e.target === popup) {
+      closeNewInternalTaskModal();
+    }
+  });
+  popup.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:420px;width:95%;max-height:90vh;overflow:hidden;">
+      <div class="modal-head">
+        <h3>📋 下达内部任务</h3>
+        <button class="modal-close" onclick="closeNewInternalTaskModal()">×</button>
+      </div>
+      <div class="modal-body" style="padding:12px;overflow-y:auto;max-height:calc(90vh - 60px);">
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">任务名称</label>
+          <input class="input" id="newTaskName" placeholder="如：仓库焊架子" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+        </div>
+        
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">工作类型</label>
+            <select class="input" id="newTaskType" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
+              <option value="仓库工作">仓库工作</option>
+              <option value="送货">送货</option>
+              <option value="外出安装">外出安装</option>
+              <option value="其他">其他</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">工时等级</label>
+            <select class="input" id="newTaskLevel" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
+              <option value="初级">初级</option>
+              <option value="中级" selected>中级</option>
+              <option value="高级">高级</option>
+              <option value="特级">特级</option>
+            </select>
+          </div>
+        </div>
+        
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">分配人员</label>
+          <select class="input" id="newTaskWorker" onchange="updateNewTaskWorkerName()" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
+            <option value="">请选择人员</option>
+            ${workerOptions}
+          </select>
+        </div>
+        
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">任务日期</label>
+            <input class="input" type="date" id="newTaskDate" value="${new Date().toISOString().slice(0,10)}" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" />
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">开始时间</label>
+            <select class="input" id="newTaskStartTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;">
+              ${generateTimeOptions("08:00")}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">结束时间</label>
+            <select class="input" id="newTaskEndTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;">
+              ${generateTimeOptions("10:00")}
+            </select>
+          </div>
+        </div>
+        
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">预计工时(小时)</label>
+          <input class="input" type="number" min="0" step="0.1" id="newTaskEstHours" placeholder="0" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+        </div>
+        
+        <div style="margin-bottom:12px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">任务备注</label>
+          <textarea class="input" id="newTaskNote" placeholder="选填，如任务具体要求等" rows="2" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;"></textarea>
+        </div>
+        
+        <button class="btn primary" onclick="saveNewInternalTask()" style="width:100%;padding:8px;font-size:14px;">下达任务</button>
+      </div>
+    </div>`;
+  document.body.appendChild(popup);
+}
+
+function updateNewTaskWorkerName() {
+  const select = document.getElementById("newTaskWorker");
+  const option = select.options[select.selectedIndex];
+  if (option) {
+    select.setAttribute("data-name", option.getAttribute("data-name") || option.text);
+  }
+}
+
+function saveNewInternalTask() {
+  const name = document.getElementById("newTaskName").value.trim();
+  const workType = document.getElementById("newTaskType").value;
+  const level = document.getElementById("newTaskLevel").value;
+  const workerId = document.getElementById("newTaskWorker").value;
+  const workerName = document.getElementById("newTaskWorker").getAttribute("data-name") || 
+                     document.getElementById("newTaskWorker").options[document.getElementById("newTaskWorker").selectedIndex]?.text || "";
+  const date = document.getElementById("newTaskDate").value;
+  const scheduledStartTime = document.getElementById("newTaskStartTime").value;
+  const scheduledEndTime = document.getElementById("newTaskEndTime").value;
+  const estHours = Number(document.getElementById("newTaskEstHours").value);
+  const note = document.getElementById("newTaskNote").value.trim();
+  
+  if (!name) { toast("请输入任务名称"); return; }
+  if (!workerId) { toast("请选择分配人员"); return; }
+  if (!date) { toast("请选择任务日期"); return; }
+  if (!scheduledStartTime) { toast("请选择开始时间"); return; }
+  if (!scheduledEndTime) { toast("请选择结束时间"); return; }
+  if (!estHours || estHours <= 0) { toast("请输入预计工时"); return; }
+  
+  addInternalTask({
+    name,
+    workType,
+    level,
+    workerId,
+    workerName,
+    date,
+    scheduledStartTime,
+    scheduledEndTime,
+    estHours,
+    note
+  });
+  
+  toast("任务已下达");
+  closeNewInternalTaskModal();
+  renderInternalTasks();
+  updateInternalTaskBadge();
+}
+
+function startInternalTask(id) {
+  updateInternalTask(id, {
+    status: 'in_progress',
+    actualStartTime: new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'}),
+    startTimestamp: Date.now()
+  });
+  toast("任务已开始");
+  renderInternalTasks();
+  updateInternalTaskBadge();
+}
+
+function completeInternalTask(id) {
+  const tasks = getInternalTasks();
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  
+  const actualEndTime = new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'});
+  const endTimestamp = Date.now();
+  
+  let actualHours = 0;
+  if (task.startTimestamp) {
+    const diffMs = endTimestamp - task.startTimestamp;
+    actualHours = (diffMs / (1000 * 60 * 60)).toFixed(1);
+  }
+  
+  let finalHours = Number(actualHours);
+  if (isNaN(finalHours)) {
+    finalHours = task.estHours;
+  }
+  
+  updateInternalTask(id, {
+    status: 'completed',
+    actualEndTime,
+    endTimestamp,
+    actualHours: finalHours,
+    calculatedHours: Number(actualHours)
+  });
+  
+  toast("任务已完成，等待审核");
+  renderInternalTasks();
+  updateInternalTaskBadge();
+}
+
+function showVerifyModal(id) {
+  const tasks = getInternalTasks();
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  
+  const popup = document.createElement("div");
+  popup.id = "verifyInternalTaskModal";
+  popup.className = "modal-mask";
+  
+  let isDragging = false;
+  popup.addEventListener("mousedown", function(e) {
+    isDragging = false;
+  });
+  popup.addEventListener("mousemove", function(e) {
+    isDragging = true;
+  });
+  popup.addEventListener("mouseup", function(e) {
+    if (!isDragging && e.target === popup) {
+      closeVerifyModal();
+    }
+  });
+  
+  const defaultHours = task.calculatedHours !== undefined ? task.calculatedHours : task.actualHours;
+  
+  popup.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:480px;width:95%;max-height:90vh;overflow:hidden;">
+      <div class="modal-head">
+        <h3>✅ 审核任务</h3>
+        <button class="modal-close" onclick="closeVerifyModal()">×</button>
+      </div>
+      <div class="modal-body" style="padding:16px;overflow-y:auto;max-height:calc(90vh - 60px);">
+        <div style="margin-bottom:16px;padding:12px;background:#f8f9fa;border-radius:8px;">
+          <div style="font-size:16px;font-weight:600;margin-bottom:8px;">${esc(task.name)}</div>
+          <div style="font-size:13px;color:#666;line-height:1.6;">
+            <div>👤 ${esc(task.workerName)}</div>
+            <div>📅 ${esc(task.date)}</div>
+            <div>🏷️ ${esc(task.workType)} · ${esc(task.level)}</div>
+          </div>
+        </div>
+        
+        <div style="margin-bottom:12px;">
+          <label style="font-size:14px;font-weight:bold;color:#333;">⏰ 安排时间</label>
+          <div style="font-size:13px;color:#666;margin-top:4px;">${esc(task.scheduledStartTime || '-')} ~ ${esc(task.scheduledEndTime || '-')}</div>
+        </div>
+        
+        <div style="margin-bottom:12px;">
+          <label style="font-size:14px;font-weight:bold;color:#333;">⏰ 实际时间</label>
+          <div style="font-size:13px;color:#666;margin-top:4px;">${esc(task.actualStartTime || '-')} ~ ${esc(task.actualEndTime || '-')}</div>
+        </div>
+        
+        <div style="margin-bottom:12px;">
+          <label style="font-size:14px;font-weight:bold;color:#333;">📊 预计工时</label>
+          <div style="font-size:13px;color:#666;margin-top:4px;">${esc(task.estHours)}小时</div>
+        </div>
+        
+        <div style="margin-bottom:16px;">
+          <label style="font-size:14px;font-weight:bold;color:#333;">📊 系统自动计算工时</label>
+          <div style="font-size:13px;color:#3b82f6;margin-top:4px;">${task.calculatedHours !== undefined ? esc(task.calculatedHours) + '小时' : '未计算'}</div>
+        </div>
+        
+        <div style="margin-bottom:16px;">
+          <label style="font-size:14px;font-weight:bold;color:#333;">✏️ 审核确认工时（小时）</label>
+          <input class="input" type="number" min="0" step="0.1" id="verifyHours" value="${defaultHours}" style="width:100%;margin-top:6px;" />
+        </div>
+        
+        <div style="margin-bottom:16px;">
+          <label style="font-size:14px;font-weight:bold;color:#333;">📝 审核备注</label>
+          <textarea class="input" id="verifyNote" placeholder="选填，如审核意见等" rows="2" style="width:100%;margin-top:6px;"></textarea>
+        </div>
+        
+        <div style="display:flex;gap:12px;">
+          <button class="btn" onclick="closeVerifyModal()" style="flex:1;">取消</button>
+          <button class="btn primary" onclick="doVerifyInternalTask('${task.id}')" style="flex:1;">审核通过</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(popup);
+}
+
+function closeVerifyModal() {
+  const mask = document.getElementById("verifyInternalTaskModal");
+  if (mask) mask.remove();
+}
+
+function doVerifyInternalTask(id) {
+  const verifyHours = Number(document.getElementById("verifyHours").value);
+  const verifyNote = document.getElementById("verifyNote").value.trim();
+  
+  if (!verifyHours || verifyHours <= 0) {
+    toast("请输入有效的工时");
+    return;
+  }
+  
+  const tasks = getInternalTasks();
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  
+  updateInternalTask(id, {
+    status: 'verified',
+    verifiedAt: new Date().toLocaleString('zh-CN'),
+    actualHours: verifyHours,
+    verifyNote: verifyNote
+  });
+  
+  addInternalWorkLog({
+    workerId: task.workerId,
+    workerName: task.workerName,
+    workType: task.workType,
+    date: task.date,
+    startTime: task.actualStartTime || task.scheduledStartTime || '-',
+    endTime: task.actualEndTime || '-',
+    hours: verifyHours,
+    level: task.level,
+    note: verifyNote ? `审核备注: ${verifyNote}${task.note ? ' | ' + task.note : ''}` : (task.note || '')
+  });
+  
+  closeVerifyModal();
+  toast("审核通过，工时已计入内部工时统计");
+  renderInternalTasks();
+  renderStats();
+  updateInternalTaskBadge();
+}
+
+function renderInternalTasks() {
+  const container = document.getElementById("internalTaskList");
+  if (!container) return;
+  
+  const tasks = getInternalTasks();
+  const statusFilter = document.getElementById("internalTaskStatusFilter")?.value || "";
+  const workerFilter = document.getElementById("internalTaskWorkerFilter")?.value || "";
+  const typeFilter = document.getElementById("internalTaskTypeFilter")?.value || "";
+  const dateFilter = document.getElementById("internalTaskDateFilter")?.value || "3days";
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const filtered = tasks.filter(t => {
+    if (statusFilter && t.status !== statusFilter) return false;
+    if (workerFilter && t.workerId !== workerFilter) return false;
+    if (typeFilter && t.workType !== typeFilter) return false;
+    
+    if (dateFilter === "3days") {
+      if (t.status === 'pending' || t.status === 'in_progress') return true;
+      const taskDate = new Date(t.date);
+      taskDate.setHours(0, 0, 0, 0);
+      const diffDays = (taskDate - today) / (1000 * 60 * 60 * 24);
+      return diffDays >= -2 && diffDays <= 0;
+    } else if (dateFilter === "7days") {
+      if (t.status === 'pending' || t.status === 'in_progress') return true;
+      const taskDate = new Date(t.date);
+      taskDate.setHours(0, 0, 0, 0);
+      const diffDays = (taskDate - today) / (1000 * 60 * 60 * 24);
+      return diffDays >= -6 && diffDays <= 0;
+    }
+    
+    return true;
+  }).sort((a, b) => {
+    const statusOrder = { pending: 0, in_progress: 1, completed: 2, verified: 3 };
+    if (statusOrder[a.status] !== statusOrder[b.status]) {
+      return statusOrder[a.status] - statusOrder[b.status];
+    }
+    return new Date(b.date) - new Date(a.date);
+  });
+  
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="empty">暂无内部任务</div>';
+    return;
+  }
+  
+  container.innerHTML = filtered.map(t => {
+    const statusText = { pending: '待开始', in_progress: '进行中', completed: '待审核', verified: '已审核' };
+    const statusColor = { pending: '#6b7280', in_progress: '#3b82f6', completed: '#f59e0b', verified: '#10b981' };
+    
+    let actionButtons = '';
+    if (t.status === 'pending') {
+      actionButtons = `<button class="btn primary" onclick="startInternalTask('${t.id}')">任务开始</button>`;
+    } else if (t.status === 'in_progress') {
+      actionButtons = `<button class="btn success" onclick="completeInternalTask('${t.id}')">任务完成</button>`;
+    } else if (t.status === 'completed') {
+      actionButtons = isManager() ? `<button class="btn primary" onclick="showVerifyModal('${t.id}')">审核</button>` : '';
+    }
+    
+    const timeInfo = t.status === 'pending' && t.scheduledStartTime && t.scheduledEndTime
+      ? `<div style="margin-top:6px;padding:6px;background:#fef3c7;border-radius:4px;">
+           <div style="font-size:11px;color:#666;">📅 安排: <b>${t.scheduledStartTime} ~ ${t.scheduledEndTime}</b></div>
+         </div>`
+      : t.status === 'in_progress' 
+        ? `<div style="margin-top:6px;padding:6px;background:#eff6ff;border-radius:4px;">
+             <div style="font-size:11px;color:#666;">📅 安排: <b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
+             <div style="font-size:11px;color:#666;margin-top:1px;">⏰ 实际开始: <b>${t.actualStartTime || '-'}</b></div>
+           </div>`
+        : t.status === 'completed'
+          ? `<div style="margin-top:6px;padding:6px;background:#fef3c7;border-radius:4px;">
+               <div style="font-size:11px;color:#666;">📅 安排: <b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
+               <div style="font-size:11px;color:#666;margin-top:1px;">⏰ 实际: <b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
+               <div style="font-size:11px;color:#666;margin-top:1px;">📊 预计: ${t.estHours}h / 记录: <b>${t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours)}h</b></div>
+               <div style="font-size:11px;color:#f59e0b;margin-top:1px;">⚠️ 等待审核</div>
+             </div>`
+          : t.status === 'verified'
+            ? `<div style="margin-top:6px;padding:6px;background:#ecfdf5;border-radius:4px;">
+                 <div style="font-size:11px;color:#666;">📅 安排: <b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
+                 <div style="font-size:11px;color:#666;margin-top:1px;">⏰ 实际: <b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
+                 <div style="font-size:11px;color:#666;margin-top:1px;">📊 预计: ${t.estHours}h / 记录: <b>${t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours)}h</b></div>
+                 <div style="font-size:11px;color:#10b981;margin-top:1px;">✅ 已审核</div>
+                 ${t.verifyNote ? `<div style="font-size:11px;color:#666;margin-top:1px;">📝 ${esc(t.verifyNote)}</div>` : ''}
+               </div>`
+            : '';
+    
+    return `
+      <div class="card internal-task-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+          <div>
+            <h3 style="font-size:15px;font-weight:600;margin-bottom:2px;">${esc(t.name)}</h3>
+            <div style="font-size:12px;color:#666;">${esc(t.workType)} · ${esc(t.level)}</div>
+          </div>
+          <span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:${statusColor[t.status]}15;color:${statusColor[t.status]};">
+            ${statusText[t.status]}
+          </span>
+        </div>
+        
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;font-size:12px;">
+          <div><span style="color:#888;">👤</span> ${esc(t.workerName)}</div>
+          <div><span style="color:#888;">📅</span> ${esc(t.date)}</div>
+          <div><span style="color:#888;">⏱️</span> 预计 ${esc(t.estHours)}h</div>
+        </div>
+        
+        ${t.note ? `<div style="font-size:12px;color:#666;margin-bottom:8px;padding:6px;background:#f8f9fa;border-radius:4px;">📝 ${esc(t.note)}</div>` : ''}
+        
+        ${timeInfo}
+        
+        ${actionButtons}
+        
+        ${isManager() ? `<button class="btn tiny" style="margin-top:6px;color:#ef4444;border-color:#fecaca;" onclick="deleteInternalTask('${t.id}')">删除</button>` : ''}
+      </div>
+    `;
+  }).join("");
+}
+
+let internalTasksInitialized = false;
+function initInternalTasks() {
+  try {
+    const workerSelect = document.getElementById("internalTaskWorkerFilter");
+    if (workerSelect) {
+      workerSelect.innerHTML = '<option value="">全部人员</option>' + 
+        cache.workers.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
+    }
+    
+    if (!internalTasksInitialized) {
+      const btn = document.getElementById("btnNewInternalTask");
+      if (btn) {
+        btn.addEventListener("click", showNewInternalTaskModal);
+      }
+      internalTasksInitialized = true;
+    }
+    renderInternalTasks();
+  } catch (e) {
+    console.error("Error initializing internal tasks:", e);
+  }
 }
 
 function exportStats() {
@@ -7117,7 +8162,7 @@ function exportStats() {
   });
   summarySheet.columns = [{ key: 'A', width: 15 }, { key: 'B', width: 25 }];
 
-  const workerData = [['施工人员', '类型', '安装工时(小时)', 'vs平均', '初级工时', '中级工时', '高级工时', '特级工时', '施工天数', '请假天数', '参与项目数']];
+  const workerData = [['施工人员', '类型', '工时(小时)', 'vs平均', '初级工时', '中级工时', '高级工时', '特级工时', '施工天数', '请假天数', '参与项目数']];
   rows.forEach((r) => {
     const vsAvg = r.isOutsourced ? "" : ((r.hours - avgHours) >= 0 ? "+" : "") + (r.hours - avgHours).toFixed(1);
     workerData.push([
@@ -7151,12 +8196,12 @@ function exportStats() {
   });
   workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 10 }, { key: 'K', width: 12 }];
 
-  const dailyData = [['施工人员', '类型', '日期', '工时(小时)', '工时等级', '是否请假']];
+  const dailyData = [['施工人员', '类型', '日期', '工时(小时)', '工时等级', '项目/工作类型', '是否请假']];
   rows.forEach((r) => {
     Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).forEach(([date, logs]) => {
       const isLeave = r.leaveRecords && r.leaveRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
       logs.forEach((log) => {
-        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, log.hours, log.level, isLeave ? '是' : '']);
+        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, log.hours, log.level, log.project || '', isLeave ? '是' : '']);
       });
     });
   });
@@ -7172,7 +8217,7 @@ function exportStats() {
       }
     });
   });
-  dailySheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }];
+  dailySheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 10 }, { key: 'F', width: 20 }, { key: 'G', width: 10 }];
 
   const hasLeaves = rows.some((r) => r.leaveRecords && r.leaveRecords.length > 0);
   if (hasLeaves) {
@@ -8678,6 +9723,9 @@ function switchTab(name) {
   if (name === "schedules") {
     renderWorkerSchedules();
   }
+  if (name === "internalTasks") {
+    initInternalTasks();
+  }
 }
 
 /* 头部角色标签 */
@@ -8712,6 +9760,7 @@ function applyPermissions() {
     stores: perm.manageStores(),
     accounts: perm.manageAccounts() && MODE === "cloud",
     rolePerms: perm.manageAccounts() && MODE === "cloud",
+    internalTasks: role != null && (isManager() || (!myStore() && (isStoreManager() || isWorker())) || (cache.stores.length > 0 && storeName(myStore()).includes("广告工程部"))),
   };
   document.querySelectorAll(".tab-btn").forEach((b) => {
     b.classList.toggle("hidden", !tabVisible[b.dataset.tab]);
@@ -8726,16 +9775,24 @@ function applyPermissions() {
   setHidden("btnNewOutsourced", !perm.manageWorkers());
   setHidden("btnNewStore", !perm.manageStores());
   setHidden("btnWageConfig", !perm.manageWageConfig());
+  setHidden("btnExportStats", !perm.viewGlobalStats());
+  setHidden("btnInternalWorkLog", !perm.viewGlobalStats());
+  setHidden("statsPeriod", !perm.viewGlobalStats() && myStore());
+  setHidden("statsWorker", !perm.viewGlobalStats() && myStore());
+  setHidden("statsStatus", !perm.viewGlobalStats() && myStore());
 
+  const isAssignedStoreManager = isStoreManager() && myStore();
+  
   const bottomNavVisible = {
     projects: role != null,
     calendar: role != null,
     construction: role != null,
-    workers: role != null,
-    leaves: role != null,
-    schedules: role != null,
+    workers: !isAssignedStoreManager && role != null,
+    leaves: !isAssignedStoreManager && role != null,
+    schedules: !isAssignedStoreManager && role != null,
     stats: perm.viewStats(),
     storeStats: perm.viewStoreStats(),
+    internalTasks: role != null && (isManager() || (!myStore() && (isStoreManager() || isWorker())) || (cache.stores.length > 0 && storeName(myStore()).includes("广告工程部"))),
   };
   document.querySelectorAll(".bottom-nav-item").forEach((b) => {
     const tab = b.dataset.tab;
@@ -8769,6 +9826,7 @@ function renderAll() {
   renderLeaves();
   initScheduleFilters();
   renderWorkerSchedules();
+  initInternalTasks();
 }
 
 /* ============================================================
@@ -10717,6 +11775,7 @@ async function startCloudSession() {
   await repo.loadAll();
   renderRoleInfo();
   applyPermissions();
+  updateInternalTaskBadge();
   renderAll();
   subscribeRealtime();
 }
@@ -10895,6 +11954,7 @@ function bindEvents() {
   document.getElementById("statsStatus").addEventListener("change", renderStats);
   document.getElementById("btnExportStats").addEventListener("click", exportStats);
   document.getElementById("btnWageConfig").addEventListener("click", showWageConfig);
+  document.getElementById("btnInternalWorkLog").addEventListener("click", showInternalWorkLogModal);
 
   document.getElementById("storeStatsMonth").value = thisMonth;
   document.getElementById("storeStatsMonth").addEventListener("change", renderStoreStats);
@@ -10944,6 +12004,7 @@ async function init() {
     await repo.loadAll();
     renderRoleInfo();
     applyPermissions();
+    updateInternalTaskBadge();
     renderAll();
   }
 

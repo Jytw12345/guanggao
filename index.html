@@ -77,6 +77,7 @@
       <button class="tab-btn" data-tab="stores">门店管理</button>
       <button class="tab-btn" data-tab="accounts">账号管理</button>
       <button class="tab-btn" data-tab="rolePerms">角色权限</button>
+      <button class="tab-btn" data-tab="internalTasks">内部任务</button>
     </nav>
   </header>
 
@@ -88,6 +89,7 @@
     <button class="bottom-nav-item" data-tab="leaves" title="请假管理">🏥</button>
     <button class="bottom-nav-item" data-tab="schedules" title="个人日程">📝</button>
     <button class="bottom-nav-item" data-tab="stats" title="工时统计">📊</button>
+    <button class="bottom-nav-item" data-tab="internalTasks" title="内部任务">📋</button>
   </nav>
 
   <main class="container">
@@ -98,31 +100,33 @@
         <button class="btn primary" id="btnNewProject">+ 新建预约</button>
       </div>
       <div class="toolbar">
-        <input type="text" id="projectSearch" class="input" placeholder="搜索项目名称 / 客户 / 地址" />
-        <select id="projectStatusFilter" class="input" onchange="onProjectStatusChange(this.value)">
-          <option value="">全部状态</option>
-          <option value="预约中">预约中</option>
-          <option value="施工中">施工中</option>
-          <option value="已暂停">已暂停</option>
-          <option value="已延期">已延期</option>
-          <option value="已完工">已完工</option>
-          <option value="已验收">已验收</option>
-          <option value="已审核">已审核</option>
-          <option value="已取消">已取消</option>
-        </select>
-        <select id="projectStoreFilter" class="input">
-          <option value="">全部门店</option>
-        </select>
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+          <input type="text" id="projectSearch" class="input" placeholder="搜索项目名称 / 客户 / 地址" style="flex:1;min-width:150px;max-width:350px;" />
+          <select id="projectStatusFilter" class="input" onchange="onProjectStatusChange(this.value)" style="width:140px;">
+            <option value="">全部状态</option>
+            <option value="预约中">预约中</option>
+            <option value="施工中">施工中</option>
+            <option value="已暂停">已暂停</option>
+            <option value="已延期">已延期</option>
+            <option value="已完工">已完工</option>
+            <option value="已验收">已验收</option>
+            <option value="已审核">已审核</option>
+            <option value="已取消">已取消</option>
+          </select>
+          <select id="projectStoreFilter" class="input" style="width:140px;">
+            <option value="">全部门店</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="includeCompleted" onchange="renderProjects()" style="width:16px;height:16px;">
+            <span style="font-size:12px;color:var(--muted);">包含已完工</span>
+          </label>
+        </div>
         <div class="toolbar-time-filter">
-          <span style="font-size:12px; color:var(--muted); margin-right:6px;">时间范围</span>
+          <span style="font-size:12px; color:var(--muted);">时间范围</span>
           <button class="btn small" id="timeFilterAll" onclick="setProjectTimeFilter(0)">全部</button>
           <button class="btn small" id="timeFilter3" onclick="setProjectTimeFilter(3)">3天</button>
           <button class="btn small primary" id="timeFilter7" onclick="setProjectTimeFilter(7)">7天</button>
           <button class="btn small" id="timeFilter15" onclick="setProjectTimeFilter(15)">15天</button>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <input type="checkbox" id="includeCompleted" onchange="renderProjects()" style="width:16px;height:16px;">
-          <label for="includeCompleted" style="font-size:12px;color:var(--muted);cursor:pointer;">包含已完工</label>
         </div>
       </div>
       <div id="projectList" class="card-grid"></div>
@@ -201,9 +205,43 @@
         </select>
         <button class="btn" id="btnExportStats">导出统计数据</button>
         <button class="btn" id="btnWageConfig">工时单价设置</button>
+        <button class="btn" id="btnInternalWorkLog">内部工时记录</button>
       </div>
       <div id="statsSummary" class="stats-summary"></div>
       <div id="statsTable"></div>
+    </section>
+
+    <!-- 内部任务管理 -->
+    <section id="internalTasks" class="tab-panel">
+      <div class="section-head">
+        <h2>内部任务管理</h2>
+        <button class="btn primary" id="btnNewInternalTask">+ 下达任务</button>
+      </div>
+      <div class="toolbar">
+        <select id="internalTaskStatusFilter" class="input" onchange="renderInternalTasks()">
+          <option value="">全部状态</option>
+          <option value="pending">待开始</option>
+          <option value="in_progress">进行中</option>
+          <option value="completed">待审核</option>
+          <option value="verified">已审核</option>
+        </select>
+        <select id="internalTaskWorkerFilter" class="input" onchange="renderInternalTasks()">
+          <option value="">全部人员</option>
+        </select>
+        <select id="internalTaskTypeFilter" class="input" onchange="renderInternalTasks()">
+          <option value="">全部类型</option>
+          <option value="仓库工作">仓库工作</option>
+          <option value="送货">送货</option>
+          <option value="外出安装">外出安装</option>
+          <option value="其他">其他</option>
+        </select>
+        <select id="internalTaskDateFilter" class="input" onchange="renderInternalTasks()">
+          <option value="3days" selected>最近3天</option>
+          <option value="7days">最近7天</option>
+          <option value="all">全部任务</option>
+        </select>
+      </div>
+      <div id="internalTaskList" class="card-grid"></div>
     </section>
 
     <!-- 店面统计（总经理） -->
