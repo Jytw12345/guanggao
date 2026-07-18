@@ -98,7 +98,7 @@
       </div>
       <div class="toolbar">
         <input type="text" id="projectSearch" class="input" placeholder="搜索项目名称 / 客户 / 地址" />
-        <select id="projectStatusFilter" class="input">
+        <select id="projectStatusFilter" class="input" onchange="onProjectStatusChange(this.value)">
           <option value="">全部状态</option>
           <option value="预约中">预约中</option>
           <option value="施工中">施工中</option>
@@ -118,7 +118,10 @@
           <button class="btn small" id="timeFilter3" onclick="setProjectTimeFilter(3)">3天</button>
           <button class="btn small primary" id="timeFilter7" onclick="setProjectTimeFilter(7)">7天</button>
           <button class="btn small" id="timeFilter15" onclick="setProjectTimeFilter(15)">15天</button>
-          <button class="btn small" id="timeFilter30" onclick="setProjectTimeFilter(30)">30天</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input type="checkbox" id="includeCompleted" onchange="renderProjects()" style="width:16px;height:16px;">
+          <label for="includeCompleted" style="font-size:12px;color:var(--muted);cursor:pointer;">包含已完工</label>
         </div>
       </div>
       <div id="projectList" class="card-grid"></div>

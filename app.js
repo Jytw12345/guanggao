@@ -2841,6 +2841,7 @@ function renderProjects() {
   const kw = document.getElementById("projectSearch").value.trim().toLowerCase();
   const status = document.getElementById("projectStatusFilter").value;
   const storeFilter = document.getElementById("projectStoreFilter").value;
+  const includeCompleted = document.getElementById("includeCompleted")?.checked || false;
   const list = document.getElementById("projectList");
   let items = cache.projects.slice().sort((a, b) =>
     new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0));
@@ -2856,6 +2857,10 @@ function renderProjects() {
       const aptTime = new Date(p.appointmentTime);
       return !isNaN(aptTime.getTime()) && aptTime >= startDate && aptTime <= endDate;
     });
+  }
+
+  if (!includeCompleted && !kw && !status) {
+    items = items.filter((p) => ![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status));
   }
 
   if (kw) {
@@ -2956,6 +2961,15 @@ function refreshProjectStoreFilter() {
   if (prev && cache.stores.some((s) => s.id === prev)) sel.value = prev;
 }
 
+function onProjectStatusChange(status) {
+  const completedStatuses = ["已完工", "已验收", "已审核"];
+  const includeCompletedEl = document.getElementById("includeCompleted");
+  if (includeCompletedEl && completedStatuses.includes(status)) {
+    includeCompletedEl.checked = true;
+  }
+  renderProjects();
+}
+
 function setProjectTimeFilter(days) {
   projectTimeFilterDays = days;
   
@@ -2963,7 +2977,6 @@ function setProjectTimeFilter(days) {
   document.getElementById("timeFilter3").classList.toggle("primary", days === 3);
   document.getElementById("timeFilter7").classList.toggle("primary", days === 7);
   document.getElementById("timeFilter15").classList.toggle("primary", days === 15);
-  document.getElementById("timeFilter30").classList.toggle("primary", days === 30);
   
   renderProjects();
 }
@@ -5107,49 +5120,6 @@ function generateWorkerScheduleDescription(dateStr = null) {
       }
     }
     
-    let continuousWorkMinutes = 0;
-    let lastEndTime = null;
-    let lastAddress = "";
-    
-    const sortedProjects = [...projects].sort((a, b) => {
-      const sa = projectStart(a);
-      const sb = projectStart(b);
-      return (sa || new Date()) - (sb || new Date());
-    });
-    
-    for (let i = 0; i < sortedProjects.length; i++) {
-      const p = sortedProjects[i];
-      const pStart = projectStart(p);
-      const pEnd = projectEnd(p) || new Date((pStart || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
-      const pAddress = p.address || "";
-      
-      if (!pStart) continue;
-      
-      if (lastEndTime && lastAddress) {
-        const gap = (pStart - lastEndTime) / (1000 * 60);
-        const sameAddress = isAddressSimilar(lastAddress, pAddress);
-        
-        if (gap >= 30 || !sameAddress) {
-          continuousWorkMinutes = 0;
-        }
-        
-        const effectiveStart = pStart > lastEndTime ? pStart : lastEndTime;
-        const durationMinutes = Math.max(0, (pEnd - effectiveStart) / (1000 * 60));
-        continuousWorkMinutes += durationMinutes;
-      } else {
-        continuousWorkMinutes += (pEnd - pStart) / (1000 * 60);
-      }
-      
-      lastEndTime = pEnd > lastEndTime ? pEnd : lastEndTime;
-      lastAddress = pAddress;
-    }
-    
-    if (continuousWorkMinutes > 240) {
-      const hours = Math.floor(continuousWorkMinutes / 60);
-      const mins = Math.round(continuousWorkMinutes % 60);
-      description += `<div class="schedule-warning" style="background:#fef3c7;border-left:4px solid #f59e0b;">☕ <strong>休息提醒</strong>：${name}今日连续工作预计${hours}小时${mins}分钟，建议适当休息，注意劳逸结合！</div>`;
-    }
-    
     const nearbyProjects = [];
     for (let i = 0; i < projects.length; i++) {
       for (let j = i + 1; j < projects.length; j++) {
@@ -5292,6 +5262,70 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const moreCount = teamProjects.length > 5 ? `等${teamProjects.length}个` : "";
       description += `<div class="schedule-summary-item" style="background:#ecfdf5;padding:8px;border-radius:4px;">👥 <strong>协作项目</strong>：${teamProjectNames}${moreCount}需要多人配合，请提前沟通好分工！</div>`;
     }
+    
+    const overtimeProjects = allTodayProjects.filter(p => {
+      if (!p.startedAt || p.status !== STATUS.WORKING) return false;
+      const started = new Date(p.startedAt);
+      const now = new Date();
+      let elapsedMs = now - started;
+      (p.pauseHistory || []).forEach(ph => {
+        if (ph.startTime && ph.endTime) {
+          const pauseStart = new Date(ph.startTime);
+          const pauseEnd = new Date(ph.endTime);
+          elapsedMs -= pauseEnd - pauseStart;
+        }
+      });
+      const elapsedHours = elapsedMs / (1000 * 60 * 60);
+      return elapsedHours > (p.estimatedHours || 8);
+    });
+    
+    if (overtimeProjects.length > 0) {
+      const overtimeNames = overtimeProjects.slice(0, 5).map(p => {
+        const started = new Date(p.startedAt);
+        const now = new Date();
+        let elapsedMs = now - started;
+        (p.pauseHistory || []).forEach(ph => {
+          if (ph.startTime && ph.endTime) {
+            const pauseStart = new Date(ph.startTime);
+            const pauseEnd = new Date(ph.endTime);
+            elapsedMs -= pauseEnd - pauseStart;
+          }
+        });
+        const elapsedHours = (elapsedMs / (1000 * 60 * 60)).toFixed(1);
+        const overtimeHours = (elapsedHours - (p.estimatedHours || 8)).toFixed(1);
+        return `${p.name}（已超时${overtimeHours}小时）`;
+      }).join("、");
+      const moreCount = overtimeProjects.length > 5 ? `等${overtimeProjects.length}个` : "";
+      description += `<div class="schedule-summary-item warning" style="background:#fee2e2;padding:8px;border-radius:4px;">⏰ <strong>超时提醒</strong>：${overtimeNames}${moreCount}项目已超出预计工时，请关注进度！</div>`;
+    }
+    
+    const highLoadWorkers = Object.entries(workerHours).filter(([name, hrs]) => parseFloat(hrs) > 10);
+    if (highLoadWorkers.length > 0) {
+      const highLoadList = highLoadWorkers.map(([name, hrs]) => `${name}(${hrs}小时)`).join("、");
+      description += `<div class="schedule-summary-item warning" style="background:#fef3c7;padding:8px;border-radius:4px;">⚠️ <strong>高负载提醒</strong>：${highLoadList}今日任务较重，建议关注工作状态！</div>`;
+    }
+    
+    const totalEstimatedHours = allTodayProjects.reduce((sum, p) => {
+      return sum + (p.estimatedHours || 0);
+    }, 0);
+    const totalActualPersonHours = allTodayProjects.reduce((sum, p) => {
+      if (!p.startedAt) return sum;
+      const end = p.finishedAt ? new Date(p.finishedAt) : new Date();
+      const start = new Date(p.startedAt);
+      let elapsedMs = end - start;
+      (p.pauseHistory || []).forEach(ph => {
+        if (ph.startTime && ph.endTime) {
+          const pauseStart = new Date(ph.startTime);
+          const pauseEnd = new Date(ph.endTime);
+          elapsedMs -= pauseEnd - pauseStart;
+        }
+      });
+      const workerCount = Math.max(1, (p.assignedWorkerIds || []).length);
+      return sum + (elapsedMs / (1000 * 60 * 60)) * workerCount;
+    }, 0);
+    
+    const hoursRemaining = Math.max(0, totalEstimatedHours - totalActualPersonHours);
+    description += `<div class="schedule-summary-item">📈 <strong>工时预测</strong>：预计总工时 ${totalEstimatedHours.toFixed(1)} 小时，已完成 ${totalActualPersonHours.toFixed(1)} 小时，剩余 ${hoursRemaining.toFixed(1)} 小时</div>`;
     
     if (totalProjects > 0 && onJobWorkers > 0) {
       const avgProjects = (totalProjects / onJobWorkers).toFixed(1);
