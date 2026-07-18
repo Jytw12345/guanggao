@@ -7,6 +7,8 @@
 
 const STORE_KEY = "ad_install_system_v1";
 const CUSTOMER_HISTORY_KEY = "ad_install_customer_history";
+const DATA_VERSION = 2;
+const MAX_LOGS = 1000;
 
 function getCustomerHistory() {
   try {
@@ -65,7 +67,7 @@ function getAllowedStatuses(currentStatus) {
 const TIGHT_GAP_MINUTES = 30;
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -73,10 +75,12 @@ const ROLE_LABEL = { manager: "总经理", store_manager: "店长", worker: "施
 
 /* 运行时状态 */
 let MODE = "local";        // 'cloud' | 'local'
-let sb = null;             // supabase client
+let sb = null;             // supabase client (anon key)
+let sbAdmin = null;        // supabase admin client (service key, optional)
 let currentUser = null;    // 云端登录用户
 let currentProfile = { role: null, storeId: null }; // 当前用户角色与门店
 let reloadTimer = null;    // 实时刷新去抖
+let workingProjectsTimer = null; // 施工中项目定时刷新
 
 const getWorker = (id) => cache.workers.find((w) => w.id === id);
 const getProject = (id) => cache.projects.find((p) => p.id === id);
@@ -97,46 +101,108 @@ const isWorker = () => myRole() === ROLE.WORKER;
  * 这些键需与 role_permissions.perms 的 jsonb 键、以及 SQL my_can(cap) 保持一致。 */
 const CAP = {
   PROJECT_CREATE: "project_create",
-  PROJECT_EDIT: "project_edit",
-  PROJECT_DELETE: "project_delete",
-  CONSTRUCTION: "construction",
-  ASSIGN_WORKER: "assign_worker",
-  VIEW_STATS: "view_stats",
-  VIEW_STORE_STATS: "view_store_stats",
-  MANAGE_STORES: "manage_stores",
-  MANAGE_WORKERS: "manage_workers",
-  MANAGE_LEAVES: "manage_leaves",
+  PROJECT_EDIT_OWN: "project_edit_own",
+  PROJECT_EDIT_ALL: "project_edit_all",
+  PROJECT_DELETE_OWN: "project_delete_own",
+  PROJECT_DELETE_ALL: "project_delete_all",
+  PROJECT_VIEW_ALL: "project_view_all",
+  CONSTRUCTION_START: "construction_start",
+  CONSTRUCTION_PAUSE: "construction_pause",
+  CONSTRUCTION_RESUME: "construction_resume",
+  CONSTRUCTION_COMPLETE: "construction_complete",
+  CONSTRUCTION_LOG_WORK: "construction_log_work",
+  CONSTRUCTION_LOG_OUTSOURCED: "construction_log_outsourced",
+  WORKER_ASSIGN: "worker_assign",
+  WORKER_UNASSIGN: "worker_unassign",
+  WORKER_ADD: "worker_add",
+  WORKER_EDIT: "worker_edit",
+  WORKER_DELETE: "worker_delete",
+  WORKER_VIEW: "worker_view",
+  LEAVE_APPLY: "leave_apply",
+  LEAVE_APPROVE: "leave_approve",
+  LEAVE_REJECT: "leave_reject",
+  LEAVE_VIEW_ALL: "leave_view_all",
   REVIEW_PROJECT: "review_project",
+  UNREVIEW_PROJECT: "unreview_project",
+  ACCEPT_PROJECT: "accept_project",
+  VIEW_STATS_GLOBAL: "view_stats_global",
+  VIEW_STATS_STORE: "view_stats_store",
+  MANAGE_STORES: "manage_stores",
+  MANAGE_ACCOUNTS: "manage_accounts",
+  MANAGE_HOLIDAYS: "manage_holidays",
+  MANAGE_OUTSOURCED: "manage_outsourced",
+  DATA_EXPORT: "data_export",
+  REPAIR_CREATE: "repair_create",
+  REPAIR_COMPLETE: "repair_complete",
 };
 
 /* 权限项的中文说明（角色权限配置页逐行展示，顺序即展示顺序） */
 const CAP_LABEL = {
   project_create: "新建预约",
-  project_edit: "编辑预约（店长限本门店）",
-  project_delete: "删除预约（店长限本门店）",
-  construction: "填写施工工时 / 实际工时 / 验收",
-  assign_worker: "分配安装人员",
-  view_stats: "查看工时统计",
-  view_store_stats: "查看店面统计",
-  manage_workers: "管理施工人员名册",
-  manage_leaves: "管理请假记录",
+  project_edit_own: "编辑自己创建的预约",
+  project_edit_all: "编辑所有预约",
+  project_delete_own: "删除自己创建的预约",
+  project_delete_all: "删除所有预约",
+  project_view_all: "查看所有门店项目",
+  construction_start: "开始施工",
+  construction_pause: "暂停施工",
+  construction_resume: "恢复施工",
+  construction_complete: "完成施工",
+  construction_log_work: "填写施工工时",
+  construction_log_outsourced: "填写外协工时",
+  worker_assign: "分配安装人员",
+  worker_unassign: "移除安装人员",
+  worker_add: "添加施工人员",
+  worker_edit: "编辑施工人员",
+  worker_delete: "删除施工人员",
+  worker_view: "查看施工人员",
+  leave_apply: "申请请假",
+  leave_approve: "批准请假",
+  leave_reject: "拒绝请假",
+  leave_view_all: "查看所有请假记录",
+  review_project: "审核项目",
+  unreview_project: "反审核项目",
+  accept_project: "验收项目",
+  view_stats_global: "查看全局工时统计",
+  view_stats_store: "查看本门店统计",
   manage_stores: "管理门店",
-  review_project: "审核项目（审核后不可编辑）",
+  manage_accounts: "管理账户",
+  manage_holidays: "管理节假日",
+  manage_outsourced: "管理外协人员",
+  data_export: "导出数据",
+  repair_create: "发起维修单",
+  repair_complete: "完成维修",
 };
 
 /* 默认权限模板（与 SQL seed 一致）；云端会用 role_permissions 表覆盖 */
 const DEFAULT_ROLE_PERMS = {
   store_manager: {
-    project_create: true, project_edit: true, project_delete: true,
-    assign_worker: false, construction: false, view_stats: false,
-    view_store_stats: false, manage_stores: false, manage_workers: false,
-    manage_leaves: true, review_project: true,
+    project_create: true, project_edit_own: true, project_edit_all: true,
+    project_delete_own: true, project_delete_all: true, project_view_all: true,
+    construction_start: false, construction_pause: false, construction_resume: false,
+    construction_complete: false, construction_log_work: false, construction_log_outsourced: false,
+    worker_assign: false, worker_unassign: false, worker_add: false,
+    worker_edit: false, worker_delete: false, worker_view: true,
+    leave_apply: true, leave_approve: true, leave_reject: true, leave_view_all: true,
+    review_project: true, unreview_project: true, accept_project: false,
+    view_stats_global: false, view_stats_store: true,
+    manage_stores: false, manage_accounts: false, manage_holidays: false,
+    manage_outsourced: true, data_export: false,
+    repair_create: true, repair_complete: false,
   },
   worker: {
-    project_create: true, project_edit: false, project_delete: false,
-    assign_worker: true, construction: true, view_stats: false,
-    view_store_stats: false, manage_stores: false, manage_workers: false,
-    manage_leaves: true, review_project: false,
+    project_create: true, project_edit_own: false, project_edit_all: false,
+    project_delete_own: false, project_delete_all: false, project_view_all: false,
+    construction_start: true, construction_pause: true, construction_resume: true,
+    construction_complete: true, construction_log_work: true, construction_log_outsourced: true,
+    worker_assign: true, worker_unassign: true, worker_add: false,
+    worker_edit: false, worker_delete: false, worker_view: true,
+    leave_apply: true, leave_approve: false, leave_reject: false, leave_view_all: false,
+    review_project: false, accept_project: false,
+    view_stats_global: false, view_stats_store: false,
+    manage_stores: false, manage_accounts: false, manage_holidays: false,
+    repair_create: false, repair_complete: true,
+    manage_outsourced: false, data_export: false,
   },
 };
 
@@ -153,17 +219,41 @@ function can(cap) {
 
 const perm = {
   createProject: () => can(CAP.PROJECT_CREATE),
-  editProject: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
-  deleteProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELETE) && (isManager() || !myStore() || (p && p.storeId === myStore())),
-  doConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION),
-  assignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.ASSIGN_WORKER),
-  viewStats: () => can(CAP.VIEW_STATS),
-  viewStoreStats: () => can(CAP.VIEW_STORE_STATS),
-  manageStores: () => can(CAP.MANAGE_STORES),
-  manageWorkers: () => can(CAP.MANAGE_WORKERS),
-  manageLeaves: () => can(CAP.MANAGE_LEAVES),
-  manageAccounts: () => isManager(),
+  editProject: (p) => !isReviewed(p) && (can(CAP.PROJECT_EDIT_ALL) || (can(CAP.PROJECT_EDIT_OWN) && p && p.createdBy === currentProfile.id)) && (isManager() || !myStore() || (p && p.storeId === myStore())),
+  deleteProject: (p) => !isReviewed(p) && (can(CAP.PROJECT_DELETE_ALL) || (can(CAP.PROJECT_DELETE_OWN) && p && p.createdBy === currentProfile.id)) && (isManager() || !myStore() || (p && p.storeId === myStore())),
+  viewProjectAll: () => can(CAP.PROJECT_VIEW_ALL),
+  startConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_START),
+  pauseConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_PAUSE),
+  resumeConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_RESUME),
+  completeConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_COMPLETE),
+  logWorkHours: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_LOG_WORK),
+  logOutsourcedHours: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_LOG_OUTSOURCED),
+  assignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_ASSIGN),
+  unassignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_UNASSIGN),
+  addWorker: () => can(CAP.WORKER_ADD),
+  editWorker: () => can(CAP.WORKER_EDIT),
+  deleteWorker: () => can(CAP.WORKER_DELETE),
+  viewWorker: () => can(CAP.WORKER_VIEW),
+  applyLeave: () => can(CAP.LEAVE_APPLY),
+  approveLeave: () => can(CAP.LEAVE_APPROVE),
+  rejectLeave: () => can(CAP.LEAVE_REJECT),
+  viewAllLeaves: () => can(CAP.LEAVE_VIEW_ALL),
   reviewProject: (p) => can(CAP.REVIEW_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
+  unreviewProject: (p) => can(CAP.UNREVIEW_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
+  acceptProject: (p) => can(CAP.ACCEPT_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
+  viewGlobalStats: () => can(CAP.VIEW_STATS_GLOBAL),
+  viewStoreStats: () => can(CAP.VIEW_STATS_STORE),
+  manageStores: () => can(CAP.MANAGE_STORES),
+  manageAccounts: () => isManager() || can(CAP.MANAGE_ACCOUNTS),
+  manageHolidays: () => can(CAP.MANAGE_HOLIDAYS),
+  manageOutsourced: () => can(CAP.MANAGE_OUTSOURCED),
+  exportData: () => can(CAP.DATA_EXPORT),
+  createRepair: () => can(CAP.REPAIR_CREATE),
+  completeRepair: () => can(CAP.REPAIR_COMPLETE),
+  doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE) || can(CAP.CONSTRUCTION_LOG_WORK)),
+  manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT) || can(CAP.LEAVE_VIEW_ALL),
+  viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
+  manageWorkers: () => can(CAP.WORKER_ADD) || can(CAP.WORKER_EDIT) || can(CAP.WORKER_DELETE),
 };
 
 function isReviewed(p) {
@@ -200,6 +290,32 @@ function esc(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+function safeJsonParse(str, defaultValue = null) {
+  if (!str || typeof str !== "string") return defaultValue;
+  try {
+    return JSON.parse(str);
+  } catch (e) {
+    console.warn("JSON解析失败:", str.substring(0, 100), e);
+    return defaultValue;
+  }
+}
+
+function validatePhone(phone) {
+  if (!phone) return true;
+  const regex = /^1[3-9]\d{9}$/;
+  return regex.test(phone.replace(/\s/g, ""));
+}
+
+function validateHours(hours) {
+  const h = Number(hours);
+  return !isNaN(h) && h >= 0.1 && h <= 24;
+}
+
+function validateWorkerCount(count) {
+  const c = Number(count);
+  return !isNaN(c) && c >= 1 && c <= 10;
 }
 
 function fmtDateTime(v) {
@@ -468,7 +584,7 @@ function getProjectProgress(p, est, act, hasActual, done) {
     return Math.min(100, (act / est) * 100);
   }
   
-  if ((p.status === STATUS.WORKING || p.status === STATUS.PAUSED) && p.startedAt) {
+  if (p.startedAt) {
     const started = new Date(p.startedAt);
     const now = new Date();
     
@@ -672,6 +788,13 @@ function sendNotificationForProjectChange(eventType, project) {
 
 /* ============================================================
  * 字段映射（云端 snake_case <-> 前端 camelCase）
+ * 
+ * 命名约定：
+ * - 前端 JavaScript 代码统一使用 camelCase（如 workerId, appointmentTime）
+ * - 数据库字段使用 snake_case（如 worker_id, appointment_time）
+ * - mapProject() 将数据库字段转为前端格式
+ * - projectToRow() 将前端格式转为数据库格式
+ * - 其他实体（workers, stores, leave_records 等）遵循相同规则
  * ============================================================ */
 let modifiedProjectIds = new Set();
 let projectTimeFilterDays = 7;
@@ -702,21 +825,21 @@ const mapProject = (r) => ({
   createdAt: r.created_at,
   workLogs: r.workLogs || [],
   timeModified: modifiedProjectIds.has(r.id),
-  repairOrder: r.repair_order ? (typeof r.repair_order === "string" ? JSON.parse(r.repair_order) : r.repair_order) : null,
+  repairOrder: r.repair_order ? (typeof r.repair_order === "string" ? safeJsonParse(r.repair_order, null) : r.repair_order) : null,
   pausedAt: r.paused_at || null,
   pauseReason: r.pause_reason || null,
   pauseCount: Number(r.pause_count) || 0,
   accumulatedWorkHours: Number(r.accumulated_work_hours) || Number(r.accumulatedWorkHours) || 0,
   resumedAt: r.resumed_at || r.resumedAt || null,
-  workSessions: (r.work_sessions || r.workSessions) ? (typeof (r.work_sessions || r.workSessions) === "string" ? JSON.parse(r.work_sessions || r.workSessions) : (r.work_sessions || r.workSessions)) : [],
+  workSessions: (r.work_sessions || r.workSessions) ? (typeof (r.work_sessions || r.workSessions) === "string" ? safeJsonParse(r.work_sessions || r.workSessions, []) : (r.work_sessions || r.workSessions)) : [],
   reviewedAt: r.reviewed_at || null,
-  pauseHistory: (r.pause_history || r.pauseHistory) ? (typeof (r.pause_history || r.pauseHistory) === "string" ? JSON.parse(r.pause_history || r.pauseHistory) : (r.pause_history || r.pauseHistory)) : [],
-  delayHistory: (r.delay_history || r.delayHistory) ? (typeof (r.delay_history || r.delayHistory) === "string" ? JSON.parse(r.delay_history || r.delayHistory) : (r.delay_history || r.delayHistory)) : [],
-  workerChangeHistory: (r.worker_change_history || r.workerChangeHistory) ? (typeof (r.worker_change_history || r.workerChangeHistory) === "string" ? JSON.parse(r.worker_change_history || r.workerChangeHistory) : (r.worker_change_history || r.workerChangeHistory)) : [],
-  actionLogs: (r.action_logs || r.actionLogs) ? (typeof (r.action_logs || r.actionLogs) === "string" ? JSON.parse(r.action_logs || r.actionLogs) : (r.action_logs || r.actionLogs)) : [],
+  pauseHistory: (r.pause_history || r.pauseHistory) ? (typeof (r.pause_history || r.pauseHistory) === "string" ? safeJsonParse(r.pause_history || r.pauseHistory, []) : (r.pause_history || r.pauseHistory)) : [],
+  delayHistory: (r.delay_history || r.delayHistory) ? (typeof (r.delay_history || r.delayHistory) === "string" ? safeJsonParse(r.delay_history || r.delayHistory, []) : (r.delay_history || r.delayHistory)) : [],
+  workerChangeHistory: (r.worker_change_history || r.workerChangeHistory) ? (typeof (r.worker_change_history || r.workerChangeHistory) === "string" ? safeJsonParse(r.worker_change_history || r.workerChangeHistory, []) : (r.worker_change_history || r.workerChangeHistory)) : [],
+  actionLogs: (r.action_logs || r.actionLogs) ? (typeof (r.action_logs || r.actionLogs) === "string" ? safeJsonParse(r.action_logs || r.actionLogs, []) : (r.action_logs || r.actionLogs)) : [],
   delayReason: r.delay_reason || null,
   delayCount: Number(r.delay_count) || 0,
-  scheduleHistory: (r.schedule_history || r.scheduleHistory) ? (typeof (r.schedule_history || r.scheduleHistory) === "string" ? JSON.parse(r.schedule_history || r.scheduleHistory) : (r.schedule_history || r.scheduleHistory)) : [],
+  scheduleHistory: (r.schedule_history || r.scheduleHistory) ? (typeof (r.schedule_history || r.scheduleHistory) === "string" ? safeJsonParse(r.schedule_history || r.scheduleHistory, []) : (r.schedule_history || r.scheduleHistory)) : [],
   cancelledAt: r.cancelled_at || r.cancelledAt || null,
   cancelReason: r.cancel_reason || r.cancelReason || null,
 });
@@ -764,11 +887,11 @@ const projectToRow = (p) => ({
 
 const mapLog = (r) => ({
   id: r.id,
-  workerId: r.worker_id,
-  workerName: r.worker_name,
+  workerId: r.worker_id || r.workerId || "",
+  workerName: r.worker_name || r.workerName || "",
   hours: Number(r.hours) || 0,
-  date: r.date,
-  note: r.note,
+  date: r.date || "",
+  note: r.note || "",
   level: r.level || "中级",
   isOutsourced: r.is_outsourced || false,
 });
@@ -791,7 +914,7 @@ const repo = {
         sb.from("leave_quota").select("*"),
         sb.from("holidays").select("*"),
         sb.from("outsourced_workers").select("*"),
-        sb.from("operation_logs").select("*").order("timestamp", { ascending: false }).limit(200),
+        sb.from("operation_logs").select("*").order("timestamp", { ascending: false }).limit(MAX_LOGS),
         sb.from("worker_schedules").select("*"),
       ]);
       const allErrors = [
@@ -934,9 +1057,26 @@ const repo = {
     if (error) return fail(error);
   },
   async deleteAccount(userId) {
-    if (MODE !== "cloud") return;
-    const { error } = await sb.from("profiles").delete().eq("id", userId);
-    if (error) return fail(error);
+    if (MODE === "cloud") {
+      try {
+        const { error: profileError } = await sb.from("profiles").delete().eq("id", userId);
+        if (profileError) {
+          console.warn("删除 profiles 失败:", profileError);
+        }
+        if (sbAdmin) {
+          const { error: authError } = await sbAdmin.auth.admin.deleteUser(userId);
+          if (authError) {
+            console.warn("删除 Auth 用户失败:", authError);
+            return fail(new Error("删除 Auth 用户失败，请手动在 Supabase 控制台删除"));
+          }
+        }
+      } catch (e) {
+        return fail(e);
+      }
+    } else {
+      cache.accounts = cache.accounts.filter(a => a.id !== userId);
+      saveLocal();
+    }
   },
 
   /* ---- 角色权限模板（总经理配置每个角色可做的操作） ---- */
@@ -1248,12 +1388,38 @@ function fail(error) {
   throw error;
 }
 
+function migrateData(data) {
+  const currentVersion = data.version || 1;
+  
+  if (currentVersion < 2) {
+    if (!data.outsourcedWorkers) {
+      data.outsourcedWorkers = [];
+    }
+    if (!data.workerSchedules) {
+      data.workerSchedules = [];
+    }
+    data.projects = (data.projects || []).map(p => {
+      if (!p.workSessions) p.workSessions = [];
+      if (!p.pauseHistory) p.pauseHistory = [];
+      if (!p.delayHistory) p.delayHistory = [];
+      if (!p.workerChangeHistory) p.workerChangeHistory = [];
+      if (!p.actionLogs) p.actionLogs = [];
+      if (!p.scheduleHistory) p.scheduleHistory = [];
+      return p;
+    });
+    data.version = 2;
+  }
+  
+  return data;
+}
+
 /* ---------- 本地存储实现 ---------- */
 function loadLocal() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
-      const data = JSON.parse(raw);
+      let data = safeJsonParse(raw, {});
+      data = migrateData(data);
       cache.workers = data.workers || [];
       cache.projects = (data.projects || []).map((p) => {
         const mapped = mapProject(p);
@@ -1269,6 +1435,8 @@ function loadLocal() {
       cache.holidays = data.holidays || [];
       cache.outsourcedWorkers = data.outsourcedWorkers || [];
       cache.workerSchedules = data.workerSchedules || [];
+      cache.operationLogs = data.operationLogs || [];
+      cache.accounts = data.accounts || [];
     }
   } catch (e) {
     console.error("读取本地数据失败", e);
@@ -1285,6 +1453,7 @@ function loadLocal() {
 
 function saveLocal() {
   localStorage.setItem(STORE_KEY, JSON.stringify({ 
+    version: DATA_VERSION,
     workers: cache.workers, 
     projects: cache.projects, 
     stores: cache.stores, 
@@ -1292,25 +1461,124 @@ function saveLocal() {
     leaveQuota: cache.leaveQuota,
     holidays: cache.holidays,
     outsourcedWorkers: cache.outsourcedWorkers,
-    workerSchedules: cache.workerSchedules
+    workerSchedules: cache.workerSchedules,
+    operationLogs: cache.operationLogs,
+    accounts: cache.accounts
   }));
 }
 
+let pendingChanges = new Set();
+
+async function loadTableData(tableName) {
+  const { data, error } = await sb.from(tableName).select("*");
+  if (error) {
+    console.warn(`加载 ${tableName} 失败:`, error);
+    return [];
+  }
+  return data || [];
+}
+
+async function applyIncrementalUpdate(tableName) {
+  switch (tableName) {
+    case "workers": {
+      const data = await loadTableData("workers");
+      cache.workers = data.map(r => ({ id: r.id, name: r.name, phone: r.phone, role: r.role }));
+      break;
+    }
+    case "stores": {
+      const data = await loadTableData("stores");
+      cache.stores = data.map(r => ({ id: r.id, name: r.name, phone: r.phone || "" }))
+        .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+      break;
+    }
+    case "role_permissions": {
+      const data = await loadTableData("role_permissions");
+      rolePerms = JSON.parse(JSON.stringify(DEFAULT_ROLE_PERMS));
+      data.forEach(r => {
+        rolePerms[r.role] = { ...(DEFAULT_ROLE_PERMS[r.role] || {}), ...(r.perms || {}) };
+      });
+      applyPermissions();
+      break;
+    }
+    case "leave_records": {
+      const data = await loadTableData("leave_records");
+      cache.leaveRecords = data.map(r => ({
+        id: r.id, workerId: r.worker_id, workerName: r.worker_name,
+        leaveType: r.leave_type || "personal",
+        startDate: r.start_date, startType: r.start_type || "all", startTime: r.start_time,
+        endDate: r.end_date, endType: r.end_type || "all", endTime: r.end_time,
+        reason: r.reason, status: r.status || "pending",
+        reviewerId: r.reviewer_id, reviewerName: r.reviewer_name,
+        reviewNote: r.review_note, reviewedAt: r.reviewed_at,
+        createdAt: r.created_at,
+      }));
+      break;
+    }
+    case "outsourced_workers": {
+      const data = await loadTableData("outsourced_workers");
+      cache.outsourcedWorkers = data.map(r => ({ id: r.id, name: r.name, phone: r.phone || "" }))
+        .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+      break;
+    }
+    case "holidays": {
+      const data = await loadTableData("holidays");
+      cache.holidays = data.map(r => ({
+        id: r.id, date: r.date, name: r.name,
+        isWorkday: r.is_workday || false,
+        createdAt: r.created_at,
+      }));
+      break;
+    }
+    case "worker_schedules": {
+      const data = await loadTableData("worker_schedules");
+      cache.workerSchedules = data.map(r => ({
+        id: r.id, workerId: r.worker_id, workerName: r.worker_name,
+        title: r.title, startDate: r.start_date, startTime: r.start_time,
+        endDate: r.end_date, endTime: r.end_time,
+        type: r.type || "personal", description: r.description || "",
+        createdBy: r.created_by, createdByName: r.created_by_name,
+        createdAt: r.created_at,
+      }));
+      break;
+    }
+    case "projects":
+    case "work_logs": {
+      const [pRes, lRes] = await Promise.all([
+        sb.from("projects").select("*"),
+        sb.from("work_logs").select("*"),
+      ]);
+      if (!pRes.error && !lRes.error) {
+        const logs = (lRes.data || []).map(r => ({ ...mapLog(r), _pid: r.project_id }));
+        cache.projects = (pRes.data || []).map(r => {
+          const p = mapProject(r);
+          p.workLogs = logs.filter(l => l._pid === r.id).map(({ _pid, ...l }) => l);
+          p.outsourcedHoursFromLogs = p.workLogs.reduce((sum, l) => {
+            const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
+            return sum + (isOutsourced ? (Number(l.hours) || 0) : 0);
+          }, 0);
+          return p;
+        });
+      }
+      break;
+    }
+  }
+}
+
 /* ============================================================
- * 实时同步：任意客户端改动 -> 去抖后重载并重绘
+ * 实时同步：任意客户端改动 -> 去抖后增量更新并重绘
  * ============================================================ */
 function subscribeRealtime() {
   if (MODE !== "cloud") return;
   sb.channel("realtime-all")
-    .on("postgres_changes", { event: "*", schema: "public", table: "workers" }, scheduleReload)
-    .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, scheduleReload)
-    .on("postgres_changes", { event: "*", schema: "public", table: "work_logs" }, scheduleReload)
-    .on("postgres_changes", { event: "*", schema: "public", table: "stores" }, scheduleReload)
-    .on("postgres_changes", { event: "*", schema: "public", table: "role_permissions" }, scheduleReload)
-    .on("postgres_changes", { event: "*", schema: "public", table: "leave_records" }, scheduleReload)
-    .on("postgres_changes", { event: "*", schema: "public", table: "outsourced_workers" }, scheduleReload)
-    .on("postgres_changes", { event: "*", schema: "public", table: "holidays" }, scheduleReload)
-    .on("postgres_changes", { event: "*", schema: "public", table: "worker_schedules" }, scheduleReload)
+    .on("postgres_changes", { event: "*", schema: "public", table: "workers" }, () => pendingChanges.add("workers"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, () => pendingChanges.add("projects"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "work_logs" }, () => pendingChanges.add("work_logs"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "stores" }, () => pendingChanges.add("stores"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "role_permissions" }, () => pendingChanges.add("role_permissions"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "leave_records" }, () => pendingChanges.add("leave_records"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "outsourced_workers" }, () => pendingChanges.add("outsourced_workers"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "holidays" }, () => pendingChanges.add("holidays"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "worker_schedules" }, () => pendingChanges.add("worker_schedules"))
     .subscribe((status) => {
       if (status === "SUBSCRIBED") setSyncStatus("online", "● 实时同步中");
       else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setSyncStatus("offline", "● 同步连接异常");
@@ -1320,8 +1588,25 @@ function subscribeRealtime() {
 function scheduleReload() {
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(async () => {
-    await repo.loadAll();
-    applyPermissions();  // 角色权限可能变更，需重新计算 Tab 与按钮可见性
+    if (pendingChanges.size === 0) return;
+    
+    const hasRolePermChange = pendingChanges.has("role_permissions");
+    const hasProjectChange = pendingChanges.has("projects") || pendingChanges.has("work_logs");
+    const needsFullReload = pendingChanges.size > 5 || hasProjectChange;
+    
+    if (needsFullReload) {
+      await repo.loadAll();
+      applyPermissions();
+    } else {
+      for (const table of pendingChanges) {
+        await applyIncrementalUpdate(table);
+      }
+      if (hasRolePermChange) {
+        applyPermissions();
+      }
+    }
+    
+    pendingChanges.clear();
     renderAll();
   }, 300);
 }
@@ -1397,7 +1682,7 @@ function renderWorkers(dateStr) {
           <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
           <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
           <div class="card-actions">
-            ${isManager() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
+            ${perm.editWorker() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button>` : ""}${perm.deleteWorker() ? `<button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
             <button class="btn small" onclick="renderWorkerSchedule('${displayDate}', '${w.id}')">查看安排</button>
             <button class="btn small" onclick="openLeaveForm('${w.id}')" style="background:#ef4444;color:#fff">请假</button>
           </div>
@@ -1726,11 +2011,11 @@ function workerForm(w = {}) {
 }
 
 function newWorker() { 
-  if (!isManager()) { toast("权限不足"); return; }
+  if (!perm.addWorker()) { toast("权限不足"); return; }
   modal.open("添加施工人员", workerForm()); 
 }
 function editWorker(id) { 
-  if (!isManager()) { toast("权限不足"); return; }
+  if (!perm.editWorker()) { toast("权限不足"); return; }
   modal.open("编辑施工人员", workerForm(getWorker(id))); 
 }
 
@@ -1750,7 +2035,7 @@ async function saveWorker(id) {
 }
 
 async function deleteWorker(id) {
-  if (!isManager()) { toast("权限不足"); return; }
+  if (!perm.deleteWorker()) { toast("权限不足"); return; }
   const used = cache.projects.some((p) => (p.workLogs || []).some((l) => l.workerId === id));
   if (used && !(await confirmDialog("该人员已有施工工时记录，删除不会移除历史记录。确定删除该人员？", "删除人员"))) return;
   if (!used && !(await confirmDialog("确定删除该人员？", "删除人员"))) return;
@@ -1780,7 +2065,7 @@ function renderOutsourcedWorkers() {
       </div>
       <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
       <div class="card-actions">
-        ${isManager() ? `<button class="btn small" onclick="editOutsourcedWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteOutsourcedWorker('${w.id}')">删除</button>` : ""}
+        ${perm.manageOutsourced() ? `<button class="btn small" onclick="editOutsourcedWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteOutsourcedWorker('${w.id}')">删除</button>` : ""}
       </div>
     </div>`).join("");
 }
@@ -1802,11 +2087,11 @@ function outsourcedWorkerForm(w = {}) {
 }
 
 function newOutsourcedWorker() { 
-  if (!isManager()) { toast("权限不足"); return; }
+  if (!perm.manageOutsourced()) { toast("权限不足"); return; }
   modal.open("添加外协人员", outsourcedWorkerForm()); 
 }
 function editOutsourcedWorker(id) { 
-  if (!isManager()) { toast("权限不足"); return; }
+  if (!perm.manageOutsourced()) { toast("权限不足"); return; }
   modal.open("编辑外协人员", outsourcedWorkerForm(getOutsourcedWorker(id))); 
 }
 
@@ -1825,7 +2110,7 @@ async function saveOutsourcedWorker(id) {
 }
 
 async function deleteOutsourcedWorker(id) {
-  if (!isManager()) { toast("权限不足"); return; }
+  if (!perm.manageOutsourced()) { toast("权限不足"); return; }
   if (!(await confirmDialog("确定删除该外协人员？", "删除外协人员"))) return;
   await repo.deleteOutsourcedWorker(id);
   await repo.loadAll();
@@ -2882,7 +3167,7 @@ function renderProjects() {
     const canDelete = perm.deleteProject(p);
     const canReview = perm.reviewProject(p);
     const reviewed = isReviewed(p);
-    const canUnreview = reviewed && isManager();
+    const canUnreview = reviewed && perm.unreviewProject(p);
     
     const end = new Date(p.endTime || p.startTime);
     const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
@@ -2921,8 +3206,7 @@ function renderProjects() {
         ` : ""}
         <div class="card-row"><span>预计安排</span><b>总工时${est}人·小时 / ${(p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1}人 / 时长${est > 0 ? (est / ((p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1)).toFixed(1) : "—"}小时</b></div>
         <div class="card-row"><span>实际登记</span><b>${hasActual ? act : "—"}工时 / ${(p.workLogs || []).filter(l => l.workerId).length > 0 ? [...new Set((p.workLogs || []).filter(l => l.workerId).map(l => l.workerId))].length : "-"}人 / ${diffLabel(p)}</b></div>
-        ${est > 0 ? `
-          <div class="card-row">
+        <div class="card-row">
             <span>进度</span>
             <div style="flex:1;display:flex;align-items:center;gap:8px;">
               <div style="flex:1;height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
@@ -2936,7 +3220,6 @@ function renderProjects() {
               <span style="font-weight:bold;font-size:12px;">${Math.round(getProjectProgress(p, est, act, hasActual, done))}%</span>
             </div>
           </div>
-        ` : ""}
         <div class="card-row"><span>开始施工</span><b>${p.startedAt ? esc(fmtDateTime(p.startedAt)) : "—"}</b></div>
         <div class="card-row"><span>完工时间</span><b>${p.finishedAt ? esc(fmtDateTime(p.finishedAt)) : "—"}</b></div>
         <div class="card-row"><span>施工时长</span><b>${p.startedAt && p.finishedAt ? esc(calcActualWorkDuration(p)) : "—"}</b></div>
@@ -3144,9 +3427,14 @@ async function saveProject(id) {
   if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
   const storeEl = document.getElementById("pStore");
   let storeId = storeEl ? storeEl.value : "";
-  if (isStoreManager() && myStore() != null && myStore() !== "") storeId = myStore();          // 有指定门店的店长强制本门店
-  if (isWorker() && myStore() != null && myStore() !== "") storeId = myStore();   // 施工人员强制本门店
-  const workerCount = Number(document.getElementById("pWorkers").value) || 1;
+  if (isStoreManager() && myStore() != null && myStore() !== "") storeId = myStore();
+  if (isWorker() && myStore() != null && myStore() !== "") storeId = myStore();
+  const workerCountInput = document.getElementById("pWorkers").value;
+  if (!validateWorkerCount(workerCountInput)) { toast("施工人数必须在 1-10 之间"); return; }
+  const workerCount = Number(workerCountInput);
+  
+  const phone = document.getElementById("pPhone").value.trim();
+  if (!validatePhone(phone)) { toast("请输入有效的手机号码"); return; }
   
   const inputEstHours = Number(document.getElementById("pEst").value) || 0;
   const startTime = new Date(fullTime);
@@ -3649,11 +3937,11 @@ function renderConstruction() {
         <button class="btn small danger" onclick="cancelProject('${p.id}')"><span style="font-size:16px;font-weight:bold;">×</span> 取消项目</button>
         ` : ""}
       </div>` : ""}
-      ${reviewed && isManager() ? `
+      ${reviewed && perm.unreviewProject(p) ? `
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn" onclick="unreviewProject('${p.id}')" style="color:var(--warn)">↩ 反审核</button>
       </div>` : ""}
-      ${(reviewed || p.status === STATUS.ACCEPTED) && (isManager() || isStoreManager()) ? `
+      ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn" onclick="openRepairOrderForm('${p.id}')" style="background:#f59e0b;color:#fff">🔧 发起维修单</button>
       </div>` : ""}
@@ -3668,7 +3956,7 @@ function renderConstruction() {
         <div class="info-item"><div class="k">预约维修时间</div><div class="v">${p.repairOrder.appointmentTime ? fmtDateTime(p.repairOrder.appointmentTime) : "—"}</div></div>
         <div class="info-item"><div class="k">维修状态</div><div class="v">${p.repairOrder.status || "待维修"}</div></div>
       </div>
-      ${((isManager() || isWorker()) && p.repairOrder.status === "待维修") ? `
+      ${perm.completeRepair() && p.repairOrder.status === "待维修" ? `
       <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn primary" onclick="completeRepair('${p.id}')">✅ 完成维修</button>
       </div>` : ""}
@@ -4303,12 +4591,17 @@ async function assignWorker(pid) {
     operatorRole: currentProfile.role
   });
   
-  await repo.setAssignedWorkers(pid, cur.concat(wid));
-  await repo.patchProject(pid, { workerChangeHistory, actionLogs });
-  await repo.loadAll();
-  renderAll();
-  toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
-  logOperation("PROJECT_ASSIGN", p.name || "项目", `ID: ${pid}, 人员: ${worker ? worker.name : "未知"}${worker?.phone ? `(${worker.phone})` : ""}`);
+  try {
+    await repo.setAssignedWorkers(pid, cur.concat(wid));
+    await repo.patchProject(pid, { workerChangeHistory, actionLogs });
+    await repo.loadAll();
+    renderAll();
+    toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
+    logOperation("PROJECT_ASSIGN", p.name || "项目", `ID: ${pid}, 人员: ${worker ? worker.name : "未知"}${worker?.phone ? `(${worker.phone})` : ""}`);
+  } catch (error) {
+    console.error("分配人员失败:", error);
+    toast("分配失败，请重试");
+  }
 }
 
 /* 保存外协人员信息 */
@@ -4518,18 +4811,23 @@ async function updateProjectStatus(id, newStatus) {
     patch.workerChangeHistory = workerChangeHistory;
   }
   clearTimeout(reloadTimer);
-  await repo.patchProject(id, patch);
-  await repo.loadAll();
-  renderAll();
-  toast("状态已更新");
-  
-  if (newStatus === STATUS.WORKING) {
-    sendNotificationForProjectChange("start", p);
-    logOperation("PROJECT_START", p.name || "项目", `ID: ${id}`);
-  } else if (newStatus === STATUS.DONE) {
-    sendNotificationForProjectChange("done", p);
-  } else if (newStatus === STATUS.ACCEPTED) {
-    sendNotificationForProjectChange("accepted", p);
+  try {
+    await repo.patchProject(id, patch);
+    await repo.loadAll();
+    renderAll();
+    toast("状态已更新");
+    
+    if (newStatus === STATUS.WORKING) {
+      sendNotificationForProjectChange("start", p);
+      logOperation("PROJECT_START", p.name || "项目", `ID: ${id}`);
+    } else if (newStatus === STATUS.DONE) {
+      sendNotificationForProjectChange("done", p);
+    } else if (newStatus === STATUS.ACCEPTED) {
+      sendNotificationForProjectChange("accepted", p);
+    }
+  } catch (error) {
+    console.error("更新状态失败:", error);
+    toast("更新失败，请重试");
   }
 }
 
@@ -4905,12 +5203,13 @@ function updateLogOutsourcedInput() {
 async function addWorkLog(id) {
   const p = getProject(id);
   const type = document.getElementById("logType").value;
-  const hours = Number(document.getElementById("logHours").value);
+  const hoursInput = document.getElementById("logHours").value;
   const date = document.getElementById("logDate").value;
   const note = document.getElementById("logNote").value.trim();
   const level = document.getElementById("logLevel").value;
   
-  if (!hours || hours <= 0) { toast("请填写有效工时"); return; }
+  if (!validateHours(hoursInput)) { toast("工时必须在 0.1-24 小时之间"); return; }
+  const hours = Number(hoursInput);
   if (!date) { toast("请选择施工日期"); return; }
   
   let workerId, workerName;
@@ -4925,22 +5224,26 @@ async function addWorkLog(id) {
     workerId = "outsourced:" + workerName;
   }
   
-  await repo.addWorkLog(id, { workerId, workerName, hours, date, note, level, isOutsourced: type === "outsourced" });
-  if (p.status === STATUS.BOOKED) {
-      const now = new Date().toISOString();
-      await repo.patchProject(id, { status: STATUS.WORKING, startedAt: now, originalStartedAt: now });
-    }
-  clearTimeout(reloadTimer);
-  await repo.loadAll();
-  const updatedProject = getProject(id);
-  
-  const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
-  
-  await repo.patchProject(id, { actualHours: totalHours });
-  updatedProject.actualHours = totalHours;
-  logOperation("WORK_LOG_ADD", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}，等级：${level}，备注：${note || "无"}，类型：${type === "outsourced" ? "外协" : "内部"}`);
-  renderAll();
-  toast("已添加施工工时");
+  try {
+    await repo.addWorkLog(id, { workerId, workerName, hours, date, note, level, isOutsourced: type === "outsourced" });
+    if (p.status === STATUS.BOOKED) {
+        const now = new Date().toISOString();
+        await repo.patchProject(id, { status: STATUS.WORKING, startedAt: now, originalStartedAt: now });
+      }
+    clearTimeout(reloadTimer);
+    await repo.loadAll();
+    const updatedProject = getProject(id);
+    
+    const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
+    
+    await repo.patchProject(id, { actualHours: totalHours });
+    updatedProject.actualHours = totalHours;
+    logOperation("WORK_LOG_ADD", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}，等级：${level}，备注：${note || "无"}，类型：${type === "outsourced" ? "外协" : "内部"}`);
+    renderAll();
+    toast("已添加施工工时");
+  } catch (error) {
+    console.error("添加工时失败:", error);
+  }
 }
 
 async function deleteWorkLog(pid, lid) {
@@ -6660,9 +6963,22 @@ async function removeStore(id) {
 async function renderAccounts() {
   const box = document.getElementById("accountList");
   if (!box) return;
-  if (MODE !== "cloud" || !isManager()) { box.innerHTML = ""; return; }
-  const accounts = await repo.loadProfiles();
-  if (accounts.length === 0) { box.innerHTML = `<div class="empty">暂无账号。</div>`; return; }
+  if (!perm.manageAccounts()) { box.innerHTML = ""; return; }
+  
+  let accounts = [];
+  if (MODE === "cloud") {
+    accounts = await repo.loadProfiles();
+  } else {
+    accounts = cache.accounts;
+  }
+  
+  if (accounts.length === 0) { 
+    box.innerHTML = `
+      <div class="empty">暂无账号。</div>
+      ${MODE === "local" ? `<button class="btn" onclick="addLocalAccount()">添加本地账号</button>` : ""}
+    `; 
+    return; 
+  }
 
   const roleOpts = (cur) => `<option value="">待分配</option>` +
     Object.keys(ROLE_LABEL).map((r) => `<option value="${r}" ${cur === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("");
@@ -6671,6 +6987,7 @@ async function renderAccounts() {
 
   box.innerHTML = `
     <div class="detail-block" style="padding:0;overflow:hidden">
+      ${MODE === "local" ? `<button class="btn" style="margin-bottom:12px" onclick="addLocalAccount()">添加本地账号</button>` : ""}
       <table class="data">
         <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>所属门店</th><th>操作</th></tr></thead>
         <tbody>
@@ -6688,18 +7005,42 @@ async function renderAccounts() {
 }
 
 async function changeAccountName(id, name) {
-  await repo.setProfile(id, { name });
+  if (MODE === "cloud") {
+    await repo.setProfile(id, { name });
+  } else {
+    const account = cache.accounts.find(a => a.id === id);
+    if (account) {
+      account.name = name;
+      saveLocal();
+    }
+  }
   toast("姓名已更新");
 }
 
 async function changeAccountRole(id, role) {
-  await repo.setProfile(id, { role });
+  if (MODE === "cloud") {
+    await repo.setProfile(id, { role });
+  } else {
+    const account = cache.accounts.find(a => a.id === id);
+    if (account) {
+      account.role = role;
+      saveLocal();
+    }
+  }
   toast("角色已更新");
   renderAccounts();
 }
 
 async function changeAccountStore(id, storeId) {
-  await repo.setProfile(id, { storeId });
+  if (MODE === "cloud") {
+    await repo.setProfile(id, { storeId });
+  } else {
+    const account = cache.accounts.find(a => a.id === id);
+    if (account) {
+      account.storeId = storeId;
+      saveLocal();
+    }
+  }
   toast("门店已更新");
 }
 
@@ -6707,6 +7048,24 @@ async function deleteAccount(id, email) {
   if (!(await confirmDialog(`确定要删除账号 ${email} 吗？此操作不可撤销。`, "删除账号"))) return;
   await repo.deleteAccount(id);
   toast("账号已删除");
+  renderAccounts();
+}
+
+async function addLocalAccount() {
+  const email = prompt("请输入账号邮箱：");
+  if (!email) return;
+  const name = prompt("请输入姓名：");
+  const account = {
+    id: uid(),
+    email: email,
+    name: name || "",
+    role: ROLE.WORKER,
+    storeId: null,
+    createdAt: new Date().toISOString(),
+  };
+  cache.accounts.push(account);
+  saveLocal();
+  toast("账号已添加");
   renderAccounts();
 }
 
@@ -7018,6 +7377,18 @@ const OPERATION_TYPES = {
 let logSaveTimer = null;
 let pendingLogs = [];
 
+async function pruneOldLogs() {
+  if (!sb) return;
+  try {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 90);
+    const cutoffTimestamp = cutoffDate.toISOString();
+    await sb.from("operation_logs").delete().lt("timestamp", cutoffTimestamp);
+  } catch (e) {
+    console.warn("清理旧日志失败:", e);
+  }
+}
+
 function logOperation(type, target, detail = "") {
   const log = {
     id: uid(),
@@ -7031,15 +7402,18 @@ function logOperation(type, target, detail = "") {
     timestamp: new Date().toISOString(),
   };
   cache.operationLogs.unshift(log);
-  if (cache.operationLogs.length > 1000) {
-    cache.operationLogs = cache.operationLogs.slice(0, 1000);
+  if (cache.operationLogs.length > MAX_LOGS) {
+    cache.operationLogs = cache.operationLogs.slice(0, MAX_LOGS);
+    pruneOldLogs().catch(() => {});
   }
   
   pendingLogs.push(log);
   
   if (logSaveTimer) clearTimeout(logSaveTimer);
   logSaveTimer = setTimeout(() => {
-    saveLocal();
+    if (MODE === "local") {
+      saveLocal();
+    }
     if (sb && pendingLogs.length > 0) {
       const logsToSave = [...pendingLogs];
       pendingLogs = [];
@@ -8848,7 +9222,7 @@ function openTimelineActionMenu(taskEl, projectId) {
     </div>` : `<div class="tl-menu-info"><div><span>人员</span><b>${esc(workers)}</b></div></div>`}
     <div class="tl-menu-actions">
       <button class="btn small primary" onclick="closeTimelineActionMenu(); gotoConstruction('${p.id}')">施工管理</button>
-      ${p.repairOrder && p.repairOrder.status === "待维修" && (isManager() || isWorker()) ? `<button class="btn small" onclick="closeTimelineActionMenu(); completeRepair('${p.id}')">✅ 完成维修</button>` : ""}
+      ${p.repairOrder && p.repairOrder.status === "待维修" && perm.completeRepair() ? `<button class="btn small" onclick="closeTimelineActionMenu(); completeRepair('${p.id}')">✅ 完成维修</button>` : ""}
       ${perm.editProject(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); editProject('${p.id}')">编辑</button>` : ""}
       ${perm.reviewProject(p) && !isReviewed(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); reviewProject('${p.id}')">审核</button>` : ""}
       ${perm.deleteProject(p) ? `<button class="btn small danger" onclick="closeTimelineActionMenu(); deleteProject('${p.id}')">删除</button>` : ""}
@@ -9855,6 +10229,9 @@ async function init() {
   if (cloudConfigured()) {
     MODE = "cloud";
     sb = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
+    if (window.APP_CONFIG.SUPABASE_SERVICE_KEY) {
+      sbAdmin = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_SERVICE_KEY);
+    }
     await startCloudSession();
   } else {
     MODE = "local";
@@ -9866,12 +10243,23 @@ async function init() {
     renderAll();
   }
 
-  setInterval(() => {
+  workingProjectsTimer = setInterval(() => {
     const hasWorkingProjects = cache.projects.some(p => p.status === STATUS.WORKING);
     if (hasWorkingProjects) {
       renderAll();
     }
   }, 60000);
+
+  window.addEventListener('beforeunload', () => {
+    if (workingProjectsTimer) {
+      clearInterval(workingProjectsTimer);
+      workingProjectsTimer = null;
+    }
+    if (reloadTimer) {
+      clearTimeout(reloadTimer);
+      reloadTimer = null;
+    }
+  });
 }
 
 document.addEventListener("DOMContentLoaded", init);
