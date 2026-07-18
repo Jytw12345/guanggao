@@ -2983,7 +2983,7 @@ function getLeaveQuota(workerId) {
     personal_days: 15,
     sick_days: 30,
     annual_days: 10,
-    comp_days: 0
+    comp_days: 12
   };
 }
 
