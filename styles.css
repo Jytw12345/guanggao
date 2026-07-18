@@ -1386,7 +1386,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 }
 #statsSummary {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 12px;
 }
 .stat-card {
@@ -1395,6 +1395,10 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
   border-radius: 12px;
   padding: 16px;
   box-shadow: var(--shadow);
+  flex: 1;
+  min-width: 140px;
+  max-width: 200px;
+  text-align: center;
 }
 .stat-card .num { font-size: 26px; font-weight: 700; color: var(--primary); }
 .stat-card .lbl { color: var(--muted); font-size: 13px; margin-top: 4px; }

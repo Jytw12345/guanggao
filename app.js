@@ -134,6 +134,7 @@ const CAP = {
   DATA_EXPORT: "data_export",
   REPAIR_CREATE: "repair_create",
   REPAIR_COMPLETE: "repair_complete",
+  MANAGE_WAGE_CONFIG: "manage_wage_config",
 };
 
 /* 权限项的中文说明（角色权限配置页逐行展示，顺序即展示顺序） */
@@ -171,6 +172,7 @@ const CAP_LABEL = {
   manage_outsourced: "管理外协人员",
   data_export: "导出数据",
   repair_create: "发起维修单",
+  manage_wage_config: "管理工时单价",
   repair_complete: "完成维修",
 };
 
@@ -250,6 +252,7 @@ const perm = {
   exportData: () => can(CAP.DATA_EXPORT),
   createRepair: () => can(CAP.REPAIR_CREATE),
   completeRepair: () => can(CAP.REPAIR_COMPLETE),
+  manageWageConfig: () => isManager() || can(CAP.MANAGE_WAGE_CONFIG),
   doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE) || can(CAP.CONSTRUCTION_LOG_WORK)),
   manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT) || can(CAP.LEAVE_VIEW_ALL),
   viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
@@ -6383,14 +6386,43 @@ function refreshWorkerSelectors() {
   if (prev) sel.value = prev;
 }
 
+function refreshStoreSelectors() {
+  const sel = document.getElementById("statsStore");
+  const prev = sel.value;
+  sel.innerHTML = `<option value="">全部店面</option>` +
+    cache.stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  if (prev) sel.value = prev;
+}
+
 function collectStats() {
+  const period = document.getElementById("statsPeriod").value;
   const month = document.getElementById("statsMonth").value;
+  const storeFilter = document.getElementById("statsStore").value;
   const workerFilter = document.getElementById("statsWorker").value;
+  const statusFilter = document.getElementById("statsStatus").value;
+  
+  function isInPeriod(dateStr) {
+    if (!month) return true;
+    const [year, m] = month.split("-").map(Number);
+    if (period === "month") {
+      return monthKey(dateStr) === month;
+    } else if (period === "quarter") {
+      const quarter = Math.ceil(m / 3);
+      const [logYear, logMonth] = monthKey(dateStr).split("-").map(Number);
+      const logQuarter = Math.ceil(logMonth / 3);
+      return logYear === year && logQuarter === quarter;
+    } else if (period === "year") {
+      return dateStr.startsWith(year + "-");
+    }
+    return true;
+  }
+
   const rows = {};
   cache.projects.forEach((p) => {
+    if (storeFilter && p.storeId !== storeFilter) return;
     (p.workLogs || []).forEach((l) => {
       const logMonth = monthKey(l.date);
-      if (month && logMonth !== month) return;
+      if (!isInPeriod(l.date)) return;
       if (workerFilter && l.workerId !== workerFilter) return;
       const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
       const key = l.workerId || l.workerName || l.id;
@@ -6408,7 +6440,7 @@ function collectStats() {
       if (!rows[key].daily[dayKey]) {
         rows[key].daily[dayKey] = [];
       }
-      rows[key].daily[dayKey].push({ hours: Number(l.hours) || 0, level: level });
+      rows[key].daily[dayKey].push({ hours: Number(l.hours) || 0, level: level, project: p.name });
     });
   });
   
@@ -6417,16 +6449,16 @@ function collectStats() {
     if (workerFilter && l.workerId !== workerFilter) return;
     if (!rows[l.workerId]) {
       const w = getWorker(l.workerId);
-      rows[l.workerId] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced: false };
+      rows[l.workerId] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced: false };
     }
     const start = new Date(l.startDate);
     const end = new Date(l.endDate);
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const dateKey = fmtDate(d);
-      if (month && monthKey(dateKey) !== month) continue;
+      if (!isInPeriod(dateKey)) continue;
       rows[l.workerId].leaveDays.add(dateKey);
     }
-    if (!month || (monthKey(l.startDate) === month || monthKey(l.endDate) === month)) {
+    if (!month || isInPeriod(l.startDate) || isInPeriod(l.endDate)) {
       rows[l.workerId].leaveRecords.push(l);
     }
   });
@@ -6446,10 +6478,35 @@ function collectStats() {
 
 /* 按预约时间归月的项目工时差异统计 */
 function collectProjectStats() {
+  const period = document.getElementById("statsPeriod").value;
   const month = document.getElementById("statsMonth").value;
+  const storeFilter = document.getElementById("statsStore").value;
   const workerFilter = document.getElementById("statsWorker").value;
+  const statusFilter = document.getElementById("statsStatus").value;
+  
+  function isInPeriod(dateStr) {
+    if (!month) return true;
+    const [year, m] = month.split("-").map(Number);
+    if (period === "month") {
+      return monthKey(dateStr) === month;
+    } else if (period === "quarter") {
+      const quarter = Math.ceil(m / 3);
+      const [logYear, logMonth] = monthKey(dateStr).split("-").map(Number);
+      const logQuarter = Math.ceil(logMonth / 3);
+      return logYear === year && logQuarter === quarter;
+    } else if (period === "year") {
+      return dateStr.startsWith(year + "-");
+    }
+    return true;
+  }
+
   return cache.projects
-    .filter((p) => !month || monthKey(p.appointmentTime) === month)
+    .filter((p) => {
+      if (!isInPeriod(p.appointmentTime)) return false;
+      if (storeFilter && p.storeId !== storeFilter) return false;
+      if (statusFilter && p.status !== statusFilter) return false;
+      return true;
+    })
     .map((p) => {
       const est = Number(p.estimatedHours) || 0;
       const act = (p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
@@ -6485,6 +6542,108 @@ function collectProjectStats() {
         .map((data) => ({ name: data.name, hours: data.hours, levelHours: data.levelHours, isOutsourced: true }));
       const outsourcedCount = outsourcedWorkerHours.length;
       const totalOutsourcedHoursFromLogs = Object.values(outsourcedWorkerMap).reduce((sum, h) => sum + (h.hours || 0), 0);
+      const autoWorkerHours = [];
+      if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && p.startedAt && p.finishedAt) {
+        const workerPeriods = {};
+        const allWorkerIds = new Set([...(p.assignedWorkerIds || [])]);
+        (p.workerChangeHistory || []).forEach(ch => {
+          if (ch.workerId) allWorkerIds.add(ch.workerId);
+        });
+        allWorkerIds.forEach((wid) => {
+          workerPeriods[wid] = buildWorkerPeriods(p, wid);
+        });
+        (p.workerChangeHistory || []).forEach((ch) => {
+          const wid = ch.workerId;
+          if (ch.action === "unassign" && workerPeriods[wid]) {
+            const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+            if (lastPeriod) {
+              lastPeriod.end = ch.time;
+              lastPeriod.autoHours = ch.autoHours;
+            }
+          }
+        });
+        const projectEndTime = getProjectEffectiveEndTime(p).toISOString();
+        allWorkerIds.forEach((wid) => {
+          if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
+            const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+            if (!lastPeriod.end) {
+              lastPeriod.end = projectEndTime;
+            }
+          }
+        });
+        allWorkerIds.forEach((wid) => {
+          if (workerFilter && wid !== workerFilter) return;
+          const worker = cache.workers.find(w => w.id === wid);
+          const name = worker ? worker.name : "未知";
+          const periods = workerPeriods[wid] || [];
+          let hours = 0;
+          periods.forEach(pr => {
+            const start = new Date(pr.start);
+            const end = pr.end ? new Date(pr.end) : new Date(projectEndTime);
+            let duration = (end - start) / (1000 * 60 * 60);
+            hours += duration;
+          });
+          hours = Math.round(hours * 10) / 10;
+          if (hours > 0) {
+            autoWorkerHours.push({ name, hours });
+          }
+        });
+      } else {
+        const autoLogs = (p.workLogs || []).filter(l => {
+          if (workerFilter && l.workerId !== workerFilter) return false;
+          return l.note && l.note.includes("系统自动计算");
+        });
+        autoLogs.forEach(l => {
+          autoWorkerHours.push({ name: l.workerName || "未知", hours: Number(l.hours) || 0 });
+        });
+      }
+      if ([STATUS.WORKING].includes(p.status) && p.startedAt) {
+        const workerPeriods = {};
+        (p.assignedWorkerIds || []).forEach((wid) => {
+          workerPeriods[wid] = buildWorkerPeriods(p, wid);
+        });
+        (p.workerChangeHistory || []).forEach((ch) => {
+          const wid = ch.workerId;
+          if (ch.action === "unassign" && workerPeriods[wid]) {
+            const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+            if (lastPeriod) {
+              lastPeriod.end = ch.time;
+              lastPeriod.autoHours = ch.autoHours;
+            }
+          }
+        });
+        const projectEndTime = getProjectEffectiveEndTime(p).toISOString();
+        (p.assignedWorkerIds || []).forEach((wid) => {
+          if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
+            const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+            if (!lastPeriod.end) {
+              lastPeriod.end = projectEndTime;
+            }
+          }
+        });
+        (p.assignedWorkerIds || []).forEach((wid) => {
+          if (workerFilter && wid !== workerFilter) return;
+          const worker = cache.workers.find(w => w.id === wid);
+          const name = worker ? worker.name : "未知";
+          const periods = workerPeriods[wid] || [];
+          let hours = 0;
+          periods.forEach(pr => {
+            const start = new Date(pr.start);
+            const end = pr.end ? new Date(pr.end) : new Date(projectEndTime);
+            let duration = (end - start) / (1000 * 60 * 60);
+            hours += duration;
+          });
+          hours = Math.round(hours * 10) / 10;
+          if (hours > 0) {
+            autoWorkerHours.push({ name, hours });
+          }
+        });
+      }
+      const autoHours = autoWorkerHours.reduce((sum, w) => sum + w.hours, 0);
+      const notes = (p.workLogs || [])
+        .filter(l => l.note && l.note.trim() && (!workerFilter || l.workerId === workerFilter))
+        .map(l => (l.workerName || "未知") + "：" + l.note.trim())
+        .join("；");
       return { 
         id: p.id, 
         name: p.name, 
@@ -6501,7 +6660,12 @@ function collectProjectStats() {
         outsourcedHours: p.outsourcedHours || 0, 
         outsourcedHoursFromLogs: Math.max(p.outsourcedHoursFromLogs || 0, totalOutsourcedHoursFromLogs),
         date: p.appointmentTime,
-        store: storeName(p.storeId)
+        store: storeName(p.storeId),
+        autoHours,
+        autoWorkerHours,
+        notes,
+        appointmentTime: p.appointmentTime,
+        startedAt: p.startedAt
       };
     })
     .sort((a, b) => b.diff - a.diff);
@@ -6512,9 +6676,35 @@ function renderStats() {
   const totalHours = rows.reduce((s, r) => s + r.hours, 0);
 
   const projRows = collectProjectStats();
+  
+  const period = document.getElementById("statsPeriod").value;
+  const month = document.getElementById("statsMonth").value;
+  const storeFilter = document.getElementById("statsStore").value;
+  
+  function isInPeriod(dateStr) {
+    if (!month) return true;
+    const [year, m] = month.split("-").map(Number);
+    if (period === "month") {
+      return monthKey(dateStr) === month;
+    } else if (period === "quarter") {
+      const quarter = Math.ceil(m / 3);
+      const [logYear, logMonth] = monthKey(dateStr).split("-").map(Number);
+      const logQuarter = Math.ceil(logMonth / 3);
+      return logYear === year && logQuarter === quarter;
+    } else if (period === "year") {
+      return dateStr.startsWith(year + "-");
+    }
+    return true;
+  }
+  
+  const allProjects = cache.projects.filter(p => {
+    if (!isInPeriod(p.appointmentTime)) return false;
+    if (storeFilter && p.storeId !== storeFilter) return false;
+    return true;
+  });
   const recorded = projRows.filter((r) => r.hasActual);
-  const totalEst = recorded.reduce((s, r) => s + r.est, 0);
-  const totalAct = recorded.reduce((s, r) => s + (r.act || 0), 0);
+  const totalEst = allProjects.reduce((s, r) => s + (Number(r.estimatedHours) || 0), 0);
+  const totalAct = allProjects.reduce((s, r) => s + ((r.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0)), 0);
   const totalDiff = totalAct - totalEst;
   
   const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
@@ -6656,7 +6846,7 @@ function renderStats() {
     <div class="detail-block" style="padding:0;overflow:hidden">
       <table class="data">
         <thead>
-          <tr><th>日期</th><th>店面</th><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异(实际−预计)</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工人员工时</th><th style="color:#8b5cf6">外协人数</th></tr>
+          <tr><th>日期</th><th>预约开工</th><th>实际开工</th><th>店面</th><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工人员工时</th><th style="color:#8b5cf6">外协人数</th><th style="color:#f59e0b">系统自动工时</th><th>工时备注</th></tr>
         </thead>
         <tbody>
           ${projRows.map((r) => {
@@ -6664,9 +6854,12 @@ function renderStats() {
             const outsourcedWorkers = r.outsourcedWorkerHours.map((w) => `<span style="color:#8b5cf6">${esc(w.name)} ${w.hours}h</span>`).join("、");
             const workerText = (internalWorkers || "") + (internalWorkers && outsourcedWorkers ? "、" : "") + (outsourcedWorkers || "");
             const outsourcedCount = r.outsourcedWorkerHours.length;
+            const autoWorkerText = (r.autoWorkerHours || []).map((w) => `${esc(w.name)} ${w.hours}h`).join("、");
             return `
             <tr>
               <td>${r.date ? fmtDate(r.date) : "—"}</td>
+              <td>${r.appointmentTime ? fmtTime(r.appointmentTime) : "—"}</td>
+              <td>${r.startedAt ? fmtTime(r.startedAt) : "—"}</td>
               <td>${esc(r.store || "—")}</td>
               <td>${esc(r.name)}</td>
               <td><span class="badge ${r.status}">${r.status}</span></td>
@@ -6679,16 +6872,19 @@ function renderStats() {
               <td style="color:#dc2626">${r.levelHours?.特级 || 0}</td>
               <td style="white-space:normal;max-width:320px">${workerText || `<span style="color:var(--muted)">—</span>`}</td>
               <td style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
+              <td style="color:#f59e0b;white-space:normal;max-width:200px">${autoWorkerText || `<span style="color:var(--muted)">—</span>`}</td>
+              <td style="white-space:normal;max-width:300px">${r.notes || `<span style="color:var(--muted)">—</span>`}</td>
             </tr>`;
           }).join("")}
         </tbody>
         <tfoot>
-          <tr><td colspan="4">合计（已登记实际）</td><td>${totalEst}</td><td>${totalAct}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td>
+          <tr><td colspan="6">合计（已登记实际）</td><td>${totalEst}</td><td>${totalAct}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td>
             <td>${projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0)}</td>
             <td>${projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0)}</td>
             <td>${projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0)}</td>
             <td>${projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0)}</td>
             <td></td><td style="color:#8b5cf6;font-weight:600">${totalOutsourcedWorkers}人</td>
+            <td style="color:#f59e0b;font-weight:600">${projRows.reduce((s, r) => s + (r.autoHours || 0), 0)}</td><td></td>
           </tr>
         </tfoot>
       </table>
@@ -6721,86 +6917,588 @@ function renderStats() {
     ${projectTable}`;
 }
 
+function getWageConfig() {
+  const stored = localStorage.getItem("wageConfig");
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch (e) {
+      console.error("Failed to parse wage config:", e);
+    }
+  }
+  return {初级: 10, 中级: 15, 高级: 20, 特级: 30};
+}
+
+function saveWageConfig(config) {
+  localStorage.setItem("wageConfig", JSON.stringify(config));
+}
+
+function closeWageConfigModal() {
+  const mask = document.getElementById("wageConfigModal");
+  if (mask) mask.remove();
+}
+
+function showWageConfig() {
+  if (!perm.manageWageConfig()) { toast("权限不足：此功能仅总经理可见"); return; }
+  const config = getWageConfig();
+  const isMobile = window.innerWidth <= 768;
+  const popup = document.createElement("div");
+  popup.id = "wageConfigModal";
+  popup.className = "modal-mask";
+  if (!isMobile) {
+    const btn = document.getElementById("btnWageConfig");
+    const btnRect = btn.getBoundingClientRect();
+    popup.style.alignItems = "flex-start";
+    popup.style.justifyContent = "flex-start";
+    popup.style.paddingLeft = btnRect.left + "px";
+    popup.style.paddingTop = (btnRect.bottom + 8) + "px";
+  }
+  let isDragging = false;
+  popup.addEventListener("mousedown", function(e) {
+    isDragging = false;
+  });
+  popup.addEventListener("mousemove", function(e) {
+    isDragging = true;
+  });
+  popup.addEventListener("mouseup", function(e) {
+    if (!isDragging && e.target === popup) {
+      closeWageConfigModal();
+    }
+  });
+  popup.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:${isMobile ? '90%' : '280px'};width:${isMobile ? 'auto' : '280px'};max-height:none;overflow:hidden;">
+      <div class="modal-head">
+        <h3>💰 工时单价设置</h3>
+        <button class="modal-close" onclick="closeWageConfigModal()">×</button>
+      </div>
+      <div class="modal-body" style="padding:12px;">
+        <p style="color:#666;margin-bottom:12px;font-size:12px;">设置各等级工时的单价（元/小时）</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <label style="font-weight:bold;color:#007bff;font-size:12px;">初级</label>
+            <input type="number" id="wageLevel1" value="${config.初级 || 10}" class="input" placeholder="10" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;" />
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <label style="font-weight:bold;color:#28a745;font-size:12px;">中级</label>
+            <input type="number" id="wageLevel2" value="${config.中级 || 15}" class="input" placeholder="15" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;" />
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <label style="font-weight:bold;color:#ffc107;font-size:12px;">高级</label>
+            <input type="number" id="wageLevel3" value="${config.高级 || 20}" class="input" placeholder="20" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;" />
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <label style="font-weight:bold;color:#dc3545;font-size:12px;">特级</label>
+            <input type="number" id="wageLevel4" value="${config.特级 || 30}" class="input" placeholder="30" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeWageConfigModal()">取消</button>
+        <button class="btn" onclick="saveWageConfigFromDialog()">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(popup);
+}
+
+function saveWageConfigFromDialog() {
+  const config = {
+    初级: Number(document.getElementById("wageLevel1").value) || 10,
+    中级: Number(document.getElementById("wageLevel2").value) || 15,
+    高级: Number(document.getElementById("wageLevel3").value) || 20,
+    特级: Number(document.getElementById("wageLevel4").value) || 30
+  };
+  saveWageConfig(config);
+  closeWageConfigModal();
+  toast("工时单价设置已保存");
+}
+
 function exportStats() {
   const rows = collectStats();
   const projRows = collectProjectStats();
   if (rows.length === 0 && projRows.length === 0) { toast("暂无数据可导出"); return; }
+  const period = document.getElementById("statsPeriod").value;
   const month = document.getElementById("statsMonth").value || "全部";
+  const wageConfig = getWageConfig();
 
-  let html = `
-<html xmlns:x="urn:schemas-microsoft-com:office:excel">
-<head>
-<meta charset="utf-8"/>
-<style>
-table {border-collapse:collapse;font-family:Microsoft YaHei,sans-serif;font-size:12px;margin:0 auto;}
-th {background:#4f46e5;color:#fff;font-weight:bold;text-align:center;padding:8px 12px;border:1px solid #e5e7eb;white-space:nowrap;}
-td {border:1px solid #e5e7eb;padding:8px 12px;text-align:center;}
-.num {text-align:right;}
-.title {font-size:16px;font-weight:bold;margin:16px 0 8px;color:#1f2937;text-align:center;}
-</style>
-</head>
-<body>
-`;
-
-  html += '<div class="title">👷 人员安装工时</div>\n<table>\n<col width="120"/><col width="100"/><col width="80"/><col width="80"/><col width="80"/><col width="80"/><col width="80"/><col width="80"/><col width="100"/>\n<tr><th>施工人员</th><th>安装工时(小时)</th><th>初级工时</th><th>中级工时</th><th>高级工时</th><th>特级工时</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>';
-
-  rows.forEach((r) => {
-    html += '<tr>\n<td>' + esc(r.name) + (r.isOutsourced ? ' (外协)' : '') + '</td>\n<td class="num">' + r.hours + '</td>\n<td class="num">' + (r.levelHours?.初级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.中级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.高级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.特级 || 0) + '</td>\n<td class="num">' + r.days + '</td>\n<td class="num">' + (r.leaveDays || 0) + '</td>\n<td class="num">' + r.projects + '</td>\n</tr>';
+  const totalHours = rows.reduce((s, r) => s + r.hours, 0);
+  const totalLevelHours = {初级: 0, 中级: 0, 高级: 0, 特级: 0};
+  rows.forEach(r => {
+    totalLevelHours.初级 += r.levelHours?.初级 || 0;
+    totalLevelHours.中级 += r.levelHours?.中级 || 0;
+    totalLevelHours.高级 += r.levelHours?.高级 || 0;
+    totalLevelHours.特级 += r.levelHours?.特级 || 0;
   });
+  const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
+  const totalOutsourcedWorkers = rows.filter(r => r.isOutsourced).length;
+  const totalWorkers = rows.length - totalOutsourcedWorkers;
+  const avgHours = totalWorkers > 0 ? Math.round(totalHours / totalWorkers * 10) / 10 : 0;
+  const projRecorded = projRows.filter(r => r.hasActual);
+  const totalEst = projRecorded.reduce((s, r) => s + r.est, 0);
+  const totalAct = projRecorded.reduce((s, r) => s + r.act, 0);
+  const totalDiff = totalAct - totalEst;
 
-  html += '<tr style="background:#f3f4f6;"><td style="font-weight:bold;">合计</td>\n<td class="num" style="font-weight:bold;">' + rows.reduce((s, r) => s + r.hours, 0) + '</td>\n<td class="num">' + rows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0) + '</td>\n<td class="num">' + rows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0) + '</td>\n<td class="num">' + rows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0) + '</td>\n<td class="num">' + rows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0) + '</td>\n<td colspan="3"></td></tr>\n</table>';
+  const internalRows = rows.filter(r => !r.isOutsourced);
+  const lowEfficiencyWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
+  const highWorkloadWorkers = internalRows.filter(r => r.hours > 40);
+  const topWorkerRow = internalRows.length > 0 ? internalRows.reduce((prev, curr) => (prev.hours > curr.hours ? prev : curr), internalRows[0]) : null;
+  const topWorker = topWorkerRow ? topWorkerRow.name : "";
+  const topHours = topWorkerRow ? topWorkerRow.hours : 0;
 
-  html += '<div class="title">📅 每日工时明细</div>\n<table>\n<col width="120"/><col width="100"/><col width="100"/><col width="80"/><col width="80"/>\n<tr><th>施工人员</th><th>日期</th><th>工时(小时)</th><th>工时等级</th><th>是否请假</th></tr>';
+  function isInPeriod(dateStr) {
+    if (!month) return true;
+    const [year, m] = month.split("-").map(Number);
+    if (period === "month") {
+      return monthKey(dateStr) === month;
+    } else if (period === "quarter") {
+      const quarter = Math.ceil(m / 3);
+      const [logYear, logMonth] = monthKey(dateStr).split("-").map(Number);
+      const logQuarter = Math.ceil(logMonth / 3);
+      return logYear === year && logQuarter === quarter;
+    } else if (period === "year") {
+      return dateStr.startsWith(year + "-");
+    }
+    return true;
+  }
 
+  const titleStyle = { font: { bold: true, size: 14, color: { argb: 'FF1F2937' } }, alignment: { horizontal: 'center' } };
+  const infoStyle = { font: { size: 11 }, alignment: { vertical: 'middle' } };
+  const sectionTitleStyle = { font: { bold: true, size: 12, color: { argb: 'FF4F46E5' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF2FF' } }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
+  const headerStyle = { font: { bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
+  const totalStyle = { font: { bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
+  const dataStyle = { alignment: { vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
+  const numStyle = { alignment: { horizontal: 'right', vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
+  const leaveStyle = { font: { color: { argb: 'FFFF0000' } }, alignment: { vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
+  const highlightStyle = { font: { bold: true, color: { argb: 'FFDC2626' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = '广告施工预约系统';
+  workbook.lastModifiedBy = '系统';
+  workbook.created = new Date();
+  workbook.modified = new Date();
+
+  const summaryData = [
+    ['统计项', '数值'],
+    ['统计周期', month],
+    ['统计类型', period === 'month' ? '月度' : period === 'quarter' ? '季度' : '年度'],
+    ['', ''],
+    ['施工人员总数', rows.length],
+    ['内部人员', totalWorkers],
+    ['外协人员', totalOutsourcedWorkers],
+    ['总工时(小时)', totalHours],
+    ['人均工时(小时)', avgHours],
+    ['', ''],
+    ['初级工时', totalLevelHours.初级],
+    ['中级工时', totalLevelHours.中级],
+    ['高级工时', totalLevelHours.高级],
+    ['特级工时', totalLevelHours.特级],
+    ['外协工时', totalOutsourcedHours + 'h'],
+    ['', ''],
+    ['预计工时(小时)', totalEst],
+    ['实际工时(小时)', totalAct],
+    ['工时差异', (totalDiff >= 0 ? '+' : '') + totalDiff],
+    ['', ''],
+    ['高负荷预警', highWorkloadWorkers.length > 0 ? highWorkloadWorkers.map(w => w.name).join("、") : '无'],
+    ['效率建议', lowEfficiencyWorkers.length > 0 ? lowEfficiencyWorkers.map(w => w.name).join("、") : '无'],
+    ['本月之星', topWorker && topHours > 0 ? topWorker + ' (' + topHours + '小时)' : '无']
+  ];
+  const summarySheet = workbook.addWorksheet("统计概览");
+  summaryData.forEach((row, rowIndex) => {
+    const excelRow = summarySheet.addRow(row);
+    row.forEach((cell, colIndex) => {
+      const excelCell = excelRow.getCell(colIndex + 1);
+      if (rowIndex === 0) {
+        excelCell.style = { ...headerStyle };
+      } else if (rowIndex === summaryData.length - 1 && row[0] === '合计') {
+        excelCell.style = { ...totalStyle };
+      } else {
+        excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
+      }
+    });
+  });
+  summarySheet.columns = [{ key: 'A', width: 15 }, { key: 'B', width: 25 }];
+
+  const workerData = [['施工人员', '类型', '安装工时(小时)', 'vs平均', '初级工时', '中级工时', '高级工时', '特级工时', '施工天数', '请假天数', '参与项目数']];
+  rows.forEach((r) => {
+    const vsAvg = r.isOutsourced ? "" : ((r.hours - avgHours) >= 0 ? "+" : "") + (r.hours - avgHours).toFixed(1);
+    workerData.push([
+      r.name,
+      r.isOutsourced ? '外协' : '内部',
+      r.hours,
+      vsAvg,
+      r.levelHours?.初级 || 0,
+      r.levelHours?.中级 || 0,
+      r.levelHours?.高级 || 0,
+      r.levelHours?.特级 || 0,
+      r.days,
+      r.leaveDays || 0,
+      r.projects
+    ]);
+  });
+  workerData.push(['合计', '', totalHours, '', totalLevelHours.初级, totalLevelHours.中级, totalLevelHours.高级, totalLevelHours.特级, '', '', '']);
+  const workerSheet = workbook.addWorksheet("人员安装工时");
+  workerData.forEach((row, rowIndex) => {
+    const excelRow = workerSheet.addRow(row);
+    row.forEach((cell, colIndex) => {
+      const excelCell = excelRow.getCell(colIndex + 1);
+      if (rowIndex === 0) {
+        excelCell.style = { ...headerStyle };
+      } else if (rowIndex === workerData.length - 1 && row[0] === '合计') {
+        excelCell.style = { ...totalStyle };
+      } else {
+        excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
+      }
+    });
+  });
+  workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 10 }, { key: 'K', width: 12 }];
+
+  const dailyData = [['施工人员', '类型', '日期', '工时(小时)', '工时等级', '是否请假']];
   rows.forEach((r) => {
     Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).forEach(([date, logs]) => {
       const isLeave = r.leaveRecords && r.leaveRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
       logs.forEach((log) => {
-        html += '<tr>\n<td>' + esc(r.name) + '</td>\n<td>' + date + '</td>\n<td class="num">' + log.hours + '</td>\n<td>' + esc(log.level) + '</td>\n<td>' + (isLeave ? '是' : '') + '</td>\n</tr>';
+        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, log.hours, log.level, isLeave ? '是' : '']);
       });
     });
   });
-
-  html += '</table>';
+  const dailySheet = workbook.addWorksheet("每日工时明细");
+  dailyData.forEach((row, rowIndex) => {
+    const excelRow = dailySheet.addRow(row);
+    row.forEach((cell, colIndex) => {
+      const excelCell = excelRow.getCell(colIndex + 1);
+      if (rowIndex === 0) {
+        excelCell.style = { ...headerStyle };
+      } else {
+        excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
+      }
+    });
+  });
+  dailySheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }];
 
   const hasLeaves = rows.some((r) => r.leaveRecords && r.leaveRecords.length > 0);
   if (hasLeaves) {
-    html += '<div class="title">🌴 请假记录</div>\n<table>\n<col width="120"/><col width="180"/><col width="300"/>\n<tr><th>施工人员</th><th>请假时段</th><th>请假原因</th></tr>';
-
+    const leaveData = [['施工人员', '类型', '请假时段', '请假原因']];
     rows.forEach((r) => {
       if (!r.leaveRecords || r.leaveRecords.length === 0) return;
       r.leaveRecords.forEach((lr) => {
-        html += '<tr>\n<td>' + esc(r.name) + '</td>\n<td>' + formatLeaveTime(lr) + '</td>\n<td>' + esc(lr.reason || '') + '</td>\n</tr>';
+        leaveData.push([r.name, r.isOutsourced ? '外协' : '内部', formatLeaveTime(lr), lr.reason || '']);
       });
     });
-
-    html += '</table>';
+    const leaveSheet = workbook.addWorksheet("请假记录");
+    leaveData.forEach((row, rowIndex) => {
+      const excelRow = leaveSheet.addRow(row);
+      row.forEach((cell, colIndex) => {
+        const excelCell = excelRow.getCell(colIndex + 1);
+        if (rowIndex === 0) {
+          excelCell.style = { ...headerStyle };
+        } else {
+          excelCell.style = { ...dataStyle };
+        }
+      });
+    });
+    leaveSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 20 }, { key: 'D', width: 25 }];
   }
 
-  html += '<div class="title">📐 项目工时差异</div>\n<table>\n<col width="100"/><col width="100"/><col width="250"/><col width="80"/><col width="80"/><col width="80"/><col width="100"/><col width="60"/><col width="60"/><col width="60"/><col width="60"/><col width="250"/><col width="80"/>\n<tr><th>日期</th><th>店面</th><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工人员工时</th><th>外协人数</th></tr>';
-
+  const projectData = [['日期', '预约开工时间', '实际开工时间', '店面', '项目', '状态', '预计工时', '实际工时', '差异', '初级', '中级', '高级', '特级', '施工人员工时', '外协人数', '系统自动工时', '工时备注']];
   projRows.forEach((r) => {
-    const internalWorkers = r.workerHours.map((w) => esc(w.name) + ' ' + w.hours + 'h').join('、');
-    const outsourcedWorkers = r.outsourcedWorkerHours.map((w) => esc(w.name) + ' ' + w.hours + 'h').join('、');
+    const internalWorkers = r.workerHours.map((w) => w.name + ' ' + w.hours + 'h').join('、');
+    const outsourcedWorkers = r.outsourcedWorkerHours.map((w) => w.name + ' ' + w.hours + 'h').join('、');
     const workerText = (internalWorkers || '') + (internalWorkers && outsourcedWorkers ? '、' : '') + (outsourcedWorkers || '');
     const outsourcedCount = r.outsourcedWorkerHours.length;
-    html += '<tr>\n<td>' + (r.date ? fmtDate(r.date) : '') + '</td>\n<td>' + esc(r.store || '') + '</td>\n<td>' + esc(r.name) + '</td>\n<td>' + r.status + '</td>\n<td class="num">' + r.est + '</td>\n<td class="num">' + (r.hasActual ? r.act : '') + '</td>\n<td class="num">' + (r.hasActual ? fmtSignedDiff(r.diff) : '未登记') + '</td>\n<td class="num">' + (r.levelHours?.初级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.中级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.高级 || 0) + '</td>\n<td class="num">' + (r.levelHours?.特级 || 0) + '</td>\n<td>' + workerText + '</td>\n<td class="num">' + (outsourcedCount > 0 ? outsourcedCount + '人' : '') + '</td>\n</tr>';
+    const autoWorkerText = (r.autoWorkerHours || []).map((w) => w.name + ' ' + w.hours + 'h').join('、');
+    projectData.push([
+      r.date ? fmtDate(r.date) : '',
+      r.appointmentTime ? fmtTime(r.appointmentTime) : '',
+      r.startedAt ? fmtTime(r.startedAt) : '',
+      r.store || '',
+      r.name,
+      r.status,
+      r.est,
+      r.hasActual ? r.act : '',
+      r.hasActual ? (r.diff >= 0 ? '+' : '') + r.diff : '未登记',
+      r.levelHours?.初级 || 0,
+      r.levelHours?.中级 || 0,
+      r.levelHours?.高级 || 0,
+      r.levelHours?.特级 || 0,
+      workerText,
+      outsourcedCount > 0 ? outsourcedCount + '人' : '',
+      autoWorkerText,
+      r.notes || ''
+    ]);
+  });
+  projectData.push(['', '', '', '', '', '合计', totalEst, totalAct, (totalDiff >= 0 ? '+' : '') + totalDiff,
+    projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0),
+    projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0),
+    projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0),
+    projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0),
+    '', '', projRows.reduce((s, r) => s + (r.autoHours || 0), 0), '']);
+  const projectSheet = workbook.addWorksheet("项目工时差异");
+  projectData.forEach((row, rowIndex) => {
+    const excelRow = projectSheet.addRow(row);
+    row.forEach((cell, colIndex) => {
+      const excelCell = excelRow.getCell(colIndex + 1);
+      if (rowIndex === 0) {
+        excelCell.style = { ...headerStyle };
+      } else if (rowIndex === projectData.length - 1 && row[0] === '') {
+        excelCell.style = { ...totalStyle };
+      } else {
+        excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
+      }
+    });
+  });
+  projectSheet.columns = [{ key: 'A', width: 10 }, { key: 'B', width: 12 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 25 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 8 }, { key: 'K', width: 8 }, { key: 'L', width: 8 }, { key: 'M', width: 8 }, { key: 'N', width: 25 }, { key: 'O', width: 10 }, { key: 'P', width: 15 }, { key: 'Q', width: 30 }];
+
+  const usedNames = {};
+  rows.forEach((r) => {
+    let workerName = r.name.replace(/[\\/\?\*\[\]:]/g, '_');
+    if (workerName.length > 20) workerName = workerName.substring(0, 20);
+    if (usedNames[workerName]) {
+      workerName += '_' + (++usedNames[workerName]);
+    } else {
+      usedNames[workerName] = 1;
+    }
+    const sheetName = workerName;
+    
+    const sheet = workbook.addWorksheet(sheetName);
+    let rowNum = 1;
+    
+    sheet.addRow(['施工人员工时统计与工资核算表']);
+    sheet.getRow(rowNum).getCell(1).style = { ...titleStyle };
+    sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+    rowNum++;
+    
+    rowNum++;
+    
+    sheet.addRow(['姓名', r.name, '', '类型', r.isOutsourced ? '外协人员' : '内部人员', '', '统计周期', month]);
+    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...infoStyle });
+    rowNum++;
+    
+    sheet.addRow(['总工时', (r.hours || 0), '小时', '施工天数', (r.days || 0), '天', '请假天数', (r.leaveDays || 0), '天']);
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      cell.style = ci === 1 || ci === 4 || ci === 7 ? { ...numStyle } : { ...infoStyle };
+    });
+    rowNum++;
+    
+    rowNum++;
+    
+    sheet.addRow(['工时等级统计']);
+    sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
+    sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+    rowNum++;
+    
+    sheet.addRow(['等级', '工时(小时)', '占比', '单价(元/小时)', '金额(元)']);
+    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+    rowNum++;
+    
+    const levels = ['初级', '中级', '高级', '特级'];
+    const levelRowNums = [];
+    levels.forEach((level, idx) => {
+      const hours = r.levelHours?.[level] || 0;
+      const percentage = r.hours > 0 ? ((hours / r.hours) * 100).toFixed(1) + '%' : '0%';
+      const price = wageConfig[level] || 0;
+      levelRowNums.push(rowNum);
+      sheet.addRow([level, hours, percentage, price, '']);
+      const amountCell = sheet.getRow(rowNum).getCell(5);
+      amountCell.value = { formula: `=B${rowNum}*D${rowNum}`, result: hours * price };
+      amountCell.style = { ...numStyle };
+      sheet.getRow(rowNum).eachCell((cell, ci) => {
+        if (ci === 4) return;
+        cell.style = ci === 1 || ci === 3 || ci === 4 ? { ...numStyle } : { ...dataStyle };
+      });
+      rowNum++;
+    });
+    
+    const totalAmount = levels.reduce((sum, level) => sum + (r.levelHours?.[level] || 0) * (wageConfig[level] || 0), 0);
+    sheet.addRow(['合计', '', '', '', '']);
+    const totalCell = sheet.getRow(rowNum).getCell(5);
+    totalCell.value = { formula: `=SUM(E${levelRowNums[0]}:E${levelRowNums[levelRowNums.length-1]})`, result: totalAmount };
+    totalCell.style = { ...highlightStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      if (ci === 4) return;
+      cell.style = { ...totalStyle };
+    });
+    rowNum++;
+    const totalAmountRowNum = rowNum - 1;
+    
+    rowNum++;
+    
+    const calTitleRow = sheet.addRow(['每日工时日历']);
+    calTitleRow.getCell(1).style = { ...sectionTitleStyle };
+    sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+    rowNum++;
+    
+    sheet.addRow(['日期', '星期', '初级工时', '中级工时', '高级工时', '特级工时', '合计工时', '项目', '请假']);
+    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+    rowNum++;
+    
+    const dates = [];
+    const hoursMap = {};
+    const leaveMap = {};
+    const projectMap = {};
+    const levelHoursMap = {初级: {}, 中级: {}, 高级: {}, 特级: {}};
+    
+    if (month) {
+      const [year, m] = month.split("-").map(Number);
+      const daysInMonth = new Date(year, m, 0).getDate();
+      for (let i = 1; i <= daysInMonth; i++) {
+        const dateStr = `${year}-${String(m).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+        if (isInPeriod(dateStr)) {
+          dates.push(dateStr);
+          hoursMap[dateStr] = 0;
+          projectMap[dateStr] = '';
+          levels.forEach(l => levelHoursMap[l][dateStr] = 0);
+        }
+      }
+    } else {
+      Object.keys(r.daily).forEach(date => {
+        dates.push(date);
+        hoursMap[date] = 0;
+        projectMap[date] = '';
+        levels.forEach(l => levelHoursMap[l][date] = 0);
+      });
+      dates.sort();
+    }
+    
+    Object.entries(r.daily).forEach(([date, logs]) => {
+      if (!hoursMap[date]) hoursMap[date] = 0;
+      logs.forEach(log => {
+        hoursMap[date] += log.hours;
+        levelHoursMap[log.level][date] += log.hours;
+        projectMap[date] += (projectMap[date] ? '、' : '') + (log.project || '');
+      });
+    });
+    
+    if (r.leaveRecords) {
+      r.leaveRecords.forEach(lr => {
+        const start = new Date(lr.startDate);
+        const end = new Date(lr.endDate);
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+          const dateStr = fmtDate(d);
+          leaveMap[dateStr] = lr.reason || '请假';
+        }
+      });
+    }
+    
+    let calTotalHours = 0;
+    const calLevelTotals = {初级: 0, 中级: 0, 高级: 0, 特级: 0};
+    dates.forEach(date => {
+      const d = new Date(date);
+      const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
+      const weekDay = weekDays[d.getDay()];
+      const hours = hoursMap[date] || 0;
+      calTotalHours += hours;
+      levels.forEach(l => calLevelTotals[l] += levelHoursMap[l][date] || 0);
+      const isLeaveDay = !!leaveMap[date];
+      sheet.addRow([date, weekDay, levelHoursMap.初级[date] || 0, levelHoursMap.中级[date] || 0, levelHoursMap.高级[date] || 0, levelHoursMap.特级[date] || 0, hours, projectMap[date] || '', isLeaveDay ? leaveMap[date] : '']);
+      sheet.getRow(rowNum).eachCell((cell, ci) => {
+        if (isLeaveDay && ci === 8) {
+          cell.style = { ...leaveStyle };
+        } else if (ci >= 2 && ci <= 6) {
+          cell.style = { ...numStyle };
+        } else {
+          cell.style = { ...dataStyle };
+        }
+      });
+      rowNum++;
+    });
+    
+    sheet.addRow(['合计', '', calLevelTotals.初级, calLevelTotals.中级, calLevelTotals.高级, calLevelTotals.特级, calTotalHours, '', '']);
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      cell.style = ci >= 2 && ci <= 6 ? { ...highlightStyle } : { ...totalStyle };
+    });
+    rowNum++;
+    
+    rowNum++;
+    
+    if (r.leaveRecords && r.leaveRecords.length > 0) {
+      sheet.addRow(['请假记录']);
+      sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
+      sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+      rowNum++;
+      
+      sheet.addRow(['序号', '开始日期', '结束日期', '请假天数', '请假原因', '', '', '', '']);
+      sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+      rowNum++;
+      
+      r.leaveRecords.forEach((lr, idx) => {
+        const start = new Date(lr.startDate);
+        const end = new Date(lr.endDate);
+        const days = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+        sheet.addRow([idx + 1, lr.startDate, lr.endDate, days, lr.reason || '', '', '', '', '']);
+        sheet.getRow(rowNum).eachCell((cell, ci) => {
+          cell.style = ci === 3 ? { ...numStyle } : { ...dataStyle };
+        });
+        rowNum++;
+      });
+      
+      rowNum++;
+    }
+    
+    sheet.addRow(['工资核算']);
+    sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
+    sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+    rowNum++;
+    
+    sheet.addRow(['项目', '金额(元)', '', '计算公式']);
+    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+    rowNum++;
+    
+    const wageRowNum = rowNum;
+    sheet.addRow(['工时工资合计', '', '', '各等级工时 x 对应单价之和']);
+    const wageCell = sheet.getRow(rowNum).getCell(2);
+    wageCell.value = { formula: `=E${totalAmountRowNum}`, result: totalAmount };
+    wageCell.style = { ...numStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      if (ci === 1) return;
+      cell.style = { ...dataStyle };
+    });
+    rowNum++;
+    
+    sheet.addRow(['其他补贴', '', '', '']);
+    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...dataStyle });
+    rowNum++;
+    
+    const grossRowNum = rowNum;
+    sheet.addRow(['应发工资合计', '', '', '工时工资 + 其他补贴']);
+    const grossCell = sheet.getRow(rowNum).getCell(2);
+    grossCell.value = { formula: `=B${wageRowNum}+B${rowNum - 1}`, result: totalAmount };
+    grossCell.style = { ...highlightStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      if (ci === 1) return;
+      cell.style = { ...totalStyle };
+    });
+    rowNum++;
+    
+    sheet.addRow(['扣款/其他', '', '', '']);
+    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...dataStyle });
+    rowNum++;
+    
+    sheet.addRow(['实发工资', '', '', '应发工资 - 扣款']);
+    const netCell = sheet.getRow(rowNum).getCell(2);
+    netCell.value = { formula: `=B${grossRowNum}-B${rowNum - 1}`, result: totalAmount };
+    netCell.style = { ...highlightStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      cell.style = ci === 1 ? { ...highlightStyle } : { ...totalStyle };
+    });
+    rowNum++;
+    
+    sheet.columns = [
+      { key: 'A', width: 15 }, { key: 'B', width: 12 }, { key: 'C', width: 5 }, { key: 'D', width: 12 },
+      { key: 'E', width: 12 }, { key: 'F', width: 8 }, { key: 'G', width: 8 }, { key: 'H', width: 30 }, { key: 'I', width: 15 }
+    ];
   });
 
-  const recorded = projRows.filter((r) => r.hasActual);
-  const totalEst = recorded.reduce((s, r) => s + r.est, 0);
-  const totalAct = recorded.reduce((s, r) => s + r.act, 0);
-  html += '<tr style="background:#f3f4f6;"><td colspan="4" style="font-weight:bold;">合计</td>\n<td class="num" style="font-weight:bold;">' + totalEst + '</td>\n<td class="num" style="font-weight:bold;">' + totalAct + '</td>\n<td class="num" style="font-weight:bold;">' + fmtSignedDiff(totalAct - totalEst) + '</td>\n<td class="num">' + projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0) + '</td>\n<td class="num">' + projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0) + '</td>\n<td class="num">' + projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0) + '</td>\n<td class="num">' + projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0) + '</td>\n<td colspan="2"></td></tr>\n</table>';
-
-  html += '</body></html>';
-
-  const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = '工时统计_' + month + '.xls';
-  a.click();
-  URL.revokeObjectURL(a.href);
-  toast('已导出 Excel');
+  workbook.xlsx.writeBuffer().then(buffer => {
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '工时统计_' + month + '.xlsx';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('已导出 Excel');
+  }).catch(err => {
+    console.error('Export error:', err);
+    toast('导出失败，请重试');
+  });
 }
 
 /* ============================================================
@@ -8027,6 +8725,7 @@ function applyPermissions() {
   setHidden("btnNewWorker", !perm.manageWorkers());
   setHidden("btnNewOutsourced", !perm.manageWorkers());
   setHidden("btnNewStore", !perm.manageStores());
+  setHidden("btnWageConfig", !perm.manageWageConfig());
 
   const bottomNavVisible = {
     projects: role != null,
@@ -8057,6 +8756,7 @@ function renderAll() {
   refreshProjectSelector();
   refreshProjectStoreFilter();
   refreshWorkerSelectors();
+  refreshStoreSelectors();
   renderConstruction();
   renderCalendar();
   renderTimelineInDetail();
@@ -10188,9 +10888,13 @@ function bindEvents() {
   if (calendarDateEl) {
     calendarDateEl.textContent = now.getDate();
   }
+  document.getElementById("statsPeriod").addEventListener("change", renderStats);
   document.getElementById("statsMonth").addEventListener("change", renderStats);
+  document.getElementById("statsStore").addEventListener("change", renderStats);
   document.getElementById("statsWorker").addEventListener("change", renderStats);
+  document.getElementById("statsStatus").addEventListener("change", renderStats);
   document.getElementById("btnExportStats").addEventListener("click", exportStats);
+  document.getElementById("btnWageConfig").addEventListener("click", showWageConfig);
 
   document.getElementById("storeStatsMonth").value = thisMonth;
   document.getElementById("storeStatsMonth").addEventListener("change", renderStoreStats);

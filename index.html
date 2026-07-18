@@ -15,6 +15,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="施工预约" />
   <link rel="stylesheet" href="styles.css" />
+  <script src="exceljs.min.js"></script>
 </head>
 <body>
   <header class="app-header">
@@ -175,11 +176,31 @@
         <h2>月底工时统计</h2>
       </div>
       <div class="toolbar">
+        <select id="statsPeriod" class="input">
+          <option value="month">月度统计</option>
+          <option value="quarter">季度统计</option>
+          <option value="year">年度统计</option>
+        </select>
         <input type="month" id="statsMonth" class="input" />
+        <select id="statsStore" class="input">
+          <option value="">全部店面</option>
+        </select>
         <select id="statsWorker" class="input">
           <option value="">全部人员</option>
         </select>
+        <select id="statsStatus" class="input">
+          <option value="">全部状态</option>
+          <option value="施工中">施工中</option>
+          <option value="已完工">已完工</option>
+          <option value="已验收">已验收</option>
+          <option value="已审核">已审核</option>
+          <option value="已暂停">已暂停</option>
+          <option value="已延期">已延期</option>
+          <option value="预约中">预约中</option>
+          <option value="已取消">已取消</option>
+        </select>
         <button class="btn" id="btnExportStats">导出统计数据</button>
+        <button class="btn" id="btnWageConfig">工时单价设置</button>
       </div>
       <div id="statsSummary" class="stats-summary"></div>
       <div id="statsTable"></div>
