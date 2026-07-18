@@ -562,6 +562,28 @@ function getProjectEffectiveEndTime(p) {
   return now;
 }
 
+function buildWorkerPeriods(p, wid) {
+  const periods = [];
+  (p.workerChangeHistory || []).forEach(ch => {
+    if (ch.workerId === wid) {
+      if (ch.action === "assign") {
+        let periodStart = ch.time;
+        if (p.startedAt && new Date(ch.time) < new Date(p.startedAt)) {
+          periodStart = p.startedAt;
+        }
+        periods.push({ start: periodStart, end: null });
+      } else if (ch.action === "unassign") {
+        const last = periods[periods.length - 1];
+        if (last) last.end = ch.time;
+      }
+    }
+  });
+  if (periods.length === 0 && p.startedAt) {
+    periods.push({ start: p.startedAt, end: null });
+  }
+  return periods;
+}
+
 function calcWorkerRealtimeHours(p, workerId, periods) {
   if (!periods || periods.length === 0) return 0;
   
@@ -3648,20 +3670,7 @@ function renderConstruction() {
             const projectEndTime = getProjectEffectiveEndTime(p);
             let totalHours = 0;
             (p.assignedWorkerIds || []).forEach(wid => {
-              const periods = [];
-              (p.workerChangeHistory || []).forEach(ch => {
-                if (ch.workerId === wid) {
-                  if (ch.action === "assign") {
-                    periods.push({ start: ch.time, end: null });
-                  } else if (ch.action === "unassign") {
-                    const last = periods[periods.length - 1];
-                    if (last) last.end = ch.time;
-                  }
-                }
-              });
-              if (periods.length === 0 && p.startedAt) {
-                periods.push({ start: p.startedAt, end: null });
-              }
+              const periods = buildWorkerPeriods(p, wid);
               periods.forEach(pr => {
                 const start = new Date(pr.start);
                 const end = pr.end ? new Date(pr.end) : projectEndTime;
@@ -3796,18 +3805,13 @@ function renderConstruction() {
         });
         
         const workerPeriods = {};
+        (p.assignedWorkerIds || []).forEach((wid) => {
+          workerPeriods[wid] = buildWorkerPeriods(p, wid);
+        });
+        
         (p.workerChangeHistory || []).forEach((ch) => {
           const wid = ch.workerId;
-          if (!workerPeriods[wid]) {
-            workerPeriods[wid] = [];
-          }
-          if (ch.action === "assign") {
-            let periodStart = ch.time;
-            if (p.startedAt && new Date(ch.time) < new Date(p.startedAt)) {
-              periodStart = p.startedAt;
-            }
-            workerPeriods[wid].push({ start: periodStart, end: null });
-          } else if (ch.action === "unassign") {
+          if (ch.action === "unassign" && workerPeriods[wid]) {
             const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
             if (lastPeriod) {
               lastPeriod.end = ch.time;
@@ -3818,11 +3822,6 @@ function renderConstruction() {
         
         const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
         (p.assignedWorkerIds || []).forEach((wid) => {
-          if (!workerPeriods[wid] || workerPeriods[wid].length === 0) {
-            if (p.startedAt) {
-              workerPeriods[wid] = [{ start: p.startedAt, end: null }];
-            }
-          }
           if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
             const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
             if (!lastPeriod.end) {
@@ -5470,24 +5469,7 @@ function openCompleteProjectForm(id) {
           const projectEndTime = getProjectEffectiveEndTime(p);
           let totalHours = 0;
           (p.assignedWorkerIds || []).forEach(wid => {
-            const periods = [];
-            (p.workerChangeHistory || []).forEach(ch => {
-              if (ch.workerId === wid) {
-                if (ch.action === "assign") {
-                  let periodStart = ch.time;
-                  if (p.startedAt && new Date(ch.time) < new Date(p.startedAt)) {
-                    periodStart = p.startedAt;
-                  }
-                  periods.push({ start: periodStart, end: null });
-                } else if (ch.action === "unassign") {
-                  const last = periods[periods.length - 1];
-                  if (last) last.end = ch.time;
-                }
-              }
-            });
-            if (periods.length === 0 && p.startedAt) {
-              periods.push({ start: p.startedAt, end: null });
-            }
+            const periods = buildWorkerPeriods(p, wid);
             periods.forEach(pr => {
               const start = new Date(pr.start);
               const end = pr.end ? new Date(pr.end) : projectEndTime;
@@ -5584,18 +5566,13 @@ function openCompleteProjectForm(id) {
   
   if (workers.length > 0) {
     const workerPeriods = {};
+    assignedWorkerIds.forEach((wid) => {
+      workerPeriods[wid] = buildWorkerPeriods(p, wid);
+    });
+    
     (p.workerChangeHistory || []).forEach((ch) => {
       const wid = ch.workerId;
-      if (!workerPeriods[wid]) {
-        workerPeriods[wid] = [];
-      }
-      if (ch.action === "assign") {
-        let periodStart = ch.time;
-        if (p.startedAt && new Date(ch.time) < new Date(p.startedAt)) {
-          periodStart = p.startedAt;
-        }
-        workerPeriods[wid].push({ start: periodStart, end: null });
-      } else if (ch.action === "unassign") {
+      if (ch.action === "unassign" && workerPeriods[wid]) {
         const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
         if (lastPeriod) {
           lastPeriod.end = ch.time;
@@ -5606,11 +5583,6 @@ function openCompleteProjectForm(id) {
     
     const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
     assignedWorkerIds.forEach((wid) => {
-      if (!workerPeriods[wid] || workerPeriods[wid].length === 0) {
-        if (p.startedAt) {
-          workerPeriods[wid] = [{ start: p.startedAt, end: null }];
-        }
-      }
       if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
         const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
         if (!lastPeriod.end) {
