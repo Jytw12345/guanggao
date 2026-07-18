@@ -156,7 +156,7 @@ const perm = {
   editProject: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT) && (isManager() || (p && p.storeId === myStore())),
   deleteProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELETE) && (isManager() || (p && p.storeId === myStore())),
   doConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION),
-  assignWorker: (p) => !isReviewed(p) && can(CAP.ASSIGN_WORKER),
+  assignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.ASSIGN_WORKER),
   viewStats: () => can(CAP.VIEW_STATS),
   viewStoreStats: () => can(CAP.VIEW_STORE_STATS),
   manageStores: () => can(CAP.MANAGE_STORES),
@@ -329,7 +329,7 @@ function onDateChange() {
   
   const selectedDate = dateEl.value;
   const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = dateKey(today);
   
   if (selectedDate === todayStr) {
     const now = new Date();
@@ -2566,7 +2566,7 @@ function updateLeaveDuration() {
   const current = new Date(start);
   
   while (current <= end) {
-    const dateStr = current.toISOString().slice(0, 10);
+    const dateStr = dateKey(current);
     if (!isWorkDay(dateStr)) {
       current.setDate(current.getDate() + 1);
       current.setHours(workStart, 0, 0, 0);
@@ -2892,9 +2892,8 @@ function renderProjects() {
             <span style="color:#991b1b;font-size:12px;">${leaveConflicts.map(r => `${r.workerName}(${r.startDate}~${r.endDate})`).join("、")}</span>
           </div>
         ` : ""}
-        <div class="card-row"><span>预计 / 实际工时</span><b>${est} / ${hasActual ? act : "—"} 工时</b></div>
-        <div class="card-row"><span>工时差异</span><b>${diffLabel(p)}</b></div>
-        <div class="card-row"><span>已填施工工时</span><b>${done} 工时</b></div>
+        <div class="card-row"><span>预计安排</span><b>总工时${est}人·小时 / ${(p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1}人 / 时长${est > 0 ? (est / ((p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1)).toFixed(1) : "—"}小时</b></div>
+        <div class="card-row"><span>实际登记</span><b>${hasActual ? act : "—"}工时 / ${(p.workLogs || []).filter(l => l.workerId).length > 0 ? [...new Set((p.workLogs || []).filter(l => l.workerId).map(l => l.workerId))].length : "-"}人 / ${diffLabel(p)}</b></div>
         ${est > 0 ? `
           <div class="card-row">
             <span>进度</span>
@@ -3803,7 +3802,11 @@ function renderConstruction() {
             workerPeriods[wid] = [];
           }
           if (ch.action === "assign") {
-            workerPeriods[wid].push({ start: ch.time, end: null });
+            let periodStart = ch.time;
+            if (p.startedAt && new Date(ch.time) < new Date(p.startedAt)) {
+              periodStart = p.startedAt;
+            }
+            workerPeriods[wid].push({ start: periodStart, end: null });
           } else if (ch.action === "unassign") {
             const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
             if (lastPeriod) {
@@ -4215,6 +4218,7 @@ async function assignWorker(pid) {
   const wid = sel ? sel.value : "";
   if (!wid) { toast("请选择安装人员"); return; }
   const p = getProject(pid);
+  if (isCompleted(p)) { toast("项目已完工，不允许再分配人员"); return; }
   const cur = p.assignedWorkerIds || [];
   if (cur.includes(wid)) { toast("该人员已分配"); return; }
   
@@ -4290,6 +4294,7 @@ async function saveOutsourcedWorkers(pid, names) {
 
 async function unassignWorker(pid, wid) {
   const p = getProject(pid);
+  if (isCompleted(p)) { toast("项目已完工，不允许移除人员"); return; }
   const next = (p.assignedWorkerIds || []).filter((x) => x !== wid);
   
   const worker = getWorker(wid);
@@ -4332,7 +4337,7 @@ async function unassignWorker(pid, wid) {
       workerId: wid,
       workerName: worker ? worker.name : "未知",
       hours: autoHours,
-      date: now.toISOString().slice(0, 10),
+      date: dateKey(now),
       note: `系统自动计算：从${fmtDateTime(p.startedAt)}到${fmtDateTime(nowStr)}，共${autoHours}小时`,
       level: "中级",
       isOutsourced: false,
@@ -4625,10 +4630,10 @@ function delayProject(id) {
   const now = new Date();
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowDate = tomorrow.toISOString().slice(0, 10);
+  const tomorrowDate = dateKey(tomorrow);
   
   const originalTime = p.appointmentTime ? new Date(p.appointmentTime) : null;
-  const originalDateStr = originalTime ? originalTime.toISOString().slice(0, 10) : "";
+  const originalDateStr = originalTime ? dateKey(originalTime) : "";
   const originalTimeStr = originalTime ? `${String(originalTime.getHours()).padStart(2, '0')}:${String(originalTime.getMinutes()).padStart(2, '0')}` : "";
   
   let times = "";
@@ -4884,13 +4889,13 @@ async function deleteWorkLog(pid, lid) {
 
 function generateWorkerScheduleDescription(dateStr = null) {
   const targetDate = dateStr ? new Date(dateStr) : new Date();
-  const dateStrFormatted = targetDate.toISOString().slice(0, 10);
+  const dateStrFormatted = dateKey(targetDate);
   const weekday = ["日", "一", "二", "三", "四", "五", "六"][targetDate.getDay()];
   
   const allTodayProjects = cache.projects.filter(p => {
     const pStart = projectStart(p);
     if (!pStart) return false;
-    return pStart.toISOString().slice(0, 10) === dateStrFormatted;
+    return dateKey(pStart) === dateStrFormatted;
   }).sort((a, b) => projectStart(a) - projectStart(b));
   
   const todayProjects = allTodayProjects.filter(p => !isCompleted(p));
@@ -5413,7 +5418,7 @@ function openCompleteProjectForm(id) {
   
   const outsourcedWorkers = (p.outsourcedWorkers || "").split(",").map(n => n.trim()).filter(n => n);
   
-  const dateStr = new Date().toISOString().slice(0, 10);
+  const dateStr = dateKey(new Date());
   
   const originalStartedAt = p.originalStartedAt || p.startedAt;
   const displayStartedAt = originalStartedAt ? new Date(originalStartedAt) : null;
@@ -5469,7 +5474,11 @@ function openCompleteProjectForm(id) {
             (p.workerChangeHistory || []).forEach(ch => {
               if (ch.workerId === wid) {
                 if (ch.action === "assign") {
-                  periods.push({ start: ch.time, end: null });
+                  let periodStart = ch.time;
+                  if (p.startedAt && new Date(ch.time) < new Date(p.startedAt)) {
+                    periodStart = p.startedAt;
+                  }
+                  periods.push({ start: periodStart, end: null });
                 } else if (ch.action === "unassign") {
                   const last = periods[periods.length - 1];
                   if (last) last.end = ch.time;
@@ -5581,7 +5590,11 @@ function openCompleteProjectForm(id) {
         workerPeriods[wid] = [];
       }
       if (ch.action === "assign") {
-        workerPeriods[wid].push({ start: ch.time, end: null });
+        let periodStart = ch.time;
+        if (p.startedAt && new Date(ch.time) < new Date(p.startedAt)) {
+          periodStart = p.startedAt;
+        }
+        workerPeriods[wid].push({ start: periodStart, end: null });
       } else if (ch.action === "unassign") {
         const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
         if (lastPeriod) {
@@ -7994,7 +8007,8 @@ let calViewMode = "timeline"; /* "calendar" | "timeline" */
 
 function dateKey(d) {
   const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  const date = new Date(d);
+  return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}`;
 }
 
 /* 某天的预约（按开始时间排序） */
@@ -8428,9 +8442,9 @@ function renderTimelineInDetail() {
             </div>
           </div>
           <div class="timeline-task-info">
-            <span>⏰ ${timeStr}</span>
-            <span>⏱️ ${p.estimatedHours}h</span>
-            <span>👥 需${p.workerCount || 1}人</span>
+            <span>${timeStr}</span>
+            <span>${p.estimatedHours}人·小时/${(p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1}人</span>
+            <span>${p.estimatedHours > 0 ? (p.estimatedHours / ((p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1)).toFixed(1) : "—"}h</span>
           </div>
           <div class="timeline-task-workers">👤 ${esc(workers)}</div>
         </div>`;
@@ -9586,6 +9600,11 @@ function bindEvents() {
   const now = new Date();
   const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   document.getElementById("statsMonth").value = thisMonth;
+  
+  const calendarDateEl = document.getElementById("calendarDate");
+  if (calendarDateEl) {
+    calendarDateEl.textContent = now.getDate();
+  }
   document.getElementById("statsMonth").addEventListener("change", renderStats);
   document.getElementById("statsWorker").addEventListener("change", renderStats);
   document.getElementById("btnExportStats").addEventListener("click", exportStats);
