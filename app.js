@@ -357,12 +357,19 @@ function fmtTime(v) {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-function generateTimeOptions(selectedValue = "08:00") {
+function generateTimeOptions(selectedValue = "08:00", minTime = null) {
   const options = [];
+  const now = new Date();
+  let started = false;
   for (let h = 0; h < 24; h++) {
     for (let m = 0; m < 60; m += 10) {
       const time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-      options.push(`<option value="${time}"${time === selectedValue ? " selected" : ""}>${time}</option>`);
+      /* 有最小时间限制时，更早的选项禁用 */
+      if (minTime && time < minTime) {
+        options.push(`<option value="${time}" disabled style="color:#ccc;">${time}</option>`);
+      } else {
+        options.push(`<option value="${time}"${time === selectedValue ? " selected" : ""}>${time}</option>`);
+      }
     }
   }
   return options.join("");
@@ -1664,7 +1671,12 @@ function renderWorkers(dateStr) {
     renderWorkerScheduleForWorker(displayDate);
     return;
   }
-  
+
+  if (!perm.viewWorker()) {
+    if (list) list.innerHTML = `<div class="empty">当前账号无查看施工人员的权限。</div>`;
+    return;
+  }
+
   if (!list) return;
   
   if (cache.workers.length === 0) {
@@ -1707,22 +1719,35 @@ function renderWorkers(dateStr) {
       const totalHours = cache.projects.reduce((s, p) =>
         s + (p.workLogs || []).filter((l) => l.workerId === w.id)
           .reduce((a, l) => a + (Number(l.hours) || 0), 0), 0);
+      const now = new Date();
+      const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+      const monthHours = cache.projects.reduce((s, p) =>
+        s + (p.workLogs || []).filter((l) => l.workerId === w.id && (l.date || '').startsWith(ym))
+          .reduce((a, l) => a + (Number(l.hours) || 0), 0), 0);
       return `
         <div class="card">
-          <div class="card-title">
-            <h3>${esc(w.name)}</h3>
-            <span class="badge 已完工">${esc(w.role || "施工")}</span>
+          <div class="worker-card-head">
+            <div class="worker-avatar">${esc((w.name || "?").charAt(0))}</div>
+            <div class="card-title">
+              <h3>${esc(w.name)}</h3>
+              <span class="role-badge">${esc(w.role || "施工")}</span>
+            </div>
           </div>
-          <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
-          <div class="card-row"><span>累计施工工时</span><b>${totalHours} 小时</b></div>
+          <div class="card-row"><span>👤 联系电话</span><b>${esc(w.phone || "—")}</b></div>
+          <div class="worker-hours-row">
+            <span class="worker-hours-item"><span class="worker-hours-label">累计工时</span><b>${totalHours} 小时</b></span>
+            <span class="worker-hours-sep"></span>
+            <span class="worker-hours-item"><span class="worker-hours-label">本月工时</span><b class="${monthHours > 208 ? 'text-overload' : ''}">${monthHours} 小时</b></span>
+          </div>
           <div class="card-actions">
             ${perm.editWorker() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button>` : ""}${perm.deleteWorker() ? `<button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
             <button class="btn small" onclick="renderWorkerSchedule('${displayDate}', '${w.id}')">查看安排</button>
-            <button class="btn small" onclick="openLeaveForm('${w.id}')" style="background:#ef4444;color:#fff">请假</button>
+            <button class="btn small danger" onclick="openLeaveForm('${w.id}')">请假</button>
           </div>
         </div>`;
     }).join("")}
     </div>`;
+  initCustomSelects(document.getElementById("workers"));
 }
 
 function renderWorkerScheduleHtml(dateStr, workerId = null) {
@@ -2128,15 +2153,19 @@ function renderOutsourcedWorkers() {
   
   list.innerHTML = cache.outsourcedWorkers.map((w) => `
     <div class="card">
-      <div class="card-title">
-        <h3>${esc(w.name)}</h3>
-        <span class="badge" style="background:#8b5cf6;color:#fff;">外协</span>
+      <div class="worker-card-head">
+        <div class="worker-avatar" style="background:linear-gradient(135deg,#a78bfa,#7c3aed);box-shadow:0 2px 6px rgba(124,58,237,0.25);">${esc((w.name || "?").charAt(0))}</div>
+        <div class="card-title">
+          <h3>${esc(w.name)}</h3>
+          <span class="role-badge role-badge--out">外协</span>
+        </div>
       </div>
-      <div class="card-row"><span>联系电话</span><b>${esc(w.phone || "—")}</b></div>
+      <div class="card-row"><span>👤 联系电话</span><b>${esc(w.phone || "—")}</b></div>
       <div class="card-actions">
         ${perm.manageOutsourced() ? `<button class="btn small" onclick="editOutsourcedWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteOutsourcedWorker('${w.id}')">删除</button>` : ""}
       </div>
     </div>`).join("");
+  initCustomSelects(document.getElementById("outsourced"));
 }
 
 function outsourcedWorkerForm(w = {}) {
@@ -3358,7 +3387,8 @@ function renderProjects() {
     });
     
     return `
-      <div class="card ${isOverdue ? "card-overdue" : ""}">
+      <div class="card ${isOverdue ? "card-overdue" : ""}" data-status="${esc(p.status)}">
+        <div class="card-status-bar"></div>
         <div class="card-title">
           <h3>${esc(p.name)}</h3>
           <div style="display: flex; gap: 4px;">
@@ -3368,45 +3398,99 @@ function renderProjects() {
             ${leaveConflicts.length > 0 ? `<span class="badge danger">⚠️ 人员请假</span>` : ""}
           </div>
         </div>
-        <div class="card-row"><span>预约门店</span><b>${esc(storeName(p.storeId))}</b></div>
-        <div class="card-row"><span>客户</span><b>${esc(p.customer || "—")}</b></div>
-        <div class="card-row"><span>联系电话</span><b>${p.phone ? `<a href="tel:${esc(p.phone)}" style="color:var(--info)">${esc(p.phone)}</a>` : "—"}</b></div>
-        <div class="card-row"><span>安装地址</span><b>${esc(p.address || "—")}</b></div>
-        <div class="card-row"><span>预约时段</span><b>${fmtTimeRange(p)}</b></div>
+
+        <!-- 摘要行：门店 / 客户 -->
+        <div class="card-meta">
+          <span class="card-meta__item"><b>${esc(storeName(p.storeId))}</b></span>
+          <span class="card-meta__sep">·</span>
+          <span class="card-meta__item">${esc(p.customer || "—")}</span>
+        </div>
+
+        <!-- 电话 + 地址 -->
+        <div class="card-sub">
+          ${p.phone ? `<a href="tel:${esc(p.phone)}" class="card-sub__link">${esc(p.phone)}</a>` : ""}
+          ${p.address ? `<span class="card-sub__addr">${esc(p.address)}</span>` : ""}
+        </div>
+
+        <!-- 预约时段（高亮 + 时长标签） -->
+        <div class="card-highlight">
+          <span class="card-highlight__icon">🕐</span>
+          <span class="card-highlight__text">${fmtTimeRange(p)}</span>
+          ${(() => {
+            const s = projectStart(p), e = projectEnd(p);
+            if (!s || !e) return "";
+            const hrs = (e - s) / 3600000;
+            const h = Math.floor(hrs);
+            const m = Math.round((hrs - h) * 60);
+            const label = m > 0 ? `${h}小时${m}分钟` : `${h}小时`;
+            return `<span class="card-highlight__duration">${label}</span>`;
+          })()}
+        </div>
+
+        <!-- 施工内容标签 -->
+        ${(p.workContent && p.workContent.length) ? `
+        <div class="card-content">
+          ${p.workContent.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("")}
+        </div>` : ""}
+
         ${leaveConflicts.length > 0 ? `
-          <div class="card-row" style="background:#fef2f2;padding:6px 10px;border-radius:4px;margin-top:4px;">
-            <span style="font-weight:bold;color:#dc2626;font-size:12px;">⚠️ 施工人员请假：</span>
-            <span style="color:#991b1b;font-size:12px;">${leaveConflicts.map(r => `${r.workerName}(${r.startDate}~${r.endDate})`).join("、")}</span>
+          <div class="card-row card-row--warn">
+            <span>⚠️ 施工人员请假</span><b>${leaveConflicts.map(r => `${r.workerName}(${r.startDate}~${r.endDate})`).join("、")}</b>
           </div>
         ` : ""}
-        <div class="card-row"><span>预计安排</span><b>总工时${est}人·小时 / ${(p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1}人 / 时长${est > 0 ? (est / ((p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1)).toFixed(1) : "—"}小时</b></div>
-        <div class="card-row"><span>实际登记</span><b>${hasActual ? act : "—"}工时 / ${(p.workLogs || []).filter(l => l.workerId).length > 0 ? [...new Set((p.workLogs || []).filter(l => l.workerId).map(l => l.workerId))].length : "-"}人 / ${diffLabel(p)}</b></div>
-        <div class="card-row">
-            <span>进度</span>
-            <div style="flex:1;display:flex;align-items:center;gap:8px;">
-              <div style="flex:1;height:7px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
-                <div style="height:100%;width:${Math.min(100, getProjectProgress(p, est, act, hasActual, done))}%;background:${(() => {
-                  if (getProjectProgress(p, est, act, hasActual, done) >= 100) return '#10b981';
-                  if (p.status === STATUS.PAUSED) return '#f59e0b';
-                  if (p.status === STATUS.DELAYED) return '#dc2626';
-                  return '#3b82f6';
-                })()};border-radius:4px;"></div>
-              </div>
-              <span style="font-weight:bold;font-size:12px;">${Math.round(getProjectProgress(p, est, act, hasActual, done))}%</span>
-            </div>
+
+        <!-- 工时摘要：预计 / 实际 -->
+        <div class="card-hours">
+          <div class="card-hours__item ${hasActual ? "" : "card-hours__item--muted"}">
+            <span class="card-hours__label">预计</span>
+            <span class="card-hours__val">${est}工时 · ${(p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1}人</span>
           </div>
-        <div class="card-row"><span>开始施工</span><b>${p.startedAt ? esc(fmtDateTime(p.startedAt)) : "—"}</b></div>
-        <div class="card-row"><span>完工时间</span><b>${p.finishedAt ? esc(fmtDateTime(p.finishedAt)) : "—"}</b></div>
-        <div class="card-row"><span>施工时长</span><b>${p.startedAt && p.finishedAt ? esc(calcActualWorkDuration(p)) : "—"}</b></div>
+          <div class="card-hours__sep"></div>
+          <div class="card-hours__item ${hasActual ? "" : "card-hours__item--muted"}">
+            <span class="card-hours__label">实际</span>
+            <span class="card-hours__val">${hasActual ? act + "工时 · " + ((p.workLogs || []).filter(l => l.workerId).length) + "人" : "—"} ${diffLabel(p)}</span>
+          </div>
+        </div>
+
+        <!-- 进度条 -->
+        <div class="card-progress">
+          <div class="card-progress__bar-wrap">
+            <div class="card-progress__bar" style="width:${Math.min(100, getProjectProgress(p, est, act, hasActual, done))}%;background:${(() => {
+              const pg = getProjectProgress(p, est, act, hasActual, done);
+              if (pg >= 100) return '#10b981';
+              if (p.status === STATUS.PAUSED) return '#f59e0b';
+              if (p.status === STATUS.DELAYED) return '#dc2626';
+              return '#3b82f6';
+            })()};"></div>
+          </div>
+          <span class="card-progress__pct">${Math.round(getProjectProgress(p, est, act, hasActual, done))}%</span>
+        </div>
+
+        <!-- 时间节点（仅在有值时显示） -->
+        ${(p.startedAt || p.finishedAt) ? `
+        <div class="card-timeline">
+          ${p.startedAt ? `<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--blue"></span><span>开工 ${fmtDateTime(p.startedAt)}</span></div>` : ""}
+          ${p.finishedAt ? `<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--green"></span><span>完工 ${fmtDateTime(p.finishedAt)}</span></div>` : ""}
+          ${p.startedAt && p.finishedAt ? `<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--gray"></span><span>时长 ${calcActualWorkDuration(p)}</span></div>` : ""}
+        </div>` : ""}
+
         <div class="card-actions">
           <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
+          ${(p.workContent && p.workContent.length) || p.note ? `<button class="btn small" onclick="showProjectContent('${p.id}')">📋 施工详情</button>` : ""}
           ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">编辑</button>` : ""}
-          ${canDelete ? `<button class="btn small danger" onclick="deleteProject('${p.id}')">删除</button>` : ""}
-          ${canReview && !reviewed ? `<button class="btn small" onclick="reviewProject('${p.id}')">审核</button>` : ""}
-          ${canUnreview ? `<button class="btn small" onclick="unreviewProject('${p.id}')">反审核</button>` : ""}
+          ${(canDelete || (canReview && !reviewed) || canUnreview) ? `
+          <div class="action-more">
+            <button class="action-more-btn" onclick="toggleActionMore(this.parentElement,event)">更多 ▾</button>
+            <div class="action-more-menu">
+              ${canDelete ? `<button class="action-more-item danger" onclick="event.stopPropagation();closeAllActionMenus();deleteProject('${p.id}')">🗑 删除</button>` : ""}
+              ${canReview && !reviewed ? `<button class="action-more-item" onclick="event.stopPropagation();closeAllActionMenus();reviewProject('${p.id}')">✅ 审核</button>` : ""}
+              ${canUnreview ? `<button class="action-more-item" onclick="event.stopPropagation();closeAllActionMenus();unreviewProject('${p.id}')">↩ 反审核</button>` : ""}
+            </div>
+          </div>` : ""}
         </div>
       </div>`;
   }).join("");
+  initCustomSelects(document.getElementById("projects"));
 }
 
 /* 项目列表的门店筛选下拉 */
@@ -3438,6 +3522,12 @@ function setProjectTimeFilter(days) {
   
   renderProjects();
 }
+
+/* 施工内容可选项（广告安装类常用项，可在自定义中输入补充） */
+const WORK_CONTENT_OPTIONS = [
+  "门头安装", "发光字", "LED屏", "灯箱", "背景墙",
+  "写真喷绘", "展架展具", "拆除", "维修", "其他",
+];
 
 function projectForm(p = {}) {
   const storeLocked = (isStoreManager() && myStore() != null && myStore() !== "") || isWorker();
@@ -3557,14 +3647,72 @@ function projectForm(p = {}) {
       </div>
     </div>
     <div class="form-row">
-      <label><span style="color:#6b7280;">💬</span> 备注</label>
-      <textarea class="input" id="pNote" placeholder="施工内容 / 注意事项" style="min-height:50px;">${esc(p.note || "")}</textarea>
+      <label><span style="color:#0ea5e9;">🛠️</span> 施工内容</label>
+      <div class="work-content-chips" id="pWorkContent">
+        ${WORK_CONTENT_OPTIONS.map((opt) => `
+          <label class="work-chip ${((p.workContent || []).includes(opt)) ? "work-chip--on" : ""}">
+            <input type="checkbox" value="${esc(opt)}" ${(p.workContent || []).includes(opt) ? "checked" : ""} onchange="toggleWorkChip(this)" />
+            <span>${esc(opt)}</span>
+          </label>`).join("")}
+      </div>
+      <input class="input" id="pWorkContentCustom" placeholder="可补充自定义内容，用、或空格分隔" value="${(p.workContent || []).filter((c) => !WORK_CONTENT_OPTIONS.includes(c)).join("、")}" style="width:100%;font-size:13px;margin-top:6px;" onkeydown="if(event.key==='Enter'){event.preventDefault();}" />
+    </div>
+    <div class="form-row">
+      <label><span style="color:#6b7280;">💬</span> 注意事项</label>
+      <textarea class="input" id="pNote" placeholder="施工注意事项、特殊要求等" style="min-height:50px;">${esc(p.note || "")}</textarea>
     </div>
     <input type="hidden" id="pStatus" value="${p.status || STATUS.BOOKED}" />
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
       <button class="btn primary" onclick="saveProject('${p.id || ""}')">保存</button>
     </div>`;
+}
+
+function toggleWorkChip(el) {
+  el.closest(".work-chip").classList.toggle("work-chip--on", el.checked);
+}
+
+function showProjectContent(id) {
+  const p = getProject(id);
+  if (!p) return;
+  const wc = p.workContent || [];
+  const html = `
+    <div class="proj-content-detail">
+      <div class="proj-content-detail__label">🛠️ 施工内容</div>
+      ${wc.length ? `
+        <div class="proj-content-detail__tags">
+          ${wc.map((c) => `<span class="badge" style="background:#e0f2fe;color:#0369a1;border-color:#7dd3fc;">${esc(c)}</span>`).join("")}
+        </div>` : `<div class="hint">未填写施工内容</div>`}
+      <div class="proj-content-detail__label" style="margin-top:16px;">💬 注意事项</div>
+      <div class="proj-content-detail__note">${esc(p.note || "无")}</div>
+    </div>`;
+  modal.open(`${esc(p.name)} · 施工内容`, html);
+}
+
+function switchAssignTab(btn) {
+  const tabGroup = btn.closest(".assign-tabs");
+  if (tabGroup) tabGroup.querySelectorAll(".assign-tab").forEach((t) => t.classList.toggle("active", t === btn));
+  const panel = btn.closest(".assign-panel");
+  if (panel) {
+    const target = btn.dataset.tab;
+    panel.querySelectorAll(".assign-body").forEach((b) =>
+      b.classList.toggle("assign-body--active", b.dataset.panel === target)
+    );
+  }
+}
+
+/* 切换加人类型（内部人员 / 外协人员）—— 显示对应输入组 */
+function switchAssignType(btn) {
+  const toggle = btn.closest(".assign-type-toggle");
+  if (!toggle) return;
+  toggle.querySelectorAll(".assign-type-btn").forEach(b => b.classList.toggle("active", b === btn));
+  const type = btn.dataset.type;
+  const area = btn.closest(".assign-add-area");
+  if (area) {
+    area.querySelectorAll(".assign-input-group").forEach(g => {
+      g.style.display = g.id === `assignInputGroup_${type}` ? "flex" : "none";
+    });
+  }
 }
 
 function newProject() { 
@@ -3624,6 +3772,11 @@ async function saveProject(id) {
     autoCalculated = true;
   }
   
+  const wcChecks = Array.from(document.querySelectorAll("#pWorkContent input:checked")).map((c) => c.value);
+  const wcCustom = (document.getElementById("pWorkContentCustom").value || "")
+    .split(/[、,，\s]+/).map((s) => s.trim()).filter(Boolean);
+  const workContent = [...new Set([...wcChecks, ...wcCustom])];
+
   const payload = {
     name,
     customer: document.getElementById("pCustomer").value.trim(),
@@ -3635,6 +3788,7 @@ async function saveProject(id) {
     workerCount,
     status: document.getElementById("pStatus").value,
     note: document.getElementById("pNote").value.trim(),
+    workContent,
     storeId,
   };
   
@@ -3669,6 +3823,9 @@ async function saveProject(id) {
       if (existing.workerCount !== payload.workerCount) changes.push(`施工人数: ${existing.workerCount || 1} -> ${payload.workerCount}`);
       if (existing.status !== payload.status) changes.push(`状态: ${existing.status || "无"} -> ${payload.status}`);
       if (existing.note !== payload.note) changes.push(`备注: ${existing.note || "无"} -> ${payload.note || "无"}`);
+      const oldWc = (existing.workContent || []).join("、");
+      const newWc = (payload.workContent || []).join("、");
+      if (oldWc !== newWc) changes.push(`施工内容: ${oldWc || "无"} -> ${newWc || "无"}`);
       if (existing.storeId !== payload.storeId) changes.push(`门店: ${storeName(existing.storeId) || "无"} -> ${storeName(payload.storeId) || "无"}`);
       const changeDetail = changes.length > 0 ? changes.join("; ") : "无字段变更";
       logOperation("PROJECT_EDIT", name, `ID: ${id}, 变更: ${changeDetail}`);
@@ -3885,7 +4042,8 @@ function refreshProjectSelector() {
 
 /* 构造“门店 项目名 日期”格式的项目显示文本 */
 function buildProjectDisplay(p) {
-  const store = p.storeName ? esc(p.storeName) : "";
+  // 优先用已存的 storeName，否则按 storeId 反查门店名（项目数据主要存的是 storeId）
+  const store = p.storeName ? esc(p.storeName) : esc(storeName(p.storeId) || "");
   const name = esc(p.name) || "（未命名项目）";
   const date = p.appointmentTime ? fmtDate(p.appointmentTime) : "";
   return { store, name, date };
@@ -4019,9 +4177,9 @@ function gotoConstruction(id) {
   updateConstructionSelectLabel();
   renderConstruction();
   setTimeout(() => {
-    const detail = document.getElementById("constructionDetail");
-    if (detail) {
-      detail.scrollIntoView({ behavior: "smooth", block: "start" });
+    const section = document.getElementById("construction");
+    if (section) {
+      section.scrollIntoView({ behavior: "smooth", block: "start" });
     }
   }, 100);
 }
@@ -4129,37 +4287,55 @@ function renderConstruction() {
       const disabledAttr = hasLeaveConflict ? ` disabled` : "";
       return `<option value="${w.id}"${disabledAttr}>${esc(w.name)}${hasLeaveConflict ? " 🌴 请假中" : ""}</option>`;
     }).join("");
+  const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).filter(n => n.trim());
+  const allChips = [...(assignedChips ? assignedChips : ""), ...outsourcedNames.map(n =>
+    `<span class="assign-chip outsourced"><span class="chip-icon">🤝</span>${esc(n.trim())}<button class="chip-x" onclick="removeOutsourcedWorker('${p.id}', '${(n.trim() || "").replace(/'/g, "\\'")}')" title="移除">✕</button></span>`
+  )].join("");
+  const hasAny = (assigned.length > 0) || (outsourcedNames.length > 0);
+
   const assignBlock = `
-    <div class="detail-block">
-      <h3>🧑‍🔧 安装人员分配</h3>
-      <p class="hint" style="margin:0 0 10px">提前为本项目分配安装人员。若某人在同一时间段已被分配到其它项目，将给出冲突提醒（仍可强制分配）。</p>
-      <div class="assign-list">${assignedChips}</div>
-      ${canAssign ? `
-      <div class="assign-form">
-        <select class="input" id="assignWorkerSel" onchange="showWorkerSchedule('${p.id}', this.value)">
-          <option value="">请选择安装人员</option>
-          ${assignSelectOpts || ``}
-        </select>
-        <button class="btn primary" onclick="assignWorker('${p.id}')">分配</button>
+    <div class="detail-block assign-panel">
+      <div class="assign-head">
+        <h3>🧑‍🔧 安装人员分配</h3>
       </div>
-      <div id="workerSchedule" class="worker-schedule"></div>` : ""}
-      ${canEdit ? `
-      <div class="outsourced-block">
-        <h4>🤝 外协人员</h4>
-        <p class="hint" style="margin:0 0 8px;font-size:12px">当任务由外协人员完成时，填写外协人员姓名（分别输入后按添加）。设置外协后，该任务不占用内部施工人员工时，时间冲突将被解除。</p>
-        <div class="assign-list">${(p.outsourcedWorkers || "").split(/[,，]/).filter(n => n.trim()).map(n => `<span class="assign-chip outsourced"><span style="color:#8b5cf6">🤝</span> ${esc(n.trim())}<button class="chip-x" onclick="removeOutsourcedWorker('${p.id}', '${(n.trim() || "").replace(/'/g, "\\'")}')" title="移除">✕</button></span>`).join("") || `<span class="hint" style="margin:0">尚未添加外协人员</span>`}</div>
-        <div style="margin-bottom:8px;">
-          <select class="input" id="outsourcedWorkersSelect_${p.id}" onchange="addOutsourcedWorker('${p.id}', this.value)">
-            <option value="">从常用外协人员列表添加</option>
+
+      <!-- 统一人员展示区：内部 + 外协 一块显示 -->
+      <div class="assign-chips-row">
+        ${hasAny ? allChips : `<span class="assign-empty">暂未分配安装人员</span>`}
+        ${assigned.length > 0 && outsourcedNames.length > 0 ? `<span class="assign-divider"></span>` : ""}
+      </div>
+
+      ${canAssign ? `
+      <!-- 加人区域：类型切换 + 选择 -->
+      <div class="assign-add-area">
+        <div class="assign-type-toggle">
+          <button class="assign-type-btn active" data-type="internal" onclick="switchAssignType(this)">内部人员</button>
+          <button class="assign-type-btn" data-type="outsourced" onclick="switchAssignType(this)">外协人员</button>
+        </div>
+
+        <!-- 内部人员选择 -->
+        <div class="assign-input-group" id="assignInputGroup_internal">
+          <select class="input assign-select" id="assignWorkerSel" onchange="showWorkerSchedule('${p.id}', this.value)">
+            <option value="">选择内部人员</option>
+            ${assignSelectOpts || ``}
+          </select>
+          <button class="btn primary btn-assign" onclick="assignWorker('${p.id}')">＋ 分配</button>
+        </div>
+
+        <!-- 外协人员选择 -->
+        <div class="assign-input-group" id="assignInputGroup_outsourced" style="display:none;">
+          <select class="input assign-select" id="outsourcedWorkersSelect_${p.id}" onchange="addOutsourcedWorker('${p.id}', this.value)" style="flex:2;min-width:0;max-width:220px;">
+            <option value="">从常用列表选择</option>
             ${cache.outsourcedWorkers.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}${w.phone ? ` (${esc(w.phone)})` : ''}</option>`).join("")}
           </select>
+          <input type="text" class="input" id="outsourcedWorkersInput_${p.id}" placeholder="或手动输入姓名" style="flex:2;min-width:0;" onkeydown="if(event.key==='Enter'){addOutsourcedWorkerByName('${p.id}', this.value);this.value=''}">
+          <button class="btn primary btn-assign-sm" onclick="addOutsourcedWorkerByName('${p.id}', document.getElementById('outsourcedWorkersInput_${p.id}').value)">添加</button>
         </div>
-        <div class="assign-form" style="margin-bottom:0">
-          <input type="text" class="input" id="outsourcedWorkersInput_${p.id}" placeholder="输入外协人员姓名" onkeydown="if(event.key==='Enter'){addOutsourcedWorkerByName('${p.id}', this.value);this.value=''}">
-          <button class="btn primary" onclick="addOutsourcedWorkerByName('${p.id}', document.getElementById('outsourcedWorkersInput_${p.id}').value)">添加</button>
-        </div>
-        ${p.outsourcedWorkers ? `<div class="outsourced-hint">当前任务已设置为外协</div>` : ""}
-      </div>` : ""}
+
+        ${p.outsourcedWorkers && outsourcedNames.length > 0 ? `<span class="assign-outsourced-badge">含 ${outsourcedNames.length} 名外协</span>` : ""}
+      </div>
+
+      <div id="workerSchedule" class="worker-schedule"></div>` : ""}
     </div>`;
 
   const end = new Date(p.endTime || p.startTime);
@@ -4167,85 +4343,109 @@ function renderConstruction() {
   
   box.innerHTML = `
     <div class="detail-block">
-      <h3>📋 项目信息 <span class="badge ${p.status}">${p.status}</span>${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}</h3>
-      ${reviewed ? `<p class="hint" style="margin:0 0 10px;color:var(--warn)">⚠️ 该项目已审核，信息不可更改。</p>` : ""}
-      ${canEdit || reviewed ? "" : `<p class="hint" style="margin:0 0 10px">当前角色为只读，施工工时与验收由施工人员/总经理填写。</p>`}
-      <div class="info-grid">
-        <div class="info-item"><div class="k">项目名称</div><div class="v">${esc(p.name)}</div></div>
-        <div class="info-item"><div class="k">预约门店</div><div class="v">${esc(storeName(p.storeId))}</div></div>
-        <div class="info-item"><div class="k">客户</div><div class="v">${esc(p.customer || "—")}</div></div>
-        <div class="info-item"><div class="k">联系电话</div><div class="v">${p.phone ? `<a href="tel:${esc(p.phone)}" style="color:var(--info)">${esc(p.phone)}</a>` : "—"}</div></div>
-        <div class="info-item"><div class="k">安装地址</div><div class="v">${esc(p.address || "—")}</div></div>
-        <div class="info-item"><div class="k">预约时段</div><div class="v">${fmtTimeRange(p)}</div></div>
-        <div class="info-item"><div class="k">预计工时</div><div class="v">${p.estimatedHours || 0} 小时</div></div>
-        <div class="info-item"><div class="k">外协工时</div><div class="v" style="color:#8b5cf6;font-weight:600">${p.outsourcedHoursFromLogs || 0} 小时</div></div>
-        <div class="info-item"><div class="k">工程实际用工时</div><div class="v">${((p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0)) || 0} 小时</div></div>
-        <div class="info-item"><div class="k">工时差异（实际−预计）</div><div class="v">${diffLabel(p)}</div></div>
-        ${p.startedAt ? `<div class="info-item"><div class="k">⏰ 开始施工时间</div><div class="v">${esc(fmtDateTime(p.startedAt))}</div></div>` : ""}
-        ${p.finishedAt ? `<div class="info-item"><div class="k">✅ 完工时间</div><div class="v">${esc(fmtDateTime(p.finishedAt))}</div></div>` : ""}
-        ${p.startedAt && p.finishedAt ? `<div class="info-item"><div class="k">⏱️ 实际施工时长</div><div class="v"><b>${esc(calcActualWorkDuration(p))}</b></div></div>` : ""}
-      </div>
-      ${p.estimatedHours > 0 ? `
-      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <div class="proj-hero">
+        <div class="proj-hero__head">
+          <span class="proj-hero__name">${esc(p.name)}</span>
+          <div class="proj-hero__badges">
+            <span class="badge ${p.status}">${p.status}</span>
+            ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
+          </div>
+        </div>
+        ${reviewed ? `<p class="hint" style="margin:0;color:var(--warn)">⚠️ 该项目已审核，信息不可更改。</p>` : ""}
+        ${canEdit || reviewed ? "" : `<p class="hint" style="margin:0">当前角色为只读，施工工时与验收由施工人员/总经理填写。</p>`}
+        <div class="proj-hero__meta">
+          <span>门店</span><b>${esc(storeName(p.storeId))}</b>
+          <span>客户</span><b>${esc(p.customer || "—")}</b>
+          <span>预约</span><b>${fmtTimeRange(p)}</b>
+          ${p.phone ? `<span>电话</span><b><a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></b>` : ""}
+          <span>地址</span><b>${esc(p.address || "—")}</b>
+        </div>
+        ${p.estimatedHours > 0 ? `
+        <div class="proj-hero__progress">
           <span style="font-size:13px;color:var(--muted)">项目进度</span>
-          <span style="font-weight:bold;font-size:14px;">${(() => {
+          <span class="proj-hero__progress-pct">${(() => {
             const { est, act, hasActual } = hoursDiff(p);
             return Math.round(getProjectProgress(p, est, act, hasActual, totalHours)) + '%';
           })()}</span>
-          ${p.status === STATUS.PAUSED && p.pauseReason ? `<span style="font-size:12px;color:#f59e0b;margin-left:8px;">暂停原因：${esc(p.pauseReason)}</span>` : ""}
-          ${p.status === STATUS.DELAYED && p.delayReason ? `<span style="font-size:12px;color:#ef4444;margin-left:8px;">延期原因：${esc(p.delayReason)}</span>` : ""}
-        </div>
-        <div style="height:8px;background:#e5e7eb;border-radius:4px;overflow:hidden;">
-          <div style="height:100%;width:${(() => {
-            const { est, act, hasActual } = hoursDiff(p);
-            return Math.min(100, getProjectProgress(p, est, act, hasActual, totalHours)) + '%';
-          })()};background:${(() => {
-            const { est, act, hasActual } = hoursDiff(p);
-            const progress = getProjectProgress(p, est, act, hasActual, totalHours);
-            if (progress >= 100) return '#10b981';
-            if (p.status === STATUS.PAUSED) return '#f59e0b';
-            if (p.status === STATUS.DELAYED) return '#dc2626';
-            return '#3b82f6';
-          })()};border-radius:4px;transition:width 0.3s ease;"></div>
-        </div>
-      </div>` : ""}
-      ${canEdit || (canReview && !reviewed) ? `
-      <div style="margin-top:14px;display:flex;flex-wrap:wrap;gap:16px;align-items:center">
-        <div style="display:flex;align-items:center;gap:8px">
-          <label style="font-size:13px;color:var(--muted)">状态</label>
-          <select class="input" id="cStatus" onchange="updateProjectStatus('${p.id}', this.value)" style="width:auto;min-width:100px;">
+          <div class="proj-hero__progress-track">
+            <div class="proj-hero__progress-fill" style="width:${(() => {
+              const { est, act, hasActual } = hoursDiff(p);
+              return Math.min(100, getProjectProgress(p, est, act, hasActual, totalHours)) + '%';
+            })()};background:${(() => {
+              const { est, act, hasActual } = hoursDiff(p);
+              const progress = getProjectProgress(p, est, act, hasActual, totalHours);
+              if (progress >= 100) return '#10b981';
+              if (p.status === STATUS.PAUSED) return '#f59e0b';
+              if (p.status === STATUS.DELAYED) return '#dc2626';
+              return '#3b82f6';
+            })()};"></div>
+          </div>
+          ${p.status === STATUS.PAUSED && p.pauseReason ? `<span class="proj-hero__reason proj-hero__reason--pause">暂停原因：${esc(p.pauseReason)}</span>` : ""}
+          ${p.status === STATUS.DELAYED && p.delayReason ? `<span class="proj-hero__reason proj-hero__reason--delay">延期原因：${esc(p.delayReason)}</span>` : ""}
+        </div>` : ""}
+      </div>
+      <div class="info-grid">
+        <div class="info-item"><div class="k">预计</div><div class="v">${p.estimatedHours || 0} 小时</div></div>
+        <div class="info-item"><div class="k">外协</div><div class="v" style="color:#8b5cf6">${p.outsourcedHoursFromLogs || 0} 小时</div></div>
+        <div class="info-item"><div class="k">实际用工</div><div class="v">${((p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0)) || 0} 小时</div></div>
+        <div class="info-item"><div class="k">差异</div><div class="v">${diffLabel(p)}</div></div>
+        ${p.startedAt ? `<div class="info-item"><div class="k">⏰ 开工</div><div class="v">${esc(fmtDateTime(p.startedAt))}</div></div>` : ""}
+        ${p.finishedAt ? `<div class="info-item"><div class="k">✅ 完工</div><div class="v">${esc(fmtDateTime(p.finishedAt))}</div></div>` : ""}
+        ${p.startedAt && p.finishedAt ? `<div class="info-item"><div class="k">⏱️ 时长</div><div class="v"><b>${esc(calcActualWorkDuration(p))}</b></div></div>` : ""}
+      </div>
+      ${(canEdit || canReview || (reviewed && perm.unreviewProject(p)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair())) ? `
+      <div class="action-groups">
+        <!-- 状态流转操作 -->
+        <div class="action-group">
+          <span class="action-group__label">状态</span>
+          <select class="input assign-select" id="cStatus" onchange="updateProjectStatus('${p.id}', this.value)">
             <option value="${p.status}" selected>${p.status}</option>
             ${getAllowedStatuses(p.status).map((s) =>
               `<option value="${s}">${s}</option>`).join("")}
           </select>
+          ${canEdit && p.status === STATUS.BOOKED ? `
+          <button class="btn small primary" onclick="updateProjectStatus('${p.id}', '${STATUS.WORKING}')">🚀 开始施工</button>
+          <button class="btn small" onclick="delayProject('${p.id}')">📅 延期</button>
+          ` : ""}
+          ${canEdit && p.status === STATUS.WORKING ? `
+          <button class="btn small" style="background:#f59e0b;color:#fff" onclick="pauseProject('${p.id}')">⏸️ 暂停施工</button>
+          <button class="btn small" style="background:#10b981;color:#fff" onclick="updateProjectStatus('${p.id}', '${STATUS.DONE}')">✅ 完成安装</button>
+          <button class="btn small" onclick="delayProject('${p.id}')">📅 延期</button>
+          ` : ""}
+          ${canEdit && p.status === STATUS.PAUSED ? `
+          <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
+          <button class="btn small" onclick="delayProject('${p.id}')">📅 延期</button>
+          ` : ""}
+          ${canEdit && p.status === STATUS.DELAYED ? `
+          <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
+          ` : ""}
+          ${canEdit && [STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED].includes(p.status) ? `
+          <button class="btn small danger" onclick="cancelProject('${p.id}')"><span style="font-size:16px;font-weight:bold;">×</span> 取消</button>
+          ` : ""}
         </div>
-        
-        ${canReview && !reviewed ? `
-        <button class="btn small primary" onclick="reviewProject('${p.id}')">✅ 审核项目</button>
-        ` : ""}
-        ${p.status === STATUS.WORKING ? `
-        <button class="btn small" style="background:#f59e0b;color:#fff" onclick="pauseProject('${p.id}')">⏸️ 暂停施工</button>
-        <button class="btn small" style="background:#ef4444;color:#fff" onclick="delayProject('${p.id}')">📅 项目延期</button>
-        ` : ""}
-        ${p.status === STATUS.PAUSED ? `
-        <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
-        <button class="btn small" style="background:#ef4444;color:#fff" onclick="delayProject('${p.id}')">📅 项目延期</button>
-        ` : ""}
-        ${p.status === STATUS.DELAYED ? `
-        <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
-        ` : ""}
-        ${[STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED].includes(p.status) ? `
-        <button class="btn small danger" onclick="cancelProject('${p.id}')"><span style="font-size:16px;font-weight:bold;">×</span> 取消项目</button>
-        ` : ""}
-      </div>` : ""}
-      ${reviewed && perm.unreviewProject(p) ? `
-      <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
-        <button class="btn" onclick="unreviewProject('${p.id}')" style="color:var(--warn)">↩ 反审核</button>
-      </div>` : ""}
-      ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `
-      <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
-        <button class="btn" onclick="openRepairOrderForm('${p.id}')" style="background:#f59e0b;color:#fff">🔧 发起维修单</button>
+
+        <!-- 审核相关（仅完工后可审核） -->
+        ${canReview && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED) ? `<span class="action-group__divider"></span>` : ""}
+        ${canReview && !reviewed && p.status === STATUS.DONE ? `
+        <div class="action-group">
+          <button class="btn small primary" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>
+          <button class="btn small primary" onclick="reviewProject('${p.id}')">🔍 审核项目</button>
+        </div>` : ""}
+        ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `
+        <div class="action-group">
+          <button class="btn small primary" onclick="reviewProject('${p.id}')">🔍 审核项目</button>
+        </div>` : ""}
+
+        <!-- 反审核 / 维修单 -->
+        ${(reviewed && perm.unreviewProject(p)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) ? `<span class="action-group__divider"></span>` : ""}
+        ${reviewed && perm.unreviewProject(p) ? `
+        <div class="action-group">
+          <button class="btn small" onclick="unreviewProject('${p.id}')" style="color:var(--warn)">↩ 反审核</button>
+        </div>` : ""}
+        ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `
+        <div class="action-group">
+          <button class="btn small" onclick="openRepairOrderForm('${p.id}')" style="background:#f59e0b;color:#fff">🔧 发起维修单</button>
+        </div>` : ""}
       </div>` : ""}
     </div>
 
@@ -4269,22 +4469,22 @@ function renderConstruction() {
     ${(p.startedAt || p.finishedAt || p.workSessions.length > 0 || p.pauseCount > 0 || p.reviewedAt || p.pauseHistory.length > 0 || p.delayHistory.length > 0 || p.workerChangeHistory.length > 0 || p.actionLogs.length > 0) ? `
     <div class="detail-block">
       <h3>📝 施工记录</h3>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px;">
-        ${p.startedAt ? `<div style="background:#f0f9ff;border-radius:8px;padding:10px;">
-          <div style="font-size:11px;color:#0369a1;margin-bottom:2px;">🚀 开工时间</div>
-          <div style="font-size:14px;font-weight:600;color:#1e40af;">${esc(fmtDateTime(p.startedAt))}</div>
+      <div class="rec-timecards">
+        ${p.startedAt ? `<div class="rec-timecard rec-timecard--blue">
+          <div class="rec-timecard__label">🚀 开工时间</div>
+          <div class="rec-timecard__value">${esc(fmtDateTime(p.startedAt))}</div>
         </div>` : ""}
-        ${p.finishedAt ? `<div style="background:#ecfdf5;border-radius:8px;padding:10px;">
-          <div style="font-size:11px;color:#047857;margin-bottom:2px;">✅ 完工时间</div>
-          <div style="font-size:14px;font-weight:600;color:#065f46;">${esc(fmtDateTime(p.finishedAt))}</div>
+        ${p.finishedAt ? `<div class="rec-timecard rec-timecard--green">
+          <div class="rec-timecard__label">✅ 完工时间</div>
+          <div class="rec-timecard__value">${esc(fmtDateTime(p.finishedAt))}</div>
         </div>` : ""}
-        ${p.reviewedAt ? `<div style="background:#fef3c7;border-radius:8px;padding:10px;">
-          <div style="font-size:11px;color:#b45309;margin-bottom:2px;">🔍 审核时间</div>
-          <div style="font-size:14px;font-weight:600;color:#92400e;">${esc(fmtDateTime(p.reviewedAt))}</div>
+        ${p.reviewedAt ? `<div class="rec-timecard rec-timecard--amber">
+          <div class="rec-timecard__label">🔍 审核时间</div>
+          <div class="rec-timecard__value">${esc(fmtDateTime(p.reviewedAt))}</div>
         </div>` : ""}
-        ${p.startedAt ? `<div style="background:#e0e7ff;border-radius:8px;padding:10px;">
-          <div style="font-size:11px;color:#6366f1;margin-bottom:2px;">⏱️ 工时时长</div>
-          <div style="font-size:14px;font-weight:600;color:#4338ca;">${(() => {
+        ${p.startedAt ? `<div class="rec-timecard rec-timecard--indigo">
+          <div class="rec-timecard__label">⏱️ 工时时长</div>
+          <div class="rec-timecard__value">${(() => {
             const projectEndTime = getProjectEffectiveEndTime(p);
             let totalHours = 0;
             (p.assignedWorkerIds || []).forEach(wid => {
@@ -4311,106 +4511,116 @@ function renderConstruction() {
       </div>
       
       ${p.pauseHistory.length > 0 ? `
-      <div style="background:#fffbeb;border-left:4px solid #f59e0b;border-radius:8px;padding:12px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#92400e;font-weight:500;margin-bottom:8px;">⏸️ 暂停/恢复明细</div>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          ${p.pauseHistory.map((ph, idx) => {
-            const pauseTime = new Date(ph.pauseAt);
-            const pauseStr = `${pauseTime.getMonth() + 1}/${pauseTime.getDate()} ${String(pauseTime.getHours()).padStart(2, "0")}:${String(pauseTime.getMinutes()).padStart(2, "0")}`;
-            const resumeStr = ph.resumedAt ? ((() => {
-              const resumeTime = new Date(ph.resumedAt);
-              return `${resumeTime.getMonth() + 1}/${resumeTime.getDate()} ${String(resumeTime.getHours()).padStart(2, "0")}:${String(resumeTime.getMinutes()).padStart(2, "0")}`;
-            })()) : "未恢复";
-            const durHours = ph.duration ? Math.floor(ph.duration) : 0;
-            const durMins = ph.duration ? Math.floor((ph.duration - durHours) * 60) : 0;
-            const durStr = ph.duration ? (durHours > 0 ? `${durHours}h${durMins}m` : `${durMins}m`) : "";
-            return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:13px;color:#78350f;">
-              <span style="font-weight:600;">第${idx + 1}次：</span>
-              <span>⏸ ${pauseStr}</span>
-              <span>→</span>
-              <span>▶ ${resumeStr}</span>
-              ${durStr ? `<span style="color:#f59e0b;font-weight:500;">(${durStr})</span>` : ""}
-              ${ph.reason ? `<span>· 原因：${esc(ph.reason)}</span>` : ""}
-            </div>`;
-          }).join("")}
-        </div>
-      </div>` : p.pauseCount > 0 ? `
-      <div style="background:#fffbeb;border-left:4px solid #f59e0b;border-radius:8px;padding:12px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#92400e;font-weight:500;margin-bottom:6px;">⏸️ 暂停记录</div>
-        <div style="font-size:13px;color:#78350f;">已暂停 ${p.pauseCount} 次，累计暂停 ${(() => {
-          const pauseDuration = derivePauseDuration(p);
-          const hours = Math.floor(pauseDuration);
-          const mins = Math.floor((pauseDuration - hours) * 60);
-          return hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
-        })()}，已从总用时中扣除</div>
-      </div>` : ""}
-      
-      ${p.delayHistory.length > 0 ? `
-      <div style="background:#fef2f2;border-left:4px solid #ef4444;border-radius:8px;padding:12px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#b91c1c;font-weight:500;margin-bottom:8px;">⚠️ 延期记录</div>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          ${p.delayHistory.map((dh, idx) => {
-            const delayTime = new Date(dh.time);
-            const timeStr = `${delayTime.getMonth() + 1}/${delayTime.getDate()} ${String(delayTime.getHours()).padStart(2, "0")}:${String(delayTime.getMinutes()).padStart(2, "0")}`;
-            return `<div style="font-size:13px;color:#991b1b;">
-              <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+      <details class="rec-details rec-details--amber">
+        <summary>⏸️ 暂停/恢复明细（${p.pauseHistory.length}次）</summary>
+        <div class="rec-details__body">
+          <div class="rec-list">
+            ${p.pauseHistory.map((ph, idx) => {
+              const pauseTime = new Date(ph.pauseAt);
+              const pauseStr = `${pauseTime.getMonth() + 1}/${pauseTime.getDate()} ${String(pauseTime.getHours()).padStart(2, "0")}:${String(pauseTime.getMinutes()).padStart(2, "0")}`;
+              const resumeStr = ph.resumedAt ? ((() => {
+                const resumeTime = new Date(ph.resumedAt);
+                return `${resumeTime.getMonth() + 1}/${resumeTime.getDate()} ${String(resumeTime.getHours()).padStart(2, "0")}:${String(resumeTime.getMinutes()).padStart(2, "0")}`;
+              })()) : "未恢复";
+              const durHours = ph.duration ? Math.floor(ph.duration) : 0;
+              const durMins = ph.duration ? Math.floor((ph.duration - durHours) * 60) : 0;
+              const durStr = ph.duration ? (durHours > 0 ? `${durHours}h${durMins}m` : `${durMins}m`) : "";
+              return `<div class="rec-list__item">
                 <span style="font-weight:600;">第${idx + 1}次：</span>
-                <span>${timeStr}</span>
-                <span>${dh.originalDate} ${dh.originalTime}</span>
+                <span>⏸ ${pauseStr}</span>
                 <span>→</span>
-                <span style="color:#ef4444;font-weight:600;">${dh.newDate} ${dh.newTime}</span>
-              </div>
-              <div style="margin-top:2px;padding-left:8px;color:#b91c1c;">原因：${esc(dh.reason)}</div>
-            </div>`;
-          }).join("")}
-        </div>
-      </div>` : ""}
-      
-      ${p.workerChangeHistory.length > 0 ? `
-      <div style="background:#f0fdf4;border-left:4px solid #22c55e;border-radius:8px;padding:12px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#166534;font-weight:500;margin-bottom:8px;">👥 人员变动</div>
-        <div style="display:flex;flex-direction:column;gap:6px;">
-          ${p.workerChangeHistory.map((wch, idx) => {
-            const changeTime = new Date(wch.time);
-            const timeStr = `${changeTime.getMonth() + 1}/${changeTime.getDate()} ${String(changeTime.getHours()).padStart(2, "0")}:${String(changeTime.getMinutes()).padStart(2, "0")}`;
-            return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;font-size:13px;color:#15803d;">
-              <span>${timeStr}</span>
-              <span style="font-weight:600;">${wch.action === "assign" ? "➕ 分配" : "➖ 移除"}：</span>
-              <span>${esc(wch.workerName)}</span>
-              ${wch.workerPhone ? `<span>(${wch.workerPhone})</span>` : ""}
-            </div>`;
-          }).join("")}
-        </div>
-      </div>` : ""}
-      
-      ${p.workSessions.length > 0 ? `
-      <div style="background:#eff6ff;border-left:4px solid #3b82f6;border-radius:8px;padding:12px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#1d4ed8;font-weight:500;margin-bottom:8px;">🔧 施工时段明细</div>
-        <div style="display:flex;flex-direction:column;gap:6px;">
-          ${p.workSessions.map((s, idx) => {
-            const start = new Date(s.startTime);
-            const end = new Date(s.endTime);
-            const hours = Math.floor(s.duration);
-            const mins = Math.floor((s.duration - hours) * 60);
-            const durationStr = hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
-            const startStr = `${start.getMonth() + 1}/${start.getDate()} ${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`;
-            const endStr = `${end.getMonth() + 1}/${end.getDate()} ${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
-            return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#374151;">
-              <span>第${idx + 1}段：${startStr} → ${endStr}</span>
-              <span style="font-weight:600;color:#1d4ed8;">${durationStr}</span>
-            </div>`;
-          }).join("")}
-          <div style="border-top:1px dashed #93c5fd;margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#1d4ed8;">
-            <span style="font-weight:600;">合计</span>
-            <span style="font-weight:600;">${(() => {
-              const total = p.workSessions.reduce((sum, s) => sum + s.duration, 0);
-              const hours = Math.floor(total);
-              const mins = Math.floor((total - hours) * 60);
-              return hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
-            })()}</span>
+                <span>▶ ${resumeStr}</span>
+                ${durStr ? `<span style="color:#f59e0b;font-weight:500;">(${durStr})</span>` : ""}
+                ${ph.reason ? `<span>· 原因：${esc(ph.reason)}</span>` : ""}
+              </div>`;
+            }).join("")}
           </div>
         </div>
-      </div>` : ""}
+      </details>` : p.pauseCount > 0 ? `
+      <details class="rec-details rec-details--amber">
+        <summary>⏸️ 暂停记录（${p.pauseCount}次）</summary>
+        <div class="rec-details__body">
+          <div class="rec-list__item">已暂停 ${p.pauseCount} 次，累计暂停 ${(() => {
+            const pauseDuration = derivePauseDuration(p);
+            const hours = Math.floor(pauseDuration);
+            const mins = Math.floor((pauseDuration - hours) * 60);
+            return hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
+          })()}，已从总用时中扣除</div>
+        </div>
+      </details>` : ""}
+      
+      ${p.delayHistory.length > 0 ? `
+      <details class="rec-details rec-details--red">
+        <summary>⚠️ 延期记录（${p.delayHistory.length}次）</summary>
+        <div class="rec-details__body">
+          <div class="rec-list">
+            ${p.delayHistory.map((dh, idx) => {
+              const delayTime = new Date(dh.time);
+              const timeStr = `${delayTime.getMonth() + 1}/${delayTime.getDate()} ${String(delayTime.getHours()).padStart(2, "0")}:${String(delayTime.getMinutes()).padStart(2, "0")}`;
+              return `<div class="rec-list__item" style="flex-direction:column;align-items:flex-start;gap:2px;">
+                <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;">
+                  <span style="font-weight:600;">第${idx + 1}次：</span>
+                  <span>${timeStr}</span>
+                  <span>${dh.originalDate} ${dh.originalTime}</span>
+                  <span>→</span>
+                  <span style="color:#ef4444;font-weight:600;">${dh.newDate} ${dh.newTime}</span>
+                </div>
+                <div style="padding-left:8px;">原因：${esc(dh.reason)}</div>
+              </div>`;
+            }).join("")}
+          </div>
+        </div>
+      </details>` : ""}
+      
+      ${p.workerChangeHistory.length > 0 ? `
+      <details class="rec-details rec-details--green">
+        <summary>👥 人员变动（${p.workerChangeHistory.length}次）</summary>
+        <div class="rec-details__body">
+          <div class="rec-list">
+            ${p.workerChangeHistory.map((wch, idx) => {
+              const changeTime = new Date(wch.time);
+              const timeStr = `${changeTime.getMonth() + 1}/${changeTime.getDate()} ${String(changeTime.getHours()).padStart(2, "0")}:${String(changeTime.getMinutes()).padStart(2, "0")}`;
+              return `<div class="rec-list__item">
+                <span>${timeStr}</span>
+                <span style="font-weight:600;">${wch.action === "assign" ? "➕ 分配" : "➖ 移除"}：</span>
+                <span>${esc(wch.workerName)}</span>
+                ${wch.workerPhone ? `<span>(${wch.workerPhone})</span>` : ""}
+              </div>`;
+            }).join("")}
+          </div>
+        </div>
+      </details>` : ""}
+      
+      ${p.workSessions.length > 0 ? `
+      <details class="rec-details rec-details--blue">
+        <summary>🔧 施工时段明细（${p.workSessions.length}段）</summary>
+        <div class="rec-details__body">
+          <div class="rec-list">
+            ${p.workSessions.map((s, idx) => {
+              const start = new Date(s.startTime);
+              const end = new Date(s.endTime);
+              const hours = Math.floor(s.duration);
+              const mins = Math.floor((s.duration - hours) * 60);
+              const durationStr = hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
+              const startStr = `${start.getMonth() + 1}/${start.getDate()} ${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`;
+              const endStr = `${end.getMonth() + 1}/${end.getDate()} ${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
+              return `<div class="rec-list__item" style="justify-content:space-between;">
+                <span>第${idx + 1}段：${startStr} → ${endStr}</span>
+                <span style="font-weight:600;">${durationStr}</span>
+              </div>`;
+            }).join("")}
+            <div class="rec-list__total">
+              <span>合计</span>
+              <span>${(() => {
+                const total = p.workSessions.reduce((sum, s) => sum + s.duration, 0);
+                const hours = Math.floor(total);
+                const mins = Math.floor((total - hours) * 60);
+                return hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
+              })()}</span>
+            </div>
+          </div>
+        </div>
+      </details>` : ""}
       
       ${(() => {
         const workerLogs = {};
@@ -4486,54 +4696,58 @@ function renderConstruction() {
         if (workerStats.length === 0) return "";
         
         return `
-        <div style="background:#ecfdf5;border-left:4px solid #22c55e;border-radius:8px;padding:12px;margin-bottom:12px;">
-          <div style="font-size:12px;color:#166534;font-weight:500;margin-bottom:8px;">👷 工人工时统计</div>
-          <div style="display:flex;flex-direction:column;gap:8px;">
-            ${workerStats.map((ws) => `
-              <div style="border-bottom:1px dashed #86efac;padding-bottom:6px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:4px;">
-                  <span style="color:${ws.isAssigned ? "#15803d" : "#6b7280"}">
-                    ${ws.name}${ws.isOutsourced ? ` <span style="color:#8b5cf6;font-size:11px">(外协)</span>` : ""}${!ws.isAssigned ? ` <span style="color:#9ca3af;font-size:11px">(已移除)</span>` : ""}
-                  </span>
-                  <span style="font-weight:600;color:${ws.isAssigned ? "#166534" : "#9ca3af"};">${ws.hours.toFixed(1)} 工时</span>
-                </div>
-                ${ws.periods.length > 0 ? `
-                  <div style="display:flex;flex-direction:column;gap:2px;padding-left:8px;">
-                    ${ws.periods.map((pr) => `
-                      <div style="font-size:11px;color:#65a30d;">
-                        ${fmtDateShort(pr.start)} ${fmtTime(pr.start)} - ${pr.end ? fmtDateShort(pr.end) + " " + fmtTime(pr.end) : "至今"}
-                        ${pr.autoHours ? ` <span style="color:#f59e0b;">(自动记录 ${pr.autoHours} 工时)</span>` : ""}
-                      </div>
-                    `).join("")}
+        <details class="rec-details rec-details--green">
+          <summary>👷 工人工时统计（${workerStats.length}人）</summary>
+          <div class="rec-details__body">
+            <div class="rec-list">
+              ${workerStats.map((ws) => `
+                <div class="rec-worker">
+                  <div class="rec-worker__head">
+                    <span style="color:${ws.isAssigned ? "inherit" : "#6b7280"}">
+                      ${ws.name}${ws.isOutsourced ? ` <span style="color:#8b5cf6;font-size:11px">(外协)</span>` : ""}${!ws.isAssigned ? ` <span style="color:#9ca3af;font-size:11px">(已移除)</span>` : ""}
+                    </span>
+                    <span style="font-weight:600;color:${ws.isAssigned ? "inherit" : "#9ca3af"};">${ws.hours.toFixed(1)} 工时</span>
                   </div>
-                ` : ""}
+                  ${ws.periods.length > 0 ? `
+                    <div class="rec-worker__periods">
+                      ${ws.periods.map((pr) => `
+                        <div class="rec-worker__period">
+                          ${fmtDateShort(pr.start)} ${fmtTime(pr.start)} - ${pr.end ? fmtDateShort(pr.end) + " " + fmtTime(pr.end) : "至今"}
+                          ${pr.autoHours ? ` <span style="color:#f59e0b;">(自动记录 ${pr.autoHours} 工时)</span>` : ""}
+                        </div>
+                      `).join("")}
+                    </div>
+                  ` : ""}
+                </div>
+              `).join("")}
+              <div class="rec-list__total">
+                <span>合计</span>
+                <span>${workerStats.reduce((sum, ws) => sum + ws.hours, 0).toFixed(1)} 工时</span>
               </div>
-            `).join("")}
-            <div style="border-top:1px dashed #86efac;margin-top:4px;padding-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:13px;color:#166534;">
-              <span style="font-weight:600;">合计</span>
-              <span style="font-weight:600;">${workerStats.reduce((sum, ws) => sum + ws.hours, 0).toFixed(1)} 工时</span>
             </div>
           </div>
-        </div>`;
+        </details>`;
       })()}
       
       ${p.actionLogs.length > 0 ? `
-      <div style="background:#f9fafb;border-left:4px solid #6b7280;border-radius:8px;padding:12px;">
-        <div style="font-size:12px;color:#4b5563;font-weight:500;margin-bottom:8px;">📋 操作日志</div>
-        <div style="display:flex;flex-direction:column;gap:4px;">
-          ${p.actionLogs.slice().reverse().map((log) => {
-            const logTime = new Date(log.time);
-            const timeStr = `${logTime.getMonth() + 1}/${logTime.getDate()} ${String(logTime.getHours()).padStart(2, "0")}:${String(logTime.getMinutes()).padStart(2, "0")}`;
-            const iconMap = { start: "🚀", pause: "⏸️", resume: "▶️", delay: "⚠️", assign: "👥", unassign: "➖", finish: "✅", review: "🔍" };
-            const icon = iconMap[log.action] || "📋";
-            return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:#6b7280;">
-              <span>${icon}</span>
-              <span style="font-weight:500;">${timeStr}</span>
-              <span>${esc(log.description)}</span>
-            </div>`;
-          }).join("")}
+      <details class="rec-details rec-details--gray">
+        <summary>📋 操作日志（${p.actionLogs.length}条）</summary>
+        <div class="rec-details__body">
+          <div class="rec-list" style="gap:4px;">
+            ${p.actionLogs.slice().reverse().map((log) => {
+              const logTime = new Date(log.time);
+              const timeStr = `${logTime.getMonth() + 1}/${logTime.getDate()} ${String(logTime.getHours()).padStart(2, "0")}:${String(logTime.getMinutes()).padStart(2, "0")}`;
+              const iconMap = { start: "🚀", pause: "⏸️", resume: "▶️", delay: "⚠️", assign: "👥", unassign: "➖", finish: "✅", review: "🔍" };
+              const icon = iconMap[log.action] || "📋";
+              return `<div class="rec-list__item" style="font-size:12px;gap:6px;">
+                <span>${icon}</span>
+                <span style="font-weight:500;">${timeStr}</span>
+                <span>${esc(log.description)}</span>
+              </div>`;
+            }).join("")}
+          </div>
         </div>
-      </div>` : ""}
+      </details>` : ""}
     </div>` : ""}
 
     <div class="detail-block">
@@ -4625,6 +4839,7 @@ function renderConstruction() {
       ` : `<p class="hint" style="margin:0">暂无验收信息。</p>`)}
     </div>
   `;
+  initCustomSelects(document.getElementById("construction"));
 }
 
 /* 找出某安装人员已被分配、且与本项目时间段重叠的其它项目 */
@@ -5708,8 +5923,11 @@ function generateWorkerScheduleDescription(dateStr = null) {
         taskDesc += `，一起去的有 <strong>${pWorkers}</strong>`;
       }
       
+      if (p.workContent && p.workContent.length) {
+        taskDesc += `。施工内容：<strong>${esc(p.workContent.join("、"))}</strong>`;
+      }
       if (p.note) {
-        taskDesc += `。施工内容和注意事项：<strong>${esc(p.note)}</strong>`;
+        taskDesc += `。注意事项：<strong>${esc(p.note)}</strong>`;
       }
       
       if (pStart) {
@@ -6028,9 +6246,9 @@ function generateWorkerScheduleDescription(dateStr = null) {
       return sum + (elapsedMs / (1000 * 60 * 60)) * workerCount;
     }, 0);
     
-    const internalTasksToday = getInternalTasks().filter(t => 
-      t.date === todayStr && 
-      t.actualStartTime && 
+    const internalTasksToday = getInternalTasks().filter(t =>
+      t.date === dateStrFormatted &&
+      t.actualStartTime &&
       ['in_progress', 'completed', 'verified'].includes(t.status)
     );
     const internalActualHours = internalTasksToday.reduce((sum, t) => {
@@ -6168,8 +6386,8 @@ function generateWorkerScheduleDescription(dateStr = null) {
             <span class="schedule-progress-store">${esc(storeName)}</span>
             <span class="schedule-progress-time">${startTime} ~ ${endTime} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
           </div>
-          <div class="schedule-progress-bar-container">
-            <div class="schedule-progress-bar" style="width: ${progress}%; background-color: ${statusColor};"></div>
+          <div class="schedule-progress-bar-container${isOverdue ? ' schedule-progress-bar--overdue' : ''}">
+            <div class="schedule-progress-bar ${isOverdue ? 'schedule-progress-fill--overdue' : ''}" style="width: ${progress}%; background-color: ${statusColor};"></div>
           </div>
           <div class="schedule-progress-info">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -7364,6 +7582,7 @@ function renderStats() {
       <h3 class="stats-subhead">📐 项目工时差异（预计 vs 实际）</h3>
       ${projectTable}`;
   }
+  initCustomSelects(document.getElementById("stats"));
 }
 
 function getWageConfig() {
@@ -7447,6 +7666,7 @@ function showWageConfig() {
       </div>
     </div>`;
   document.body.appendChild(popup);
+  initCustomSelects(popup);
 }
 
 function saveWageConfigFromDialog() {
@@ -7616,6 +7836,7 @@ function showInternalWorkLogModal() {
     </div>`;
   document.body.appendChild(popup);
   calculateIwlHours();
+  initCustomSelects(popup);
 }
 
 function updateIwlWorkerName() {
@@ -7772,6 +7993,53 @@ async function deleteInternalTask(id) {
   renderInternalTasks();
 }
 
+/** 获取当前时间向上取整到10分钟的字符串，用于开始时间最小值 */
+function getTodayMinTime() {
+  const now = new Date();
+  const h = now.getHours();
+  const m = Math.ceil(now.getMinutes() / 10) * 10;
+  if (m >= 60) return `${String(h + 1).padStart(2,"0")}:00`;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
+/** 获取默认开始时间（如果当前已过08:00则取最小值，否则08:00） */
+function getDefaultStartTime() {
+  const min = getTodayMinTime();
+  return min > "08:00" ? min : "08:00";
+}
+
+/** 根据任务日期刷新开始/结束时间选项 */
+function refreshTaskTimeOptions() {
+  const dateEl = document.getElementById("newTaskDate");
+  const startEl = document.getElementById("newTaskStartTime");
+  const endEl = document.getElementById("newTaskEndTime");
+  if (!dateEl || !startEl || !endEl) return;
+  const isToday = dateEl.value === new Date().toISOString().slice(0,10);
+  const minTime = isToday ? getTodayMinTime() : null;
+  const curStart = startEl.value;
+  /* 刷新开始时间 */
+  startEl.innerHTML = generateTimeOptions(
+    (isToday && curStart < (minTime||"")) ? getDefaultStartTime() : (curStart || "08:00"),
+    minTime
+  );
+  refreshTaskEndTimeMin();
+}
+
+/** 根据开始时间刷新结束时间最小值 */
+function refreshTaskEndTimeMin() {
+  const startEl = document.getElementById("newTaskStartTime");
+  const endEl = document.getElementById("newTaskEndTime");
+  if (!startEl || !endEl) return;
+  const startVal = startEl.value || "08:00";
+  const curEnd = endEl.value;
+  /* 结束时间至少比开始时间晚10分钟 */
+  let [sh, sm] = startVal.split(":").map(Number);
+  let em = sm + 10; let eh = sh;
+  if (em >= 60) { em -= 60; eh++; }
+  const minEnd = `${String(eh).padStart(2,"0")}:${String(em).padStart(2,"0")}`;
+  endEl.innerHTML = generateTimeOptions(curEnd > minEnd ? curEnd : minEnd, minEnd);
+}
+
 function closeNewInternalTaskModal() {
   const mask = document.getElementById("newInternalTaskModal");
   if (mask) mask.remove();
@@ -7842,12 +8110,12 @@ function showNewInternalTaskModal() {
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
           <div>
             <label style="font-size:12px;font-weight:600;color:#333;">任务日期</label>
-            <input class="input" type="date" id="newTaskDate" value="${new Date().toISOString().slice(0,10)}" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" />
+            <input class="input" type="date" id="newTaskDate" value="${new Date().toISOString().slice(0,10)}" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="refreshTaskTimeOptions()" />
           </div>
           <div>
             <label style="font-size:12px;font-weight:600;color:#333;">开始时间</label>
-            <select class="input" id="newTaskStartTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;">
-              ${generateTimeOptions("08:00")}
+            <select class="input" id="newTaskStartTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="refreshTaskEndTimeMin()">
+              ${generateTimeOptions(getDefaultStartTime(), getTodayMinTime())}
             </select>
           </div>
           <div>
@@ -7872,6 +8140,7 @@ function showNewInternalTaskModal() {
       </div>
     </div>`;
   document.body.appendChild(popup);
+  initCustomSelects(popup);
 }
 
 function updateNewTaskWorkerName() {
@@ -8041,6 +8310,7 @@ function showVerifyModal(id) {
       </div>
     </div>`;
   document.body.appendChild(popup);
+  initCustomSelects(popup);
 }
 
 function closeVerifyModal() {
@@ -8086,6 +8356,169 @@ function doVerifyInternalTask(id) {
   renderStats();
   updateInternalTaskBadge();
 }
+
+/* ============================================================
+ * 自定义美化下拉组件（替代原生 <select>）
+ * ============================================================ */
+let _csOpenInstance = null; /* 当前打开的下拉实例 */
+
+/** 将单个 <select> 元素转换为自定义下拉 */
+function initCustomSelect(selectEl) {
+  if (!selectEl || selectEl._csInited || selectEl.tagName !== "SELECT") return;
+  selectEl._csInited = true;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "custom-select" +
+    (selectEl.classList.contains("assign-select") ? " cs-sm assign-select" : "") +
+    (selectEl.style.width && parseInt(selectEl.style.width) <= 100 ? " cs-xs" : "") +
+    (selectEl.disabled ? " disabled" : "");
+
+  /* 从内联 style 推断尺寸变体 */
+  const fs = selectEl.style.fontSize || "";
+  if (fs && parseFloat(fs) <= 12) wrapper.classList.add("cs-xs");
+
+  const trigger = document.createElement("div");
+  trigger.className = "cs-trigger";
+  trigger.tabIndex = 0;
+  trigger.setAttribute("role", "combobox");
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+
+  const textSpan = document.createElement("span");
+  textSpan.className = "cs-text";
+  const arrowSpan = document.createElement("span");
+  arrowSpan.className = "cs-arrow";
+  arrowSpan.textContent = "▾";
+
+  trigger.appendChild(textSpan);
+  trigger.appendChild(arrowSpan);
+
+  const dropdown = document.createElement("div");
+  dropdown.className = "cs-dropdown";
+  dropdown.setAttribute("role", "listbox");
+
+  wrapper.appendChild(trigger);
+  wrapper.appendChild(dropdown);
+  selectEl.parentNode.insertBefore(wrapper, selectEl);
+  wrapper.appendChild(selectEl);
+
+  /** 构建选项列表 */
+  function buildOptions() {
+    dropdown.innerHTML = "";
+    const opts = Array.from(selectEl.options);
+    if (opts.length === 0) { dropdown.style.display = "none"; return; }
+    dropdown.style.display = "";
+
+    opts.forEach((opt, idx) => {
+      const item = document.createElement("div");
+      item.className = "cs-option" + (opt.selected ? " selected" : "");
+      item.textContent = opt.text;
+      item.setAttribute("data-value", opt.value);
+      item.setAttribute("data-idx", idx);
+      item.setAttribute("role", "option");
+      item.setAttribute("aria-selected", opt.selected ? "true" : "false");
+      if (opt.disabled) {
+        item.style.opacity = "0.45";
+        item.style.pointerEvents = "none";
+      }
+
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (opt.disabled) return;
+        selectEl.value = opt.value;
+        selectEl.selectedIndex = idx;
+        syncUI();
+        closeAllCS();
+        selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+        selectEl.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+
+      dropdown.appendChild(item);
+    });
+  }
+
+  /** 同步触发器文本和选中态 */
+  function syncUI() {
+    const sel = selectEl.options[selectEl.selectedIndex];
+    textSpan.textContent = sel ? sel.text : (selectEl.dataset.placeholder || "请选择");
+    Array.from(dropdown.children).forEach(item => {
+      const isSelected = item.getAttribute("data-value") === selectEl.value;
+      item.classList.toggle("selected", isSelected);
+      item.setAttribute("aria-selected", isSelected ? "true" : "false");
+    });
+  }
+
+  /** 打开 */
+  function open() {
+    if (selectEl.disabled) return;
+    closeAllCS();
+    buildOptions();
+    syncUI();
+    wrapper.classList.add("open");
+    trigger.setAttribute("aria-expanded", "true");
+    _csOpenInstance = wrapper;
+
+    /* 滚动到选中项 */
+    const selItem = dropdown.querySelector(".cs-option.selected");
+    if (selItem) {
+      const r = selItem.offsetTop - dropdown.clientHeight / 2 + selItem.offsetHeight / 2;
+      dropdown.scrollTop = Math.max(0, r);
+    }
+  }
+
+  /** 关闭 */
+  function close() {
+    wrapper.classList.remove("open");
+    trigger.setAttribute("aria-expanded", "false");
+    if (_csOpenInstance === wrapper) _csOpenInstance = null;
+  }
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (wrapper.classList.contains("open")) { close(); } else { open(); }
+  });
+
+  trigger.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+      e.preventDefault();
+      open();
+    } else if (e.key === "Escape") {
+      close();
+    }
+  });
+
+  /* 监听原生 select 变化（程序化赋值 .value 时） */
+  const observer = new MutationObserver(() => {
+    syncUI();
+    if (selectEl.disabled) wrapper.classList.add("disabled"); else wrapper.classList.remove("disabled");
+  });
+  observer.observe(selectEl, { attributes: true, attributeFilter: ["disabled"] });
+
+  /* 初始化 */
+  buildOptions();
+  syncUI();
+
+  /* 暴露方法 */
+  wrapper._csClose = close;
+  wrapper._csOpen = open;
+  wrapper._csRebuild = buildOptions;
+}
+
+/** 关闭所有打开的自定义下拉 */
+function closeAllCS() {
+  if (_csOpenInstance) { _csOpenInstance._csClose(); _csOpenInstance = null; }
+}
+
+/** 初始化容器内所有 <select> 为自定义下拉 */
+function initCustomSelects(container) {
+  const root = container || document;
+  root.querySelectorAll("select:not(._csInited)").forEach(s => initCustomSelect(s));
+}
+
+/** 点击外部关闭所有下拉 */
+document.addEventListener("click", () => closeAllCS());
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAllCS(); });
 
 function renderInternalTasks() {
   const container = document.getElementById("internalTaskList");
@@ -8146,60 +8579,67 @@ function renderInternalTasks() {
       actionButtons = isManager() ? `<button class="btn primary" onclick="showVerifyModal('${t.id}')">审核</button>` : '';
     }
     
+    const calcH = t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours);
     const timeInfo = t.status === 'pending' && t.scheduledStartTime && t.scheduledEndTime
-      ? `<div style="margin-top:6px;padding:6px;background:#fef3c7;border-radius:4px;">
-           <div style="font-size:11px;color:#666;">📅 安排: <b>${t.scheduledStartTime} ~ ${t.scheduledEndTime}</b></div>
+      ? `<div class="it-time-box it-time-box--pending">
+           <div class="it-tline">📅 安排：<b>${t.scheduledStartTime} ~ ${t.scheduledEndTime}</b></div>
          </div>`
       : t.status === 'in_progress' 
-        ? `<div style="margin-top:6px;padding:6px;background:#eff6ff;border-radius:4px;">
-             <div style="font-size:11px;color:#666;">📅 安排: <b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
-             <div style="font-size:11px;color:#666;margin-top:1px;">⏰ 实际开始: <b>${t.actualStartTime || '-'}</b></div>
+        ? `<div class="it-time-box it-time-box--in_progress">
+             <div class="it-tline">📅 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
+             <div class="it-tline">⏰ 实际开始：<b>${t.actualStartTime || '-'}</b></div>
            </div>`
         : t.status === 'completed'
-          ? `<div style="margin-top:6px;padding:6px;background:#fef3c7;border-radius:4px;">
-               <div style="font-size:11px;color:#666;">📅 安排: <b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
-               <div style="font-size:11px;color:#666;margin-top:1px;">⏰ 实际: <b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
-               <div style="font-size:11px;color:#666;margin-top:1px;">📊 预计: ${t.estHours}h / 记录: <b>${t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours)}h</b></div>
-               <div style="font-size:11px;color:#f59e0b;margin-top:1px;">⚠️ 等待审核</div>
+          ? `<div class="it-time-box it-time-box--completed">
+               <div class="it-tline">📅 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
+               <div class="it-tline">⏰ 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
+               <div class="it-tline">📊 预计：${t.estHours}h / 记录：<b>${calcH}h</b></div>
+               <div class="it-tline it-tline--warn">⚠️ 等待审核</div>
              </div>`
           : t.status === 'verified'
-            ? `<div style="margin-top:6px;padding:6px;background:#ecfdf5;border-radius:4px;">
-                 <div style="font-size:11px;color:#666;">📅 安排: <b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
-                 <div style="font-size:11px;color:#666;margin-top:1px;">⏰ 实际: <b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
-                 <div style="font-size:11px;color:#666;margin-top:1px;">📊 预计: ${t.estHours}h / 记录: <b>${t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours)}h</b></div>
-                 <div style="font-size:11px;color:#10b981;margin-top:1px;">✅ 已审核</div>
-                 ${t.verifyNote ? `<div style="font-size:11px;color:#666;margin-top:1px;">📝 ${esc(t.verifyNote)}</div>` : ''}
+            ? `<div class="it-time-box it-time-box--verified">
+                 <div class="it-tline">📅 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
+                 <div class="it-tline">⏰ 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
+                 <div class="it-tline">📊 预计：${t.estHours}h / 记录：<b>${calcH}h</b></div>
+                 <div class="it-tline it-tline--ok">✅ 已审核</div>
+                 ${t.verifyNote ? `<div class="it-tline">📝 ${esc(t.verifyNote)}</div>` : ''}
                </div>`
             : '';
     
     return `
-      <div class="card internal-task-card">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-          <div>
-            <h3 style="font-size:15px;font-weight:600;margin-bottom:2px;">${esc(t.name)}</h3>
-            <div style="font-size:12px;color:#666;">${esc(t.workType)} · ${esc(t.level)}</div>
+      <div class="card internal-task-card it-card--${t.status}">
+        <!-- 右上角状态角标 -->
+        <span class="it-status-pill it-status-pill--${t.status}">
+          <i class="it-dot"></i>${statusText[t.status]}
+        </span>
+        
+        <div class="it-body">
+          <div class="it-head-row">
+            <h3 class="it-title">${esc(t.name)}</h3>
           </div>
-          <span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:${statusColor[t.status]}15;color:${statusColor[t.status]};">
-            ${statusText[t.status]}
-          </span>
+          <p class="it-sub">${esc(t.workType)} · ${esc(t.level)} · 预计${esc(t.estHours)}小时</p>
+
+          <div class="it-meta-row">
+            <span class="it-meta-item"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>${esc(t.workerName)}</span>
+            <span class="it-meta-item"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>${esc(t.date)}</span>
+          </div>
+
+          ${t.note ? `<div class="it-note">${esc(t.note)}</div>` : ''}
+
+          ${timeInfo}
         </div>
-        
-        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;font-size:12px;">
-          <div><span style="color:#888;">👤</span> ${esc(t.workerName)}</div>
-          <div><span style="color:#888;">📅</span> ${esc(t.date)}</div>
-          <div><span style="color:#888;">⏱️</span> 预计 ${esc(t.estHours)}h</div>
+
+        <div class="it-footer">
+          <div class="it-actions">
+            ${actionButtons}
+          </div>
+          ${isManager() ? `<button class="it-del-link" onclick="deleteInternalTask('${t.id}')">删除任务</button>` : ''}
         </div>
-        
-        ${t.note ? `<div style="font-size:12px;color:#666;margin-bottom:8px;padding:6px;background:#f8f9fa;border-radius:4px;">📝 ${esc(t.note)}</div>` : ''}
-        
-        ${timeInfo}
-        
-        ${actionButtons}
-        
-        ${isManager() ? `<button class="btn tiny" style="margin-top:6px;color:#ef4444;border-color:#fecaca;" onclick="deleteInternalTask('${t.id}')">删除</button>` : ''}
       </div>
     `;
   }).join("");
+
+  initCustomSelects(container.parentElement);
 }
 
 let internalTasksInitialized = false;
@@ -8219,6 +8659,7 @@ function initInternalTasks() {
       internalTasksInitialized = true;
     }
     renderInternalTasks();
+    initCustomSelects(document.getElementById("internalTasks"));
   } catch (e) {
     console.error("Error initializing internal tasks:", e);
   }
@@ -8739,7 +9180,15 @@ function collectStoreStats() {
       const { est, act, diff, hasActual } = hoursDiff(p);
       if (hasActual) { b.recordedEst += est; b.act += act; b.recordedDiff += diff; }
     });
-  return Object.values(buckets).sort((a, b) => b.count - a.count);
+  return Object.values(buckets).sort((a, b) => {
+    // 未指定门店排第一
+    if (!a.id && b.id) return -1;
+    if (a.id && !b.id) return 1;
+    // 其余按编号数字排序：101,102,...109
+    const na = Number(a.id) || 999;
+    const nb = Number(b.id) || 999;
+    return na - nb;
+  });
 }
 
 function renderStoreStats() {
@@ -8775,8 +9224,8 @@ function renderStoreStats() {
         </tfoot>
       </table>
     </div>`;
+  initCustomSelects(document.getElementById("storeStats"));
 }
-
 function exportStoreStats() {
   const rows = collectStoreStats();
   if (rows.length === 0) { toast("暂无数据可导出"); return; }
@@ -8912,6 +9361,7 @@ async function renderAccounts() {
         </tbody>
       </table>
     </div>`;
+  initCustomSelects(document.getElementById("accounts"));
 }
 
 async function changeAccountName(id, name) {
@@ -9112,6 +9562,7 @@ const modal = {
     }
     
     document.getElementById("modal").classList.remove("hidden");
+    initCustomSelects(document.getElementById("modalBody"));
   },
   close() {
     document.getElementById("modal").classList.add("hidden");
@@ -9327,9 +9778,11 @@ function logOperation(type, target, detail = "") {
     if (sb && pendingLogs.length > 0) {
       const logsToSave = [...pendingLogs];
       pendingLogs = [];
-      sb.from("operation_logs").insert(logsToSave).catch(e => {
-        console.warn("保存操作日志失败:", e);
-        pendingLogs = [...logsToSave, ...pendingLogs];
+      sb.from("operation_logs").insert(logsToSave).then(({ error }) => {
+        if (error) {
+          console.warn("保存操作日志失败:", error);
+          pendingLogs = [...logsToSave, ...pendingLogs];
+        }
       });
     } else {
       pendingLogs = [];
@@ -9867,6 +10320,75 @@ async function importOutsourcedWorker(row) {
   await repo.saveOutsourcedWorker(ow);
 }
 
+/* ============================================================
+ * 我的页面（移动端聚合）
+ * ============================================================ */
+function renderMine() {
+  const box = document.getElementById("mineContent");
+  if (!box) return;
+  const role = myRole();
+  const userEmail = currentUser?.email || "";
+  const userName = currentUser?.user_metadata?.name || userEmail.split("@")[0] || "用户";
+  const roleLabel = ROLE_LABEL[role] || role || "未分配";
+
+  // 功能中心菜单项（根据权限过滤）
+  const featureItems = [
+    { tab: "workers", icon: "👷", label: "施工人员", color: "#eff6ff", show: perm.viewWorker() },
+    { tab: "outsourced", icon: "🤝", label: "外协人员", color: "#f5f3ff", show: perm.manageWorkers() },
+    { tab: "leaves", icon: "🏥", label: "请假管理", color: "#fff7ed", show: !isStoreManager() || !myStore() },
+    { tab: "schedules", icon: "📅", label: "个人日程", color: "#fef3c7", show: true },
+    { tab: "stores", icon: "🏪", label: "门店管理", color: "#f0fdf4", show: perm.manageStores() },
+    { tab: "storeStats", icon: "📊", label: "店面统计", color: "#eff6ff", show: perm.viewStoreStats() },
+    { tab: "stats", icon: "📈", label: "工时统计", color: "#f0f9ff", show: perm.viewStats() },
+    { tab: "internalTasks", icon: "✅", label: "内部任务", color: "#fef2f2", show: isManager() || (!myStore() && (isStoreManager() || isWorker())) },
+    { tab: "accounts", icon: "👤", label: "账号管理", color: "#faf5ff", show: perm.manageAccounts() },
+    { tab: "rolePerms", icon: "🛡️", label: "角色权限", color: "#fffbeb", show: perm.manageAccounts() && MODE === "cloud" },
+  ].filter(i => i.show);
+
+  box.innerHTML = `
+    <div class="mine-header">
+      <div class="mine-avatar">👤</div>
+      <div class="mine-user-info">
+        <div class="mine-user-name">${esc(userName)}</div>
+        <div class="mine-user-role">${esc(roleLabel)}</div>
+      </div>
+    </div>
+
+    <div class="mine-section-title">功能中心</div>
+    <div class="mine-grid">
+      ${featureItems.map(item => `
+        <div class="mine-grid-item" onclick="switchTab('${item.tab}')">
+          <div class="mine-grid-icon" style="background:${item.color}">${item.icon}</div>
+          <span class="mine-grid-label">${item.label}</span>
+        </div>`).join("")}
+    </div>
+
+    ${perm.viewGlobalStats() ? `
+    <div class="mine-section-title">系统</div>
+    <div class="mine-list">
+      <div class="mine-list-item" onclick="exportAllData()">
+        <div class="mine-list-icon" style="background:#eff6ff;color:#2563eb">⬇️</div>
+        <span class="mine-list-text">数据导出</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
+      ${MODE === "cloud" ? `
+      <div class="mine-list-item" onclick="document.getElementById('importFile').click()">
+        <div class="mine-list-icon" style="background:#f0fdf4;color:#16a34a">⬆️</div>
+        <span class="mine-list-text">数据导入</span>
+        <span class="mine-list-arrow">›</span>
+      </div>` : ""}
+      <div class="mine-list-item" onclick="showHelp()">
+        <div class="mine-list-icon" style="background:#fef3c7;color:#d97706">❓</div>
+        <span class="mine-list-text">帮助与反馈</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
+    </div>
+    ` : ""}
+
+    ${MODE === "cloud" ? `<button class="mine-logout" onclick="if(confirm('确定要退出登录吗？'))doLogout()">登出</button>` : ""}
+  `;
+}
+
 function switchTab(name) {
   const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
   if (btn && btn.classList.contains("hidden")) return;
@@ -9877,6 +10399,7 @@ function switchTab(name) {
   document.querySelectorAll(".bottom-nav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === name));
   document.querySelector(".tabs").classList.remove("open");
+  window.scrollTo({ top: 0, behavior: "instant" });
 
   if (name !== "calendar" && name !== "workers") {
     document.body.classList.remove("timeline-view");
@@ -9899,6 +10422,14 @@ function switchTab(name) {
   if (name === "internalTasks") {
     initInternalTasks();
   }
+  if (name === "mine") {
+    renderMine();
+  }
+  /* 全局初始化当前可见区域内的自定义下拉组件 */
+  requestAnimationFrame(() => {
+    const panel = document.getElementById(name);
+    if (panel) initCustomSelects(panel);
+  });
 }
 
 /* 头部角色标签 */
@@ -9926,7 +10457,7 @@ function applyPermissions() {
     construction: role != null,
     stats: perm.viewStats(),
     storeStats: perm.viewStoreStats(),
-    workers: perm.manageWorkers() || myRole() === ROLE.WORKER,
+    workers: perm.viewWorker(),
     outsourced: perm.manageWorkers(),
     leaves: role != null,
     schedules: role != null,
@@ -9954,18 +10485,13 @@ function applyPermissions() {
   setHidden("statsWorker", !perm.viewGlobalStats() && myStore());
   setHidden("statsStatus", !perm.viewGlobalStats() && myStore());
 
-  const isAssignedStoreManager = isStoreManager() && myStore();
-  
   const bottomNavVisible = {
     projects: role != null,
     calendar: role != null,
     construction: role != null,
-    workers: !isAssignedStoreManager && role != null,
-    leaves: !isAssignedStoreManager && role != null,
-    schedules: !isAssignedStoreManager && role != null,
-    stats: perm.viewStats(),
-    storeStats: perm.viewStoreStats(),
     internalTasks: role != null && (isManager() || (!myStore() && (isStoreManager() || isWorker())) || (cache.stores.length > 0 && storeName(myStore()).includes("广告工程部"))),
+    workers: perm.viewWorker() && role != null,
+    mine: role != null,
   };
   document.querySelectorAll(".bottom-nav-item").forEach((b) => {
     const tab = b.dataset.tab;
@@ -10049,6 +10575,7 @@ function renderLeaves() {
   
   const holidayEl = document.getElementById("holidayManage");
   if (holidayEl) renderHolidayManage(holidayEl);
+  initCustomSelects(document.getElementById("leaves"));
 }
 
 function renderLeaveStats(container) {
@@ -10196,6 +10723,7 @@ function renderHolidayManage(container) {
       </p>
     </div>
   `;
+  initCustomSelects(container);
 }
 
 function openHolidayForm() {
@@ -11161,6 +11689,7 @@ function openTimelineActionMenu(taskEl, projectId) {
     </div>`;
 
   document.body.appendChild(menu);
+  initCustomSelects(menu);
 
   /* 定位菜单：显示在任务卡片下方 */
   const taskRect = taskEl.getBoundingClientRect();
@@ -12250,3 +12779,22 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
 function showHelp() {
   window.open("help.html", "_blank");
 }
+
+/* ===== 卡片操作：更多菜单下拉交互 ===== */
+function toggleActionMore(el, event) {
+  event.stopPropagation();
+  const wasOpen = el.classList.contains("open");
+  closeAllActionMenus();
+  if (!wasOpen) {
+    el.classList.add("open");
+  }
+}
+
+function closeAllActionMenus() {
+  document.querySelectorAll(".action-more.open").forEach((el) => el.classList.remove("open"));
+}
+
+document.addEventListener("click", () => closeAllActionMenus());
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeAllActionMenus();
+});

@@ -82,14 +82,31 @@
   </header>
 
   <nav class="bottom-nav">
-    <button class="bottom-nav-item active" data-tab="projects" title="项目预约">📋</button>
-    <button class="bottom-nav-item" data-tab="calendar" title="预约日历">📅<span id="calendarDate"></span></button>
-    <button class="bottom-nav-item" data-tab="construction" title="施工管理">🏗️</button>
-    <button class="bottom-nav-item" data-tab="workers" title="施工人员">👷</button>
-    <button class="bottom-nav-item" data-tab="leaves" title="请假管理">🏥</button>
-    <button class="bottom-nav-item" data-tab="schedules" title="个人日程">📝</button>
-    <button class="bottom-nav-item" data-tab="stats" title="工时统计">📊</button>
-    <button class="bottom-nav-item" data-tab="internalTasks" title="内部任务">📋</button>
+    <button class="bottom-nav-item active" data-tab="projects" title="项目预约">
+      <span class="bnav-icon">📋</span>
+      <span class="bnav-label">项目</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="calendar" title="预约日历">
+      <span class="bnav-icon">📅</span>
+      <span class="bnav-label">日历</span>
+      <span id="calendarDate"></span>
+    </button>
+    <button class="bottom-nav-item" data-tab="construction" title="施工管理">
+      <span class="bnav-icon">🏗️</span>
+      <span class="bnav-label">施工</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="internalTasks" title="任务">
+      <span class="bnav-icon">✅</span>
+      <span class="bnav-label">任务</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="workers" title="人员">
+      <span class="bnav-icon">👷</span>
+      <span class="bnav-label">人员</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="mine" title="我的">
+      <span class="bnav-icon">👤</span>
+      <span class="bnav-label">我的</span>
+    </button>
   </nav>
 
   <main class="container">
@@ -116,17 +133,15 @@
           <select id="projectStoreFilter" class="input" style="width:140px;">
             <option value="">全部门店</option>
           </select>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="checkbox" id="includeCompleted" onchange="renderProjects()" style="width:16px;height:16px;">
-            <span style="font-size:12px;color:var(--muted);">包含已完工</span>
-          </label>
         </div>
         <div class="toolbar-time-filter">
-          <span style="font-size:12px; color:var(--muted);">时间范围</span>
           <button class="btn small" id="timeFilterAll" onclick="setProjectTimeFilter(0)">全部</button>
           <button class="btn small" id="timeFilter3" onclick="setProjectTimeFilter(3)">3天</button>
           <button class="btn small primary" id="timeFilter7" onclick="setProjectTimeFilter(7)">7天</button>
           <button class="btn small" id="timeFilter15" onclick="setProjectTimeFilter(15)">15天</button>
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-left:auto;font-size:12px;color:var(--muted);">
+            <input type="checkbox" id="includeCompleted" onchange="renderProjects()" style="width:14px;height:14px;vertical-align:middle;"> 包含已完工
+          </label>
         </div>
       </div>
       <div id="projectList" class="card-grid"></div>
@@ -216,11 +231,11 @@
 
     <!-- 内部任务管理 -->
     <section id="internalTasks" class="tab-panel">
-      <div class="section-head">
-        <h2>内部任务管理</h2>
+      <div class="section-head it-section-head">
+        <h2>📋 内部任务管理</h2>
         <button class="btn primary" id="btnNewInternalTask">+ 下达任务</button>
       </div>
-      <div class="toolbar">
+      <div class="it-toolbar">
         <select id="internalTaskStatusFilter" class="input" onchange="renderInternalTasks()">
           <option value="">全部状态</option>
           <option value="pending">待开始</option>
@@ -239,8 +254,8 @@
           <option value="其他">其他</option>
         </select>
         <select id="internalTaskDateFilter" class="input" onchange="renderInternalTasks()">
-          <option value="3days" selected>最近3天</option>
-          <option value="7days">最近7天</option>
+          <option value="3days" selected>最近 3 天</option>
+          <option value="7days">最近 7 天</option>
           <option value="all">全部任务</option>
         </select>
       </div>
@@ -351,6 +366,11 @@
       </div>
       <div id="scheduleCalendar"></div>
       <div id="scheduleList"></div>
+    </section>
+
+    <!-- 我的（移动端聚合页） -->
+    <section id="mine" class="tab-panel">
+      <div id="mineContent"></div>
     </section>
   </main>
 
