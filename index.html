@@ -102,7 +102,7 @@
       <div class="toolbar">
         <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
           <input type="text" id="projectSearch" class="input" placeholder="搜索项目名称 / 客户 / 地址" style="flex:1;min-width:150px;max-width:350px;" />
-          <select id="projectStatusFilter" class="input" onchange="onProjectStatusChange(this.value)" style="width:140px;">
+          <select id="projectStatusFilter" class="input" style="width:140px;">
             <option value="">全部状态</option>
             <option value="预约中">预约中</option>
             <option value="施工中">施工中</option>
@@ -166,7 +166,10 @@
         <h2>施工管理</h2>
         <div class="project-select-wrapper">
           <label>选择项目：</label>
-          <select id="constructionProjectSelect" class="input construction-select"></select>
+          <button type="button" id="constructionProjectSelect" class="project-select-btn" onclick="openProjectPicker()" aria-haspopup="dialog" aria-expanded="false">
+            <span class="project-select-text" id="constructionProjectSelectLabel">— 请选择项目 —</span>
+            <span class="project-select-arrow" aria-hidden="true">▾</span>
+          </button>
         </div>
       </div>
       <p class="hint">选择一个进入施工阶段的项目，为其分配施工人员、分人填写施工工时，并登记工程实际用的工时与验收信息。</p>

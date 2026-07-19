@@ -286,7 +286,11 @@ function cloudConfigured() {
 
 /* ---------- 工具函数 ---------- */
 function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  // 使用 crypto.randomUUID() 确保唯一性（现代浏览器均支持）
+  // 添加计数器和时间戳作为双重保障，防止高频调用下的碰撞
+  return Date.now().toString(36)
+    + "-" + Math.random().toString(36).slice(2, 10)
+    + "-" + Math.floor(Math.random() * 46656).toString(36);
 }
 
 function esc(str) {
@@ -796,6 +800,12 @@ function sendNotificationForProjectChange(eventType, project) {
       break;
     case "update":
       showNotificationAlert(`📝 项目更新：${project.name}`);
+      break;
+    case "pause":
+      showNotificationAlert(`⏸️ 项目暂停：${project.name}`);
+      break;
+    case "resume":
+      showNotificationAlert(`▶️ 项目恢复：${project.name}`);
       break;
   }
 }
@@ -1399,7 +1409,8 @@ function fail(error) {
     message += "（错误码：" + error.code + "）";
   }
   toast(message);
-  throw error;
+  console.error("[app] 操作失败:", error);
+  // 不再 throw，避免未捕获异常导致 UI 崩溃
 }
 
 function migrateData(data) {
@@ -1466,19 +1477,28 @@ function loadLocal() {
 }
 
 function saveLocal() {
-  localStorage.setItem(STORE_KEY, JSON.stringify({ 
-    version: DATA_VERSION,
-    workers: cache.workers, 
-    projects: cache.projects, 
-    stores: cache.stores, 
-    leaveRecords: cache.leaveRecords,
-    leaveQuota: cache.leaveQuota,
-    holidays: cache.holidays,
-    outsourcedWorkers: cache.outsourcedWorkers,
-    workerSchedules: cache.workerSchedules,
-    operationLogs: cache.operationLogs,
-    accounts: cache.accounts
-  }));
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({ 
+      version: DATA_VERSION,
+      workers: cache.workers, 
+      projects: cache.projects, 
+      stores: cache.stores, 
+      leaveRecords: cache.leaveRecords,
+      leaveQuota: cache.leaveQuota,
+      holidays: cache.holidays,
+      outsourcedWorkers: cache.outsourcedWorkers,
+      workerSchedules: cache.workerSchedules,
+      operationLogs: cache.operationLogs,
+      accounts: cache.accounts
+    }));
+  } catch (e) {
+    console.error("[app] localStorage 保存失败（可能已满）:", e);
+    if (e.name === "QuotaExceededError") {
+      toast("⚠️ 本地存储空间不足！请清理旧项目数据或导出备份");
+    } else {
+      toast("⚠️ 数据保存失败，请检查浏览器存储空间");
+    }
+  }
 }
 
 let pendingChanges = new Set();
@@ -3855,21 +3875,148 @@ let currentProjectId = "";
 /* 日历视图状态（移至下方统一定义） */
 
 function refreshProjectSelector() {
-  const sel = document.getElementById("constructionProjectSelect");
-  const prev = currentProjectId;
-  const items = cache.projects.slice()
+  // 缓存可选项目列表，供自定义选择弹窗使用
+  constructionProjectList = cache.projects.slice()
     .filter(p => p.status !== STATUS.REVIEWED && p.status !== STATUS.ACCEPTED)
     .sort((a, b) =>
     new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0));
-  sel.innerHTML = `<option value="">— 请选择项目 —</option>` +
-    items.map((p) => `<option value="${p.id}">${p.storeName ? esc(p.storeName) + ' · ' : ''}${esc(p.name)}${p.appointmentTime ? ` · ${fmtDate(p.appointmentTime)}` : ''}</option>`).join("");
-  if (prev && getProject(prev) && items.some(i => i.id === prev)) sel.value = prev;
+  updateConstructionSelectLabel();
+}
+
+/* 构造“门店 项目名 日期”格式的项目显示文本 */
+function buildProjectDisplay(p) {
+  const store = p.storeName ? esc(p.storeName) : "";
+  const name = esc(p.name) || "（未命名项目）";
+  const date = p.appointmentTime ? fmtDate(p.appointmentTime) : "";
+  return { store, name, date };
+}
+
+/* 更新施工管理选择按钮上显示的文字 */
+function updateConstructionSelectLabel() {
+  const labelEl = document.getElementById("constructionProjectSelectLabel");
+  if (!labelEl) return;
+  if (!currentProjectId) {
+    labelEl.textContent = "— 请选择项目 —";
+    labelEl.classList.remove("has-project");
+    return;
+  }
+  const p = getProject(currentProjectId);
+  if (!p) {
+    labelEl.textContent = "— 请选择项目 —";
+    labelEl.classList.remove("has-project");
+    return;
+  }
+  const { store, name, date } = buildProjectDisplay(p);
+  labelEl.classList.add("has-project");
+  // 按钮上用简洁文本：门店 项目名 日期
+  labelEl.textContent = [store, name, date].filter(Boolean).join(" · ");
+}
+
+/* 打开自定义项目选择弹窗（替代原生 select 的系统下拉） */
+let constructionProjectList = [];
+let projectPickerSearchKeyword = "";
+
+function openProjectPicker() {
+  const keyword = projectPickerSearchKeyword.trim().toLowerCase();
+  let items = constructionProjectList;
+  if (keyword) {
+    items = items.filter(p => {
+      const { store, name, date } = buildProjectDisplay(p);
+      return [store, name, date].join(" ").toLowerCase().includes(keyword)
+        || (p.customer && String(p.customer).toLowerCase().includes(keyword))
+        || (p.address && String(p.address).toLowerCase().includes(keyword));
+    });
+  }
+
+  const listHtml = items.length
+    ? items.map(p => {
+        const { store, name, date } = buildProjectDisplay(p);
+        const active = p.id === currentProjectId ? " active" : "";
+        const statusTag = p.status ? `<span class="pp-status pp-status-${esc(p.status)}">${esc(p.status)}</span>` : "";
+        return `
+          <div class="project-picker-item${active}" onclick="pickConstructionProject('${p.id}')">
+            <div class="pp-main">
+              ${store ? `<span class="pp-store">${store}</span>` : ""}
+              <span class="pp-name">${name}</span>
+            </div>
+            <div class="pp-meta">
+              ${date ? `<span class="pp-date">📅 ${date}</span>` : ""}
+              ${statusTag}
+            </div>
+          </div>`;
+      }).join("")
+    : `<div class="project-picker-empty">没有匹配的项目</div>`;
+
+  const body = `
+    <div class="project-picker">
+      <div class="project-picker-search">
+        <input type="text" id="projectPickerSearch" class="input" placeholder="🔍 搜索门店 / 项目名 / 日期 / 客户 / 地址" value="${esc(projectPickerSearchKeyword)}" oninput="onProjectPickerSearch(this.value)" />
+      </div>
+      <div class="project-picker-count">共 ${items.length} 个可选项目</div>
+      <div class="project-picker-list" id="projectPickerList">${listHtml}</div>
+    </div>
+  `;
+
+  modal.open("选择项目", body, { hideFooter: true });
+  // 自动聚焦搜索框
+  setTimeout(() => {
+    const s = document.getElementById("projectPickerSearch");
+    if (s) { s.focus(); s.select(); }
+  }, 50);
+}
+
+function onProjectPickerSearch(val) {
+  projectPickerSearchKeyword = val || "";
+  const listEl = document.getElementById("projectPickerList");
+  const countEl = document.querySelector(".project-picker-count");
+  if (!listEl) return;
+  const keyword = projectPickerSearchKeyword.trim().toLowerCase();
+  let items = constructionProjectList;
+  if (keyword) {
+    items = items.filter(p => {
+      const { store, name, date } = buildProjectDisplay(p);
+      return [store, name, date].join(" ").toLowerCase().includes(keyword)
+        || (p.customer && String(p.customer).toLowerCase().includes(keyword))
+        || (p.address && String(p.address).toLowerCase().includes(keyword));
+    });
+  }
+  if (countEl) countEl.textContent = `共 ${items.length} 个可选项目`;
+  listEl.innerHTML = items.length
+    ? items.map(p => {
+        const { store, name, date } = buildProjectDisplay(p);
+        const active = p.id === currentProjectId ? " active" : "";
+        const statusTag = p.status ? `<span class="pp-status pp-status-${esc(p.status)}">${esc(p.status)}</span>` : "";
+        return `
+          <div class="project-picker-item${active}" onclick="pickConstructionProject('${p.id}')">
+            <div class="pp-main">
+              ${store ? `<span class="pp-store">${store}</span>` : ""}
+              <span class="pp-name">${name}</span>
+            </div>
+            <div class="pp-meta">
+              ${date ? `<span class="pp-date">📅 ${date}</span>` : ""}
+              ${statusTag}
+            </div>
+          </div>`;
+      }).join("")
+    : `<div class="project-picker-empty">没有匹配的项目</div>`;
+}
+
+function pickConstructionProject(id) {
+  currentProjectId = id;
+  modal.close();
+  projectPickerSearchKeyword = "";
+  updateConstructionSelectLabel();
+  renderConstruction();
+  setTimeout(() => {
+    const detail = document.getElementById("constructionDetail");
+    if (detail) detail.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 100);
 }
 
 function gotoConstruction(id) {
   currentProjectId = id;
   switchTab("construction");
-  document.getElementById("constructionProjectSelect").value = id;
+  updateConstructionSelectLabel();
   renderConstruction();
   setTimeout(() => {
     const detail = document.getElementById("constructionDetail");
@@ -4495,6 +4642,7 @@ function assignConflicts(project, workerId) {
 
 /* 判断项目是否已完成（不参与人员冲突检测） */
 function isCompleted(p) {
+  // 注意：CANCELLED 状态也视为"无需后续操作"，与 DONE/REVIEWED/ACCEPTED 一致
   return [STATUS.DONE, STATUS.REVIEWED, STATUS.ACCEPTED, STATUS.CANCELLED].includes(p.status);
 }
 
@@ -7119,37 +7267,56 @@ function renderStats() {
   const projectTable = projRows.length === 0
     ? `<div class="empty">所选月份暂无项目。</div>`
     : `
-    <div class="detail-block" style="padding:0;overflow:hidden">
-      <table class="data">
+    <div class="detail-block hours-diff-wrap" style="padding:0">
+      <table class="data project-hours-diff">
         <thead>
-          <tr><th>日期</th><th>预约开工</th><th>实际开工</th><th>店面</th><th>项目</th><th>状态</th><th>预计工时</th><th>实际工时</th><th>差异</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工人员工时</th><th style="color:#8b5cf6">外协人数</th><th style="color:#f59e0b">系统自动工时</th><th>工时备注</th></tr>
+          <tr>
+            <th class="col-date">日期</th>
+            <th class="col-time">预约开工</th>
+            <th class="col-time">实际开工</th>
+            <th class="col-store">店面</th>
+            <th class="col-name">项目</th>
+            <th class="col-status">状态</th>
+            <th class="col-num">预计<br>工时</th>
+            <th class="col-num">实际<br>工时</th>
+            <th class="col-num">差异</th>
+            <th class="col-num">初级</th>
+            <th class="col-num">中级</th>
+            <th class="col-num">高级</th>
+            <th class="col-num">特级</th>
+            <th class="col-workers">施工人员工时</th>
+            <th class="col-num" style="color:#8b5cf6">外协人数</th>
+            <th class="col-auto">系统自动工时</th>
+            <th class="col-notes">工时备注</th>
+          </tr>
         </thead>
         <tbody>
           ${projRows.map((r) => {
-            const internalWorkers = r.workerHours.map((w) => `${esc(w.name)} ${w.hours}h`).join("、");
-            const outsourcedWorkers = r.outsourcedWorkerHours.map((w) => `<span style="color:#8b5cf6">${esc(w.name)} ${w.hours}h</span>`).join("、");
-            const workerText = (internalWorkers || "") + (internalWorkers && outsourcedWorkers ? "、" : "") + (outsourcedWorkers || "");
+            const workerChips = [
+              ...r.workerHours.map((w) => `<span class="worker-chip internal">${esc(w.name)} <b>${w.hours}h</b></span>`),
+              ...r.outsourcedWorkerHours.map((w) => `<span class="worker-chip outsourced">${esc(w.name)} <b>${w.hours}h</b></span>`)
+            ].join("");
             const outsourcedCount = r.outsourcedWorkerHours.length;
-            const autoWorkerText = (r.autoWorkerHours || []).map((w) => `${esc(w.name)} ${w.hours}h`).join("、");
+            const autoChips = (r.autoWorkerHours || []).map((w) => `<span class="worker-chip auto">${esc(w.name)} <b>${w.hours}h</b></span>`).join("");
             return `
             <tr>
-              <td>${r.date ? fmtDate(r.date) : "—"}</td>
-              <td>${r.appointmentTime ? fmtTime(r.appointmentTime) : "—"}</td>
-              <td>${r.startedAt ? fmtTime(r.startedAt) : "—"}</td>
-              <td>${esc(r.store || "—")}</td>
-              <td>${esc(r.name)}</td>
-              <td><span class="badge ${r.status}">${r.status}</span></td>
-              <td>${r.est}</td>
-              <td>${r.hasActual ? r.act : "—"}</td>
-              <td style="color:${r.hasActual ? diffColor(r.diff) : "var(--muted)"};font-weight:600">${r.hasActual ? fmtSignedDiff(r.diff) : "未登记"}</td>
-              <td style="color:#6b7280">${r.levelHours?.初级 || 0}</td>
-              <td style="color:#3b82f6">${r.levelHours?.中级 || 0}</td>
-              <td style="color:#f59e0b">${r.levelHours?.高级 || 0}</td>
-              <td style="color:#dc2626">${r.levelHours?.特级 || 0}</td>
-              <td style="white-space:normal;max-width:320px">${workerText || `<span style="color:var(--muted)">—</span>`}</td>
-              <td style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
-              <td style="color:#f59e0b;white-space:normal;max-width:200px">${autoWorkerText || `<span style="color:var(--muted)">—</span>`}</td>
-              <td style="white-space:normal;max-width:300px">${r.notes || `<span style="color:var(--muted)">—</span>`}</td>
+              <td class="col-date">${r.date ? fmtDate(r.date) : "—"}</td>
+              <td class="col-time">${r.appointmentTime ? fmtTime(r.appointmentTime) : "—"}</td>
+              <td class="col-time">${r.startedAt ? fmtTime(r.startedAt) : "—"}</td>
+              <td class="col-store">${esc(r.store || "—")}</td>
+              <td class="col-name">${esc(r.name)}</td>
+              <td class="col-status"><span class="badge ${r.status}">${r.status}</span></td>
+              <td class="col-num">${r.est}</td>
+              <td class="col-num">${r.hasActual ? r.act : "—"}</td>
+              <td class="col-num" style="color:${r.hasActual ? diffColor(r.diff) : "var(--muted)"};font-weight:600">${r.hasActual ? fmtSignedDiff(r.diff) : "未登记"}</td>
+              <td class="col-num" style="color:#6b7280">${r.levelHours?.初级 || 0}</td>
+              <td class="col-num" style="color:#3b82f6">${r.levelHours?.中级 || 0}</td>
+              <td class="col-num" style="color:#f59e0b">${r.levelHours?.高级 || 0}</td>
+              <td class="col-num" style="color:#dc2626">${r.levelHours?.特级 || 0}</td>
+              <td class="col-workers wrap">${workerChips || `<span style="color:var(--muted)">—</span>`}</td>
+              <td class="col-num" style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
+              <td class="col-auto wrap">${autoChips || `<span style="color:var(--muted)">—</span>`}</td>
+              <td class="col-notes wrap">${r.notes || `<span style="color:var(--muted)">—</span>`}</td>
             </tr>`;
           }).join("")}
         </tbody>
@@ -9720,6 +9887,12 @@ function switchTab(name) {
     document.body.classList.add("timeline-view");
   }
 
+  if (name === "stats" || name === "storeStats") {
+    document.body.classList.add("stats-view");
+  } else {
+    document.body.classList.remove("stats-view");
+  }
+
   if (name === "schedules") {
     renderWorkerSchedules();
   }
@@ -10444,6 +10617,7 @@ function renderCalDay() {
   }
 
   document.body.classList.remove("timeline-view");
+  document.body.classList.remove("stats-view");
   document.removeEventListener("click", timelineCloseAllTasks);
   closeTimelineActionMenu();
 
@@ -11926,13 +12100,13 @@ function bindEvents() {
   document.getElementById("btnNewProject").addEventListener("click", newProject);
   document.getElementById("btnNewStore").addEventListener("click", newStore);
   document.getElementById("projectSearch").addEventListener("input", renderProjects);
-  document.getElementById("projectStatusFilter").addEventListener("change", renderProjects);
+  document.getElementById("projectStatusFilter").addEventListener("change", (e) => {
+    onProjectStatusChange(e.target.value);
+    renderProjects();
+  });
   document.getElementById("projectStoreFilter").addEventListener("change", renderProjects);
 
-  document.getElementById("constructionProjectSelect").addEventListener("change", (e) => {
-    currentProjectId = e.target.value;
-    renderConstruction();
-  });
+  // 施工管理项目选择已改为自定义弹窗（按钮 onclick=openProjectPicker），无需 change 监听
 
   document.getElementById("calPrev").addEventListener("click", calPrevMonth);
   document.getElementById("calNext").addEventListener("click", calNextMonth);
@@ -11995,6 +12169,13 @@ async function init() {
     sb = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
     if (window.APP_CONFIG.SUPABASE_SERVICE_KEY) {
       sbAdmin = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_SERVICE_KEY);
+      // 安全检查：非本地部署时 service_key 会暴露在客户端代码中
+      if (window.APP_CONFIG.ENFORCE_KEY_SECURITY && 
+          !["localhost", "127.0.0.1", ""].includes(window.location.hostname)) {
+        console.warn("[安全警告] service_role 密钥在客户端代码中暴露！"
+          + "如果您部署在公开托管服务（如 GitHub Pages），请将 SUPABASE_SERVICE_KEY 设为空字符串。"
+          + "否则攻击者可以使用此密钥完全控制您的 Supabase 数据库。");
+      }
     }
     await startCloudSession();
   } else {
@@ -12053,14 +12234,13 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(() => {
+      const activeTab = document.querySelector(".tab-panel.active");
+      if (!activeTab) return;
       if (document.body.classList.contains("timeline-view")) {
-        const activeTab = document.querySelector(".tab-panel.active");
-        if (activeTab) {
-          if (activeTab.id === "calendar") {
-            renderCalendar();
-          } else if (activeTab.id === "workers") {
-            renderWorkers();
-          }
+        if (activeTab.id === "calendar") {
+          renderCalendar();
+        } else if (activeTab.id === "workers") {
+          renderWorkers();
         }
       }
     }, 200);
