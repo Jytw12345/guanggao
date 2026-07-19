@@ -1,5 +1,5 @@
 :root {
-  --bg: #f4f6fb;
+  --bg: #e7ecf3;
   --card: #ffffff;
   --primary: #2f6fed;
   --primary-dark: #2456c0;
@@ -424,9 +424,9 @@ body {
   overflow-x: hidden;
   box-sizing: border-box;
 }
-/* 时间线模式放宽但不全屏 */
+/* 时间线模式：容器不限制最大宽度，让时间线自然撑开并由 cal-day-detail 提供滚动 */
 body.timeline-view .container {
-  max-width: 1600px;
+  max-width: none;
   padding-left: 8px;
   padding-right: 8px;
 }
@@ -727,14 +727,15 @@ body.stats-view .container {
 }
 
 .btn.danger {
-  background: linear-gradient(135deg, #f87171 0%, #dc2626 100%);
-  border-color: transparent;
-  color: #fff;
-  box-shadow: 0 1px 4px rgba(239,68,68,0.25);
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  box-shadow: none;
 }
 .btn.danger:hover {
-  background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
-  box-shadow: 0 4px 12px rgba(239,68,68,0.35);
+  background: #fee2e2;
+  border-color: #fca5a5;
+  box-shadow: none;
 }
 
 .btn.warning {
@@ -757,26 +758,32 @@ body.stats-view .container {
 
 /* ===== 项目卡片：整体升级 ===== */
 .card {
-  background: var(--card);
-  border: 1px solid #e8ecf0;
+  background: #ffffff;
+  border: 1px solid #c9d1db;
   border-radius: 14px;
   padding: 18px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.03);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    0 4px 12px rgba(15, 23, 42, 0.06),
+    0 8px 24px rgba(15, 23, 42, 0.04);
   position: relative;
   overflow: hidden;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 .card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
-  border-color: #d4dae3;
+  box-shadow:
+    0 2px 4px rgba(15, 23, 42, 0.06),
+    0 8px 20px rgba(15, 23, 42, 0.09),
+    0 16px 36px rgba(15, 23, 42, 0.06);
+  border-color: #b5beca;
 }
 
 /* 左侧状态色条（JS 根据状态动态添加 class） */
 .card-status-bar {
   position: absolute;
   left: 0; top: 0; bottom: 0;
-  width: 4px;
+  width: 5px;
   border-radius: 14px 0 0 14px;
 }
 .card[data-status="预约中"] .card-status-bar { background: linear-gradient(180deg, #3b82f6, #60a5fa); }
@@ -2221,9 +2228,11 @@ textarea.input { resize: vertical; min-height: 50px; }
 }
 .btn.tiny:hover { transform: translateY(-1px); }
 
+/* 进度跟踪等处的取消按钮：与 .btn.danger 对齐为淡红风格，不再刺眼 */
 .btn.tiny.danger {
-  background: linear-gradient(135deg, #f87171 0%, #dc2626 100%);
-  color: white;
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
 }
 
 .schedule-progress-item.overdue {
@@ -2454,7 +2463,33 @@ textarea.input { resize: vertical; min-height: 50px; }
   font-size: 13px;
   height: auto;
 }
+/* 改造为自定义下拉后，select 被包在 .custom-select 内，原 > select 选择失效，
+   这里给状态选择器等一个合理的宽度范围，避免过窄或过宽 */
+.action-group .custom-select {
+  width: auto;
+  min-width: 80px;
+  max-width: 110px;
+  flex: 0 0 auto;
+}
 .action-group__divider { width: 1px; height: 22px; background: var(--border); }
+
+/* 进度跟踪操作按钮：中性风格，不使用彩色背景，保持简洁 */
+.action-group > .btn.tiny {
+  background: #f8f9fb;
+  border-color: #e2e6ef;
+  color: #4b5563;
+}
+.action-group > .btn.tiny:hover {
+  background: #eef1f6;
+  border-color: #c9d1db;
+  color: #1f2937;
+}
+/* 取消按钮在中性基础上保留淡淡红色提示 */
+.action-group > .btn.tiny.danger {
+  background: #fdf2f4;
+  border-color: #f5d5d9;
+  color: #b03340;
+}
 
 /* ===== 施工记录：时间节点卡片 ===== */
 .rec-timecards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
@@ -3226,8 +3261,9 @@ table.data.project-hours-diff td.wrap {
   }
 
   .search-results {
-    right: -10px;
-    width: calc(100vw - 20px);
+    left: 0;
+    right: auto;
+    width: min(360px, calc(100vw - 24px));
     max-width: none;
   }
 
@@ -3249,6 +3285,11 @@ table.data.project-hours-diff td.wrap {
 
   .card {
     padding: 12px;
+    border-color: #b6c0cf;
+    box-shadow:
+      0 1px 3px rgba(15, 23, 42, 0.10),
+      0 6px 16px rgba(15, 23, 42, 0.09),
+      0 10px 28px rgba(15, 23, 42, 0.06);
   }
   
   #internalTaskList .card {
@@ -3321,7 +3362,7 @@ table.data.project-hours-diff td.wrap {
   .card-timeline { padding: 6px 8px; font-size: 11px; }
 
   /* 移动端卡片左侧色条稍宽一点，更明显 */
-  .card-status-bar { width: 3px; }
+  .card-status-bar { width: 5px; }
 
   .btn {
     padding: 10px 20px;
@@ -4651,16 +4692,14 @@ table.data.project-hours-diff td.wrap {
 .dot.repair { background: #f59e0b; }
 
 .cal-day-detail { margin-top: 18px; }
+/* 时间线外层滚动容器：允许内容超宽时横向滚动 */
 .timeline-horizontal .cal-day-detail {
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
   width: 100%;
-  max-width: 100%;
-}
-.timeline-horizontal .cal-day-detail > .timeline-horizontal {
-  width: fit-content;
+  /* 不限制 max-width，让内部时间线自然撑开并出现滚动条 */
 }
 .cal-detail-list { display: flex; flex-direction: column; gap: 10px; }
 .cal-detail-item {
@@ -4686,13 +4725,14 @@ table.data.project-hours-diff td.wrap {
 /* ============================================================
  * 时间线视图样式（水平时间轴）
  * ============================================================ */
+/* 时间线容器：不限制最大宽度，由外层 cal-day-detail 的 overflow-x:auto 提供横向滚动 */
 .timeline-container {
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: visible;
   background: #fff;
-  width: fit-content;
-  max-width: 100%;
+  /* 宽度由 JS 内联 style 设置（width:${totalWidth}px），这里不做上限约束 */
+  min-width: min(100%, var(--tl-content-width, 800px));
   margin: 0 auto;
   box-sizing: border-box;
 }
@@ -5866,7 +5906,7 @@ table.data.project-hours-diff td.wrap {
 .custom-select.open .cs-trigger {
   border-color: var(--primary);
   box-shadow: 0 3px 10px rgba(47,111,237,0.15);
-  border-radius: 8px 8px 0 0;
+  border-radius: 8px;
 }
 .custom-select.disabled .cs-trigger {
   background: #f9fafb;
@@ -5882,24 +5922,29 @@ table.data.project-hours-diff td.wrap {
 
 /* 下拉面板 */
 .cs-dropdown {
-  position: absolute;
+  position: absolute;          /* JS 打开时改为 fixed 并传送到 body，避免被 overflow 容器裁剪 */
   top: 100%;
   left: 0;
   right: 0;
   z-index: 9999;
   background: #fff;
   border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 8px 8px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06);
-  max-height: 240px;
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.18), 0 4px 10px rgba(0,0,0,0.10);
+  max-height: 260px;
   overflow-y: auto;
   opacity: 0;
   visibility: hidden;
   transform: translateY(-4px);
-  transition: all 0.2s ease;
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
   scrollbar-width: thin;
   scrollbar-color: #d1d5db transparent;
+}
+/* 打开态：无论面板在 DOM 何处（已传送到 body）都生效 */
+.cs-dropdown.cs-open {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 .custom-select.open .cs-dropdown {
   opacity: 1;
@@ -5917,7 +5962,7 @@ table.data.project-hours-diff td.wrap {
   transition: all 0.12s ease;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: elpsis;
+  text-overflow: ellipsis;
 }
 .cs-option:hover {
   background: #eff6ff;

@@ -697,8 +697,16 @@ function getProjectEffectiveEndTime(p) {
   if (p.status === STATUS.CANCELLED && p.cancelledAt) {
     return new Date(p.cancelledAt);
   }
-  if (p.status === STATUS.PAUSED && p.pausedAt) {
-    return new Date(p.pausedAt);
+  /* 已暂停：优先用 pausedAt；若无（历史数据缺失），从 pauseHistory 最后一条回填 */
+  if (p.status === STATUS.PAUSED) {
+    if (p.pausedAt) return new Date(p.pausedAt);
+    const history = p.pauseHistory || [];
+    if (history.length > 0) {
+      const last = history[history.length - 1];
+      if (last.pauseAt && !last.resumedAt) return new Date(last.pauseAt);
+    }
+    /* 兜底：状态是 PAUSED 就不应该再用 now，用 startedAt 或 now 中较晚者 */
+    return p.startedAt ? new Date(Math.max(new Date(p.startedAt).getTime(), now.getTime() - 1)) : now;
   }
   return now;
 }
@@ -722,6 +730,16 @@ function buildWorkerPeriods(p, wid) {
   if (periods.length === 0 && p.startedAt) {
     periods.push({ start: p.startedAt, end: null });
   }
+
+  /* 项目已暂停/完工/取消/审核 → 自动关闭未结束的时段，避免显示"至今"和持续计时 */
+  const effectiveEnd = getProjectEffectiveEndTime(p);
+  const isTerminal = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED, STATUS.PAUSED].includes(p.status);
+  if (isTerminal) {
+    periods.forEach(pr => {
+      if (!pr.end) pr.end = effectiveEnd;
+    });
+  }
+
   return periods;
 }
 
@@ -751,6 +769,44 @@ function calcWorkerRealtimeHours(p, workerId, periods) {
     
     return sum + duration;
   }, 0);
+}
+
+/* 收集项目全生命周期各状态时间节点，统一在施工记录中展示。
+   确保预约/开工/暂停/延期/完工/验收/审核/取消 的时间都被完整记录与呈现。 */
+function buildStatusTimeCards(p) {
+  const cards = [];
+  const push = (cls, icon, label, value) => {
+    if (!value) return;
+    cards.push(`<div class="rec-timecard ${cls}">
+      <div class="rec-timecard__label">${icon} ${label}</div>
+      <div class="rec-timecard__value">${esc(value)}</div>
+    </div>`);
+  };
+
+  push("rec-timecard--blue", "📅", "预约时间", p.appointmentTime ? fmtDateTime(p.appointmentTime) : "");
+  push("rec-timecard--blue", "🚀", "开工时间", p.startedAt ? fmtDateTime(p.startedAt) : "");
+  if (p.status === STATUS.PAUSED) {
+    const pauseTime = p.pausedAt || (() => {
+      const h = p.pauseHistory || [];
+      return h.length > 0 ? h[h.length - 1].pauseAt : null;
+    })();
+    if (pauseTime) push("rec-timecard--amber", "⏸️", "暂停时间", fmtDateTime(pauseTime));
+  }
+  if ((p.delayHistory || []).length > 0) {
+    const lastDelay = p.delayHistory[p.delayHistory.length - 1];
+    push("rec-timecard--amber", "⚠️", "延期时间", fmtDateTime(lastDelay.time));
+  }
+  push("rec-timecard--green", "✅", "完工时间", p.finishedAt ? fmtDateTime(p.finishedAt) : "");
+  if (p.acceptance && p.acceptance.acceptedAt) {
+    push("rec-timecard--indigo", "🤝", "验收时间", fmtDate(p.acceptance.acceptedAt));
+  }
+  push("rec-timecard--indigo", "🔍", "审核时间", p.reviewedAt ? fmtDateTime(p.reviewedAt) : "");
+  if (p.status === STATUS.CANCELLED && p.cancelledAt) {
+    push("rec-timecard--amber", "✖️", "取消时间", fmtDateTime(p.cancelledAt));
+  }
+
+  if (cards.length === 0) return "";
+  return `<div class="rec-timecards">${cards.join("")}</div>`;
 }
 
 /* 项目工时差异的展示标签（含颜色），未登记实际工时时给出提示 */
@@ -4466,22 +4522,11 @@ function renderConstruction() {
 
     ${assignBlock}
 
-    ${(p.startedAt || p.finishedAt || p.workSessions.length > 0 || p.pauseCount > 0 || p.reviewedAt || p.pauseHistory.length > 0 || p.delayHistory.length > 0 || p.workerChangeHistory.length > 0 || p.actionLogs.length > 0) ? `
+    ${(p.appointmentTime || p.startedAt || p.finishedAt || p.workSessions.length > 0 || p.pauseCount > 0 || p.reviewedAt || p.pauseHistory.length > 0 || p.delayHistory.length > 0 || (p.acceptance && p.acceptance.acceptedAt) || p.workerChangeHistory.length > 0 || p.actionLogs.length > 0 || p.cancelledAt) ? `
     <div class="detail-block">
       <h3>📝 施工记录</h3>
       <div class="rec-timecards">
-        ${p.startedAt ? `<div class="rec-timecard rec-timecard--blue">
-          <div class="rec-timecard__label">🚀 开工时间</div>
-          <div class="rec-timecard__value">${esc(fmtDateTime(p.startedAt))}</div>
-        </div>` : ""}
-        ${p.finishedAt ? `<div class="rec-timecard rec-timecard--green">
-          <div class="rec-timecard__label">✅ 完工时间</div>
-          <div class="rec-timecard__value">${esc(fmtDateTime(p.finishedAt))}</div>
-        </div>` : ""}
-        ${p.reviewedAt ? `<div class="rec-timecard rec-timecard--amber">
-          <div class="rec-timecard__label">🔍 审核时间</div>
-          <div class="rec-timecard__value">${esc(fmtDateTime(p.reviewedAt))}</div>
-        </div>` : ""}
+        ${buildStatusTimeCards(p)}
         ${p.startedAt ? `<div class="rec-timecard rec-timecard--indigo">
           <div class="rec-timecard__label">⏱️ 工时时长</div>
           <div class="rec-timecard__value">${(() => {
@@ -5290,7 +5335,7 @@ async function updateProjectStatus(id, newStatus) {
     if (!p.originalStartedAt) {
       patch.originalStartedAt = now;
     }
-    
+
     const actionLogs = [...(p.actionLogs || [])];
     actionLogs.push({
       time: now,
@@ -5300,7 +5345,7 @@ async function updateProjectStatus(id, newStatus) {
       operatorRole: currentProfile.role
     });
     patch.actionLogs = actionLogs;
-    
+
     const workerChangeHistory = [...(p.workerChangeHistory || [])];
     const assignedWorkers = p.assignedWorkerIds || [];
     assignedWorkers.forEach(wid => {
@@ -5328,6 +5373,83 @@ async function updateProjectStatus(id, newStatus) {
     });
     patch.workerChangeHistory = workerChangeHistory;
   }
+
+  /* 通过下拉切换到「已暂停」时，必须完整记录暂停信息（pausedAt / pauseHistory /
+     actionLogs / workSessions），否则 getProjectEffectiveEndTime 无法正确截断工时，
+     导致暂停后工时仍在计时、操作记录也没有暂停痕迹 */
+  if (newStatus === STATUS.PAUSED) {
+    patch.pausedAt = now;
+
+    const started = p.startedAt ? new Date(p.startedAt) : null;
+    if (started) {
+      const workDuration = (new Date(now) - started) / (1000 * 60 * 60);
+      patch.accumulatedWorkHours = (p.accumulatedWorkHours || 0) + workDuration;
+
+      const workSessions = [...(p.workSessions || [])];
+      workSessions.push({ startTime: p.startedAt, endTime: now, duration: workDuration });
+      patch.workSessions = workSessions;
+    }
+
+    const pauseCount = (p.pauseCount || 0) + 1;
+    patch.pauseCount = pauseCount;
+
+    const pauseHistory = [...(p.pauseHistory || [])];
+    pauseHistory.push({ pauseAt: now, reason: null, duration: null });
+    patch.pauseHistory = pauseHistory;
+
+    const actionLogs = [...(p.actionLogs || [])];
+    actionLogs.push({
+      time: now,
+      action: "pause",
+      description: "暂停施工（通过状态切换）",
+      operator: currentProfile.name || currentUser?.email || "系统",
+      operatorRole: currentProfile.role
+    });
+    patch.actionLogs = actionLogs;
+  }
+
+  /* 通过下拉从「已暂停」恢复为「施工中」时，补全 pauseHistory 的 resumedAt
+     和 actionLogs 恢复记录，与 resumeProject() 保持一致 */
+  if (newStatus === STATUS.WORKING && p.status === STATUS.PAUSED) {
+    patch.startedAt = now;
+    if (!p.originalStartedAt && p.startedAt) {
+      patch.originalStartedAt = p.startedAt;
+    }
+
+    const pauseHistory = [...(p.pauseHistory || [])];
+    if (pauseHistory.length > 0 && !pauseHistory[pauseHistory.length - 1].resumedAt) {
+      const lastPause = pauseHistory[pauseHistory.length - 1];
+      const pauseDuration = (new Date(now) - new Date(lastPause.pauseAt)) / (1000 * 60 * 60);
+      pauseHistory[pauseHistory.length - 1] = { ...lastPause, resumedAt: now, duration: pauseDuration };
+    }
+    patch.pauseHistory = pauseHistory;
+    /* 清除 pausedAt，让 getProjectEffectiveEndTime 回到正常计算 */
+    patch.pausedAt = null;
+
+    const actionLogs = [...(p.actionLogs || [])];
+    actionLogs.push({
+      time: now,
+      action: "resume",
+      description: "恢复施工（通过状态切换）",
+      operator: currentProfile.name || currentUser?.email || "系统",
+      operatorRole: currentProfile.role
+    });
+    patch.actionLogs = actionLogs;
+
+    /* 重新给当前分配人员生成 assign 记录，开启新工时段 */
+    const workerChangeHistory = [...(p.workerChangeHistory || [])];
+    (p.assignedWorkerIds || []).forEach(wid => {
+      const worker = getWorker(wid);
+      workerChangeHistory.push({
+        time: now,
+        action: "assign",
+        workerId: wid,
+        workerName: worker ? worker.name : "未知",
+        workerPhone: worker ? worker.phone : ""
+      });
+    });
+    patch.workerChangeHistory = workerChangeHistory;
+  }
   clearTimeout(reloadTimer);
   try {
     await repo.patchProject(id, patch);
@@ -5338,10 +5460,17 @@ async function updateProjectStatus(id, newStatus) {
     if (newStatus === STATUS.WORKING) {
       sendNotificationForProjectChange("start", p);
       logOperation("PROJECT_START", p.name || "项目", `ID: ${id}`);
+      if (p.status === STATUS.PAUSED) {
+        sendNotificationForProjectChange("resume", getProject(id));
+        logOperation("PROJECT_RESUME", p.name || "项目", `ID: ${id}`);
+      }
     } else if (newStatus === STATUS.DONE) {
       sendNotificationForProjectChange("done", p);
     } else if (newStatus === STATUS.ACCEPTED) {
       sendNotificationForProjectChange("accepted", p);
+    } else if (newStatus === STATUS.PAUSED) {
+      sendNotificationForProjectChange("pause", getProject(id));
+      logOperation("PROJECT_PAUSE", p.name || "项目", `ID: ${id}`);
     }
   } catch (error) {
     console.error("更新状态失败:", error);
@@ -6358,7 +6487,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
       if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.WORKING) {
         statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.DONE + '\')">完成安装</button>');
         statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">人员调整</button>');
-        statusActions.push('<button class="btn tiny" style="background:#f59e0b;color:#fff" onclick="pauseProject(\'' + p.id + '\')">暂停施工</button>');
+        statusActions.push('<button class="btn tiny" onclick="pauseProject(\'' + p.id + '\')">暂停施工</button>');
         statusActions.push('<button class="btn tiny" onclick="delayProject(\'' + p.id + '\')">延期</button>');
       }
       if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.DONE) {
@@ -8377,6 +8506,9 @@ function initCustomSelect(selectEl) {
   const fs = selectEl.style.fontSize || "";
   if (fs && parseFloat(fs) <= 12) wrapper.classList.add("cs-xs");
 
+  /* 保留原始宽度意图（如工具栏筛选框的 140px），避免改造后宽度异常 */
+  if (selectEl.style.width) wrapper.style.width = selectEl.style.width;
+
   const trigger = document.createElement("div");
   trigger.className = "cs-trigger";
   trigger.tabIndex = 0;
@@ -8396,9 +8528,12 @@ function initCustomSelect(selectEl) {
   const dropdown = document.createElement("div");
   dropdown.className = "cs-dropdown";
   dropdown.setAttribute("role", "listbox");
+  /* 面板内（非选项区域）点击不冒泡到 document，避免误关闭 */
+  dropdown.addEventListener("click", (e) => e.stopPropagation());
+  /* 下拉面板不再挂在 wrapper 下，打开时“传送”到 body 并以 fixed 定位，
+     彻底避免被模态框 / 卡片 / 滚动容器（overflow）裁剪导致显示不全 */
 
   wrapper.appendChild(trigger);
-  wrapper.appendChild(dropdown);
   selectEl.parentNode.insertBefore(wrapper, selectEl);
   wrapper.appendChild(selectEl);
 
@@ -8448,14 +8583,50 @@ function initCustomSelect(selectEl) {
     });
   }
 
+  /** 将下拉面板定位到触发器下方（空间不足时翻转到上方）。
+   *  使用 fixed 定位 + 视口坐标，脱离任何 overflow 裁剪上下文 */
+  function positionDropdown() {
+    if (dropdown.parentNode !== document.body) return;
+    const rect = trigger.getBoundingClientRect();
+    const w = Math.round(rect.width);
+    dropdown.style.position = "fixed";
+    dropdown.style.left = Math.round(rect.left) + "px";
+    dropdown.style.width = w + "px";
+    dropdown.style.minWidth = w + "px";
+    dropdown.style.right = "auto";
+    const ddHeight = dropdown.offsetHeight || 260;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    if (spaceBelow >= ddHeight || spaceBelow >= rect.top) {
+      dropdown.style.top = Math.round(rect.bottom + 4) + "px";
+      dropdown.style.bottom = "auto";
+    } else {
+      dropdown.style.bottom = Math.round(window.innerHeight - rect.top + 4) + "px";
+      dropdown.style.top = "auto";
+    }
+  }
+
+  function onDocScrollResize() { positionDropdown(); }
+  function addDocListeners() {
+    window.addEventListener("scroll", onDocScrollResize, true);
+    window.addEventListener("resize", onDocScrollResize, true);
+  }
+  function removeDocListeners() {
+    window.removeEventListener("scroll", onDocScrollResize, true);
+    window.removeEventListener("resize", onDocScrollResize, true);
+  }
+
   /** 打开 */
   function open() {
     if (selectEl.disabled) return;
     closeAllCS();
     buildOptions();
     syncUI();
+    if (dropdown.parentNode !== document.body) document.body.appendChild(dropdown);
     wrapper.classList.add("open");
     trigger.setAttribute("aria-expanded", "true");
+    dropdown.classList.add("cs-open");
+    positionDropdown();
+    addDocListeners();
     _csOpenInstance = wrapper;
 
     /* 滚动到选中项 */
@@ -8470,6 +8641,9 @@ function initCustomSelect(selectEl) {
   function close() {
     wrapper.classList.remove("open");
     trigger.setAttribute("aria-expanded", "false");
+    dropdown.classList.remove("cs-open");
+    removeDocListeners();
+    if (dropdown.parentNode) dropdown.parentNode.removeChild(dropdown);
     if (_csOpenInstance === wrapper) _csOpenInstance = null;
   }
 
@@ -10364,11 +10538,36 @@ function renderMine() {
     </div>
 
     ${perm.viewGlobalStats() ? `
-    <div class="mine-section-title">系统</div>
+    <div class="mine-section-title">数据工具</div>
     <div class="mine-list">
-      <div class="mine-list-item" onclick="exportAllData()">
-        <div class="mine-list-icon" style="background:#eff6ff;color:#2563eb">⬇️</div>
-        <span class="mine-list-text">数据导出</span>
+      <div class="mine-list-item" onclick="exportProjects()">
+        <div class="mine-list-icon" style="background:#eff6ff;color:#2563eb">📋</div>
+        <span class="mine-list-text">导出项目数据</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
+      <div class="mine-list-item" onclick="exportWorkLogs()">
+        <div class="mine-list-icon" style="background:#ecfdf5;color:#16a34a">📝</div>
+        <span class="mine-list-text">导出工时记录</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
+      <div class="mine-list-item" onclick="exportLeaveRecords()">
+        <div class="mine-list-icon" style="background:#fff7ed;color:#ea580c">🏥</div>
+        <span class="mine-list-text">导出请假记录</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
+      <div class="mine-list-item" onclick="exportWorkers()">
+        <div class="mine-list-icon" style="background:#f0f9ff;color:#0891b2">👷</div>
+        <span class="mine-list-text">导出施工人员</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
+      <div class="mine-list-item" onclick="exportStores()">
+        <div class="mine-list-icon" style="background:#f0fdf4;color:#16a34a">🏪</div>
+        <span class="mine-list-text">导出门店数据</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
+      <div class="mine-list-item" onclick="showOperationLogs()">
+        <div class="mine-list-icon" style="background:#fef3c7;color:#d97706">📋</div>
+        <span class="mine-list-text">操作日志</span>
         <span class="mine-list-arrow">›</span>
       </div>
       ${MODE === "cloud" ? `
@@ -10377,6 +10576,11 @@ function renderMine() {
         <span class="mine-list-text">数据导入</span>
         <span class="mine-list-arrow">›</span>
       </div>` : ""}
+      <div class="mine-list-item" onclick="exportAllData()">
+        <div class="mine-list-icon" style="background:#eef2ff;color:#6366f1">📦</div>
+        <span class="mine-list-text">导出全部数据</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
       <div class="mine-list-item" onclick="showHelp()">
         <div class="mine-list-icon" style="background:#fef3c7;color:#d97706">❓</div>
         <span class="mine-list-text">帮助与反馈</span>
@@ -11926,6 +12130,8 @@ let mouseDragStartX = 0;
 let mouseDragStartY = 0;
 let mouseDragOriginalLeft = 0;
 let mouseDragStarted = false;
+/* 拖动开始时记录任务原始时间文字，取消（叉号/取消按钮）时用于还原显示 */
+let lastDragOriginalTimeText = "";
 
 function timelineTouchStart(e) {
   const task = e.target.closest(".timeline-task");
@@ -11934,6 +12140,9 @@ function timelineTouchStart(e) {
   const left = parseFloat(task.style.left) || 0;
   const touch = e.touches[0];
   
+  const timeSpan = task.querySelector(".timeline-task-info span:first-child");
+  lastDragOriginalTimeText = timeSpan ? timeSpan.textContent : "";
+
   touchDragTask = {
     el: task,
     id: task.dataset.projectId,
@@ -11968,7 +12177,8 @@ function timelineTouchMove(e) {
     return;
   }
 
-  e.preventDefault();
+  /* 只有在事件可取消时才 preventDefault，避免滚动进行中 cancelable=false 导致的浏览器告警 */
+  if (e.cancelable) e.preventDefault();
 
   const timelineMain = document.getElementById("timelineMain");
   const dragHint = document.getElementById("tlDragHint");
@@ -12185,6 +12395,9 @@ function timelineDragMouseDown(e) {
   if (!task || !task.draggable) return;
 
   const left = parseFloat(task.style.left) || 0;
+  const timeSpan = task.querySelector(".timeline-task-info span:first-child");
+  lastDragOriginalTimeText = timeSpan ? timeSpan.textContent : "";
+
   mouseDragTask = {
     el: task,
     id: task.dataset.projectId,
@@ -12220,7 +12433,8 @@ function timelineMouseMove(e) {
     return;
   }
 
-  e.preventDefault();
+  /* 只有在事件可取消时才 preventDefault，避免滚动进行中 cancelable=false 导致的浏览器告警 */
+  if (e.cancelable) e.preventDefault();
 
   const timelineMain = document.getElementById("timelineMain");
   const dragHint = document.getElementById("tlDragHint");
@@ -12370,9 +12584,14 @@ async function saveTimelineTaskTime(projectId, newStart, newEnd) {
 }
 
 function cancelTimelineDrag(projectId, originalLeft) {
-  const taskEl = document.getElementById("timelineMain").querySelector(`.timeline-task[data-project-id="${projectId}"]`);
-  if (taskEl) {
-    taskEl.style.left = originalLeft;
+  const taskEl = document.getElementById("timelineMain")?.querySelector(`.timeline-task[data-project-id="${projectId}"]`);
+  if (!taskEl) return;
+  /* 还原位置 */
+  taskEl.style.left = originalLeft;
+  /* 还原拖动过程中被改写的时间文字（仅当确实被拖动改写过 ⏰ 时才还原） */
+  const timeSpan = taskEl.querySelector(".timeline-task-info span:first-child");
+  if (timeSpan && timeSpan.textContent.startsWith("⏰") && lastDragOriginalTimeText) {
+    timeSpan.textContent = lastDragOriginalTimeText;
   }
 }
 

@@ -1,5 +1,5 @@
-const CACHE = "ad-install-v57";
-const VERSION = "v57";
+const CACHE = "ad-install-v59";
+const VERSION = "v59";
 
 const ASSETS = [
   "./",
@@ -7,10 +7,12 @@ const ASSETS = [
   "./styles.css",
   "./app.js",
   "./config.js",
+  "./exceljs.min.js",
   "./manifest.webmanifest",
   "./help.html",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
+  "./icons/icon-180.png",
 ];
 
 self.addEventListener("install", (e) => {
