@@ -2214,25 +2214,75 @@ textarea.input { resize: vertical; min-height: 50px; }
 }
 
 .schedule-progress-actions {
-  margin-top: 10px;
+  margin-top: 8px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-wrap: nowrap;
+  gap: 5px;
 }
 
-.btn.tiny {
+/* 进度跟踪操作按钮 — 紧凑一行、语义化配色 */
+.schedule-progress-actions .btn.tiny {
   font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 6px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  letter-spacing: 0;
   transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
 }
-.btn.tiny:hover { transform: translateY(-1px); }
+/* 默认 / 人员调整 */
+.schedule-progress-actions .btn.tiny:not(.primary):not(.success):not(.warning):not(.danger) {
+  background: #f0f9ff;
+  color: #0369a1;
+  border-color: #bae6fd;
+}
+.schedule-progress-actions .btn.tiny:not(.primary):not(.success):not(.warning):not(.danger):hover {
+  background: #e0f2fe;
+  border-color: #7dd3fc;
+  transform: translateY(-1px);
+}
 
-/* 进度跟踪等处的取消按钮：与 .btn.danger 对齐为淡红风格，不再刺眼 */
-.btn.tiny.danger {
-  background: #fef2f2;
-  border-color: #fecaca;
+/* 主要操作：开始施工 / 恢复施工 / 确认验收 / 完成安装 */
+.schedule-progress-actions .btn.tiny.primary,
+.schedule-progress-actions .btn.tiny.success {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(37,99,235,0.25);
+}
+.schedule-progress-actions .btn.tiny.primary:hover,
+.schedule-progress-actions .btn.tiny.success:hover {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  box-shadow: 0 3px 10px rgba(37,99,235,0.35);
+  transform: translateY(-1px);
+}
+
+/* 警告操作：延期 / 暂停 */
+.schedule-progress-actions .btn.tiny.warning {
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  color: #92400e;
+  border-color: #fcd34d;
+  box-shadow: 0 1px 3px rgba(245,158,11,0.15);
+}
+.schedule-progress-actions .btn.tiny.warning:hover {
+  background: linear-gradient(135deg, #fde68a, #fbbf24);
+  box-shadow: 0 2px 8px rgba(245,158,11,0.25);
+  transform: translateY(-1px);
+}
+
+/* 危险操作：取消 */
+.schedule-progress-actions .btn.tiny.danger {
+  background: linear-gradient(135deg, #fee2e2, #fecaca);
   color: #b91c1c;
+  border-color: #fca5a5;
+  font-weight: 600;
+}
+.schedule-progress-actions .btn.tiny.danger:hover {
+  background: linear-gradient(135deg, #fecaca, #fca5a5);
+  box-shadow: 0 2px 8px rgba(220,38,38,0.18);
+  transform: translateY(-1px);
 }
 
 .schedule-progress-item.overdue {

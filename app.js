@@ -3532,17 +3532,31 @@ function renderProjects() {
 
         <div class="card-actions">
           <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
-          ${(p.workContent && p.workContent.length) || p.note ? `<button class="btn small" onclick="showProjectContent('${p.id}')">📋 施工详情</button>` : ""}
-          ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">编辑</button>` : ""}
-          ${(canDelete || (canReview && !reviewed) || canUnreview) ? `
-          <div class="action-more">
-            <button class="action-more-btn" onclick="toggleActionMore(this.parentElement,event)">更多 ▾</button>
-            <div class="action-more-menu">
-              ${canDelete ? `<button class="action-more-item danger" onclick="event.stopPropagation();closeAllActionMenus();deleteProject('${p.id}')">🗑 删除</button>` : ""}
-              ${canReview && !reviewed ? `<button class="action-more-item" onclick="event.stopPropagation();closeAllActionMenus();reviewProject('${p.id}')">✅ 审核</button>` : ""}
-              ${canUnreview ? `<button class="action-more-item" onclick="event.stopPropagation();closeAllActionMenus();unreviewProject('${p.id}')">↩ 反审核</button>` : ""}
-            </div>
-          </div>` : ""}
+          ${(p.workContent && p.workContent.length) || p.note ? `<button class="btn small" onclick="showProjectContent('${p.id}')">📋 查看详情</button>` : ""}
+          ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">✏️ 编辑</button>` : ""}
+          ${(() => {
+            const items = [];
+            if (canDelete) items.push('del');
+            if (canReview && !reviewed) items.push('review');
+            if (canUnreview) items.push('unreview');
+            if (items.length === 0) return '';
+            if (items.length === 1) {
+              // 只剩1个操作时直接平铺为按钮，不再套「更多」
+              if (items[0] === 'del') return `<button class="btn small danger" onclick="deleteProject('${p.id}')">🗑 删除</button>`;
+              if (items[0] === 'review') return `<button class="btn small" onclick="reviewProject('${p.id}')">✅ 审核</button>`;
+              return `<button class="btn small" onclick="unreviewProject('${p.id}')">↩ 反审核</button>`;
+            }
+            // ≥2 个操作才用「更多」收纳
+            return `
+            <div class="action-more">
+              <button class="action-more-btn" onclick="toggleActionMore(this.parentElement,event)">更多 ▾</button>
+              <div class="action-more-menu">
+                ${canDelete ? `<button class="action-more-item danger" onclick="event.stopPropagation();closeAllActionMenus();deleteProject('${p.id}')">🗑 删除</button>` : ""}
+                ${canReview && !reviewed ? `<button class="action-more-item" onclick="event.stopPropagation();closeAllActionMenus();reviewProject('${p.id}')">✅ 审核</button>` : ""}
+                ${canUnreview ? `<button class="action-more-item" onclick="event.stopPropagation();closeAllActionMenus();unreviewProject('${p.id}')">↩ 反审核</button>` : ""}
+              </div>
+            </div>`;
+          })()}
         </div>
       </div>`;
   }).join("");
@@ -6479,24 +6493,24 @@ function generateWorkerScheduleDescription(dateStr = null) {
       
       const statusActions = [];
       if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.BOOKED) {
-        statusActions.push('<button class="btn tiny ' + (isOverdue ? 'danger' : '') + '" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">开始施工</button>');
-        statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">人员调整</button>');
-        statusActions.push('<button class="btn tiny" onclick="delayProject(\'' + p.id + '\')">延期</button>');
-        statusActions.push('<button class="btn tiny danger" onclick="if(confirm(\'确定取消该预约项目？\')){updateProjectStatus(\'' + p.id + '\', \'' + STATUS.CANCELLED + '\')}">取消</button>');
+        statusActions.push('<button class="btn tiny ' + (isOverdue ? 'danger' : 'primary') + '" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">🚀 开始施工</button>');
+        statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">👷 人员调整</button>');
+        statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 延期</button>');
+        statusActions.push('<button class="btn tiny danger" onclick="if(confirm(\'确定取消该预约项目？\')){updateProjectStatus(\'' + p.id + '\', \'' + STATUS.CANCELLED + '\')}">✕ 取消</button>');
       }
       if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.WORKING) {
-        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.DONE + '\')">完成安装</button>');
-        statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">人员调整</button>');
-        statusActions.push('<button class="btn tiny" onclick="pauseProject(\'' + p.id + '\')">暂停施工</button>');
-        statusActions.push('<button class="btn tiny" onclick="delayProject(\'' + p.id + '\')">延期</button>');
+        statusActions.push('<button class="btn tiny success" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.DONE + '\')">✅ 完成安装</button>');
+        statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">👷 人员调整</button>');
+        statusActions.push('<button class="btn tiny warning" onclick="pauseProject(\'' + p.id + '\')">⏸ 暂停施工</button>');
+        statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 延期</button>');
       }
       if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.DONE) {
-        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.ACCEPTED + '\')">确认验收</button>');
+        statusActions.push('<button class="btn tiny success" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.ACCEPTED + '\')">📋 确认验收</button>');
       }
       if ((isManager() || isWorker() || isStoreManager()) && p.status === STATUS.PAUSED) {
-        statusActions.push('<button class="btn tiny" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">恢复施工</button>');
-        statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">人员调整</button>');
-        statusActions.push('<button class="btn tiny" onclick="delayProject(\'' + p.id + '\')">延期</button>');
+        statusActions.push('<button class="btn tiny primary" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">▶️ 恢复施工</button>');
+        statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">👷 人员调整</button>');
+        statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 延期</button>');
       }
       
       const workers = (p.assignedWorkerIds || []).map(wid => {
