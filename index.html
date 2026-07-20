@@ -87,9 +87,11 @@
       <span class="bnav-label">项目</span>
     </button>
     <button class="bottom-nav-item" data-tab="calendar" title="预约日历">
-      <span class="bnav-icon">📅</span>
+      <span class="bnav-icon calendar-icon">
+        <span class="calendar-day" id="calendarDay">20</span>
+      </span>
       <span class="bnav-label">日历</span>
-      <span id="calendarDate"></span>
+      <span class="bnav-badge" id="calendarBadge"></span>
     </button>
     <button class="bottom-nav-item" data-tab="construction" title="施工管理">
       <span class="bnav-icon">🏗️</span>
@@ -117,7 +119,7 @@
         <button class="btn primary" id="btnNewProject">+ 新建预约</button>
       </div>
       <div class="toolbar">
-        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+        <div class="project-filter-row" style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
           <input type="text" id="projectSearch" class="input" placeholder="搜索项目名称 / 客户 / 地址" style="flex:1;min-width:150px;max-width:350px;" />
           <select id="projectStatusFilter" class="input" style="width:140px;">
             <option value="">全部状态</option>
@@ -149,26 +151,37 @@
 
     <!-- 日历统计视图 -->
     <section id="calendar" class="tab-panel">
-      <div class="section-head">
-        <h2>预约日历</h2>
+      <div class="calendar-header">
+        <div class="section-head compact">
+          <h2>预约日历</h2>
+          <p class="hint">按月查看每日预约，点击日期可查看时段安排与人员。</p>
+        </div>
       </div>
-      <p class="hint">按月总览每天的预约与项目进度，点击某一天可查看当天各时间段的具体安排与安装人员。</p>
+
       <div class="cal-toolbar">
-        <button class="btn small" id="calPrev">◀ 上月</button>
-        <span id="calLabel" class="cal-label"></span>
-        <button class="btn small" id="calNext">下月 ▶</button>
-        <button class="btn small" id="calToday">今天</button>
-        
-        <button class="btn small" id="calToggleView">📋 视图切换</button>
-        <span class="cal-legend">
+        <div class="cal-nav-group">
+          <button class="btn small" id="calPrev" title="上月">◀</button>
+          <span id="calLabel" class="cal-label"></span>
+          <button class="btn small" id="calNext" title="下月">▶</button>
+        </div>
+        <div class="cal-action-group">
+          <button class="btn small" id="calToday">今天</button>
+          <button class="btn small" id="calToggleView">📋 视图</button>
+        </div>
+      </div>
+
+      <div class="cal-legend-wrap">
+        <div class="cal-legend status-legend">
           <span><span class="dot booked"></span>预约中</span>
           <span><span class="dot working"></span>施工中</span>
           <span><span class="dot done"></span>已完工</span>
           <span><span class="dot accepted"></span>已验收</span>
-          <span><span class="legend-hours normal">工时</span>正常</span>
-          <span><span class="legend-hours warn">&gt;32h</span>排满/全员加班</span>
-          <span><span class="legend-hours danger">&gt;40h</span>超载/需外协</span>
-        </span>
+        </div>
+        <div class="cal-legend hours-legend">
+          <span><span class="legend-hours normal">正常</span></span>
+          <span><span class="legend-hours warn">排满</span></span>
+          <span><span class="legend-hours danger">超载</span></span>
+        </div>
       </div>
       <div id="calWeekdays" class="cal-weekdays"></div>
       <div id="calGrid" class="cal-grid"></div>
@@ -187,7 +200,7 @@
           </button>
         </div>
       </div>
-      <p class="hint">选择一个进入施工阶段的项目，为其分配施工人员、分人填写施工工时，并登记工程实际用的工时与验收信息。</p>
+      <p class="hint">👆 选择项目后，可分配人员、登记工时与验收信息</p>
       <div id="constructionDetail" class="construction-detail"></div>
       <div id="workerScheduleDescription"></div>
     </section>

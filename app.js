@@ -1666,6 +1666,9 @@ async function applyIncrementalUpdate(tableName) {
  * ============================================================ */
 function subscribeRealtime() {
   if (MODE !== "cloud") return;
+  // 防止同名 channel 重复订阅导致 "after subscribe()" 错误
+  const existing = sb.getChannels().find((c) => c.topic === "realtime-all");
+  if (existing) sb.removeChannel(existing);
   sb.channel("realtime-all")
     .on("postgres_changes", { event: "*", schema: "public", table: "workers" }, () => pendingChanges.add("workers"))
     .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, () => pendingChanges.add("projects"))
@@ -3537,7 +3540,7 @@ function renderProjects() {
           ${(() => {
             const items = [];
             if (canDelete) items.push('del');
-            if (canReview && !reviewed) items.push('review');
+            if (canReview && !reviewed && p.status === STATUS.ACCEPTED) items.push('review');
             if (canUnreview) items.push('unreview');
             if (items.length === 0) return '';
             if (items.length === 1) {
@@ -3552,7 +3555,7 @@ function renderProjects() {
               <button class="action-more-btn" onclick="toggleActionMore(this.parentElement,event)">更多 ▾</button>
               <div class="action-more-menu">
                 ${canDelete ? `<button class="action-more-item danger" onclick="event.stopPropagation();closeAllActionMenus();deleteProject('${p.id}')">🗑 删除</button>` : ""}
-                ${canReview && !reviewed ? `<button class="action-more-item" onclick="event.stopPropagation();closeAllActionMenus();reviewProject('${p.id}')">✅ 审核</button>` : ""}
+                ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `<button class="action-more-item" onclick="event.stopPropagation();closeAllActionMenus();reviewProject('${p.id}')">✅ 审核</button>` : ""}
                 ${canUnreview ? `<button class="action-more-item" onclick="event.stopPropagation();closeAllActionMenus();unreviewProject('${p.id}')">↩ 反审核</button>` : ""}
               </div>
             </div>`;
@@ -4300,7 +4303,7 @@ function renderConstruction() {
   const box = document.getElementById("constructionDetail");
   const p = getProject(currentProjectId);
   if (!p) {
-    box.innerHTML = `<div class="empty">请选择一个项目进行施工管理。</div>`;
+    box.innerHTML = "";
     return;
   }
   const totalHours = sumHours(p);
@@ -4494,12 +4497,11 @@ function renderConstruction() {
           ` : ""}
         </div>
 
-        <!-- 审核相关（仅完工后可审核） -->
+        <!-- 审核相关（仅已验收后可审核） -->
         ${canReview && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED) ? `<span class="action-group__divider"></span>` : ""}
         ${canReview && !reviewed && p.status === STATUS.DONE ? `
         <div class="action-group">
           <button class="btn small primary" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>
-          <button class="btn small primary" onclick="reviewProject('${p.id}')">🔍 审核项目</button>
         </div>` : ""}
         ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `
         <div class="action-group">
@@ -6525,8 +6527,10 @@ function generateWorkerScheduleDescription(dateStr = null) {
       description += `
         <div class="schedule-progress-item ${statusClass}" style="--status-color: ${statusColor};">
           <div class="schedule-progress-header">
-            <span class="schedule-progress-name">${esc(p.name)}</span>
-            <span class="schedule-progress-store">${esc(storeName)}</span>
+            <div class="schedule-progress-title">
+              <span class="schedule-progress-name">${esc(p.name)}</span>
+              <span class="schedule-progress-store">${esc(storeName)}</span>
+            </div>
             <span class="schedule-progress-time">${startTime} ~ ${endTime} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
           </div>
           <div class="schedule-progress-bar-container${isOverdue ? ' schedule-progress-bar--overdue' : ''}">
@@ -10600,6 +10604,17 @@ function renderMine() {
         <span class="mine-list-text">帮助与反馈</span>
         <span class="mine-list-arrow">›</span>
       </div>
+      ${isManager() && MODE === "cloud" ? `
+      <div class="mine-list-item" onclick="migrateLocalToCloud()">
+        <div class="mine-list-icon" style="background:#f0fdf4;color:#16a34a">📥</div>
+        <span class="mine-list-text">导入本地数据</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
+      <div class="mine-list-item" onclick="exportCloudToLocal()">
+        <div class="mine-list-icon" style="background:#eff6ff;color:#2563eb">📤</div>
+        <span class="mine-list-text">导出到本地</span>
+        <span class="mine-list-arrow">›</span>
+      </div>` : ""}
     </div>
     ` : ""}
 
@@ -11293,7 +11308,7 @@ function renderCalendar() {
 
   const year = calMonth.getFullYear();
   const month = calMonth.getMonth();
-  if (label) label.textContent = `${year} 年 ${month + 1} 月`;
+  if (label) label.textContent = `${year}.${String(month + 1).padStart(2, "0")}`;
 
   const startWeekday = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -11346,6 +11361,25 @@ function renderCalendar() {
 
   grid.innerHTML = cells;
   renderCalDay();
+  updateCalendarNavBadge();
+}
+
+function updateCalendarNavBadge() {
+  const dayEl = document.getElementById("calendarDay");
+  const badgeEl = document.getElementById("calendarBadge");
+  if (!dayEl || !badgeEl) return;
+
+  const now = new Date();
+  dayEl.textContent = now.getDate();
+
+  const todayKey = dateKey(now);
+  const count = projectsOnDate(todayKey).filter((p) => !isCompleted(p)).length;
+  if (count > 0) {
+    badgeEl.textContent = count > 99 ? "99+" : String(count);
+    badgeEl.classList.add("show");
+  } else {
+    badgeEl.classList.remove("show");
+  }
 }
 
 function selectCalDay(ds) {
@@ -11515,7 +11549,7 @@ function renderTimelineInDetail() {
 
   document.body.classList.add("timeline-view");
 
-  if (label) label.textContent = `${calSelectedDate} 时间线视图`;
+  if (label) label.textContent = `${calSelectedDate.slice(5)} 时间线`;
 
   const items = projectsOnDate(calSelectedDate);
   const totalHours = TL_VIEW_END_HOUR - TL_VIEW_START_HOUR;
@@ -11902,7 +11936,7 @@ function openTimelineActionMenu(taskEl, projectId) {
       <button class="btn small primary" onclick="closeTimelineActionMenu(); gotoConstruction('${p.id}')">施工管理</button>
       ${p.repairOrder && p.repairOrder.status === "待维修" && perm.completeRepair() ? `<button class="btn small" onclick="closeTimelineActionMenu(); completeRepair('${p.id}')">✅ 完成维修</button>` : ""}
       ${perm.editProject(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); editProject('${p.id}')">编辑</button>` : ""}
-      ${perm.reviewProject(p) && !isReviewed(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); reviewProject('${p.id}')">审核</button>` : ""}
+      ${perm.reviewProject(p) && !isReviewed(p) && p.status === STATUS.ACCEPTED ? `<button class="btn small" onclick="closeTimelineActionMenu(); reviewProject('${p.id}')">审核</button>` : ""}
       ${perm.deleteProject(p) ? `<button class="btn small danger" onclick="closeTimelineActionMenu(); deleteProject('${p.id}')">删除</button>` : ""}
     </div>`;
 
@@ -12311,7 +12345,7 @@ function timelineTouchEnd(e) {
       ${overtimeWarn}
       <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
       <div class="tl-drag-actions">
-        <button class="btn" onclick="modal.close(); cancelTimelineDrag('${task.dataset.projectId}', '${originalLeft}px');">取消</button>
+        <button class="btn" onclick="modal.close();">取消</button>
         <button class="btn primary" onclick="modal.close(); saveTimelineTaskTime('${task.dataset.projectId}', new Date('${timelineStart.toISOString()}'), new Date('${newEnd.toISOString()}'));">确认调整时间</button>
       </div>
     </div>`;
@@ -12391,7 +12425,7 @@ function timelineDragEnd(e) {
       ${overtimeWarn}
       <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
       <div class="tl-drag-actions">
-        <button class="btn" onclick="modal.close(); cancelTimelineDrag('${task.dataset.projectId}', '${originalLeft}px');">取消</button>
+        <button class="btn" onclick="modal.close();">取消</button>
         <button class="btn primary" onclick="modal.close(); saveTimelineTaskTime('${task.dataset.projectId}', new Date('${timelineStart.toISOString()}'), new Date('${newEnd.toISOString()}'));">确认调整时间</button>
       </div>
     </div>`;
@@ -12567,7 +12601,7 @@ function timelineMouseUp(e) {
       ${overtimeWarn}
       <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
       <div class="tl-drag-actions">
-        <button class="btn" onclick="modal.close(); cancelTimelineDrag('${task.dataset.projectId}', '${originalLeft}px');">取消</button>
+        <button class="btn" onclick="modal.close();">取消</button>
         <button class="btn primary" onclick="modal.close(); saveTimelineTaskTime('${task.dataset.projectId}', new Date('${timelineStart.toISOString()}'), new Date('${newEnd.toISOString()}'));">确认调整时间</button>
       </div>
     </div>`;
@@ -12883,6 +12917,7 @@ function bindEvents() {
   if (calendarDateEl) {
     calendarDateEl.textContent = now.getDate();
   }
+  updateCalendarNavBadge();
   document.getElementById("statsPeriod").addEventListener("change", renderStats);
   document.getElementById("statsMonth").addEventListener("change", renderStats);
   document.getElementById("statsStore").addEventListener("change", renderStats);

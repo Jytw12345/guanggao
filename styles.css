@@ -2154,13 +2154,25 @@ textarea.input { resize: vertical; min-height: 50px; }
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-bottom: 12px;
+}
+
+.schedule-progress-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
 }
 
 .schedule-progress-name {
   font-weight: 600;
   color: #111827;
   font-size: 15px;
+  word-break: break-word;
 }
 
 .schedule-progress-store {
@@ -2169,13 +2181,16 @@ textarea.input { resize: vertical; min-height: 50px; }
   background: #f3f4f6;
   padding: 2px 8px;
   border-radius: 12px;
-  margin-right: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .schedule-progress-time {
   font-size: 12px;
   color: #374151;
   font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .schedule-progress-bar-container {
@@ -3005,21 +3020,57 @@ table.data.project-hours-diff td.wrap {
   white-space: nowrap;
 }
 
-.bottom-nav-item #calendarDate {
-  position: absolute;
-  top: 0;
-  right: 2px;
-  background: var(--primary);
-  color: white;
-  border-radius: 50%;
-  width: 14px;
-  height: 14px;
-  display: flex;
+/* 日历图标：方块内嵌日期数字 */
+.calendar-icon {
+  position: relative;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 0;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid currentColor;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: inherit;
+  background: rgba(255,255,255,0.6);
+}
+.calendar-icon::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 12px;
+  height: 3px;
+  background: currentColor;
+  border-radius: 2px 2px 0 0;
+}
+.calendar-day {
+  margin-top: 1px;
+}
+
+/* 底部导航任务数量角标 */
+.bnav-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  background: #ef4444;
+  color: white;
+  border-radius: 7px;
   font-size: 9px;
   font-weight: 600;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.bnav-badge.show {
+  display: flex;
 }
 
 .bottom-nav-item.active {
@@ -3253,8 +3304,10 @@ table.data.project-hours-diff td.wrap {
   }
   
   .toolbar-time-filter .btn.small {
-    padding: 3px 8px;
-    font-size: 11px;
+    height: 36px;
+    padding: 0 10px;
+    font-size: 13px;
+    border-radius: 8px;
     min-width: 0;
     flex: 1;
     max-width: 70px;
@@ -3838,39 +3891,69 @@ table.data.project-hours-diff td.wrap {
     font-size: 12px;
   }
 
+  .calendar-header .section-head.compact h2 {
+    font-size: 16px;
+  }
+  .calendar-header .hint {
+    font-size: 12px;
+  }
+
   .cal-toolbar {
-    flex-wrap: wrap;
-    gap: 4px;
+    gap: 8px;
     margin-bottom: 8px;
-    align-items: center;
+  }
+
+  .cal-nav-group,
+  .cal-action-group {
+    gap: 4px;
+  }
+
+  .cal-nav-group {
+    flex: 1;
+  }
+
+  .cal-action-group {
+    flex: 0 0 auto;
   }
 
   .cal-label {
-    min-width: auto;
     flex: 1;
-    text-align: center;
+    min-width: auto;
     font-size: 14px;
-    font-weight: 600;
-    white-space: nowrap;
     padding: 2px 4px;
   }
 
+  .cal-legend-wrap {
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
   .cal-legend {
-    margin-left: 0;
-    flex-wrap: wrap;
-    gap: 4px;
-    width: 100%;
+    gap: 6px;
     font-size: 11px;
-    padding-top: 4px;
-    border-top: 1px solid #e5e7eb;
+  }
+
+  .cal-legend .dot {
+    width: 6px;
+    height: 6px;
+  }
+
+  .cal-legend .legend-hours {
+    font-size: 10px;
+    padding: 1px 5px;
   }
 
   #calPrev, #calNext, #calToday, #calToggleView {
-    padding: 4px 6px;
-    font-size: 14px;
+    padding: 4px 8px;
+    font-size: 13px;
     min-width: 36px;
     height: 32px;
     flex-shrink: 0;
+  }
+
+  #calToday, #calToggleView {
+    padding: 4px 8px;
+    min-width: 48px;
   }
 
   .cal-grid {
@@ -4374,38 +4457,84 @@ table.data.project-hours-diff td.wrap {
 /* ============================================================
  * 日历视图
  * ============================================================ */
+.calendar-header {
+  margin-bottom: 12px;
+}
+.calendar-header .section-head.compact {
+  margin-bottom: 0;
+  gap: 4px;
+}
+.calendar-header .section-head.compact h2 {
+  font-size: 18px;
+  margin-bottom: 0;
+}
+.calendar-header .hint {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .cal-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
   flex-wrap: wrap;
 }
-.cal-label {
-  font-size: 16px;
-  font-weight: 600;
-  min-width: 120px;
-  text-align: center;
-}
-.cal-legend {
-  margin-left: auto;
+
+.cal-nav-group,
+.cal-action-group {
   display: flex;
-  gap: 14px;
+  align-items: center;
+  gap: 6px;
+}
+
+.cal-label {
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 110px;
+  text-align: center;
+  padding: 0 6px;
+  color: #111827;
+}
+
+.cal-legend-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.cal-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 12px;
   color: var(--muted);
+  flex-wrap: wrap;
 }
+
 .cal-legend > span { display: inline-flex; align-items: center; gap: 4px; }
+
+.hours-legend .legend-hours {
+  cursor: help;
+}
 
 /* 图例中的工时徽章 */
 .legend-hours {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   font-size: 11px;
   font-weight: 600;
-  padding: 1px 6px;
+  padding: 1px 7px;
   border-radius: 999px;
   line-height: 1.4;
+  white-space: nowrap;
 }
-.legend-hours.normal { color: var(--primary); border: 1px solid var(--primary); }
+.legend-hours.normal { color: var(--primary); border: 1px solid var(--primary); background: rgba(59,130,246,0.08); }
 .legend-hours.warn { color: #fff; background: var(--warn); }
 .legend-hours.danger { color: #fff; background: var(--danger); }
 
@@ -6106,4 +6235,42 @@ table.data.project-hours-diff td.wrap {
   .it-del-link { display: none; } /* 移动端底部隐藏删除链接 */
   .it-actions { width: 100%; }
   .internal-task-card > .btn:not(.tiny) { padding: 7px 22px; font-size: 12.5px; }
+
+  /* 项目预约筛选栏：搜索+状态+门店在手机上保持单行 */
+  .project-filter-row {
+    flex-wrap: nowrap !important;
+    gap: 6px;
+  }
+  .project-filter-row #projectSearch,
+  .project-filter-row #projectStatusFilter,
+  .project-filter-row #projectStoreFilter {
+    min-width: 0 !important;
+    max-width: none !important;
+    height: 36px !important;
+  }
+  .project-filter-row #projectSearch {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    max-width: 160px !important;
+  }
+  .project-filter-row #projectStatusFilter,
+  .project-filter-row #projectStoreFilter {
+    flex: 0 0 80px !important;
+    width: 80px !important;
+    padding: 8px 6px !important;
+  }
+}
+
+/* 手机端：底部「我的」页已聚合账号/角色/登出/导出/帮助等全部用户功能，
+   右上角小人菜单（及冗余的用户名/角色/登出/导出/帮助按钮）与之重复，隐藏以净化顶栏。
+   仅保留全局搜索框与同步状态。MANAGER 的「导入本地数据/导出到本地」已补进「我的」页。 */
+@media (max-width: 768px) {
+  #userMenu,
+  #userInfo,
+  #roleInfo,
+  #btnLogout,
+  #btnExport,
+  #btnHelp {
+    display: none !important;
+  }
 }
