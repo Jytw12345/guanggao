@@ -405,7 +405,26 @@
       <div id="vehicleSummary" class="veh-summary"></div>
 
       <!-- 历史记录 -->
-      <h3 class="veh-history-title">📋 历史记录</h3>
+      <div class="veh-history-head">
+        <h3 class="veh-history-title">📋 历史记录</h3>
+        <div class="seg-toggle veh-view-seg" id="vtViewSeg">
+          <button type="button" class="seg-btn" data-view="card" onclick="setVtView('card')">卡片</button>
+          <button type="button" class="seg-btn" data-view="list" onclick="setVtView('list')">列表</button>
+        </div>
+      </div>
+      <div class="veh-filter" id="vtFilterBar">
+        <div class="veh-filter__row">
+          <select id="vtFilterVehicle" class="input veh-filter__sel" onchange="applyVtFilter()"></select>
+          <select id="vtFilterDriver" class="input veh-filter__sel" onchange="applyVtFilter()"></select>
+        </div>
+        <div class="veh-filter__dates">
+          <input type="date" id="vtFilterFrom" class="input veh-filter__date" onchange="applyVtFilter()" title="起始日期" />
+          <span class="veh-filter__sep">至</span>
+          <input type="date" id="vtFilterTo" class="input veh-filter__date" onchange="applyVtFilter()" title="结束日期" />
+        </div>
+        <button class="btn small" onclick="resetVtFilter()">重置</button>
+        <button class="btn small primary" onclick="exportVehicleTrips()">⬇ 导出</button>
+      </div>
       <div id="vehicleTripList" class="card-grid"></div>
     </section>
   </main>

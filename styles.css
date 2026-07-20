@@ -2383,6 +2383,72 @@ textarea.input { resize: vertical; min-height: 50px; }
   margin-left: 4px;
 }
 
+/* ---- 进度跟踪卡片：可展开详情 ---- */
+.schedule-progress-header {
+  cursor: pointer;
+  user-select: none;
+}
+.schedule-progress-header:hover .schedule-progress-name {
+  color: #2563eb;
+}
+
+.progress-toggle-icon {
+  display: inline-block;
+  font-size: 10px;
+  color: #9ca3af;
+  transition: transform 0.2s ease, color 0.2s ease;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.schedule-progress-header:hover .progress-toggle-icon {
+  color: #6b7280;
+}
+
+.schedule-progress-detail {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e5e7eb;
+  animation: detailSlideDown 0.25s ease-out;
+}
+@keyframes detailSlideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.schedule-progress-detail-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  align-items: baseline;
+  font-size: 12.5px;
+}
+.detail-row {
+  display: contents;
+}
+.detail-label {
+  color: #6b7280;
+  white-space: nowrap;
+  min-width: 72px;
+}
+.detail-value {
+  color: #374151;
+  word-break: break-word;
+}
+
+.schedule-progress-detail-logs {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px solid #f0f0f0;
+}
+.detail-log-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  margin-bottom: 5px;
+}
+
 .leave-calendar-day {
   width: 60px;
   text-align: center;
@@ -3818,7 +3884,26 @@ table.data.project-hours-diff td.wrap {
 
   /* 移动端：操作按钮分组堆叠 */
   .action-groups { gap: 8px; }
-  .action-group { flex-wrap: nowrap; gap: 6px; }
+  .action-group {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .action-group > .btn.small {
+    flex: 1 1 calc(50% - 3px);
+    min-width: 0;
+    padding: 6px 4px;
+    font-size: 12px;
+    text-align: center;
+    justify-content: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .action-group > select,
+  .action-group .custom-select {
+    flex: 1 1 100%;
+    max-width: none;
+  }
   .action-group__divider { display: none; }
 
   /* 移动端：施工记录折叠面板触摸友好 */
@@ -6042,10 +6127,26 @@ table.data.project-hours-diff td.wrap {
     height: 6px;
   }
   .action-groups {
-    gap: 8px;
+    gap: 6px;
   }
   .action-group {
     gap: 4px;
+    flex-wrap: wrap;
+  }
+  .action-group > .btn.small {
+    flex: 1 1 calc(50% - 2px);
+    min-width: 0;
+    padding: 5px 3px;
+    font-size: 11.5px;
+    text-align: center;
+    justify-content: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .action-group > select,
+  .action-group .custom-select {
+    flex: 1 1 100%;
+    max-width: none;
   }
   .btn.small {
     padding: 5px 10px;
@@ -6360,138 +6461,148 @@ table.data.project-hours-diff td.wrap {
 }
 .alloc-presets .chip:hover { border-color: var(--primary, #2563eb); color: var(--primary, #2563eb); }
 
-/* ===== 车辆里程：三车仪表盘 ===== */
-.veh-dash-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin: 6px 0 4px;
-}
-/* ===== 车辆仪表盘（清爽浅色风格，适配手机） ===== */
-.veh-dash {
-  border: 1px solid var(--border, #e6eaf2);
-  border-radius: 18px;
-  overflow: hidden;
-  background: #ffffff;
-  color: #1f2937;
-  box-shadow: 0 2px 10px rgba(15,23,42,.06);
-  transition: transform .15s, box-shadow .15s, border-color .15s;
-}
-.veh-dash:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(15,23,42,.12); }
-.veh-dash.active {
-  border-color: var(--primary, #2563eb);
-  box-shadow: 0 0 0 3px rgba(37,99,235,.16), 0 10px 24px rgba(15,23,42,.12);
-}
-.veh-dash.busy { border-color: #fb923c; }
-.veh-dash.busy.active { box-shadow: 0 0 0 3px rgba(251,146,60,.20), 0 10px 24px rgba(15,23,42,.12); }
-.veh-dash-main { cursor: pointer; text-align: center; padding: 12px 12px 14px; }
-.veh-dash-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.veh-dash-name { font-size: 16px; font-weight: 700; color: #0f172a; text-align: left; }
-.veh-dash-plate {
-  font-size: 11px; letter-spacing: 1px; color: #fff;
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
-  padding: 3px 9px; border-radius: 6px; font-weight: 700; white-space: nowrap;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.25);
-}
-/* 仪表盘本体 */
-.veh-gauge { position: relative; width: 100%; max-width: 150px; margin: 8px auto 2px; aspect-ratio: 1 / 1; }
-.veh-gauge-svg { width: 100%; height: 100%; display: block; }
-.veh-gauge-readout {
-  position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-56%);
-  display: flex; flex-direction: column; align-items: center; pointer-events: none;
-}
-.veh-gauge-km {
-  font-size: 26px; font-weight: 800; line-height: 1;
-  font-variant-numeric: tabular-nums; color: #0f172a;
-}
-.veh-gauge-readout.inuse .veh-gauge-km { color: #c2410c; }
-.veh-gauge-unit { font-size: 11px; color: #94a3b8; margin-top: 3px; letter-spacing: .5px; }
-.veh-gauge-foot { font-size: 12px; color: #64748b; margin-top: 2px; }
-.veh-gauge-foot b { color: #334155; font-variant-numeric: tabular-nums; }
-/* 状态徽章 + CTA */
-.veh-dash-badge {
-  display: inline-block;
-  margin-top: 10px;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 3px 11px;
-  border-radius: 999px;
-}
-.veh-dash-badge.idle { background: #ecfdf5; color: #059669; border: 1px solid #a7f3d0; }
-.veh-dash-badge.inuse { background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; }
-.veh-dash-cta { margin-top: 8px; font-size: 13px; font-weight: 600; color: var(--primary, #2563eb); }
-.veh-dash.busy .veh-dash-cta { color: #ea580c; }
-
-/* ===== 车辆里程：紧凑横向列表风格（替代大卡片） ===== */
+/* ===== 车辆里程：数字主角卡（C 方案，veh-card 独立命名，避免与历史列表 .veh-row 冲突） ===== */
 .veh-dash-grid {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 6px 0 4px;
-}
-.veh-row {
-  border: 1px solid var(--border, #e6eaf2);
-  border-radius: 14px;
-  background: #fff;
-  box-shadow: 0 1px 6px rgba(15,23,42,.06);
-  overflow: visible;
-  transition: border-color .15s, box-shadow .15s;
-}
-.veh-row:hover { box-shadow: 0 4px 14px rgba(15,23,42,.10); }
-.veh-row.active {
-  border-color: var(--primary, #2563eb);
-  box-shadow: 0 0 0 3px rgba(37,99,235,.14);
-}
-.veh-row.busy { border-color: #fb923c; }
-.veh-row.busy.active { box-shadow: 0 0 0 3px rgba(251,146,60,.18); }
-.veh-row-main {
-  display: flex;
-  align-items: center;
   gap: 12px;
-  padding: 12px 14px;
-  cursor: pointer;
+  margin: 8px 0 6px;
 }
-/* 左：小仪表（月度占比环） */
-.veh-row-gauge {
+
+/* ── 卡片本体 ── */
+.veh-card {
   position: relative;
-  flex: 0 0 64px;
-  width: 64px;
-  height: 64px;
-}
-.veh-row-gauge .veh-gauge-svg { width: 64px; height: 64px; display: block; }
-.veh-row-gauge .veh-gauge-readout { top: 50%; transform: translateY(-50%); }
-.veh-row-gauge .veh-gauge-km { font-size: 15px; font-weight: 800; }
-.veh-row-gauge .veh-gauge-unit { font-size: 9px; margin-top: 0; }
-/* 中：车辆信息 */
-.veh-row-info { flex: 1 1 auto; min-width: 0; }
-.veh-row-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.veh-row-status { display: flex; align-items: center; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
-.veh-row-status .veh-dash-badge,
-.veh-row-status .veh-dash-cta { margin-top: 0; }
-.veh-row-bar {
-  margin-top: 8px;
-  height: 6px;
-  background: rgba(15,23,42,.08);
-  border-radius: 999px;
+  border: 1px solid #e8ebf0;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 13px 18px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 4px 16px rgba(15,23,42,.04);
+  transition: box-shadow .2s ease, border-color .2s ease, transform .15s ease;
   overflow: hidden;
 }
-.veh-row-bar-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #0ea5e9, #38bdf8);
-  transition: width .3s ease;
+.veh-card::before {
+  content: '';
+  position: absolute; left: 0; top: 15%; bottom: 15%;
+  width: 4px; border-radius: 0 4px 4px 0;
+  background: #22c55e;
+  transition: background .2s ease;
 }
-.veh-row.busy .veh-row-bar-fill { background: linear-gradient(90deg, #f97316, #fb923c); }
-.veh-row-foot { margin-top: 5px; font-size: 11px; color: #64748b; }
-.veh-row-foot b { color: #334155; font-variant-numeric: tabular-nums; }
-/* 右：当前里程大数字 */
-.veh-row-km { flex: 0 0 auto; text-align: right; padding-left: 4px; }
-.veh-row-km b {
-  font-size: 22px; font-weight: 800; color: #0f172a;
+.veh-card:hover {
+  box-shadow: 0 4px 12px rgba(15,23,42,.08), 0 10px 28px rgba(15,23,42,.06);
+  border-color: #dbe3ef;
+  transform: translateY(-1px);
+}
+.veh-card.active {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 3px rgba(47,111,237,.12), 0 4px 16px rgba(15,23,42,.05);
+}
+.veh-card.active::before { background: #2f6fed; }
+.veh-card.busy::before { background: #f97316; }
+.veh-card.busy.active {
+  border-color: #fdba74;
+  box-shadow: 0 0 0 3px rgba(249,115,22,.14), 0 4px 16px rgba(15,23,42,.05);
+}
+
+/* ── 顶行：车型车牌 + 状态 ── */
+.veh-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.veh-card-id {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.veh-dash-name {
+  font-size: 16px; font-weight: 700; color: #1f2937;
+  white-space: nowrap; letter-spacing: -0.2px;
+}
+.veh-dash-plate {
+  font-size: 10px; letter-spacing: 1px; color: #fff;
+  background: linear-gradient(135deg, #3b82f6, #2f6fed);
+  padding: 3px 9px; border-radius: 7px; font-weight: 700;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 2px 6px rgba(47,111,237,.25);
+}
+.veh-card-state {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: #16a34a;
+  white-space: nowrap; flex-shrink: 0;
+}
+.veh-card-state .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #22c55e;
+}
+.veh-card.busy .veh-card-state { color: #ea580c; }
+.veh-card.busy .veh-card-state .dot { background: #f97316; }
+
+/* ── 主行：圆环 + 大数字里程 + 操作 ── */
+.veh-card-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.veh-card-gauge {
+  position: relative;
+  flex: 0 0 54px; width: 54px; height: 54px;
+}
+.veh-card-gauge .veh-gauge-svg { width: 54px; height: 54px; display: block; }
+.veh-card-gauge .veh-gauge-readout {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+.veh-card-gauge .veh-gauge-km {
+  font-size: 14px; font-weight: 800; line-height: 1;
+  color: #334155; font-variant-numeric: tabular-nums; letter-spacing: -0.5px;
+}
+.veh-card-gauge .veh-gauge-unit {
+  font-size: 9px; color: #94a3b8; margin-top: 1px;
+}
+.veh-card.busy .veh-card-gauge .veh-gauge-km { color: #c2410c; }
+
+.veh-card-hero { flex: 1 1 auto; min-width: 0; }
+.veh-card-km {
+  font-size: 27px; font-weight: 800; color: #1f2937;
   font-variant-numeric: tabular-nums; line-height: 1;
+  letter-spacing: -0.8px;
 }
-.veh-row.busy .veh-row-km b { color: #c2410c; }
-.veh-row-km span { display: block; font-size: 10px; color: #94a3b8; margin-top: 3px; }
+.veh-card.busy .veh-card-km { color: #9a3412; }
+.veh-card-sub {
+  font-size: 11px; color: #6b7280; margin-top: 4px; letter-spacing: .2px;
+}
+.veh-card-sub b {
+  color: #374151; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+
+/* 油量徽章 */
+.veh-fuel-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11px; font-weight: 700; padding: 3px 10px;
+  border-radius: 999px; border: 1px solid;
+  white-space: nowrap; flex-shrink: 0; line-height: 1.4;
+}
+.veh-fuel-badge--none { background:#f1f5f9; color:#94a3b8; border-color:#e2e8f0; }
+
+/* CTA 文字 */
+.veh-card-actions {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  flex: 0 0 auto;
+}
+.veh-dash-cta {
+  font-size: 12px; font-weight: 600;
+  color: var(--primary,#2f6fed);
+  padding: 2px 8px; border-radius: 6px; white-space: nowrap; flex-shrink: 0;
+  transition: background .18s ease;
+}
+.veh-dash-cta:hover { background: rgba(47,111,237,.07); }
+.veh-card.busy .veh-dash-cta { color: #ea580c; }
+.veh-card.busy .veh-dash-cta:hover { background: rgba(234,88,12,.06); }
 
 /* 内联展开的用车 / 还车面板（直接在某辆车卡片下方） */
 .veh-dash-panel {
@@ -6563,6 +6674,147 @@ table.data.project-hours-diff td.wrap {
 .veh-quick-fields { flex: 2 1 280px; min-width: 240px; display: flex; flex-direction: column; gap: 10px; }
 .veh-quick-actions { margin-top: 16px; display: flex; gap: 10px; }
 .veh-history-title { margin: 18px 0 8px; font-size: 15px; }
+.veh-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 18px 0 8px;
+  flex-wrap: wrap;
+}
+.veh-history-head .veh-history-title { margin: 0; }
+.veh-view-seg { padding: 0; gap: 0; }
+.veh-view-seg .seg-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
+/* 历史记录：筛选栏 + 导出 */
+.veh-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e6ef;
+  border-radius: 10px;
+}
+/* 车辆 + 司机：强制同一行，平分宽度 */
+.veh-filter__row {
+  display: flex;
+  gap: 8px;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.veh-filter__sel {
+  flex: 1 1 0%;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.veh-filter__dates {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.veh-filter__date {
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.veh-filter__sep { color: #64748b; font-size: 13px; }
+.veh-filter .btn.small { padding: 6px 12px; }
+.veh-filter .btn.small.primary { margin-left: auto; }
+@media (max-width: 560px) {
+  .veh-filter { gap: 6px; padding: 8px 10px; }
+  .veh-filter__row { flex-wrap: nowrap !important; }
+  .veh-filter__sel { flex: 1 1 0%; min-width: 0; }
+  .veh-filter__dates { flex: 1 1 100%; justify-content: space-between; }
+  .veh-filter__date { flex: 1 1 auto; }
+  .veh-filter .btn.small.primary { margin-left: 0; flex: 1 1 100%; }
+}
+
+/* 历史记录：列表视图（紧凑，适合长历史） */
+.veh-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.veh-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #e2e6ef;
+  border-left: 3px solid #cbd5e1;
+  border-radius: 9px;
+  padding: 8px 12px;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.veh-row:hover {
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.07);
+  border-color: #b5beca;
+}
+.veh-row--open {
+  border-left-color: #f59e0b;
+  background: linear-gradient(180deg, #fffdf7 0%, #fff 50%);
+}
+.veh-row__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: #334155;
+}
+.veh-row__veh {
+  font-weight: 700;
+  color: #111827;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+.veh-row__type { color: #475569; }
+.veh-row__driver { color: #475569; white-space: nowrap; }
+.veh-row__km { font-weight: 600; color: var(--primary, #2563eb); white-space: nowrap; }
+.veh-row__fuel {
+  color: #b45309; font-weight: 600; white-space: nowrap;
+  background: #fef3c7; padding: 1px 7px; border-radius: 999px; font-size: 12px;
+}
+.veh-row__proj {
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+.veh-row__proj--empty { color: #cbd5e1; }
+.veh-row__time { color: #94a3b8; font-size: 12px; white-space: nowrap; }
+.veh-row__badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 1px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.veh-row__act {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+@media (max-width: 560px) {
+  .veh-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  .veh-row__main { gap: 10px; }
+  .veh-row__act { justify-content: flex-end; }
+  .veh-row__veh { max-width: none; }
+}
 
 /* 历史卡片：未还车状态 */
 .card-open { border-left: 4px solid #f59e0b; }
@@ -6584,6 +6836,144 @@ table.data.project-hours-diff td.wrap {
   border-radius: 8px;
 }
 
+/* ===== 历史用车：紧凑卡片 ===== */
+#vehicleTripList.card-grid {
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  grid-auto-rows: auto;
+  gap: 12px;
+}
+.veh-trip {
+  background: #fff;
+  border: 1px solid #e2e6ef;
+  border-left: 3px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 12px 14px;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+.veh-trip:hover {
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+  border-color: #b5beca;
+  transform: translateY(-1px);
+}
+.veh-trip--open {
+  border-left-color: #f59e0b;
+  background: linear-gradient(180deg, #fffdf7 0%, #fff 40%);
+}
+.veh-trip__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.veh-trip__title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.veh-trip__title em {
+  font-style: normal;
+  font-weight: 600;
+  font-size: 12px;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 1px 6px;
+  border-radius: 5px;
+  margin-left: 2px;
+}
+.veh-trip__badge {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.veh-trip__mileage {
+  flex-shrink: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: #2563eb;
+  white-space: nowrap;
+}
+.veh-trip__mileage i {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-left: 1px;
+}
+.veh-trip__project {
+  font-size: 12.5px;
+  color: #475569;
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.veh-trip__stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px 8px;
+  padding: 8px 0;
+  border-top: 1px dashed #eef1f6;
+  border-bottom: 1px dashed #eef1f6;
+}
+.veh-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.veh-stat i {
+  font-style: normal;
+  font-size: 10.5px;
+  color: #94a3b8;
+}
+.veh-stat b {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2937;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.veh-trip__time {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11.5px;
+  color: #64748b;
+  margin-top: 8px;
+}
+.veh-trip__note {
+  font-size: 12px;
+  color: #64748b;
+  background: #f8fafc;
+  border-radius: 6px;
+  padding: 5px 8px;
+  margin-top: 8px;
+}
+.veh-trip__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.veh-trip__actions .btn.small {
+  flex: 1;
+  text-align: center;
+  justify-content: center;
+}
+@media (max-width: 480px) {
+  .veh-trip__stats { grid-template-columns: repeat(2, 1fr); gap: 6px 8px; }
+}
+
 /* ===== 车辆里程：按月 / 按车汇总 ===== */
 .veh-summary {
   margin: 12px 0 6px;
@@ -6595,46 +6985,76 @@ table.data.project-hours-diff td.wrap {
 .veh-sum-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .veh-sum-title { font-size: 15px; font-weight: 700; }
 .veh-month { width: auto; flex: 0 0 auto; }
-.veh-sum-total {
-  display: flex; align-items: baseline; gap: 8px;
-  margin: 10px 0 12px;
-}
-.veh-sum-total span { font-size: 13px; color: var(--muted, #6b7280); }
-.veh-sum-total b {
-  font-size: 30px; font-weight: 800; color: var(--primary, #2563eb);
-  font-variant-numeric: tabular-nums;
-}
-.veh-sum-total i { font-style: normal; font-size: 13px; color: var(--muted, #6b7280); }
-.veh-sum-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.veh-sum-card {
-  background: #fff;
-  border: 1px solid var(--border, #d1d5db);
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-.veh-sum-card-name { font-size: 13px; color: var(--muted, #6b7280); }
-.veh-sum-card-km { font-size: 18px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
-.veh-sum-card-km i { font-style: normal; font-size: 11px; color: var(--muted, #6b7280); font-weight: 400; }
-.veh-sum-foot { margin-top: 10px; font-size: 12px; color: var(--muted, #6b7280); }
 
-/* 车辆模块：手机端布局优化 */
-@media (max-width: 768px) {
-  /* 平板 / 大手机：横向列表保持单列，仅收紧间距 */
-  .veh-dash-grid { gap: 10px; }
-  .veh-sum-cards { grid-template-columns: repeat(3, 1fr); }
+/* 汇总：简洁表格风格（无色块） */
+.veh-sum-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
 }
+.veh-sum-table th {
+  text-align: left;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+  border-bottom: 2px solid #e2e8f0;
+}
+.veh-sum-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 13px;
+}
+.veh-sum-th-km, .veh-sum-td-km { text-align: right; white-space: nowrap; }
+.veh-sum-th-pct, .veh-sum-td-pc { text-align: left; }
+.veh-sum-td-name { font-weight: 600; color: #334155; }
+.veh-sum-plate-sm {
+  display: inline-block;
+  font-size: 11px; letter-spacing: .5px; color: #64748b; font-weight: 500;
+  margin-left: 5px; background: #f1f5f9; padding: 0 6px; border-radius: 4px;
+}
+.veh-sum-td-km { font-weight: 700; color: #0f172a; font-variant-numeric: tabular-nums; }
+.veh-sum-td-total { color: var(--primary, #2563eb); font-size: 15px; }
+.veh-sum-total-row td { border-top: 2px solid #e2e8f0; font-weight: 600; }
+.veh-sum-bar-wrap {
+  position: relative;
+  height: 16px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+  min-width: 60px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #475569;
+  vertical-align: middle;
+  line-height: 1;
+}
+.veh-sum-bar-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 999px;
+  transition: width .35s ease;
+}
+.veh-sum-foot { margin-top: 8px; font-size: 12px; color: var(--muted, #6b7280); }
 
-@media (max-width: 520px) {
-  /* 小手机：横向列表更紧凑、更易点 */
-  .veh-dash-grid { gap: 10px; }
-  .veh-row-main { padding: 12px 12px; gap: 10px; }
-  .veh-row-gauge { flex: 0 0 56px; width: 56px; height: 56px; }
-  .veh-row-gauge .veh-gauge-svg { width: 56px; height: 56px; }
-  .veh-row-gauge .veh-gauge-km { font-size: 13px; }
-  .veh-row-km b { font-size: 19px; }
-  .veh-sum-cards { grid-template-columns: 1fr; }
-  .veh-summary { padding: 12px; }
-  .veh-sum-total b { font-size: 26px; }
+/* 车辆模块：手机端布局优化（仅作用于 .veh-card，不影响 .veh-row 历史列表） */
+@media (max-width: 640px) {
+  .veh-card { padding: 12px 14px; border-radius: 14px; }
+  .veh-card::before { width: 3px; }
+  .veh-dash-name { font-size: 14.5px; }
+  .veh-dash-plate { font-size: 9px; padding: 2px 8px; }
+  .veh-card-main { gap: 12px; }
+  .veh-card-gauge { flex: 0 0 48px; width: 48px; height: 48px; }
+  .veh-card-gauge .veh-gauge-svg { width: 48px; height: 48px; }
+  .veh-card-gauge .veh-gauge-km { font-size: 12px; }
+  .veh-card-km { font-size: 22px; }
+  .veh-summary { padding: 10px; }
+  .veh-sum-table th, .veh-sum-table td { padding: 6px 8px; font-size: 12px; }
   /* 还车面板在窄屏纵向堆叠、输入框更大更易操作 */
   .veh-quick-body { flex-direction: column; gap: 12px; }
   .veh-quick-km, .veh-quick-fields { min-width: 0; flex: 1 1 auto; width: 100%; }
