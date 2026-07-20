@@ -6485,9 +6485,14 @@ table.data.project-hours-diff td.wrap {
 /* ===== 车辆里程：数字主角卡（C 方案，veh-card 独立命名，避免与历史列表 .veh-row 冲突） ===== */
 .veh-dash-grid {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: 12px;
   margin: 8px 0 6px;
+}
+.veh-dash-grid > .veh-card {
+  flex: 1 1 calc(33.333% - 8px);
+  min-width: 280px;
 }
 
 /* ── 卡片本体 ── */
@@ -6666,6 +6671,61 @@ table.data.project-hours-diff td.wrap {
   padding: 8px 10px;
   line-height: 1.5;
 }
+
+/* 司机自定义下拉（替代原生 datalist 系统选择框） */
+.veh-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.veh-combo__input {
+  width: 100%;
+  padding-right: 34px !important;
+  border-color: #cbd5e1;
+  background: #fff;
+  transition: border-color .18s, box-shadow .18s;
+  cursor: text;
+}
+.veh-combo__input:focus {
+  border-color: var(--primary, #2563eb) !important;
+  box-shadow: 0 0 0 3px rgba(37,99,235,.10) !important;
+}
+.veh-combo__input::placeholder { color: #9ca3af; }
+.veh-combo__arrow {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 11px; line-height: 1; cursor: pointer; user-select: none; pointer-events: auto;
+  background: transparent;
+  transition: color .15s, background .15s, transform .2s ease;
+}
+.veh-combo__arrow:hover { color: var(--primary, #2563eb); background: rgba(37,99,235,.06); }
+.veh-combo--open .veh-combo__arrow { color: var(--primary, #2563eb); transform: translateY(-50%) rotate(180deg); }
+.veh-driver-float {
+  position: fixed; z-index: 9999;
+  max-height: 240px; overflow-y: auto;
+  background: #fff; color: #1f2937;
+  border: 1px solid #e2e8f0; border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(15,23,42,.14), 0 1px 4px rgba(15,23,42,.06);
+  padding: 6px; font-size: 14px;
+  animation: veh-float-in .15s ease-out;
+}
+@keyframes veh-float-in {
+  from { opacity: 0; transform: translateY(-4px) scale(.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.veh-driver-float__opt {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: 8px; cursor: pointer;
+  transition: background .12s;
+}
+.veh-driver-float__opt:hover, .veh-driver-float__opt.is-active { background: #eef2ff; }
+.veh-driver-float__opt.is-active { box-shadow: inset 0 0 0 1.5px rgba(37,99,235,.25); }
+.veh-driver-float__opt .nm { font-weight: 500; color: #1e293b; }
+.veh-driver-float__opt .tag { margin-left: auto; font-size: 11px; color: #94a3b8; background: #f1f5f9; padding: 2px 7px; border-radius: 99px; font-weight: 500; }
+.veh-driver-float__empty { padding: 16px 12px; color: #94a3b8; font-size: 13px; text-align: center; }
 
 /* ===== 快速记录面板 ===== */
 .veh-quick {
@@ -7080,4 +7140,6 @@ table.data.project-hours-diff td.wrap {
   .veh-quick-body { flex-direction: column; gap: 12px; }
   .veh-quick-km, .veh-quick-fields { min-width: 0; flex: 1 1 auto; width: 100%; }
   .veh-km-edit, .veh-km-big { font-size: 24px !important; }
+  /* 窄屏：车辆卡片单列 */
+  .veh-dash-grid > .veh-card { flex: 1 1 100% !important; min-width: 0; }
 }

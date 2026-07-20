@@ -7692,6 +7692,9 @@ function openCompleteProjectForm(id) {
     assignedWorkerIds.forEach((wid) => {
       workerPeriods[wid] = buildWorkerPeriods(p, wid);
     });
+    outsourcedWorkers.forEach((name) => {
+      workerPeriods["outsourced:" + name] = buildWorkerPeriods(p, "outsourced:" + name);
+    });
     
     (p.workerChangeHistory || []).forEach((ch) => {
       const wid = ch.workerId;
@@ -7833,7 +7836,8 @@ function openCompleteProjectForm(id) {
           note: l.note || ""
         }));
       } else {
-        segs = [{ type: "地面施工", level: "中级", hours: "", note: "" }];
+        const autoHours = window._completeWorkerAutoHours[workerId] || 0;
+        segs = [{ type: "地面施工", level: "中级", hours: autoHours > 0 ? autoHours.toFixed(1) : "", note: autoHours > 0 ? "系统自动计算" : "" }];
       }
 
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
@@ -11748,16 +11752,6 @@ function renderMine() {
         <div class="mine-list-icon" style="background:#fef2f2;color:#dc2626">🔐</div>
         <span class="mine-list-text">管理密码设置${currentProfile?.adminPasswordHash ? "" : "（未设置）"}</span>
         <span class="mine-list-arrow">›</span>
-      </div>
-      <div class="mine-list-item" onclick="migrateLocalToCloud()">
-        <div class="mine-list-icon" style="background:#f0fdf4;color:#16a34a">📥</div>
-        <span class="mine-list-text">导入本地数据</span>
-        <span class="mine-list-arrow">›</span>
-      </div>
-      <div class="mine-list-item" onclick="exportCloudToLocal()">
-        <div class="mine-list-icon" style="background:#eff6ff;color:#2563eb">📤</div>
-        <span class="mine-list-text">导出到本地</span>
-        <span class="mine-list-arrow">›</span>
       </div>` : ""}
     </div>
     ` : ""}
@@ -13873,19 +13867,9 @@ async function startCloudSession() {
   document.getElementById("dropdownRole").textContent = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
   
   if (currentProfile.role !== ROLE.MANAGER) {
-    document.getElementById("btnMigrateMenu").classList.add("hidden");
-    document.getElementById("btnExportLocalMenu").classList.add("hidden");
     document.getElementById("btnExport").classList.add("hidden");
   }
 
-  document.getElementById("btnMigrateMenu").addEventListener("click", () => {
-    document.getElementById("userDropdown").classList.add("hidden");
-    migrateLocalToCloud();
-  });
-  document.getElementById("btnExportLocalMenu").addEventListener("click", () => {
-    document.getElementById("userDropdown").classList.add("hidden");
-    exportCloudToLocal();
-  });
   document.getElementById("btnLogoutMenu").addEventListener("click", () => {
     document.getElementById("userDropdown").classList.add("hidden");
     doLogout();
@@ -14458,8 +14442,11 @@ function usePanelHtml(v) {
         </div>
         <div class="form-row">
           <label>司机 <span style="color:#dc2626">*</span>（必填，可输入新增）</label>
-          <input class="input" id="vtqDriver" list="vtqDriverList" placeholder="选择或输入司机姓名" autocomplete="off" />
-          <datalist id="vtqDriverList">${vehicleDriverListOptions()}</datalist>
+          <div class="veh-combo">
+            <input class="input veh-combo__input" id="vtqDriver" placeholder="选择或输入司机姓名"
+                   autocomplete="off" onfocus="openDriverCombo()" oninput="onDriverInput()" onkeydown="onDriverKey(event)" />
+            <span class="veh-combo__arrow" onclick="toggleDriverCombo(event)" title="选择司机">▾</span>
+          </div>
         </div>
         <div class="form-row">
           <label>备注 / 目的地</label>
@@ -14823,6 +14810,125 @@ function vehicleDriverListOptions() {
   return all.map((d) => `<option value="${esc(d.name)}"></option>`).join("");
 }
 
+/* 司机自定义下拉（取代原生 datalist，避免系统选择框样式突兀） */
+function vehicleDriverData() {
+  const workers = (cache.workers || []).map((w) => ({ id: w.id, name: w.name, kind: "施工人员" }));
+  const customs = (cache.customDrivers || []).map((n) => ({ id: "drv_" + n, name: n, kind: "历史司机" }));
+  return [...workers, ...customs];
+}
+
+let _driverComboOpen = false;
+let _driverSuppressFocus = false;
+
+function openDriverCombo() {
+  if (_driverSuppressFocus) return;
+  const input = document.getElementById("vtqDriver");
+  if (!input) return;
+  closeDriverCombo(true);
+  const wrap = input.closest(".veh-combo");
+  if (wrap) wrap.classList.add("veh-combo--open");
+  const menu = document.createElement("div");
+  menu.className = "veh-driver-float";
+  menu.id = "vehDriverFloat";
+  document.body.appendChild(menu);
+  _driverComboOpen = true;
+  renderDriverComboMenu(input.value.trim());
+  window.addEventListener("scroll", _repositionDriverCombo, true);
+  window.addEventListener("resize", _repositionDriverCombo);
+  setTimeout(() => document.addEventListener("mousedown", _onDriverOutside, true), 0);
+}
+
+function _repositionDriverCombo() {
+  const input = document.getElementById("vtqDriver");
+  const menu = document.getElementById("vehDriverFloat");
+  if (!input || !menu) return;
+  const r = input.getBoundingClientRect();
+  menu.style.minWidth = r.width + "px";
+  const h = menu.offsetHeight || 220;
+  let top = r.bottom + 6;
+  if (top + h > window.innerHeight - 8 && r.top - h - 6 > 0) top = r.top - h - 6;
+  menu.style.left = Math.max(8, r.left) + "px";
+  menu.style.top = top + "px";
+}
+
+function renderDriverComboMenu(filter) {
+  const menu = document.getElementById("vehDriverFloat");
+  if (!menu) return;
+  const data = vehicleDriverData();
+  const f = (filter || "").trim().toLowerCase();
+  const list = f ? data.filter((d) => d.name.toLowerCase().includes(f)) : data;
+  if (!list.length) {
+    const typed = (filter || "").trim();
+    menu.innerHTML = `<div class="veh-driver-float__empty">无匹配${typed ? "，可回车新增「" + esc(typed) + "」" : ""}</div>`;
+    _repositionDriverCombo();
+    return;
+  }
+  menu.innerHTML = list.map((d) =>
+    `<div class="veh-driver-float__opt" data-name="${esc(d.name)}"><span class="nm">${esc(d.name)}</span><span class="tag">${d.kind}</span></div>`
+  ).join("");
+  menu.querySelectorAll(".veh-driver-float__opt").forEach((opt) => {
+    opt.addEventListener("mousedown", (e) => { e.preventDefault(); selectDriver(opt.dataset.name); });
+  });
+  _repositionDriverCombo();
+}
+
+function onDriverInput() {
+  if (!_driverComboOpen) { openDriverCombo(); return; }
+  renderDriverComboMenu(document.getElementById("vtqDriver").value.trim());
+}
+
+function onDriverKey(e) {
+  if (!_driverComboOpen) {
+    if (e.key === "ArrowDown" || e.key === "Enter") { e.preventDefault(); openDriverCombo(); }
+    return;
+  }
+  const opts = [...document.querySelectorAll("#vehDriverFloat .veh-driver-float__opt")];
+  if (!opts.length) { if (e.key === "Escape") closeDriverCombo(); return; }
+  let idx = opts.findIndex((o) => o.classList.contains("is-active"));
+  if (e.key === "ArrowDown") { e.preventDefault(); idx = Math.min(opts.length - 1, idx + 1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); idx = idx < 0 ? 0 : Math.max(0, idx - 1); }
+  else if (e.key === "Enter") { e.preventDefault(); if (idx >= 0) selectDriver(opts[idx].dataset.name); else closeDriverCombo(); return; }
+  else if (e.key === "Escape") { e.preventDefault(); closeDriverCombo(); return; }
+  else return;
+  opts.forEach((o) => o.classList.remove("is-active"));
+  if (idx >= 0) { opts[idx].classList.add("is-active"); opts[idx].scrollIntoView({ block: "nearest" }); }
+}
+
+function selectDriver(name) {
+  const input = document.getElementById("vtqDriver");
+  if (input) input.value = name;
+  _driverSuppressFocus = true;
+  closeDriverCombo();
+  if (input) input.focus();
+  setTimeout(() => { _driverSuppressFocus = false; }, 180);
+}
+
+function toggleDriverCombo(e) {
+  e.stopPropagation();
+  if (_driverComboOpen) closeDriverCombo();
+  else openDriverCombo();
+}
+
+function _onDriverOutside(e) {
+  const menu = document.getElementById("vehDriverFloat");
+  const input = document.getElementById("vtqDriver");
+  const arrow = document.querySelector(".veh-combo__arrow");
+  if (menu && !menu.contains(e.target) && e.target !== input && !(arrow && arrow.contains(e.target))) {
+    closeDriverCombo();
+  }
+}
+
+function closeDriverCombo(silent) {
+  const menu = document.getElementById("vehDriverFloat");
+  if (menu) menu.remove();
+  _driverComboOpen = false;
+  document.removeEventListener("mousedown", _onDriverOutside, true);
+  window.removeEventListener("scroll", _repositionDriverCombo, true);
+  window.removeEventListener("resize", _repositionDriverCombo);
+  const wrap = document.querySelector(".veh-combo--open");
+  if (wrap) wrap.classList.remove("veh-combo--open");
+}
+
 function vehicleProjectOptions(selectedId) {
   const projects = (cache.projects || []).slice().sort((a, b) =>
     new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0));
@@ -14877,6 +14983,7 @@ function calcQuickMileage() {
 }
 
 function closeVehicleQuick() {
+  closeDriverCombo();
   window._vtqVehicleId = "";
   renderVehicleDashboards();
 }
