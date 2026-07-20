@@ -3471,6 +3471,10 @@ function renderProjects() {
           </div>
         </div>
 
+        <!-- 暂停/延期原因 -->
+        ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}</div>` : ""}
+        ${p.status === STATUS.DELAYED && p.delayReason ? `<div class="card-reason delayed">🕒 延期原因：${esc(p.delayReason)}</div>` : ""}
+
         <!-- 摘要行：门店 / 客户 -->
         <div class="card-meta">
           <span class="card-meta__item"><b>${esc(storeName(p.storeId))}</b></span>

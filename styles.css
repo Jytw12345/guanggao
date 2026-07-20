@@ -1097,6 +1097,26 @@ body.stats-view .container {
   transform: translateY(-1px);
 }
 
+/* 卡片暂停/延期原因提示 */
+.card-reason {
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  word-break: break-word;
+}
+.card-reason.paused {
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+}
+.card-reason.delayed {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
 /* 预约表单：施工内容可勾选标签 */
 .work-content-chips {
   display: flex;
