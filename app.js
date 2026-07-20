@@ -648,6 +648,13 @@ function fmtSignedDiff(diff) {
   return diff > 0 ? `+${rounded}` : `${rounded}`;
 }
 
+/* 工时显示：四舍五入到2位小数，去掉尾随0；用于消除 12.600000000000001 这类浮点误差 */
+function fmtHours(n) {
+  const v = Number(n);
+  if (!isFinite(v)) return "0";
+  return Number(v.toFixed(2)).toString();
+}
+
 function calcDuration(start, end) {
   const s = new Date(start);
   const e = new Date(end);
@@ -901,6 +908,7 @@ const mapProject = (r) => ({
   outsourcedHoursFromLogs: 0,
   status: r.status,
   note: r.note,
+  workContent: (r.work_content && typeof r.work_content === "string" ? safeJsonParse(r.work_content, []) : r.work_content) || r.workContent || [],
   acceptance: r.acceptance || null,
   storeId: r.store_id || r.storeId || "",
   createdBy: r.created_by || r.createdBy || null,
@@ -945,6 +953,7 @@ const projectToRow = (p) => ({
   actual_hours: p.actualHours || 0,
   status: p.status,
   note: p.note || null,
+  work_content: p.workContent && Array.isArray(p.workContent) && p.workContent.length > 0 ? JSON.stringify(p.workContent) : null,
   acceptance: p.acceptance || null,
   store_id: p.storeId || null,
   assigned_workers: p.assignedWorkerIds || [],
@@ -1310,6 +1319,10 @@ const repo = {
       if (row.workSessions && Array.isArray(row.workSessions)) {
         row.work_sessions = JSON.stringify(row.workSessions);
         delete row.workSessions;
+      }
+      if (row.workContent && Array.isArray(row.workContent)) {
+        row.work_content = row.workContent.length > 0 ? JSON.stringify(row.workContent) : null;
+        delete row.workContent;
       }
       
       const project = getProject(id);
@@ -1794,9 +1807,9 @@ function renderWorkers(dateStr) {
           </div>
           <div class="card-row"><span>👤 联系电话</span><b>${esc(w.phone || "—")}</b></div>
           <div class="worker-hours-row">
-            <span class="worker-hours-item"><span class="worker-hours-label">累计工时</span><b>${totalHours} 小时</b></span>
+            <span class="worker-hours-item"><span class="worker-hours-label">累计工时</span><b>${fmtHours(totalHours)} 小时</b></span>
             <span class="worker-hours-sep"></span>
-            <span class="worker-hours-item"><span class="worker-hours-label">本月工时</span><b class="${monthHours > 208 ? 'text-overload' : ''}">${monthHours} 小时</b></span>
+            <span class="worker-hours-item"><span class="worker-hours-label">本月工时</span><b class="${monthHours > 208 ? 'text-overload' : ''}">${fmtHours(monthHours)} 小时</b></span>
           </div>
           <div class="card-actions">
             ${perm.editWorker() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button>` : ""}${perm.deleteWorker() ? `<button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
@@ -3502,12 +3515,12 @@ function renderProjects() {
         <div class="card-hours">
           <div class="card-hours__item ${hasActual ? "" : "card-hours__item--muted"}">
             <span class="card-hours__label">预计</span>
-            <span class="card-hours__val">${est}工时 · ${(p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1}人</span>
+            <span class="card-hours__val">${fmtHours(est)}工时 · ${(p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1}人</span>
           </div>
           <div class="card-hours__sep"></div>
           <div class="card-hours__item ${hasActual ? "" : "card-hours__item--muted"}">
             <span class="card-hours__label">实际</span>
-            <span class="card-hours__val">${hasActual ? act + "工时 · " + ((p.workLogs || []).filter(l => l.workerId).length) + "人" : "—"} ${diffLabel(p)}</span>
+            <span class="card-hours__val">${hasActual ? fmtHours(act) + "工时 · " + ((p.workLogs || []).filter(l => l.workerId).length) + "人" : "—"} ${diffLabel(p)}</span>
           </div>
         </div>
 
@@ -4318,7 +4331,7 @@ function renderConstruction() {
         <tr>
           <td>${esc(l.workerName)}${isOutsourced ? ` <span style="color:#8b5cf6;font-size:12px">(外协)</span>` : ""}</td>
           <td>${fmtDate(l.date)}</td>
-          <td>${l.hours} 小时</td>
+          <td>${fmtHours(l.hours)} 小时</td>
           <td>${esc(l.level || "中级")}</td>
           <td>${esc(l.note || "—")}</td>
           <td>${canEdit ? `<button class="btn small danger" onclick="deleteWorkLog('${p.id}','${l.id}')">删除</button>` : ""}</td>
@@ -4458,9 +4471,9 @@ function renderConstruction() {
         </div>` : ""}
       </div>
       <div class="info-grid">
-        <div class="info-item"><div class="k">预计</div><div class="v">${p.estimatedHours || 0} 小时</div></div>
-        <div class="info-item"><div class="k">外协</div><div class="v" style="color:#8b5cf6">${p.outsourcedHoursFromLogs || 0} 小时</div></div>
-        <div class="info-item"><div class="k">实际用工</div><div class="v">${((p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0)) || 0} 小时</div></div>
+        <div class="info-item"><div class="k">预计</div><div class="v">${fmtHours(p.estimatedHours || 0)} 小时</div></div>
+        <div class="info-item"><div class="k">外协</div><div class="v" style="color:#8b5cf6">${fmtHours(p.outsourcedHoursFromLogs || 0)} 小时</div></div>
+        <div class="info-item"><div class="k">实际用工</div><div class="v">${fmtHours((p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0))} 小时</div></div>
         <div class="info-item"><div class="k">差异</div><div class="v">${diffLabel(p)}</div></div>
         ${p.startedAt ? `<div class="info-item"><div class="k">⏰ 开工</div><div class="v">${esc(fmtDateTime(p.startedAt))}</div></div>` : ""}
         ${p.finishedAt ? `<div class="info-item"><div class="k">✅ 完工</div><div class="v">${esc(fmtDateTime(p.finishedAt))}</div></div>` : ""}
@@ -4819,7 +4832,7 @@ function renderConstruction() {
         </thead>
         <tbody>${logsRows}</tbody>
         <tfoot>
-          <tr><td colspan="3">合计施工工时</td><td colspan="3">${totalHours} 小时</td></tr>
+          <tr><td colspan="3">合计施工工时</td><td colspan="3">${fmtHours(totalHours)} 小时</td></tr>
         </tfoot>
       </table>
 
@@ -7502,18 +7515,18 @@ function renderStats() {
   
   if (!perm.viewGlobalStats() && myStore()) {
     summary.innerHTML = `
-      <div class="stat-card"><div class="num">${totalEst}</div><div class="lbl">预计工时(小时)</div></div>
-      <div class="stat-card"><div class="num">${totalAct}</div><div class="lbl">实际工时(小时)</div></div>
+      <div class="stat-card"><div class="num">${fmtHours(totalEst)}</div><div class="lbl">预计工时(小时)</div></div>
+      <div class="stat-card"><div class="num">${fmtHours(totalAct)}</div><div class="lbl">实际工时(小时)</div></div>
       <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
       <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
     `;
   } else {
     summary.innerHTML = `
       <div class="stat-card"><div class="num">${rows.length}</div><div class="lbl">参与施工人数</div></div>
-      <div class="stat-card"><div class="num">${totalHours}</div><div class="lbl">合计工时(小时)</div></div>
-      <div class="stat-card"><div class="num">${totalEst}</div><div class="lbl">预计工时(小时)</div></div>
-      <div class="stat-card"><div class="num">${totalAct}</div><div class="lbl">实际工时(小时)</div></div>
-      <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedHours}h</div><div class="lbl">外协工时</div></div>
+      <div class="stat-card"><div class="num">${fmtHours(totalHours)}</div><div class="lbl">合计工时(小时)</div></div>
+      <div class="stat-card"><div class="num">${fmtHours(totalEst)}</div><div class="lbl">预计工时(小时)</div></div>
+      <div class="stat-card"><div class="num">${fmtHours(totalAct)}</div><div class="lbl">实际工时(小时)</div></div>
+      <div class="stat-card"><div class="num" style="color:#8b5cf6">${fmtHours(totalOutsourcedHours)}h</div><div class="lbl">外协工时</div></div>
       <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedWorkers}人</div><div class="lbl">外协人员</div></div>
       <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
       <div class="stat-card"><div class="num">${avgHours}</div><div class="lbl">人均工时(小时)</div></div>
@@ -7550,7 +7563,7 @@ function renderStats() {
             const hasInternal = dayLogs.some(log => log.isInternal);
             calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""} ${hasInternal ? "internal-hours" : ""}">
               <div class="day-num">${day}</div>
-              ${hours ? `<div class="day-hours">${hours}h</div>` : ""}
+              ${hours ? `<div class="day-hours">${fmtHours(hours)}h</div>` : ""}
               ${hasInternal ? `<div class="day-internal">📋</div>` : ""}
               ${isLeaveDay ? `<div class="day-leave">🌴</div>` : ""}
             </div>`;
@@ -7572,7 +7585,7 @@ function renderStats() {
           </div>` : `
           <div class="daily-hours-list">
             ${Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).flatMap(([date, logs]) => 
-              logs.map((log) => `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${log.hours}h</span><span class="daily-level">${esc(log.level)}</span><span class="daily-project">${log.isInternal ? '📋 ' : ''}${esc(log.project || '')}</span></div>`)
+              logs.map((log) => `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${fmtHours(log.hours)}h</span><span class="daily-level">${esc(log.level)}</span><span class="daily-project">${log.isInternal ? '📋 ' : ''}${esc(log.project || '')}</span></div>`)
             ).join("")}
           </div>`;
           
@@ -7588,7 +7601,7 @@ function renderStats() {
             <tbody>
               <tr>
                 <td style="${rowColor}">${esc(r.name)}${r.isOutsourced ? ' (外协)' : ''}</td>
-                <td style="${rowColor}"><b>${r.hours}</b></td>
+                <td style="${rowColor}"><b>${fmtHours(r.hours)}</b></td>
                 <td style="${vsAvgColor}">${vsAvg || "—"}</td>
                 <td style="color:#6b7280">${r.levelHours?.初级 || 0}</td>
                 <td style="color:#3b82f6">${r.levelHours?.中级 || 0}</td>
@@ -7658,11 +7671,11 @@ function renderStats() {
         <tbody>
           ${projRows.map((r) => {
             const workerChips = [
-              ...r.workerHours.map((w) => `<span class="worker-chip internal">${esc(w.name)} <b>${w.hours}h</b></span>`),
-              ...r.outsourcedWorkerHours.map((w) => `<span class="worker-chip outsourced">${esc(w.name)} <b>${w.hours}h</b></span>`)
+              ...r.workerHours.map((w) => `<span class="worker-chip internal">${esc(w.name)} <b>${fmtHours(w.hours)}h</b></span>`),
+              ...r.outsourcedWorkerHours.map((w) => `<span class="worker-chip outsourced">${esc(w.name)} <b>${fmtHours(w.hours)}h</b></span>`)
             ].join("");
             const outsourcedCount = r.outsourcedWorkerHours.length;
-            const autoChips = (r.autoWorkerHours || []).map((w) => `<span class="worker-chip auto">${esc(w.name)} <b>${w.hours}h</b></span>`).join("");
+            const autoChips = (r.autoWorkerHours || []).map((w) => `<span class="worker-chip auto">${esc(w.name)} <b>${fmtHours(w.hours)}h</b></span>`).join("");
             return `
             <tr>
               <td class="col-date">${r.date ? fmtDate(r.date) : "—"}</td>
@@ -7671,8 +7684,8 @@ function renderStats() {
               <td class="col-store">${esc(r.store || "—")}</td>
               <td class="col-name">${esc(r.name)}</td>
               <td class="col-status"><span class="badge ${r.status}">${r.status}</span></td>
-              <td class="col-num">${r.est}</td>
-              <td class="col-num">${r.hasActual ? r.act : "—"}</td>
+              <td class="col-num">${fmtHours(r.est)}</td>
+              <td class="col-num">${r.hasActual ? fmtHours(r.act) : "—"}</td>
               <td class="col-num" style="color:${r.hasActual ? diffColor(r.diff) : "var(--muted)"};font-weight:600">${r.hasActual ? fmtSignedDiff(r.diff) : "未登记"}</td>
               <td class="col-num" style="color:#6b7280">${r.levelHours?.初级 || 0}</td>
               <td class="col-num" style="color:#3b82f6">${r.levelHours?.中级 || 0}</td>
@@ -7712,7 +7725,7 @@ function renderStats() {
     }
     
     if (topWorker && topHours > 0) {
-      smartAnalysis += `<div class="stats-analysis success">⭐ <strong>本月之星</strong>：${topWorker} 以 ${topHours} 小时领跑全队！</div>`;
+      smartAnalysis += `<div class="stats-analysis success">⭐ <strong>本月之星</strong>：${topWorker} 以 ${fmtHours(topHours)} 小时领跑全队！</div>`;
     }
   }
   
@@ -7884,7 +7897,7 @@ function showInternalWorkLogModal() {
         <div class="internal-log-time">⏰ ${esc(l.startTime || '-')} ~ ${esc(l.endTime || '-')}</div>
       </div>
       <div class="internal-log-date">${esc(l.date)}</div>
-      <div class="internal-log-hours">${esc(l.hours)}h</div>
+      <div class="internal-log-hours">${fmtHours(l.hours)}h</div>
       ${l.note ? `<div class="internal-log-note">${esc(l.note)}</div>` : ''}
       ${isManager() ? `<button class="btn tiny danger" onclick="deleteInternalWorkLog('${l.id}')">删除</button>` : ''}
     </div>
@@ -8785,14 +8798,14 @@ function renderInternalTasks() {
           ? `<div class="it-time-box it-time-box--completed">
                <div class="it-tline">📅 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
                <div class="it-tline">⏰ 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
-               <div class="it-tline">📊 预计：${t.estHours}h / 记录：<b>${calcH}h</b></div>
+               <div class="it-tline">📊 预计：${fmtHours(t.estHours)}h / 记录：<b>${fmtHours(calcH)}h</b></div>
                <div class="it-tline it-tline--warn">⚠️ 等待审核</div>
              </div>`
           : t.status === 'verified'
             ? `<div class="it-time-box it-time-box--verified">
                  <div class="it-tline">📅 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
                  <div class="it-tline">⏰ 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
-                 <div class="it-tline">📊 预计：${t.estHours}h / 记录：<b>${calcH}h</b></div>
+                 <div class="it-tline">📊 预计：${fmtHours(t.estHours)}h / 记录：<b>${fmtHours(calcH)}h</b></div>
                  <div class="it-tline it-tline--ok">✅ 已审核</div>
                  ${t.verifyNote ? `<div class="it-tline">📝 ${esc(t.verifyNote)}</div>` : ''}
                </div>`
@@ -9057,9 +9070,9 @@ function exportStats() {
       r.store || '',
       r.name,
       r.status,
-      r.est,
-      r.hasActual ? r.act : '',
-      r.hasActual ? (r.diff >= 0 ? '+' : '') + r.diff : '未登记',
+      r.hasActual ? fmtHours(r.est) : '',
+      r.hasActual ? fmtHours(r.act) : '',
+      r.hasActual ? (r.diff >= 0 ? '+' : '') + fmtHours(r.diff) : '未登记',
       r.levelHours?.初级 || 0,
       r.levelHours?.中级 || 0,
       r.levelHours?.高级 || 0,
@@ -10520,7 +10533,9 @@ function renderMine() {
   if (!box) return;
   const role = myRole();
   const userEmail = currentUser?.email || "";
-  const userName = currentUser?.user_metadata?.name || userEmail.split("@")[0] || "用户";
+  const accountName = userEmail.split("@")[0] || userEmail || currentUser?.id || "用户";
+  const profileName = currentProfile?.name || currentUser?.user_metadata?.name || "";
+  const displayName = profileName || accountName;
   const roleLabel = ROLE_LABEL[role] || role || "未分配";
 
   // 功能中心菜单项（根据权限过滤）
@@ -10541,8 +10556,8 @@ function renderMine() {
     <div class="mine-header">
       <div class="mine-avatar">👤</div>
       <div class="mine-user-info">
-        <div class="mine-user-name">${esc(userName)}</div>
-        <div class="mine-user-role">${esc(roleLabel)}</div>
+        <div class="mine-user-name">${esc(displayName)}</div>
+        <div class="mine-user-role">${profileName && profileName !== accountName ? esc(accountName) + " · " : ""}${esc(roleLabel)}</div>
       </div>
     </div>
 
@@ -11345,7 +11360,7 @@ function renderCalendar() {
     let hoursClass = "cal-hours";
     if (totalHours > 40) hoursClass += " danger";
     else if (totalHours > 32) hoursClass += " warn";
-    const hoursHtml = totalHours > 0 ? `<div class="${hoursClass}" title="当天预约工时 ${totalHours}h">${totalHours}h</div>` : "";
+    const hoursHtml = totalHours > 0 ? `<div class="${hoursClass}" title="当天预约工时 ${fmtHours(totalHours)}h">${fmtHours(totalHours)}h</div>` : "";
     cells += `
       <div class="cal-cell ${items.length ? "has" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""} ${isHolidayDate ? "holiday" : ""}" onclick="selectCalDay('${ds}');">
         <div class="cal-daynum">${day}${countBadge}${holidayIcon}</div>
@@ -11475,7 +11490,7 @@ function renderCalDay() {
         <div class="cal-detail-time">${esc(fmtTimeRange(p))}${concurTag}</div>
         <div class="cal-detail-main">
           <div class="cal-detail-title"><b>${esc(p.name)}</b> <span class="badge ${p.status}">${p.status}</span></div>
-          <div class="cal-detail-sub">${esc(storeName(p.storeId))} · 客户 ${esc(p.customer || "—")} · 预计 ${est} / 实际 ${hasActual ? act : "—"} 小时</div>
+          <div class="cal-detail-sub">${esc(storeName(p.storeId))} · 客户 ${esc(p.customer || "—")} · 预计 ${fmtHours(est)} / 实际 ${hasActual ? fmtHours(act) : "—"} 小时</div>
           <div class="cal-detail-workers">${workerLabel}：${workersHtml}</div>
         </div>
         <button class="btn small primary" onclick="gotoConstruction('${p.id}')">施工管理</button>
@@ -11485,16 +11500,16 @@ function renderCalDay() {
   /* 工时超载提示：>40 严重超载需外协；>32 工时排满需全员加班 */
   const alerts = [];
   if (totalEst > 40) {
-    alerts.push(`<div class="cal-alert danger">⚠ <b>工时严重超载（${totalEst}h）</b>：施工人员加班可能都完不成，建议安排外协或拆分到其他日期。</div>`);
+    alerts.push(`<div class="cal-alert danger">⚠ <b>工时严重超载（${fmtHours(totalEst)}h）</b>：施工人员加班可能都完不成，建议安排外协或拆分到其他日期。</div>`);
   } else if (totalEst > 32) {
-    alerts.push(`<div class="cal-alert warn">⚠ <b>工时排满（${totalEst}h）</b>：可能需要全员加班才能完成，请提前协调人员。</div>`);
+    alerts.push(`<div class="cal-alert warn">⚠ <b>工时排满（${fmtHours(totalEst)}h）</b>：可能需要全员加班才能完成，请提前协调人员。</div>`);
   }
   if (maxConcurrency >= 3) {
     alerts.push(`<div class="cal-alert warn">⏰ <b>时段冲突</b>：当天有 <b>${maxConcurrency}</b> 个项目在同一时间段重复预约，可能需要外协或增加人员，建议错峰安排。</div>`);
   }
   const alertsHtml = alerts.length ? `<div class="cal-alerts">${alerts.join("")}</div>` : "";
 
-  const workerStatsText = Object.keys(workerHours).length > 0 ? ` · 👷 ${Object.entries(workerHours).map(([name, hours]) => `${esc(name)}${hours}h`).join("、")}` : "";
+  const workerStatsText = Object.keys(workerHours).length > 0 ? ` · 👷 ${Object.entries(workerHours).map(([name, hours]) => `${esc(name)}${fmtHours(hours)}h`).join("、")}` : "";
   /* 汇总栏工时数值也按阈值着色 */
   let estColorStyle = "";
   if (totalEst > 40) estColorStyle = "color:var(--danger)";
@@ -11502,7 +11517,7 @@ function renderCalDay() {
   box.innerHTML = `
     <div class="detail-block">
       <h3>📅 ${esc(calSelectedDate)}（当天 ${items.length} 个预约）</h3>
-      <div class="cal-summary-bar">总预计工时 <b style="${estColorStyle}">${totalEst}h</b> / 总实际工时 ${totalAct > 0 ? totalAct + 'h' : '—'}${workerStatsText}</div>
+      <div class="cal-summary-bar">总预计工时 <b style="${estColorStyle}">${fmtHours(totalEst)}h</b> / 总实际工时 ${totalAct > 0 ? fmtHours(totalAct) + 'h' : '—'}${workerStatsText}</div>
       ${alertsHtml}
       <div class="cal-detail-list">${rows}</div>
     </div>`;
@@ -11738,9 +11753,9 @@ function renderTimelineInDetail() {
         <div class="tl-stats">
           <span class="tl-stat-item"><span class="tl-stat-label">总预计工时</span><span class="tl-stat-value ${statEstHours > 40 ? 'danger' : statEstHours > 32 ? 'warn' : ''}">${statEstHours}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">施工人员工时</span><span class="tl-stat-value ${statInternalHours > 40 ? 'danger' : statInternalHours > 32 ? 'warn' : ''}">${statInternalHours}h</span></span>
-          <span class="tl-stat-item"><span class="tl-stat-label">外协工时</span><span class="tl-stat-value outsourced">${statOutsourcedHours}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">外协工时</span><span class="tl-stat-value outsourced">${fmtHours(statOutsourcedHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">外协人员</span><span class="tl-stat-value outsourced">${statOutsourcedWorkers}人</span></span>
-          <span class="tl-stat-item"><span class="tl-stat-label">实际工时</span><span class="tl-stat-value">${statActHours}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">实际工时</span><span class="tl-stat-value">${fmtHours(statActHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">加班项目</span><span class="tl-stat-value ${statOvertime > 0 ? 'warn' : ''}">${statOvertime}个</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">人员冲突</span><span class="tl-stat-value ${statConflict > 0 ? 'danger' : ''}">${statConflict > 0 ? statConflict + '个 (' + [...new Set(Object.values(conflictInfo).flat())].join('、') + ')' : statConflict + '个'}</span></span>
         </div>
