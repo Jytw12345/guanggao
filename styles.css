@@ -439,6 +439,11 @@ body.stats-view .container {
   overflow-x: hidden;
 }
 
+/* 施工管理、店面预约统计等详情页使用较窄容器，桌面端保持“半屏”阅读宽度 */
+body.narrow-view .container {
+  max-width: 1100px;
+}
+
 
 .tab-panel { display: none; }
 .tab-panel.active { display: block; scroll-margin-top: 90px; }

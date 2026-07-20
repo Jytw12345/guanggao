@@ -10009,7 +10009,7 @@ function showOperationLogs() {
           <h3 style="margin:0;">📝 操作日志</h3>
           <div style="font-size:12px;color:var(--muted);margin-top:4px;">共 ${allLogs.length} 条记录</div>
         </div>
-        ${allLogs.length > 0 ? `<button class="btn small" onclick="clearOperationLogs()" style="background:#ef4444;color:#fff;border:none">🗑️ 清除日志</button>` : ""}
+        ${allLogs.length > 0 && isManager() ? `<button class="btn small" onclick="clearOperationLogs()" style="background:#ef4444;color:#fff;border:none">🗑️ 清除日志</button>` : ""}
       </div>
       <div style="margin-bottom:12px;">
         <input type="text" id="logSearchInput" class="input" placeholder="搜索日志（关键词、操作人、目标）" style="width:100%;" />
@@ -10111,9 +10111,18 @@ async function clearOperationLogs() {
   
   if (sb) {
     try {
-      await sb.from("operation_logs").delete().neq("id", "");
+      const { error } = await sb.from("operation_logs").delete().neq("id", "");
+      if (error) {
+        console.warn("清除云端操作日志失败:", error);
+        toast("本地已清除，但云端日志删除失败：" + (error.message || "无权限"));
+        showOperationLogs();
+        return;
+      }
     } catch (e) {
       console.warn("清除云端操作日志失败:", e);
+      toast("本地已清除，但云端日志删除失败");
+      showOperationLogs();
+      return;
     }
   }
   
@@ -10666,6 +10675,13 @@ function switchTab(name) {
     document.body.classList.add("stats-view");
   } else {
     document.body.classList.remove("stats-view");
+  }
+
+  /* 施工管理、店面预约统计等页面保持较窄的“半屏”阅读宽度 */
+  if (name === "construction" || name === "storeStats") {
+    document.body.classList.add("narrow-view");
+  } else {
+    document.body.classList.remove("narrow-view");
   }
 
   if (name === "schedules") {
