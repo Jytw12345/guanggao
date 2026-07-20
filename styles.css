@@ -3563,11 +3563,13 @@ table.data.project-hours-diff td.wrap {
     gap: 8px;
   }
   .card-actions .btn.small {
-    padding: 6px 11px !important;
+    padding: 7px 8px !important;
     font-size: 13px !important;
     border-radius: 6px;
     white-space: nowrap;
-    flex-shrink: 0;
+    flex: 1 1 auto;
+    text-align: center;
+    min-width: 0;
   }
   .card-actions .btn.small.primary {
     background: var(--primary);
@@ -3591,6 +3593,28 @@ table.data.project-hours-diff td.wrap {
 
   /* 移动端卡片左侧色条稍宽一点，更明显 */
   .card-status-bar { width: 5px; }
+
+  /* 移动端：项目进度跟踪卡片 状态与操作按钮紧凑化，避免超宽 */
+  .schedule-progress-header {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .schedule-progress-info {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+  .schedule-progress-status {
+    font-size: 12px;
+    padding: 2px 8px;
+  }
+  .schedule-progress-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .schedule-progress-actions .btn.tiny {
+    flex: 1 1 calc(50% - 6px);
+    text-align: center;
+  }
 
   .btn {
     padding: 10px 20px;
@@ -6703,6 +6727,51 @@ table.data.project-hours-diff td.wrap {
 }
 .veh-combo__arrow:hover { color: var(--primary, #2563eb); background: rgba(37,99,235,.06); }
 .veh-combo--open .veh-combo__arrow { color: var(--primary, #2563eb); transform: translateY(-50%) rotate(180deg); }
+
+/* 用车登记 - 自定义关联项目选择按钮 */
+.veh-project-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.veh-project-select {
+  width: 100%;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: #fff;
+  border-color: #cbd5e1;
+  cursor: pointer;
+  padding-right: 34px !important;
+  color: #6b7280;
+}
+.veh-project-select.has-project {
+  color: var(--text, #1f2937);
+}
+.veh-project-arrow {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+  pointer-events: auto;
+  transition: color .15s, background .15s;
+}
+.veh-project-arrow:hover {
+  color: var(--primary, #2563eb);
+  background: rgba(37,99,235,.06);
+}
+
 .veh-driver-float {
   position: fixed; z-index: 9999;
   max-height: 240px; overflow-y: auto;
