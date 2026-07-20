@@ -655,6 +655,13 @@ function fmtHours(n) {
   return Number(v.toFixed(2)).toString();
 }
 
+/* 工时数值：四舍五入到2位小数，用于 Excel/CSV 数值单元格 */
+function fmtHoursNum(n) {
+  const v = Number(n);
+  if (!isFinite(v)) return 0;
+  return Number(v.toFixed(2));
+}
+
 function calcDuration(start, end) {
   const s = new Date(start);
   const e = new Date(end);
@@ -7607,10 +7614,10 @@ function renderStats() {
                 <td style="${rowColor}">${esc(r.name)}${r.isOutsourced ? ' (外协)' : ''}</td>
                 <td style="${rowColor}"><b>${fmtHours(r.hours)}</b></td>
                 <td style="${vsAvgColor}">${vsAvg || "—"}</td>
-                <td style="color:#6b7280">${r.levelHours?.初级 || 0}</td>
-                <td style="color:#3b82f6">${r.levelHours?.中级 || 0}</td>
-                <td style="color:#f59e0b">${r.levelHours?.高级 || 0}</td>
-                <td style="color:#dc2626">${r.levelHours?.特级 || 0}</td>
+                <td style="color:#6b7280">${fmtHours(r.levelHours?.初级 || 0)}</td>
+                <td style="color:#3b82f6">${fmtHours(r.levelHours?.中级 || 0)}</td>
+                <td style="color:#f59e0b">${fmtHours(r.levelHours?.高级 || 0)}</td>
+                <td style="color:#dc2626">${fmtHours(r.levelHours?.特级 || 0)}</td>
                 <td>${r.days}</td>
                 <td>${r.leaveDays > 0 ? `<span style="color:#ef4444;font-weight:600">${r.leaveDays}天</span>` : "0"}</td>
                 <td>${r.projects}</td>
@@ -7635,11 +7642,11 @@ function renderStats() {
       <div class="detail-block" style="padding:0;overflow:hidden">
         <table class="data">
           <tbody>
-            <tr><td><b>合计</b></td><td><b>${totalHours}</b></td><td></td>
-              <td>${rows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0)}</td>
-              <td>${rows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0)}</td>
-              <td>${rows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0)}</td>
-              <td>${rows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0)}</td>
+            <tr><td><b>合计</b></td><td><b>${fmtHours(totalHours)}</b></td><td></td>
+              <td>${fmtHours(rows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0))}</td>
+              <td>${fmtHours(rows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0))}</td>
+              <td>${fmtHours(rows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0))}</td>
+              <td>${fmtHours(rows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0))}</td>
               <td colspan="4"></td>
             </tr>
           </tbody>
@@ -7691,10 +7698,10 @@ function renderStats() {
               <td class="col-num">${fmtHours(r.est)}</td>
               <td class="col-num">${r.hasActual ? fmtHours(r.act) : "—"}</td>
               <td class="col-num" style="color:${r.hasActual ? diffColor(r.diff) : "var(--muted)"};font-weight:600">${r.hasActual ? fmtSignedDiff(r.diff) : "未登记"}</td>
-              <td class="col-num" style="color:#6b7280">${r.levelHours?.初级 || 0}</td>
-              <td class="col-num" style="color:#3b82f6">${r.levelHours?.中级 || 0}</td>
-              <td class="col-num" style="color:#f59e0b">${r.levelHours?.高级 || 0}</td>
-              <td class="col-num" style="color:#dc2626">${r.levelHours?.特级 || 0}</td>
+              <td class="col-num" style="color:#6b7280">${fmtHours(r.levelHours?.初级 || 0)}</td>
+              <td class="col-num" style="color:#3b82f6">${fmtHours(r.levelHours?.中级 || 0)}</td>
+              <td class="col-num" style="color:#f59e0b">${fmtHours(r.levelHours?.高级 || 0)}</td>
+              <td class="col-num" style="color:#dc2626">${fmtHours(r.levelHours?.特级 || 0)}</td>
               <td class="col-workers wrap">${workerChips || `<span style="color:var(--muted)">—</span>`}</td>
               <td class="col-num" style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
               <td class="col-auto wrap">${autoChips || `<span style="color:var(--muted)">—</span>`}</td>
@@ -7703,13 +7710,13 @@ function renderStats() {
           }).join("")}
         </tbody>
         <tfoot>
-          <tr><td colspan="6">合计（已登记实际）</td><td>${totalEst}</td><td>${totalAct}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td>
-            <td>${projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0)}</td>
-            <td>${projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0)}</td>
-            <td>${projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0)}</td>
-            <td>${projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0)}</td>
+          <tr><td colspan="6">合计（已登记实际）</td><td>${fmtHours(totalEst)}</td><td>${fmtHours(totalAct)}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td>
+            <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0))}</td>
+            <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0))}</td>
+            <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0))}</td>
+            <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0))}</td>
             <td></td><td style="color:#8b5cf6;font-weight:600">${totalOutsourcedWorkers}人</td>
-            <td style="color:#f59e0b;font-weight:600">${projRows.reduce((s, r) => s + (r.autoHours || 0), 0)}</td><td></td>
+            <td style="color:#f59e0b;font-weight:600">${fmtHours(projRows.reduce((s, r) => s + (r.autoHours || 0), 0))}</td><td></td>
           </tr>
         </tfoot>
       </table>
@@ -8946,22 +8953,22 @@ function exportStats() {
     ['施工人员总数', rows.length],
     ['内部人员', totalWorkers],
     ['外协人员', totalOutsourcedWorkers],
-    ['总工时(小时)', totalHours],
-    ['人均工时(小时)', avgHours],
+    ['总工时(小时)', fmtHoursNum(totalHours)],
+    ['人均工时(小时)', fmtHoursNum(avgHours)],
     ['', ''],
-    ['初级工时', totalLevelHours.初级],
-    ['中级工时', totalLevelHours.中级],
-    ['高级工时', totalLevelHours.高级],
-    ['特级工时', totalLevelHours.特级],
-    ['外协工时', totalOutsourcedHours + 'h'],
+    ['初级工时', fmtHoursNum(totalLevelHours.初级)],
+    ['中级工时', fmtHoursNum(totalLevelHours.中级)],
+    ['高级工时', fmtHoursNum(totalLevelHours.高级)],
+    ['特级工时', fmtHoursNum(totalLevelHours.特级)],
+    ['外协工时', fmtHoursNum(totalOutsourcedHours) + 'h'],
     ['', ''],
-    ['预计工时(小时)', totalEst],
-    ['实际工时(小时)', totalAct],
-    ['工时差异', (totalDiff >= 0 ? '+' : '') + totalDiff],
+    ['预计工时(小时)', fmtHoursNum(totalEst)],
+    ['实际工时(小时)', fmtHoursNum(totalAct)],
+    ['工时差异', (totalDiff >= 0 ? '+' : '') + fmtHoursNum(totalDiff)],
     ['', ''],
     ['高负荷预警', highWorkloadWorkers.length > 0 ? highWorkloadWorkers.map(w => w.name).join("、") : '无'],
     ['效率建议', lowEfficiencyWorkers.length > 0 ? lowEfficiencyWorkers.map(w => w.name).join("、") : '无'],
-    ['本月之星', topWorker && topHours > 0 ? topWorker + ' (' + topHours + '小时)' : '无']
+    ['本月之星', topWorker && topHours > 0 ? topWorker + ' (' + fmtHours(topHours) + '小时)' : '无']
   ];
   const summarySheet = workbook.addWorksheet("统计概览");
   summaryData.forEach((row, rowIndex) => {
@@ -8981,22 +8988,22 @@ function exportStats() {
 
   const workerData = [['施工人员', '类型', '工时(小时)', 'vs平均', '初级工时', '中级工时', '高级工时', '特级工时', '施工天数', '请假天数', '参与项目数']];
   rows.forEach((r) => {
-    const vsAvg = r.isOutsourced ? "" : ((r.hours - avgHours) >= 0 ? "+" : "") + (r.hours - avgHours).toFixed(1);
+    const vsAvg = r.isOutsourced ? "" : ((r.hours - avgHours) >= 0 ? "+" : "") + fmtHours(r.hours - avgHours);
     workerData.push([
       r.name,
       r.isOutsourced ? '外协' : '内部',
-      r.hours,
+      fmtHoursNum(r.hours),
       vsAvg,
-      r.levelHours?.初级 || 0,
-      r.levelHours?.中级 || 0,
-      r.levelHours?.高级 || 0,
-      r.levelHours?.特级 || 0,
+      fmtHoursNum(r.levelHours?.初级 || 0),
+      fmtHoursNum(r.levelHours?.中级 || 0),
+      fmtHoursNum(r.levelHours?.高级 || 0),
+      fmtHoursNum(r.levelHours?.特级 || 0),
       r.days,
       r.leaveDays || 0,
       r.projects
     ]);
   });
-  workerData.push(['合计', '', totalHours, '', totalLevelHours.初级, totalLevelHours.中级, totalLevelHours.高级, totalLevelHours.特级, '', '', '']);
+  workerData.push(['合计', '', fmtHoursNum(totalHours), '', fmtHoursNum(totalLevelHours.初级), fmtHoursNum(totalLevelHours.中级), fmtHoursNum(totalLevelHours.高级), fmtHoursNum(totalLevelHours.特级), '', '', '']);
   const workerSheet = workbook.addWorksheet("人员安装工时");
   workerData.forEach((row, rowIndex) => {
     const excelRow = workerSheet.addRow(row);
@@ -9018,7 +9025,7 @@ function exportStats() {
     Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).forEach(([date, logs]) => {
       const isLeave = r.leaveRecords && r.leaveRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
       logs.forEach((log) => {
-        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, log.hours, log.level, log.project || '', isLeave ? '是' : '']);
+        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, fmtHoursNum(log.hours), log.level, log.project || '', isLeave ? '是' : '']);
       });
     });
   });
@@ -9062,11 +9069,11 @@ function exportStats() {
 
   const projectData = [['日期', '预约开工时间', '实际开工时间', '店面', '项目', '状态', '预计工时', '实际工时', '差异', '初级', '中级', '高级', '特级', '施工人员工时', '外协人数', '系统自动工时', '工时备注']];
   projRows.forEach((r) => {
-    const internalWorkers = r.workerHours.map((w) => w.name + ' ' + w.hours + 'h').join('、');
-    const outsourcedWorkers = r.outsourcedWorkerHours.map((w) => w.name + ' ' + w.hours + 'h').join('、');
+    const internalWorkers = r.workerHours.map((w) => w.name + ' ' + fmtHours(w.hours) + 'h').join('、');
+    const outsourcedWorkers = r.outsourcedWorkerHours.map((w) => w.name + ' ' + fmtHours(w.hours) + 'h').join('、');
     const workerText = (internalWorkers || '') + (internalWorkers && outsourcedWorkers ? '、' : '') + (outsourcedWorkers || '');
     const outsourcedCount = r.outsourcedWorkerHours.length;
-    const autoWorkerText = (r.autoWorkerHours || []).map((w) => w.name + ' ' + w.hours + 'h').join('、');
+    const autoWorkerText = (r.autoWorkerHours || []).map((w) => w.name + ' ' + fmtHours(w.hours) + 'h').join('、');
     projectData.push([
       r.date ? fmtDate(r.date) : '',
       r.appointmentTime ? fmtTime(r.appointmentTime) : '',
@@ -9074,25 +9081,25 @@ function exportStats() {
       r.store || '',
       r.name,
       r.status,
-      r.hasActual ? fmtHours(r.est) : '',
-      r.hasActual ? fmtHours(r.act) : '',
-      r.hasActual ? (r.diff >= 0 ? '+' : '') + fmtHours(r.diff) : '未登记',
-      r.levelHours?.初级 || 0,
-      r.levelHours?.中级 || 0,
-      r.levelHours?.高级 || 0,
-      r.levelHours?.特级 || 0,
+      r.hasActual ? fmtHoursNum(r.est) : '',
+      r.hasActual ? fmtHoursNum(r.act) : '',
+      r.hasActual ? (r.diff >= 0 ? '+' : '') + fmtHoursNum(r.diff) : '未登记',
+      fmtHoursNum(r.levelHours?.初级 || 0),
+      fmtHoursNum(r.levelHours?.中级 || 0),
+      fmtHoursNum(r.levelHours?.高级 || 0),
+      fmtHoursNum(r.levelHours?.特级 || 0),
       workerText,
       outsourcedCount > 0 ? outsourcedCount + '人' : '',
       autoWorkerText,
       r.notes || ''
     ]);
   });
-  projectData.push(['', '', '', '', '', '合计', totalEst, totalAct, (totalDiff >= 0 ? '+' : '') + totalDiff,
-    projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0),
-    projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0),
-    projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0),
-    projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0),
-    '', '', projRows.reduce((s, r) => s + (r.autoHours || 0), 0), '']);
+  projectData.push(['', '', '', '', '', '合计', fmtHoursNum(totalEst), fmtHoursNum(totalAct), (totalDiff >= 0 ? '+' : '') + fmtHoursNum(totalDiff),
+    fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0)),
+    fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0)),
+    fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0)),
+    fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0)),
+    '', '', fmtHoursNum(projRows.reduce((s, r) => s + (r.autoHours || 0), 0)), '']);
   const projectSheet = workbook.addWorksheet("项目工时差异");
   projectData.forEach((row, rowIndex) => {
     const excelRow = projectSheet.addRow(row);
@@ -9134,7 +9141,7 @@ function exportStats() {
     sheet.getRow(rowNum).eachCell(cell => cell.style = { ...infoStyle });
     rowNum++;
     
-    sheet.addRow(['总工时', (r.hours || 0), '小时', '施工天数', (r.days || 0), '天', '请假天数', (r.leaveDays || 0), '天']);
+    sheet.addRow(['总工时', fmtHoursNum(r.hours || 0), '小时', '施工天数', (r.days || 0), '天', '请假天数', (r.leaveDays || 0), '天']);
     sheet.getRow(rowNum).eachCell((cell, ci) => {
       cell.style = ci === 1 || ci === 4 || ci === 7 ? { ...numStyle } : { ...infoStyle };
     });
@@ -9154,13 +9161,13 @@ function exportStats() {
     const levels = ['初级', '中级', '高级', '特级'];
     const levelRowNums = [];
     levels.forEach((level, idx) => {
-      const hours = r.levelHours?.[level] || 0;
-      const percentage = r.hours > 0 ? ((hours / r.hours) * 100).toFixed(1) + '%' : '0%';
+      const hours = fmtHoursNum(r.levelHours?.[level] || 0);
+      const percentage = r.hours > 0 ? fmtHours((hours / r.hours) * 100) + '%' : '0%';
       const price = wageConfig[level] || 0;
       levelRowNums.push(rowNum);
       sheet.addRow([level, hours, percentage, price, '']);
       const amountCell = sheet.getRow(rowNum).getCell(5);
-      amountCell.value = { formula: `=B${rowNum}*D${rowNum}`, result: hours * price };
+      amountCell.value = { formula: `=B${rowNum}*D${rowNum}`, result: fmtHoursNum(hours * price) };
       amountCell.style = { ...numStyle };
       sheet.getRow(rowNum).eachCell((cell, ci) => {
         if (ci === 4) return;
@@ -9423,13 +9430,13 @@ function renderStoreStats() {
               <td>${esc(r.name)}</td>
               <td><b>${r.count}</b></td>
               ${statuses.map((s) => `<td>${r.byStatus[s] || 0}</td>`).join("")}
-              <td>${r.recordedEst}</td>
-              <td>${r.act}</td>
+              <td>${fmtHours(r.recordedEst)}</td>
+              <td>${fmtHours(r.act)}</td>
               <td style="color:${diffColor(r.recordedDiff)};font-weight:600">${fmtSignedDiff(r.recordedDiff)}</td>
             </tr>`).join("")}
         </tbody>
         <tfoot>
-          <tr><td>合计</td><td>${tot.count}</td>${statuses.map((s) => `<td>${tot.byStatus[s] || 0}</td>`).join("")}<td>${tot.est}</td><td>${tot.act}</td><td style="color:${diffColor(tot.diff)};font-weight:600">${fmtSignedDiff(tot.diff)}</td></tr>
+          <tr><td>合计</td><td>${tot.count}</td>${statuses.map((s) => `<td>${tot.byStatus[s] || 0}</td>`).join("")}<td>${fmtHours(tot.est)}</td><td>${fmtHours(tot.act)}</td><td style="color:${diffColor(tot.diff)};font-weight:600">${fmtSignedDiff(tot.diff)}</td></tr>
         </tfoot>
       </table>
     </div>`;
@@ -9445,8 +9452,8 @@ function exportStoreStats() {
     `"${String(r.name).replace(/"/g, '""')}"`,
     r.count,
     ...statuses.map((s) => r.byStatus[s] || 0),
-    r.recordedEst,
-    r.act,
+    fmtHours(r.recordedEst),
+    fmtHours(r.act),
     fmtSignedDiff(r.recordedDiff),
   ].join(",")));
   const csv = "\ufeff" + lines.join("\n");
