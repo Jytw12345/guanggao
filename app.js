@@ -9742,6 +9742,101 @@ function promptDialog(message, title = "输入", defaultValue = "") {
   });
 }
 
+/* ============================================================
+ * 管理密码（高危操作二次验证）
+ * ============================================================ */
+const ADMIN_PWD_SALT = "ad-install-admin-2026";
+
+/* SHA-256 哈希，返回十六进制字符串 */
+async function sha256(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/* 密码输入框弹窗，返回明文或 null（取消） */
+function promptPassword(message, title = "管理密码验证") {
+  return new Promise((resolve) => {
+    const inputId = "pwdInput_" + Date.now();
+    let resolved = false;
+    modal.open(title, `
+      <p>${esc(message)}</p>
+      <input type="password" id="${inputId}" class="input" style="width:100%;margin-top:12px;" placeholder="请输入管理密码" autocomplete="off">
+    `, {
+      confirmText: "验证",
+      cancelText: "取消",
+      onConfirm: () => {
+        if (resolved) return;
+        resolved = true;
+        const input = document.getElementById(inputId);
+        resolve(input ? input.value : null);
+        return true;
+      },
+      onClose: () => {
+        if (resolved) return;
+        resolved = true;
+        resolve(null);
+      }
+    });
+    setTimeout(() => {
+      const input = document.getElementById(inputId);
+      if (input) {
+        input.focus();
+        if (window.innerWidth <= 768) input.click();
+      }
+    }, 100);
+  });
+}
+
+/* 设置 / 修改管理密码 */
+async function setAdminPassword() {
+  if (!(sb && currentProfile.role === ROLE.MANAGER)) {
+    toast("仅云端总经理可设置管理密码");
+    return;
+  }
+  const first = !currentProfile.adminPasswordHash;
+  const p1 = await promptPassword(first ? "首次使用：请设置管理密码（用于保护导入/导出等高危操作，至少 6 位）" : "请输入新的管理密码（至少 6 位）", "设置管理密码");
+  if (p1 === null) return;
+  if (p1.length < 6) { toast("密码至少 6 位"); return; }
+  const p2 = await promptPassword("请再次输入新密码以确认", "确认管理密码");
+  if (p2 === null) return;
+  if (p1 !== p2) { toast("两次输入的密码不一致"); return; }
+
+  try {
+    const hash = await sha256(ADMIN_PWD_SALT + p1);
+    const { error } = await sb.from("profiles").update({ admin_password_hash: hash }).eq("id", currentUser.id);
+    if (error) throw error;
+    currentProfile.adminPasswordHash = hash;
+    toast(first ? "管理密码已设置" : "管理密码已修改");
+  } catch (e) {
+    console.error(e);
+    toast("设置失败：" + (e.message || "未知错误"));
+  }
+}
+
+/* 高危操作门禁：返回 true 表示通过验证 */
+async function requireAdminPassword(actionName) {
+  if (!currentProfile || currentProfile.role !== ROLE.MANAGER) {
+    toast("只有总经理可以执行此操作");
+    return false;
+  }
+  // 尚未设置密码 → 强制先设置
+  if (!currentProfile.adminPasswordHash) {
+    toast("请先设置管理密码");
+    await setAdminPassword();
+    if (!currentProfile.adminPasswordHash) return false;
+    return true; // 刚设置完，本次直接放行
+  }
+  const pwd = await promptPassword(`「${actionName || "高危操作"}」需要管理密码验证`, "管理密码验证");
+  if (pwd === null) return false;
+  if (pwd.length === 0) { toast("请输入管理密码"); return false; }
+  const hash = await sha256(ADMIN_PWD_SALT + pwd);
+  if (hash !== currentProfile.adminPasswordHash) {
+    toast("管理密码错误");
+    return false;
+  }
+  return true;
+}
+
 const modal = {
   open(title, bodyHtml, options = {}) {
     document.getElementById("modalTitle").textContent = title;
@@ -10633,6 +10728,11 @@ function renderMine() {
         <span class="mine-list-arrow">›</span>
       </div>
       ${isManager() && MODE === "cloud" ? `
+      <div class="mine-list-item" onclick="setAdminPassword()">
+        <div class="mine-list-icon" style="background:#fef2f2;color:#dc2626">🔐</div>
+        <span class="mine-list-text">管理密码设置${currentProfile?.adminPasswordHash ? "" : "（未设置）"}</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
       <div class="mine-list-item" onclick="migrateLocalToCloud()">
         <div class="mine-list-icon" style="background:#f0fdf4;color:#16a34a">📥</div>
         <span class="mine-list-text">导入本地数据</span>
@@ -12741,7 +12841,7 @@ async function startCloudSession() {
 
   // 载入当前用户的角色 / 门店
   const { data: prof } = await sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
-  currentProfile = { role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null };
+  currentProfile = { role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null, adminPasswordHash: (prof && prof.admin_password_hash) || null };
 
   const userInfo = document.getElementById("userInfo");
   userInfo.textContent = currentProfile.name || currentUser.email;
@@ -12801,6 +12901,7 @@ async function migrateLocalToCloud() {
     toast("只有总经理可以执行此操作");
     return;
   }
+  if (!(await requireAdminPassword("导入本地数据到云端"))) return;
   let local;
   try {
     local = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
@@ -12850,6 +12951,7 @@ async function exportCloudToLocal() {
     toast("只有总经理可以执行此操作");
     return;
   }
+  if (!(await requireAdminPassword("导出云端数据到本地"))) return;
   if (!(await confirmDialog("⚠️ 危险操作：将把云端数据导出到本地浏览器存储，会覆盖本地已有数据。确定继续？", "导出到本地"))) return;
   
   try {
