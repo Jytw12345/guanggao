@@ -2816,18 +2816,21 @@ function toggleAllDaySchedule() {
 
 function newWorkerSchedule() {
   modal.open("添加日程", workerScheduleForm());
+  toggleAllDaySchedule();
 }
 
 function newWorkerScheduleForWorker(workerId) {
   const w = getWorker(workerId);
   if (!w) return;
   modal.open(`为 ${w.name} 添加日程`, workerScheduleForm({ workerId, workerName: w.name }));
+  toggleAllDaySchedule();
 }
 
 function editWorkerSchedule(id) {
   const s = getWorkerSchedule(id);
   if (!s) return;
   modal.open("编辑日程", workerScheduleForm(s));
+  toggleAllDaySchedule();
 }
 
 async function saveWorkerSchedule(id) {
@@ -3334,6 +3337,18 @@ function updateLeaveDuration() {
   hintEl.style.background = "#f0fdf4";
 }
 
+function inferLeaveType(startTime, endTime) {
+  const isFull = (startTime === "08:00" && endTime === "18:00") || (startTime === "00:00" && endTime === "23:59");
+  if (isFull) return ["all", "all"];
+  const map = (t) => {
+    if (!t) return "all";
+    if (t === "08:00" || t === "12:00") return "morning";
+    if (t === "13:00" || t === "18:00") return "afternoon";
+    return "custom";
+  };
+  return [map(startTime), map(endTime)];
+}
+
 async function submitLeaveForm() {
   const workerId = document.getElementById("leaveWorkerId").value;
   const workerName = document.getElementById("leaveWorkerName").value;
@@ -3357,14 +3372,16 @@ async function submitLeaveForm() {
       return;
     }
   }
-  
+
+  const [startType, endType] = inferLeaveType(startTime, endTime);
+
   const isAutoApproved = isManager() || leaveType === "comp";
   const status = isAutoApproved ? "approved" : "pending";
-  
+
   await repo.saveLeaveRecord({
     workerId, workerName, leaveType,
-    startDate, startTime,
-    endDate, endTime, reason, status,
+    startDate, startTime, startType,
+    endDate, endTime, endType, reason, status,
   });
   await repo.loadAll();
   modal.close();
@@ -9412,7 +9429,7 @@ function showVerifyModal(id) {
     }
   });
   
-  const defaultHours = task.calculatedHours !== undefined ? task.calculatedHours : task.actualHours;
+  const defaultHours = (task.calculatedHours !== undefined && task.calculatedHours !== null) ? task.calculatedHours : (task.actualHours || task.estHours || 0);
   
   popup.innerHTML = `
     <div class="modal" onclick="event.stopPropagation()" style="max-width:480px;width:95%;max-height:90vh;overflow:hidden;">
@@ -9479,7 +9496,7 @@ function doVerifyInternalTask(id) {
   const verifyHours = Number(document.getElementById("verifyHours").value);
   const verifyNote = document.getElementById("verifyNote").value.trim();
   
-  if (!verifyHours || verifyHours <= 0) {
+  if (isNaN(verifyHours) || verifyHours < 0) {
     toast("请输入有效的工时");
     return;
   }
@@ -10027,7 +10044,7 @@ function exportStats() {
       }
     });
   });
-  dailySheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 10 }, { key: 'F', width: 20 }, { key: 'G', width: 10 }];
+  dailySheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 10 }, { key: 'F', width: 20 }, { key: 'G', width: 12 }, { key: 'H', width: 10 }];
 
   const hasLeaves = rows.some((r) => r.leaveRecords && r.leaveRecords.length > 0);
   if (hasLeaves) {
@@ -11231,6 +11248,11 @@ function showExportMenu() {
   }
 }
 
+function hideExportMenu() {
+  const menu = document.getElementById("exportMenu");
+  if (menu) menu.classList.add("hidden");
+}
+
 function downloadCSV(filename, data) {
   const blob = new Blob(["\ufeff" + data], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -11270,7 +11292,7 @@ function exportProjects() {
   ]);
   const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
   downloadCSV(`项目数据_${new Date().toISOString().slice(0, 10)}.csv`, csv);
-  document.getElementById("exportMenu").classList.add("hidden");
+  hideExportMenu();
 }
 
 function exportWorkLogs() {
@@ -11294,7 +11316,7 @@ function exportWorkLogs() {
   );
   const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
   downloadCSV(`工时记录_${new Date().toISOString().slice(0, 10)}.csv`, csv);
-  document.getElementById("exportMenu").classList.add("hidden");
+  hideExportMenu();
 }
 
 function exportLeaveRecords() {
@@ -11315,7 +11337,7 @@ function exportLeaveRecords() {
   ]);
   const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
   downloadCSV(`请假记录_${new Date().toISOString().slice(0, 10)}.csv`, csv);
-  document.getElementById("exportMenu").classList.add("hidden");
+  hideExportMenu();
 }
 
 function exportWorkers() {
@@ -11329,7 +11351,7 @@ function exportWorkers() {
   ]);
   const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
   downloadCSV(`施工人员_${new Date().toISOString().slice(0, 10)}.csv`, csv);
-  document.getElementById("exportMenu").classList.add("hidden");
+  hideExportMenu();
 }
 
 function exportStores() {
@@ -11342,7 +11364,7 @@ function exportStores() {
   ]);
   const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
   downloadCSV(`门店数据_${new Date().toISOString().slice(0, 10)}.csv`, csv);
-  document.getElementById("exportMenu").classList.add("hidden");
+  hideExportMenu();
 }
 
 function exportAllData() {
@@ -11352,7 +11374,7 @@ function exportAllData() {
   setTimeout(() => exportLeaveRecords(), 1000);
   setTimeout(() => exportWorkers(), 1500);
   setTimeout(() => exportStores(), 2000);
-  document.getElementById("exportMenu").classList.add("hidden");
+  hideExportMenu();
 }
 
 document.addEventListener("click", function(e) {
