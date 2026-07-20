@@ -1122,6 +1122,25 @@ body.narrow-view .container {
   border: 1px solid #fecaca;
 }
 
+/* 完成项目：单人工时多段（作业类型 + 等级 + 工时） */
+.worker-segs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.worker-seg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+.worker-seg .seg-del {
+  flex: 0 0 auto;
+}
+
 /* 预约表单：施工内容可勾选标签 */
 .work-content-chips {
   display: flex;
@@ -6297,5 +6316,29 @@ table.data.project-hours-diff td.wrap {
   #btnExport,
   #btnHelp {
     display: none !important;
-  }
+  }}
+
+/* 滑块占比分配工时 */
+.alloc-form { display: flex; flex-direction: column; gap: 12px; }
+.alloc-sliders { display: flex; flex-direction: column; gap: 14px; margin: 4px 0; padding: 10px 12px; background: var(--bg, #f7f8fa); border-radius: 10px; }
+.alloc-row { display: grid; grid-template-columns: 110px 1fr 56px; align-items: center; gap: 10px; }
+.alloc-label { font-size: 13px; color: var(--text, #1f2937); font-weight: 500; }
+.alloc-pct { color: var(--primary, #2563eb); font-size: 12px; margin-left: 4px; }
+.alloc-hours { text-align: right; font-size: 13px; font-weight: 600; color: #111827; }
+.alloc-slider { width: 100%; accent-color: var(--primary, #2563eb); cursor: pointer; }
+.alloc-summary { font-size: 13px; color: var(--muted, #6b7280); }
+.alloc-summary span { font-weight: 600; color: var(--text, #1f2937); }
+.seg-toggle { display: flex; gap: 16px; align-items: center; padding: 6px 0; }
+.seg-toggle label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
+.alloc-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.alloc-presets .chip {
+  border: 1px solid var(--border, #d1d5db);
+  background: #fff;
+  color: var(--text, #1f2937);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .15s;
 }
+.alloc-presets .chip:hover { border-color: var(--primary, #2563eb); color: var(--primary, #2563eb); }

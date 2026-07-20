@@ -725,6 +725,18 @@ function getProjectEffectiveEndTime(p) {
   return now;
 }
 
+/* 作业类型：区分高空作业/地面作业/路程/其他，配合 level 实现分级计费 */
+const WORK_TYPES = ["高空作业", "高级作业", "地面施工", "路程备料"];
+const WORK_TYPE_LEVEL = { "高空作业": "特级", "高级作业": "高级", "地面施工": "中级", "路程备料": "初级", "其他": "高级", "高处作业": "高级", "地面作业": "中级", "路程": "初级", "备料": "初级" };
+function normWorkType(t) {
+  if (!t) return "地面施工";
+  if (t === "其他" || t === "高处作业") return "高级作业";
+  if (t === "地面作业") return "地面施工";
+  if (t === "路程" || t === "备料") return "路程备料";
+  return t;
+}
+const LEVELS = ["初级", "中级", "高级", "特级"];
+
 function buildWorkerPeriods(p, wid) {
   const periods = [];
   (p.workerChangeHistory || []).forEach(ch => {
@@ -737,7 +749,12 @@ function buildWorkerPeriods(p, wid) {
         periods.push({ start: periodStart, end: null });
       } else if (ch.action === "unassign") {
         const last = periods[periods.length - 1];
-        if (last) last.end = ch.time;
+        if (last && !last.end) {
+          let endTime = ch.time;
+          /* 防御：unassign 时间早于 period 开始，则按开始时间关闭，避免负时长 */
+          if (new Date(endTime) < new Date(last.start)) endTime = last.start;
+          last.end = endTime;
+        }
       }
     }
   });
@@ -750,7 +767,9 @@ function buildWorkerPeriods(p, wid) {
   const isTerminal = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED, STATUS.PAUSED].includes(p.status);
   if (isTerminal) {
     periods.forEach(pr => {
-      if (!pr.end) pr.end = effectiveEnd;
+      if (!pr.end) pr.end = effectiveEnd.toISOString();
+      /* 防御：状态切换可能让 effectiveEnd 早于某个时段的开始 */
+      if (new Date(pr.end) < new Date(pr.start)) pr.end = pr.start;
     });
   }
 
@@ -1391,6 +1410,7 @@ const repo = {
         id: uid(), project_id: pid, worker_id: log.workerId,
         worker_name: log.workerName, hours: Number(log.hours), date: log.date, note: log.note || null,
         level: log.level || "中级",
+        work_type: log.workType || null,
         is_outsourced: !!log.isOutsourced,
       };
       let { error } = await sb.from("work_logs").insert(row);
@@ -1398,6 +1418,11 @@ const repo = {
         const { level, ...rowWithoutLevel } = row;
         row = rowWithoutLevel;
         ({ error } = await sb.from("work_logs").insert(row));
+      }
+      if (error && error.message && error.message.includes('work_type')) {
+        const { work_type, ...rowWithoutWorkType } = row;
+        row = rowWithoutWorkType;
+        ({ error } = await sb.from("work_logs").insert(rowWithoutWorkType));
       }
       if (error && error.message && error.message.includes('is_outsourced')) {
         const { is_outsourced, ...rowWithoutIsOutsourced } = row;
@@ -1418,6 +1443,38 @@ const repo = {
     } else {
       const p = getProject(pid);
       p.workLogs = (p.workLogs || []).filter((l) => l.id !== lid);
+      saveLocal();
+    }
+  },
+  async updateWorkLog(pid, lid, patch) {
+    if (MODE === "cloud") {
+      let row = {};
+      if (patch.workerId !== undefined) row.worker_id = patch.workerId;
+      if (patch.workerName !== undefined) row.worker_name = patch.workerName;
+      if (patch.hours !== undefined) row.hours = Number(patch.hours);
+      if (patch.date !== undefined) row.date = patch.date;
+      if (patch.note !== undefined) row.note = patch.note || null;
+      if (patch.level !== undefined) row.level = patch.level;
+      if (patch.workType !== undefined) row.work_type = patch.workType || null;
+      if (patch.isOutsourced !== undefined) row.is_outsourced = !!patch.isOutsourced;
+      let { error } = await sb.from("work_logs").update(row).eq("id", lid);
+      if (error && error.message && error.message.includes('level')) {
+        const { level, ...r1 } = row; row = r1;
+        ({ error } = await sb.from("work_logs").update(row).eq("id", lid));
+      }
+      if (error && error.message && error.message.includes('work_type')) {
+        const { work_type, ...r2 } = row; row = r2;
+        ({ error } = await sb.from("work_logs").update(row).eq("id", lid));
+      }
+      if (error && error.message && error.message.includes('is_outsourced')) {
+        const { is_outsourced, ...r3 } = row; row = r3;
+        ({ error } = await sb.from("work_logs").update(row).eq("id", lid));
+      }
+      if (error) return fail(error);
+    } else {
+      const p = getProject(pid);
+      const log = (p.workLogs || []).find((l) => l.id === lid);
+      if (log) Object.assign(log, patch);
       saveLocal();
     }
   },
@@ -4343,12 +4400,13 @@ function renderConstruction() {
           <td>${esc(l.workerName)}${isOutsourced ? ` <span style="color:#8b5cf6;font-size:12px">(外协)</span>` : ""}</td>
           <td>${fmtDate(l.date)}</td>
           <td>${fmtHours(l.hours)} 小时</td>
+          <td>${esc(normWorkType(l.workType))}</td>
           <td>${esc(l.level || "中级")}</td>
           <td>${esc(l.note || "—")}</td>
-          <td>${canEdit ? `<button class="btn small danger" onclick="deleteWorkLog('${p.id}','${l.id}')">删除</button>` : ""}</td>
+          <td>${canEdit ? `<button class="btn small" onclick="editWorkLog('${p.id}','${l.id}')">修改</button><button class="btn small danger" onclick="deleteWorkLog('${p.id}','${l.id}')">删除</button>` : ""}</td>
         </tr>`;
       }).join("")
-    : `<tr><td colspan="6" style="color:var(--muted)">暂无施工工时记录</td></tr>`;
+    : `<tr><td colspan="7" style="color:var(--muted)">暂无施工工时记录</td></tr>`;
 
   const workerOptions = cache.workers.map((w) =>
     `<option value="${w.id}">${esc(w.name)}</option>`).join("");
@@ -4572,7 +4630,9 @@ function renderConstruction() {
           <div class="rec-timecard__value">${(() => {
             const projectEndTime = getProjectEffectiveEndTime(p);
             let totalHours = 0;
-            (p.assignedWorkerIds || []).forEach(wid => {
+            const workWids = new Set([...(p.assignedWorkerIds || [])]);
+            (p.workerChangeHistory || []).forEach(ch => { if (ch.workerId) workWids.add(ch.workerId); });
+            workWids.forEach(wid => {
               const periods = buildWorkerPeriods(p, wid);
               periods.forEach(pr => {
                 const start = new Date(pr.start);
@@ -4718,27 +4778,30 @@ function renderConstruction() {
         });
         
         const workerPeriods = {};
-        (p.assignedWorkerIds || []).forEach((wid) => {
-          workerPeriods[wid] = buildWorkerPeriods(p, wid);
-        });
-        
+        const chWorkerName = {};
+        const chIsOutsourced = {};
+        const allWids = new Set([...(p.assignedWorkerIds || [])]);
         (p.workerChangeHistory || []).forEach((ch) => {
-          const wid = ch.workerId;
-          if (ch.action === "unassign" && workerPeriods[wid]) {
-            const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
-            if (lastPeriod) {
-              lastPeriod.end = ch.time;
-              lastPeriod.autoHours = ch.autoHours;
-            }
+          if (ch.workerId) {
+            allWids.add(ch.workerId);
+            chWorkerName[ch.workerId] = ch.workerName || chWorkerName[ch.workerId];
+            if (ch.isOutsourced) chIsOutsourced[ch.workerId] = true;
           }
         });
-        
+        allWids.forEach((wid) => {
+          workerPeriods[wid] = buildWorkerPeriods(p, wid);
+        });
+
         const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
-        (p.assignedWorkerIds || []).forEach((wid) => {
+        allWids.forEach((wid) => {
           if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
             const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
             if (!lastPeriod.end) {
               lastPeriod.end = periodEndTime;
+            }
+            /* 防御：恢复施工后立即又暂停/完工，可能导致 end 早于 start */
+            if (lastPeriod.end && new Date(lastPeriod.end) < new Date(lastPeriod.start)) {
+              lastPeriod.end = lastPeriod.start;
             }
           }
         });
@@ -4759,8 +4822,8 @@ function renderConstruction() {
           const isAssigned = (p.assignedWorkerIds || []).includes(wid);
           const logEntry = workerLogs[wid];
           const worker = getWorker(wid);
-          const name = logEntry ? logEntry.name : (worker ? worker.name : "未知");
-          const isOutsourced = logEntry ? logEntry.isOutsourced : false;
+          const name = logEntry ? logEntry.name : (worker ? worker.name : (chWorkerName[wid] || "未知"));
+          const isOutsourced = logEntry ? logEntry.isOutsourced : !!chIsOutsourced[wid];
           const periods = workerPeriods[wid] || [];
           
           let hours = 0;
@@ -4789,7 +4852,7 @@ function renderConstruction() {
                 <div class="rec-worker">
                   <div class="rec-worker__head">
                     <span style="color:${ws.isAssigned ? "inherit" : "#6b7280"}">
-                      ${ws.name}${ws.isOutsourced ? ` <span style="color:#8b5cf6;font-size:11px">(外协)</span>` : ""}${!ws.isAssigned ? ` <span style="color:#9ca3af;font-size:11px">(已移除)</span>` : ""}
+                      ${ws.name}${ws.isOutsourced ? ` <span style="color:#8b5cf6;font-size:11px">(外协)</span>` : ""}${(!ws.isAssigned && !ws.isOutsourced) ? ` <span style="color:#9ca3af;font-size:11px">(已移除)</span>` : ""}
                     </span>
                     <span style="font-weight:600;color:${ws.isAssigned ? "inherit" : "#9ca3af"};">${ws.hours.toFixed(1)} 工时</span>
                   </div>
@@ -4839,7 +4902,7 @@ function renderConstruction() {
       <h3>👷 施工人员工时（分人填写）</h3>
       <table class="data">
         <thead>
-          <tr><th>施工人员</th><th>施工日期</th><th>施工工时</th><th>等级</th><th>说明</th><th></th></tr>
+          <tr><th>施工人员</th><th>施工日期</th><th>施工工时</th><th>作业类型</th><th>等级</th><th>说明</th><th></th></tr>
         </thead>
         <tbody>${logsRows}</tbody>
         <tfoot>
@@ -4882,6 +4945,15 @@ function renderConstruction() {
           <input class="input" type="number" min="0" step="0.5" id="logHours" placeholder="0" style="width:120px" />
         </div>
         <div class="field">
+          <label>作业类型</label>
+          <select class="input" id="logWorkType" style="width:120px" onchange="onLogWorkTypeChange()">
+            <option value="高空作业">高空作业</option>
+            <option value="高级作业">高级作业</option>
+            <option value="地面施工" selected>地面施工</option>
+            <option value="路程备料">路程备料</option>
+          </select>
+        </div>
+        <div class="field">
           <label>工时等级</label>
           <select class="input" id="logLevel" style="width:100px">
             <option value="初级">初级</option>
@@ -4895,6 +4967,7 @@ function renderConstruction() {
           <input class="input" id="logNote" placeholder="选填" />
         </div>
         <button class="btn primary" onclick="addWorkLog('${p.id}')">添加工时</button>
+        <button class="btn" onclick="openAllocSlider()" title="按作业类型占比分摊总工时">📊 按占比分配</button>
       </div>` : ""}
     </div>
 
@@ -5213,15 +5286,58 @@ async function saveOutsourcedWorkers(pid, names) {
   if (!p) return;
   const oldWorkers = (p.outsourcedWorkers || "").split(/[,，]/).map(n => n.trim()).filter(n => n);
   const newWorkers = names.trim().split(/[,，]/).map(n => n.trim()).filter(n => n);
-  
+
   const added = newWorkers.filter(n => !oldWorkers.includes(n));
   const removed = oldWorkers.filter(n => !newWorkers.includes(n));
-  
-  await repo.saveProject({ outsourcedWorkers: names.trim() }, pid);
+
+  const now = new Date();
+  const nowStr = now.toISOString();
+  const workerChangeHistory = [...(p.workerChangeHistory || [])];
+  const actionLogs = [...(p.actionLogs || [])];
+  let removedAutoTotal = 0;
+
+  /* 施工中批量设定名单时，对新增/移除的外协同样按真实在场时段计工时 */
+  if (p.status === STATUS.WORKING && p.startedAt) {
+    added.forEach(name => {
+      workerChangeHistory.push({ time: nowStr, action: "assign", workerId: "outsourced:" + name, workerName: name, isOutsourced: true });
+    });
+    for (const name of removed) {
+      const wid = "outsourced:" + name;
+      workerChangeHistory.push({ time: nowStr, action: "unassign", workerId: wid, workerName: name, isOutsourced: true });
+      const periods = buildWorkerPeriods(p, wid);
+      const autoHours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
+      if (autoHours > 0) {
+        const workLog = {
+          id: 'log_' + Date.now() + '_out_' + name,
+          projectId: pid,
+          workerId: wid,
+          workerName: name,
+          hours: autoHours,
+          date: dateKey(now),
+          note: `系统自动计算：从添加外协到移除共${autoHours}小时`,
+          level: "中级",
+          workType: "",
+          isOutsourced: true,
+          createdAt: nowStr
+        };
+        await repo.addWorkLog(pid, workLog);
+        removedAutoTotal += autoHours;
+      }
+    }
+  }
+
+  added.forEach(name => {
+    actionLogs.push({ time: nowStr, action: "outsource_assign", description: `添加外协：${name}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
+  });
+  removed.forEach(name => {
+    actionLogs.push({ time: nowStr, action: "outsource_unassign", description: `移除外协：${name}${removedAutoTotal > 0 ? `，自动记录工时 ${removedAutoTotal} 小时` : ""}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
+  });
+
+  await repo.patchProject(pid, { outsourcedWorkers: names.trim(), workerChangeHistory, actionLogs });
   await repo.loadAll();
   renderAll();
   toast(names.trim() ? "外协人员已保存，该任务不再占用内部施工人员" : "外协人员已清除");
-  
+
   added.forEach(name => {
     logOperation("PROJECT_OUTSOURCE_ADD", p.name || "项目", `ID: ${pid}, 外协人员: ${name}`);
   });
@@ -5239,8 +5355,22 @@ async function addOutsourcedWorker(pid, name) {
     toast("该外协人员已添加");
     return;
   }
-  currentWorkers.push(name.trim());
-  await saveOutsourcedWorkers(pid, currentWorkers.join(","));
+  const newWorkers = currentWorkers.concat(name.trim());
+  const now = new Date();
+  const nowStr = now.toISOString();
+  const wid = "outsourced:" + name.trim();
+  const workerChangeHistory = [...(p.workerChangeHistory || [])];
+  /* 仅施工中才记派工时间，便于按真实在场时段计工时；未开工/已完工则不计时 */
+  if (p.status === STATUS.WORKING && p.startedAt) {
+    workerChangeHistory.push({ time: nowStr, action: "assign", workerId: wid, workerName: name.trim(), isOutsourced: true });
+  }
+  const actionLogs = [...(p.actionLogs || [])];
+  actionLogs.push({ time: nowStr, action: "outsource_assign", description: `添加外协：${name.trim()}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
+  await repo.patchProject(pid, { outsourcedWorkers: newWorkers.join(","), workerChangeHistory, actionLogs });
+  await repo.loadAll();
+  renderAll();
+  toast("已添加外协：" + name.trim());
+  logOperation("PROJECT_OUTSOURCE_ADD", p.name || "项目", `ID: ${pid}, 外协人员: ${name.trim()}`);
 }
 
 /* 通过名称添加外协人员 */
@@ -5256,8 +5386,43 @@ async function removeOutsourcedWorker(pid, name) {
   const p = getProject(pid);
   if (!p || !name.trim()) return;
   const currentWorkers = (p.outsourcedWorkers || "").split(/[,，]/).map(n => n.trim()).filter(n => n);
+  if (!currentWorkers.includes(name.trim())) return;
   const newWorkers = currentWorkers.filter(n => n !== name.trim());
-  await saveOutsourcedWorkers(pid, newWorkers.join(","));
+  const now = new Date();
+  const nowStr = now.toISOString();
+  const wid = "outsourced:" + name.trim();
+  const workerChangeHistory = [...(p.workerChangeHistory || [])];
+  const actionLogs = [...(p.actionLogs || [])];
+  let didAuto = false, autoHours = 0;
+  /* 施工中移除：按真实在场时段自动记工时 */
+  if (p.status === STATUS.WORKING && p.startedAt) {
+    workerChangeHistory.push({ time: nowStr, action: "unassign", workerId: wid, workerName: name.trim(), isOutsourced: true });
+    const periods = buildWorkerPeriods(p, wid);
+    autoHours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
+    if (autoHours > 0) {
+      const workLog = {
+        id: 'log_' + Date.now() + '_out_' + name.trim(),
+        projectId: pid,
+        workerId: wid,
+        workerName: name.trim(),
+        hours: autoHours,
+        date: dateKey(now),
+        note: `系统自动计算：从添加外协到移除共${autoHours}小时`,
+        level: "中级",
+        workType: "",
+        isOutsourced: true,
+        createdAt: nowStr
+      };
+      await repo.addWorkLog(pid, workLog);
+      didAuto = true;
+    }
+  }
+  actionLogs.push({ time: nowStr, action: "outsource_unassign", description: `移除外协：${name.trim()}${didAuto ? `，自动记录工时 ${autoHours} 小时` : ""}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
+  await repo.patchProject(pid, { outsourcedWorkers: newWorkers.join(","), workerChangeHistory, actionLogs });
+  await repo.loadAll();
+  renderAll();
+  toast(didAuto ? `已移除外协，自动记录 ${autoHours} 工时` : "已移除外协");
+  logOperation("PROJECT_OUTSOURCE_REMOVE", p.name || "项目", `ID: ${pid}, 外协人员: ${name.trim()}${didAuto ? `, 自动记录工时: ${autoHours}` : ""}`);
 }
 
 async function unassignWorker(pid, wid) {
@@ -5273,14 +5438,9 @@ async function unassignWorker(pid, wid) {
   
   let autoHours = 0;
   if (p.status === STATUS.WORKING && p.startedAt) {
-    const started = new Date(p.startedAt);
-    let endTime = now;
-    if (p.status === STATUS.PAUSED && p.pausedAt) {
-      endTime = new Date(p.pausedAt);
-    }
-    const workDuration = (endTime - started) / (1000 * 60 * 60);
-    const workerCount = (p.assignedWorkerIds || []).length;
-    autoHours = Math.round((workDuration / workerCount) * 10) / 10;
+    /* 按该人员真实在场时段计工时，而非整段时长平摊到所有在场人员 */
+    const periods = buildWorkerPeriods(p, wid);
+    autoHours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
   }
   
   workerChangeHistory.push({
@@ -5308,6 +5468,7 @@ async function unassignWorker(pid, wid) {
       date: dateKey(now),
       note: `系统自动计算：从${fmtDateTime(p.startedAt)}到${fmtDateTime(nowStr)}，共${autoHours}小时`,
       level: "中级",
+      workType: "",
       isOutsourced: false,
       createdAt: nowStr
     };
@@ -5329,6 +5490,62 @@ async function unassignWorker(pid, wid) {
   renderAll();
   toast(autoHours > 0 ? `已移除，自动记录 ${autoHours} 工时` : "已移除");
   logOperation("PROJECT_UNASSIGN", p.name || "项目", `ID: ${pid}, 人员: ${worker ? worker.name : "未知"}${worker?.phone ? `(${worker.phone})` : ""}, 自动记录工时: ${autoHours}`);
+}
+
+/* 暂停前给当前在场人员结算工时：把本次施工段的工时落袋为安，
+   并在 workerChangeHistory 中追加 unassign，恢复时再重新 assign 即可继续计时 */
+async function settleWorkerHoursBeforePause(p, untilTime) {
+  if (!p || !p.startedAt || !(p.assignedWorkerIds || []).length) {
+    return { workerChangeHistory: p?.workerChangeHistory || [], actionLogs: p?.actionLogs || [], settled: [] };
+  }
+  const nowStr = new Date(untilTime).toISOString();
+  const workerChangeHistory = [...(p.workerChangeHistory || [])];
+  const actionLogs = [...(p.actionLogs || [])];
+  const settled = [];
+
+  for (const wid of (p.assignedWorkerIds || [])) {
+    const worker = getWorker(wid);
+    const workerName = worker ? worker.name : "未知";
+    const periods = buildWorkerPeriods(p, wid);
+    const autoHours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
+    if (autoHours > 0) {
+      const periodDesc = periods
+        .map((pr) => `${fmtDateTime(pr.start)}到${fmtDateTime(pr.end || nowStr)}`)
+        .join("、");
+      const log = {
+        id: 'log_' + Date.now() + '_' + wid,
+        projectId: p.id,
+        workerId: wid,
+        workerName,
+        hours: autoHours,
+        date: dateKey(nowStr),
+        note: `系统自动计算：暂停结算，从${periodDesc}，共${autoHours}小时`,
+        level: "中级",
+        workType: "",
+        isOutsourced: false,
+        createdAt: nowStr
+      };
+      await repo.addWorkLog(p.id, log);
+      settled.push({ workerName, hours: autoHours });
+      workerChangeHistory.push({
+        time: nowStr,
+        action: "unassign",
+        workerId: wid,
+        workerName,
+        workerPhone: worker ? worker.phone : "",
+        autoHours,
+        reason: "pause_settle"
+      });
+      actionLogs.push({
+        time: nowStr,
+        action: "pause_settle",
+        description: `暂停结算：${workerName}，自动记录工时 ${autoHours} 小时`,
+        operator: currentProfile.name || currentUser?.email || "系统",
+        operatorRole: currentProfile.role
+      });
+    }
+  }
+  return { workerChangeHistory, actionLogs, settled };
 }
 
 async function updateProjectStatus(id, newStatus) {
@@ -5418,6 +5635,7 @@ async function updateProjectStatus(id, newStatus) {
      actionLogs / workSessions），否则 getProjectEffectiveEndTime 无法正确截断工时，
      导致暂停后工时仍在计时、操作记录也没有暂停痕迹 */
   if (newStatus === STATUS.PAUSED) {
+    const { workerChangeHistory: settledWch, actionLogs: settledAl } = await settleWorkerHoursBeforePause(p, now);
     patch.pausedAt = now;
 
     const started = p.startedAt ? new Date(p.startedAt) : null;
@@ -5437,7 +5655,7 @@ async function updateProjectStatus(id, newStatus) {
     pauseHistory.push({ pauseAt: now, reason: null, duration: null });
     patch.pauseHistory = pauseHistory;
 
-    const actionLogs = [...(p.actionLogs || [])];
+    const actionLogs = settledAl;
     actionLogs.push({
       time: now,
       action: "pause",
@@ -5446,6 +5664,7 @@ async function updateProjectStatus(id, newStatus) {
       operatorRole: currentProfile.role
     });
     patch.actionLogs = actionLogs;
+    patch.workerChangeHistory = settledWch;
   }
 
   /* 通过下拉从「已暂停」恢复为「施工中」时，补全 pauseHistory 的 resumedAt
@@ -5573,6 +5792,8 @@ async function pauseProject(id) {
     const now = new Date();
     const nowStr = now.toISOString();
     
+    const { workerChangeHistory, actionLogs, settled } = await settleWorkerHoursBeforePause(p, nowStr);
+    
     const started = new Date(p.startedAt);
     const workDuration = (now - started) / (1000 * 60 * 60);
     const accumulatedWorkHours = (p.accumulatedWorkHours || 0) + workDuration;
@@ -5593,7 +5814,6 @@ async function pauseProject(id) {
       duration: null
     });
     
-    const actionLogs = [...(p.actionLogs || [])];
     actionLogs.push({
       time: nowStr,
       action: "pause",
@@ -5610,14 +5830,15 @@ async function pauseProject(id) {
       accumulatedWorkHours: accumulatedWorkHours,
       workSessions: workSessions,
       pauseHistory: pauseHistory,
-      actionLogs: actionLogs
+      actionLogs: actionLogs,
+      workerChangeHistory: workerChangeHistory
     };
     
     clearTimeout(reloadTimer);
     await repo.patchProject(id, patch);
     await repo.loadAll();
     renderAll();
-    toast(`项目已暂停：${reason}`);
+    toast(`项目已暂停：${reason}${settled.length ? `，已结算 ${settled.length} 人` : ""}`);
     sendNotificationForProjectChange("pause", getProject(id));
     logOperation("PROJECT_PAUSE", p.name || "项目", `ID: ${id}, 原因: ${reason || "未填写"}`);
   } catch (error) {
@@ -5885,7 +6106,26 @@ function updateLogOutsourcedInput() {
   }
 }
 
+function onLogWorkTypeChange() {
+  const t = document.getElementById("logWorkType");
+  const l = document.getElementById("logLevel");
+  if (t && l) l.value = WORK_TYPE_LEVEL[t.value] || "中级";
+}
 
+async function commitWorkLog(pid, log) {
+  const p = getProject(pid);
+  await repo.addWorkLog(pid, log);
+  logOperation("WORK_LOG_ADD", `${p.name} - ${log.workerName}`, `工时：${log.hours}小时，日期：${log.date}，作业类型：${log.workType}，等级：${log.level}，备注：${log.note || "无"}，类型：${log.isOutsourced ? "外协" : "内部"}`);
+}
+
+function recomputeActualHours(pid) {
+  const p = getProject(pid);
+  if (!p) return 0;
+  const total = (p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0);
+  p.actualHours = total;
+  repo.patchProject(pid, { actualHours: total });
+  return total;
+}
 
 async function addWorkLog(id) {
   const p = getProject(id);
@@ -5894,6 +6134,7 @@ async function addWorkLog(id) {
   const date = document.getElementById("logDate").value;
   const note = document.getElementById("logNote").value.trim();
   const level = document.getElementById("logLevel").value;
+  const workType = document.getElementById("logWorkType").value;
   
   if (!validateHours(hoursInput)) { toast("工时必须在 0.1-24 小时之间"); return; }
   const hours = Number(hoursInput);
@@ -5912,25 +6153,277 @@ async function addWorkLog(id) {
   }
   
   try {
-    await repo.addWorkLog(id, { workerId, workerName, hours, date, note, level, isOutsourced: type === "outsourced" });
+    await commitWorkLog(id, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
     if (p.status === STATUS.BOOKED) {
-        const now = new Date().toISOString();
-        await repo.patchProject(id, { status: STATUS.WORKING, startedAt: now, originalStartedAt: now });
-      }
+      const now = new Date().toISOString();
+      await repo.patchProject(id, { status: STATUS.WORKING, startedAt: now, originalStartedAt: now });
+    }
     clearTimeout(reloadTimer);
     await repo.loadAll();
-    const updatedProject = getProject(id);
-    
-    const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
-    
-    await repo.patchProject(id, { actualHours: totalHours });
-    updatedProject.actualHours = totalHours;
-    logOperation("WORK_LOG_ADD", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}，等级：${level}，备注：${note || "无"}，类型：${type === "outsourced" ? "外协" : "内部"}`);
+    recomputeActualHours(id);
     renderAll();
     toast("已添加施工工时");
   } catch (error) {
     console.error("添加工时失败:", error);
   }
+}
+
+/* 滑块占比分配：将一个总工时按 4 种作业类型占比分摊到对应等级 */
+function readAllocWorker() {
+  const type = document.getElementById("allocType").value;
+  if (type === "internal") {
+    const workerId = document.getElementById("allocWorker").value;
+    if (!workerId) { toast("请选择施工人员"); return null; }
+    const worker = getWorker(workerId);
+    return { workerId, workerName: worker.name, isOutsourced: false };
+  } else {
+    const workerName = document.getElementById("allocOutsourcedName").value.trim();
+    if (!workerName) { toast("请输入外协人员姓名"); return null; }
+    return { workerId: "outsourced:" + workerName, workerName, isOutsourced: true };
+  }
+}
+
+function toggleAllocType() {
+  const type = document.getElementById("allocType").value;
+  document.getElementById("allocInternalField").style.display = type === "internal" ? "" : "none";
+  document.getElementById("allocOutsourcedField").style.display = type === "outsourced" ? "" : "none";
+}
+
+function renderSliderAlloc() {
+  const total = Number(document.getElementById("allocTotal").value) || 0;
+  const sliders = WORK_TYPES.map((_, i) => document.getElementById("allocSlider" + i));
+  const vals = sliders.map((s) => Number(s.value));
+  const sum = vals.reduce((a, b) => a + b, 0);
+  WORK_TYPES.forEach((_, i) => {
+    const pctEl = document.getElementById("allocPct" + i);
+    const hrsEl = document.getElementById("allocHours" + i);
+    if (pctEl) pctEl.textContent = vals[i] + "%";
+    if (hrsEl) {
+      const h = sum > 0 ? Math.round((total * vals[i] / sum) * 10) / 10 : 0;
+      hrsEl.textContent = h + "h";
+    }
+  });
+  const sumEl = document.getElementById("allocSumPct");
+  if (sumEl) sumEl.textContent = sum + "%";
+  const totEl = document.getElementById("allocTotalHours");
+  if (totEl) totEl.textContent = total.toFixed(1) + "h";
+}
+
+function onSliderInput(idx) {
+  const sliders = WORK_TYPES.map((_, i) => document.getElementById("allocSlider" + i));
+  const vals = sliders.map((s) => Number(s.value));
+  const newVal = Math.max(0, Math.min(100, vals[idx]));
+  vals[idx] = newVal;
+  const others = WORK_TYPES.map((_, i) => i).filter((i) => i !== idx);
+  const otherSum = others.reduce((s, i) => s + vals[i], 0);
+  const remaining = 100 - newVal;
+  if (otherSum <= 0) {
+    const base = Math.floor(remaining / others.length);
+    others.forEach((i) => { vals[i] = base; });
+    let rem = remaining - base * others.length;
+    for (let k = 0; k < rem; k++) vals[others[k]] += 1;
+  } else {
+    let allocated = 0;
+    others.forEach((i, k) => {
+      if (k === others.length - 1) {
+        vals[i] = remaining - allocated;
+      } else {
+        const v = Math.round((vals[i] / otherSum) * remaining);
+        vals[i] = v;
+        allocated += v;
+      }
+    });
+  }
+  sliders.forEach((s, i) => { s.value = vals[i]; });
+  renderSliderAlloc();
+}
+
+function applyAllocPreset(arr) {
+  const sliders = WORK_TYPES.map((_, i) => document.getElementById("allocSlider" + i));
+  sliders.forEach((s, i) => { s.max = 100; s.step = 1; s.value = arr[i] || 0; });
+  renderSliderAlloc();
+}
+
+function openAllocSlider() {
+  const pid = currentProjectId;
+  if (!pid) return;
+  const p = getProject(pid);
+  const workerOptions = (cache.workers || []).map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
+  const init = [25, 25, 25, 25];
+  const sliderRows = WORK_TYPES.map((t, i) => `
+    <div class="alloc-row">
+      <div class="alloc-label">${t} <span class="alloc-pct" id="allocPct${i}">${init[i]}%</span></div>
+      <input type="range" min="0" max="100" value="${init[i]}" id="allocSlider${i}" oninput="onSliderInput(${i})" class="alloc-slider" />
+      <div class="alloc-hours" id="allocHours${i}">0h</div>
+    </div>`).join("");
+  const body = `
+    <div class="alloc-form">
+      <div class="field">
+        <label>人员类型</label>
+        <select class="input" id="allocType" onchange="toggleAllocType()">
+          <option value="internal">内部施工人员</option>
+          <option value="outsourced">外协人员</option>
+        </select>
+      </div>
+      <div class="field" id="allocInternalField">
+        <label>选择施工人员</label>
+        <select class="input" id="allocWorker">${workerOptions || `<option value="">请先添加人员</option>`}</select>
+      </div>
+      <div class="field outsourced-field" id="allocOutsourcedField" style="display:none">
+        <label>外协人员</label>
+        <input class="input" id="allocOutsourcedName" placeholder="输入外协人员姓名" />
+      </div>
+      <div class="field">
+        <label>施工日期</label>
+        <input class="input" type="date" id="allocDate" value="${new Date().toISOString().slice(0, 10)}" />
+      </div>
+      <div class="alloc-presets" id="allocPresets">
+        <button type="button" class="chip" onclick="applyAllocPreset([60,20,15,5])">高空为主</button>
+        <button type="button" class="chip" onclick="applyAllocPreset([0,70,20,10])">高级为主</button>
+        <button type="button" class="chip" onclick="applyAllocPreset([0,0,80,20])">地面为主</button>
+      </div>
+      <div class="field" id="allocTotalField">
+        <label>本次总工时(小时)</label>
+        <input class="input" type="number" min="0.1" step="0.5" id="allocTotal" value="8" oninput="renderSliderAlloc()" />
+      </div>
+      <div class="alloc-sliders">${sliderRows}</div>
+      <div class="alloc-summary">
+        合计：<span id="allocTotalHours">8.0h</span> · 占比之和 <span id="allocSumPct">100%</span>
+      </div>
+      <small class="hint">拖动滑块调整各类作业占比（之和恒为 100%），系统按占比把总工时自动分摊到对应等级（高空作业→特级 / 高级作业→高级 / 地面施工→中级 / 路程备料→初级）。</small>
+    </div>`;
+  modal.open("按占比分配工时", body, {
+    confirmText: "生成工时",
+    onConfirm: async () => {
+      const w = readAllocWorker();
+      if (!w) return false;
+      const date = document.getElementById("allocDate").value;
+      if (!date) { toast("请选择施工日期"); return false; }
+      const vals = WORK_TYPES.map((_, i) => Number(document.getElementById("allocSlider" + i).value));
+      const totalInput = document.getElementById("allocTotal").value;
+      if (!validateHours(totalInput)) { toast("总工时必须在 0.1-24 小时之间"); return false; }
+      const total = Number(totalInput);
+      const sum = vals.reduce((a, b) => a + b, 0);
+      if (sum <= 0) { toast("请至少设置一个作业类型的占比"); return false; }
+      const raw = WORK_TYPES.map((t, i) => ({ t, hours: Math.round((total * vals[i] / sum) * 10) / 10 }));
+      const allocated = raw.reduce((s, r) => s + r.hours, 0);
+      const diff = Math.round((total - allocated) * 10) / 10;
+      if (diff !== 0) {
+        let maxIdx = 0;
+        raw.forEach((r, i) => { if (r.hours > raw[maxIdx].hours) maxIdx = i; });
+        raw[maxIdx].hours = Math.round((raw[maxIdx].hours + diff) * 10) / 10;
+      }
+      const logs = raw.filter((r) => r.hours > 0).map((r) => ({
+        workerId: w.workerId, workerName: w.workerName, hours: r.hours, date,
+        note: `按占比分配(${r.t} ${Math.round((r.hours / total) * 100)}%)`,
+        level: WORK_TYPE_LEVEL[r.t] || "中级", workType: r.t, isOutsourced: w.isOutsourced,
+      }));
+      if (logs.length === 0) { toast("请至少设置一个作业类型的工时"); return false; }
+      for (const log of logs) await commitWorkLog(pid, log);
+      if (p.status === STATUS.BOOKED) {
+        const now = new Date().toISOString();
+        await repo.patchProject(pid, { status: STATUS.WORKING, startedAt: now, originalStartedAt: now });
+      }
+      clearTimeout(reloadTimer);
+      await repo.loadAll();
+      recomputeActualHours(pid);
+      renderAll();
+      modal.close();
+      toast(`已生成 ${logs.length} 条工时`);
+    },
+  });
+  renderSliderAlloc();
+}
+
+/* 修改已保存工时（审核前可改） */
+function toggleEditType() {
+  const type = document.getElementById("editType").value;
+  document.getElementById("editInternalField").style.display = type === "internal" ? "" : "none";
+  document.getElementById("editOutsourcedField").style.display = type === "outsourced" ? "" : "none";
+}
+
+function editWorkLog(pid, lid) {
+  const p = getProject(pid);
+  const log = (p.workLogs || []).find((l) => l.id === lid);
+  if (!log) return;
+  const isOut = log.isOutsourced || (log.workerId && log.workerId.startsWith("outsourced:"));
+  const workerOptions = (cache.workers || []).map((w) => {
+    const wid = w.id === log.workerId ? " selected" : "";
+    return `<option value="${w.id}"${wid}>${esc(w.name)}</option>`;
+  }).join("");
+  const curType = normWorkType(log.workType);
+  const typeOptions = WORK_TYPES.map((t) => `<option value="${t}"${t === curType ? " selected" : ""}>${t}</option>`).join("");
+  const levelOptions = LEVELS.map((l) => `<option value="${l}"${(l === (log.level || "中级")) ? " selected" : ""}>${l}</option>`).join("");
+  const body = `
+    <div class="alloc-form">
+      <div class="field">
+        <label>人员类型</label>
+        <select class="input" id="editType" onchange="toggleEditType()">
+          <option value="internal"${!isOut ? " selected" : ""}>内部施工人员</option>
+          <option value="outsourced"${isOut ? " selected" : ""}>外协人员</option>
+        </select>
+      </div>
+      <div class="field" id="editInternalField"${isOut ? ' style="display:none"' : ""}>
+        <label>施工人员</label>
+        <select class="input" id="editWorker">${workerOptions || `<option value="">请先添加人员</option>`}</select>
+      </div>
+      <div class="field outsourced-field" id="editOutsourcedField"${!isOut ? ' style="display:none"' : ""}>
+        <label>外协人员</label>
+        <input class="input" id="editOutsourcedName" value="${esc(isOut ? log.workerName : "")}" placeholder="输入外协人员姓名" />
+      </div>
+      <div class="field">
+        <label>施工日期</label>
+        <input class="input" type="date" id="editDate" value="${esc(log.date || "")}" />
+      </div>
+      <div class="field">
+        <label>施工工时(小时)</label>
+        <input class="input" type="number" min="0.1" step="0.5" id="editHours" value="${log.hours}" style="width:120px" />
+      </div>
+      <div class="field">
+        <label>作业类型</label>
+        <select class="input" id="editWorkType" style="width:120px" onchange="document.getElementById('editLevel').value = (WORK_TYPE_LEVEL[this.value]||'中级')">${typeOptions}</select>
+      </div>
+      <div class="field">
+        <label>工时等级</label>
+        <select class="input" id="editLevel" style="width:100px">${levelOptions}</select>
+      </div>
+      <div class="field" style="flex:1;min-width:150px">
+        <label>说明</label>
+        <input class="input" id="editNote" value="${esc(log.note || "")}" placeholder="选填" />
+      </div>
+    </div>`;
+  modal.open("修改施工工时", body, {
+    confirmText: "保存修改",
+    onConfirm: async () => {
+      const type = document.getElementById("editType").value;
+      let workerId, workerName;
+      if (type === "internal") {
+        workerId = document.getElementById("editWorker").value;
+        if (!workerId) { toast("请选择施工人员"); return false; }
+        workerName = getWorker(workerId).name;
+      } else {
+        workerName = document.getElementById("editOutsourcedName").value.trim();
+        if (!workerName) { toast("请输入外协人员姓名"); return false; }
+        workerId = "outsourced:" + workerName;
+      }
+      const hoursInput = document.getElementById("editHours").value;
+      if (!validateHours(hoursInput)) { toast("工时必须在 0.1-24 小时之间"); return false; }
+      const hours = Number(hoursInput);
+      const date = document.getElementById("editDate").value;
+      if (!date) { toast("请选择施工日期"); return false; }
+      const workType = document.getElementById("editWorkType").value;
+      const level = document.getElementById("editLevel").value;
+      const note = document.getElementById("editNote").value.trim();
+      await repo.updateWorkLog(pid, lid, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
+      clearTimeout(reloadTimer);
+      await repo.loadAll();
+      recomputeActualHours(pid);
+      logOperation("WORK_LOG_UPDATE", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}，作业类型：${workType}，等级：${level}，备注：${note || "无"}，类型：${type === "outsourced" ? "外协" : "内部"}`);
+      renderAll();
+      modal.close();
+      toast("已保存修改");
+    },
+  });
 }
 
 async function deleteWorkLog(pid, lid) {
@@ -5939,10 +6432,7 @@ async function deleteWorkLog(pid, lid) {
   const log = (p.workLogs || []).find(l => l.id === lid);
   await repo.deleteWorkLog(pid, lid);
   await repo.loadAll();
-  const updatedProject = getProject(pid);
-  const totalHours = (updatedProject.workLogs || []).reduce((sum, log) => sum + (Number(log.hours) || 0), 0);
-  await repo.patchProject(pid, { actualHours: totalHours });
-  updatedProject.actualHours = totalHours;
+  recomputeActualHours(pid);
   logOperation("WORK_LOG_DELETE", `${p.name} - ${log?.workerName || ""}`, `工时：${log?.hours || 0}小时，日期：${log?.date || "未知"}，等级：${log?.level || "未知"}，类型：${log?.isOutsourced ? "外协" : "内部"}`);
   renderAll();
   toast("已删除");
@@ -6580,6 +7070,272 @@ function generateWorkerScheduleDescription(dateStr = null) {
   return description;
 }
 
+/* 完成项目表单：单个工时分段行（作业类型 + 等级 + 工时 + 备注） */
+function workerSegRowHtml(seg) {
+  const type = seg.type || "地面施工";
+  const level = seg.level || WORK_TYPE_LEVEL[type] || "中级";
+  return `<div class="worker-seg">
+    <select class="seg-type input" style="width:96px;padding:3px 4px;font-size:12px;" onchange="onSegType(this)">
+      ${WORK_TYPES.map(t => `<option value="${t}"${t === type ? " selected" : ""}>${t}</option>`).join("")}
+    </select>
+    <select class="seg-level input" style="width:80px;padding:3px 4px;font-size:12px;">
+      ${LEVELS.map(l => `<option value="${l}"${l === level ? " selected" : ""}>${l}</option>`).join("")}
+    </select>
+    <input class="seg-hours input" type="number" step="0.1" min="0" max="24" value="${seg.hours ?? ""}" placeholder="0" style="width:64px;padding:3px 4px;font-size:12px;">
+    <input class="seg-note input" type="text" placeholder="备注" value="${esc(seg.note || "")}" style="flex:1;min-width:90px;padding:3px 4px;font-size:12px;">
+    <button type="button" class="seg-del" onclick="delWorkerSeg(this)" title="删除分段" style="border:none;background:#fee2e2;color:#dc2626;border-radius:4px;width:22px;height:22px;cursor:pointer;font-size:14px;line-height:1;">×</button>
+  </div>`;
+}
+function addWorkerSeg(idx, kind) {
+  const container = document.getElementById((kind === "w" ? "wsegs_" : "osegs_") + idx);
+  if (container) container.insertAdjacentHTML("beforeend", workerSegRowHtml({ type: "地面施工", level: "中级", hours: "", note: "" }));
+}
+function renderCompleteAlloc() {
+  const totalEl = document.getElementById("completeAllocTotal");
+  const sliders = WORK_TYPES.map((_, i) => document.getElementById("completeAllocSlider" + i));
+  if (!totalEl || !sliders[0]) return;
+  const total = Number(totalEl.dataset.total) || 0;
+  const vals = sliders.map(s => Number(s.value));
+  const sum = vals.reduce((a, b) => a + b, 0);
+  let allocated = 0;
+  WORK_TYPES.forEach((_, i) => {
+    const h = sum > 0 ? Math.round((total * vals[i] / sum) * 10) / 10 : 0;
+    const pctEl = document.getElementById("completeAllocPct" + i);
+    const hrsEl = document.getElementById("completeAllocHours" + i);
+    if (pctEl) pctEl.textContent = vals[i] + "%";
+    if (hrsEl) hrsEl.textContent = h + "h";
+    allocated += h;
+  });
+  const sumPctEl = document.getElementById("completeAllocSumPct");
+  if (sumPctEl) sumPctEl.textContent = sum + "%";
+  const sumHoursEl = document.getElementById("completeAllocSumHours");
+  if (sumHoursEl) sumHoursEl.textContent = allocated.toFixed(1) + "h";
+}
+
+function onCompleteSliderInput(idx) {
+  const sliders = WORK_TYPES.map((_, i) => document.getElementById("completeAllocSlider" + i));
+  const FIXED_IDX = 3; // 路程备料固定占 20%
+  if (idx === FIXED_IDX) return;
+  const vals = sliders.map(s => Number(s.value));
+  const fixedVal = vals[FIXED_IDX];
+  const newVal = Math.max(0, Math.min(100 - fixedVal, vals[idx]));
+  vals[idx] = newVal;
+  const others = WORK_TYPES.map((_, i) => i).filter(i => i !== idx && i !== FIXED_IDX);
+  const otherSum = others.reduce((s, i) => s + vals[i], 0);
+  const remaining = 100 - fixedVal - newVal;
+  if (otherSum <= 0) {
+    const base = Math.floor(remaining / others.length);
+    others.forEach(i => { vals[i] = base; });
+    let rem = remaining - base * others.length;
+    for (let k = 0; k < rem; k++) vals[others[k]] += 1;
+  } else {
+    let allocated = 0;
+    others.forEach((i, k) => {
+      if (k === others.length - 1) {
+        vals[i] = remaining - allocated;
+      } else {
+        const v = Math.round((vals[i] / otherSum) * remaining);
+        vals[i] = v;
+        allocated += v;
+      }
+    });
+  }
+  sliders.forEach((s, i) => { if (i !== FIXED_IDX) s.value = vals[i]; });
+  renderCompleteAlloc();
+}
+
+function applyCompletePreset(arr) {
+  const sliders = WORK_TYPES.map((_, i) => document.getElementById("completeAllocSlider" + i));
+  sliders.forEach((s, i) => { if (s) s.value = arr[i] || 0; });
+  renderCompleteAlloc();
+}
+
+function applyCompleteAllocToAll() {
+  const totalEl = document.getElementById("completeAllocTotal");
+  const total = Number(totalEl?.dataset.total) || 0;
+  if (total <= 0) { toast("当前实际工作时长为 0，无法自动分配，请手动填写或先确认施工时间"); return; }
+  const vals = WORK_TYPES.map((_, i) => Number(document.getElementById("completeAllocSlider" + i).value));
+  const sum = vals.reduce((a, b) => a + b, 0);
+  if (sum <= 0) { toast("请至少设置一个作业类型占比"); return; }
+  const p = getProject(currentProjectId);
+  if (!p) return;
+  
+  const assignedWorkerIds = p.assignedWorkerIds || [];
+  const allWorkerIds = new Set([...assignedWorkerIds]);
+  (p.workerChangeHistory || []).forEach(ch => { if (ch.workerId) allWorkerIds.add(ch.workerId); });
+  (p.workLogs || []).forEach(log => { if (log.workerId && !log.workerId.startsWith("outsourced:")) allWorkerIds.add(log.workerId); });
+  const workers = Array.from(allWorkerIds).map(wid => getWorker(wid) || { id: wid, name: "未知" });
+  
+  const autoHours = window._completeWorkerAutoHours || {};
+  workers.forEach((w, idx) => {
+    const perTotal = autoHours[w.id] || 0;
+    if (perTotal <= 0) return;
+    const container = document.getElementById("wsegs_" + idx);
+    if (!container) return;
+    const raw = WORK_TYPES.map((t, i) => ({ t, hours: Math.round((perTotal * vals[i] / sum) * 10) / 10 }));
+    const allocated = raw.reduce((s, r) => s + r.hours, 0);
+    const diff = Math.round((perTotal - allocated) * 10) / 10;
+    if (diff !== 0) {
+      let maxIdx = 0;
+      raw.forEach((r, i) => { if (r.hours > raw[maxIdx].hours) maxIdx = i; });
+      raw[maxIdx].hours = Math.round((raw[maxIdx].hours + diff) * 10) / 10;
+    }
+    const segs = raw.filter(r => r.hours > 0).map(r => ({
+      type: r.t,
+      level: WORK_TYPE_LEVEL[r.t] || "中级",
+      hours: r.hours.toFixed(1),
+      note: "滑块自动分配"
+    }));
+    container.innerHTML = segs.map(s => workerSegRowHtml(s)).join("");
+  });
+  toast("已按滑块比例分配到所有施工人员");
+}
+
+/* 个人滑块分配（完工弹窗内每人独立设置） */
+function workerAllocPanelHtml(prefix, idx, kind, name, total) {
+  const defaultAlloc = [0, 0, 80, 20];
+  const sliderRows = WORK_TYPES.map((t, i) => {
+    const isFixed = i === 3;
+    return `
+      <div class="alloc-row">
+        <div class="alloc-label">${t}${isFixed ? ' <span style="font-size:11px;color:#9ca3af;">(固定)</span>' : ''} <span class="alloc-pct" id="${prefix}Pct${i}">${defaultAlloc[i]}%</span></div>
+        <input type="range" min="0" max="100" value="${defaultAlloc[i]}" id="${prefix}Slider${i}" ${isFixed ? 'disabled' : `oninput="onWorkerAllocInput('${prefix}', ${i})"`} class="alloc-slider" />
+        <div class="alloc-hours" id="${prefix}Hours${i}">0h</div>
+      </div>`;
+  }).join("");
+  return `
+    <div class="alloc-form" style="width:100%;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <label style="font-weight:500;">${esc(name)} 的分配比例</label>
+        <span style="font-size:12px;color:#6b7280;">拖动滑块，按实际工作时长自动分配</span>
+      </div>
+      <div class="alloc-presets" style="margin-bottom:8px;">
+        <button type="button" class="chip" onclick="applyWorkerAllocPreset('${prefix}', [0,0,80,20])">地面为主</button>
+        <button type="button" class="chip" onclick="applyWorkerAllocPreset('${prefix}', [80,0,0,20])">高空为主</button>
+        <button type="button" class="chip" onclick="applyWorkerAllocPreset('${prefix}', [0,80,0,20])">高级为主</button>
+        <button type="button" class="chip" onclick="applyWorkerAllocPreset('${prefix}', [27,27,26,20])">均衡</button>
+      </div>
+      <div class="alloc-sliders">${sliderRows}</div>
+      <div class="alloc-summary">
+        预计总工时 <span id="${prefix}Total" data-total="${Number(total).toFixed(1)}">${Number(total).toFixed(1)}h</span>
+        · 占比之和 <span id="${prefix}SumPct">100%</span>
+        · 分配合计 <span id="${prefix}SumHours">0.0h</span>
+      </div>
+      <small style="font-size:11px;color:#9ca3af;">路程备料固定占 20%，其余在 高空/高级/地面 间分配。</small>
+      <button type="button" class="btn primary small" onclick="applyWorkerAllocTo('${prefix}', ${idx}, '${kind}')" style="margin-top:8px;align-self:flex-start;">应用给 ${esc(name)}</button>
+    </div>
+  `;
+}
+
+function toggleWorkerAlloc(idx, kind) {
+  const panel = document.getElementById((kind === "w" ? "walloc_" : "oalloc_") + idx);
+  if (!panel) return;
+  const willShow = panel.style.display === "none";
+  panel.style.display = willShow ? "block" : "none";
+  if (willShow) {
+    const prefix = (kind === "w" ? "walloc" : "oalloc") + idx;
+    renderWorkerAlloc(prefix);
+  }
+}
+
+function renderWorkerAlloc(prefix) {
+  const totalEl = document.getElementById(prefix + "Total");
+  const sliders = WORK_TYPES.map((_, i) => document.getElementById(prefix + "Slider" + i));
+  if (!totalEl || !sliders[0]) return;
+  const total = Number(totalEl.dataset.total) || 0;
+  const vals = sliders.map(s => Number(s.value));
+  const sum = vals.reduce((a, b) => a + b, 0);
+  let allocated = 0;
+  WORK_TYPES.forEach((_, i) => {
+    const h = sum > 0 ? Math.round((total * vals[i] / sum) * 10) / 10 : 0;
+    const pctEl = document.getElementById(prefix + "Pct" + i);
+    const hrsEl = document.getElementById(prefix + "Hours" + i);
+    if (pctEl) pctEl.textContent = vals[i] + "%";
+    if (hrsEl) hrsEl.textContent = h + "h";
+    allocated += h;
+  });
+  const sumPctEl = document.getElementById(prefix + "SumPct");
+  if (sumPctEl) sumPctEl.textContent = sum + "%";
+  const sumHoursEl = document.getElementById(prefix + "SumHours");
+  if (sumHoursEl) sumHoursEl.textContent = allocated.toFixed(1) + "h";
+}
+
+function onWorkerAllocInput(prefix, idx) {
+  const FIXED_IDX = 3;
+  if (idx === FIXED_IDX) return;
+  const sliders = WORK_TYPES.map((_, i) => document.getElementById(prefix + "Slider" + i));
+  const vals = sliders.map(s => Number(s.value));
+  const fixedVal = vals[FIXED_IDX];
+  const newVal = Math.max(0, Math.min(100 - fixedVal, vals[idx]));
+  vals[idx] = newVal;
+  const others = WORK_TYPES.map((_, i) => i).filter(i => i !== idx && i !== FIXED_IDX);
+  const otherSum = others.reduce((s, i) => s + vals[i], 0);
+  const remaining = 100 - fixedVal - newVal;
+  if (otherSum <= 0) {
+    const base = Math.floor(remaining / others.length);
+    others.forEach(i => { vals[i] = base; });
+    let rem = remaining - base * others.length;
+    for (let k = 0; k < rem; k++) vals[others[k]] += 1;
+  } else {
+    let allocated = 0;
+    others.forEach((i, k) => {
+      if (k === others.length - 1) {
+        vals[i] = remaining - allocated;
+      } else {
+        const v = Math.round((vals[i] / otherSum) * remaining);
+        vals[i] = v;
+        allocated += v;
+      }
+    });
+  }
+  sliders.forEach((s, i) => { if (i !== FIXED_IDX) s.value = vals[i]; });
+  renderWorkerAlloc(prefix);
+}
+
+function applyWorkerAllocPreset(prefix, arr) {
+  const sliders = WORK_TYPES.map((_, i) => document.getElementById(prefix + "Slider" + i));
+  sliders.forEach((s, i) => { if (s) s.value = arr[i] || 0; });
+  renderWorkerAlloc(prefix);
+}
+
+function applyWorkerAllocTo(prefix, idx, kind) {
+  const totalEl = document.getElementById(prefix + "Total");
+  const perTotal = Number(totalEl?.dataset.total) || 0;
+  if (perTotal <= 0) { toast("该人员当前实际工作时长为 0，无法自动分配"); return; }
+  const vals = WORK_TYPES.map((_, i) => Number(document.getElementById(prefix + "Slider" + i).value));
+  const sum = vals.reduce((a, b) => a + b, 0);
+  if (sum <= 0) { toast("请至少设置一个作业类型占比"); return; }
+  const container = document.getElementById((kind === "w" ? "wsegs_" : "osegs_") + idx);
+  if (!container) return;
+  const raw = WORK_TYPES.map((t, i) => ({ t, hours: Math.round((perTotal * vals[i] / sum) * 10) / 10 }));
+  const allocated = raw.reduce((s, r) => s + r.hours, 0);
+  const diff = Math.round((perTotal - allocated) * 10) / 10;
+  if (diff !== 0) {
+    let maxIdx = 0;
+    raw.forEach((r, i) => { if (r.hours > raw[maxIdx].hours) maxIdx = i; });
+    raw[maxIdx].hours = Math.round((raw[maxIdx].hours + diff) * 10) / 10;
+  }
+  const segs = raw.filter(r => r.hours > 0).map(r => ({
+    type: r.t,
+    level: WORK_TYPE_LEVEL[r.t] || "中级",
+    hours: r.hours.toFixed(1),
+    note: "滑块自动分配"
+  }));
+  container.innerHTML = segs.map(s => workerSegRowHtml(s)).join("");
+  toast("已应用给该人员");
+}
+
+function onSegType(sel) {
+  const levelSel = sel.parentElement.querySelector(".seg-level");
+  if (levelSel) levelSel.value = WORK_TYPE_LEVEL[sel.value] || "中级";
+}
+function delWorkerSeg(btn) {
+  const seg = btn.closest(".worker-seg");
+  const container = seg && seg.parentElement;
+  if (container && container.querySelectorAll(".worker-seg").length > 1) seg.remove();
+  else toast("至少保留一段");
+}
+
 function openCompleteProjectForm(id) {
   const p = getProject(id);
   if (!p) return;
@@ -6788,6 +7544,47 @@ function openCompleteProjectForm(id) {
       workerAutoHours[w.id] = Math.round(rtHours * 10) / 10;
       totalAutoHours += workerAutoHours[w.id];
     });
+    const allAutoHours = { ...workerAutoHours };
+    outsourcedWorkers.forEach(name => {
+      const workerId = "outsourced:" + name;
+      const periods = workerPeriods[workerId] || [];
+      const rtHours = calcWorkerRealtimeHours(p, workerId, periods);
+      allAutoHours[workerId] = Math.round(rtHours * 10) / 10;
+    });
+    window._completeWorkerAutoHours = allAutoHours;
+    
+    const defaultAlloc = [0, 0, 80, 20];
+    const sliderRows = WORK_TYPES.map((t, i) => {
+      const isFixed = i === 3; // 路程备料固定占 20%
+      return `
+      <div class="alloc-row">
+        <div class="alloc-label">${t}${isFixed ? ' <span style="font-size:11px;color:#9ca3af;">(固定)</span>' : ''} <span class="alloc-pct" id="completeAllocPct${i}">${defaultAlloc[i]}%</span></div>
+        <input type="range" min="0" max="100" value="${defaultAlloc[i]}" id="completeAllocSlider${i}" ${isFixed ? 'disabled' : `oninput="onCompleteSliderInput(${i})"`} class="alloc-slider" />
+        <div class="alloc-hours" id="completeAllocHours${i}">0h</div>
+      </div>`;
+    }).join("");
+    form += `<div class="form-row" style="grid-column:1/-1;">
+      <div class="alloc-form" style="width:100%;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <label style="font-weight:500;">自动分配比例</label>
+          <span style="font-size:12px;color:#6b7280;">拖动滑块，按实际工作时长自动分配各等级工时</span>
+        </div>
+        <div class="alloc-presets" style="margin-bottom:8px;">
+          <button type="button" class="chip" onclick="applyCompletePreset([0,0,80,20])">地面为主</button>
+          <button type="button" class="chip" onclick="applyCompletePreset([80,0,0,20])">高空为主</button>
+          <button type="button" class="chip" onclick="applyCompletePreset([0,80,0,20])">高级为主</button>
+          <button type="button" class="chip" onclick="applyCompletePreset([27,27,26,20])">均衡</button>
+        </div>
+        <div class="alloc-sliders">${sliderRows}</div>
+        <div class="alloc-summary">
+          预计总工时 <span id="completeAllocTotal" data-total="${totalAutoHours.toFixed(1)}">${totalAutoHours.toFixed(1)}h</span>
+          · 占比之和 <span id="completeAllocSumPct">100%</span>
+          · 分配合计 <span id="completeAllocSumHours">0.0h</span>
+        </div>
+        <small style="font-size:11px;color:#9ca3af;">路程备料固定占 20%，其余在 高空/高级/地面 间分配；默认按地面施工比例（80%地面 + 20%路程备料），高空、高级默认为 0，仅点对应预设才激活。</small>
+        <button type="button" class="btn primary small" onclick="applyCompleteAllocToAll()" style="margin-top:8px;align-self:flex-start;">应用到所有施工人员</button>
+      </div>
+    </div>`;
     
     form += `<div class="form-row" style="grid-column:1/-1;">
       <label>施工人员工时</label>
@@ -6804,38 +7601,36 @@ function openCompleteProjectForm(id) {
     
     workers.forEach((w, idx) => {
       const isAssigned = assignedWorkerIds.includes(w.id);
-      const allLogs = (p.workLogs || []).filter(l => l.workerId === w.id);
-      const loggedHours = allLogs.reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
-      
-      let autoHours = workerAutoHours[w.id] || 0;
-      if (!isAssigned && loggedHours > 0) {
-        autoHours = loggedHours;
+      const dayLogs = (p.workLogs || []).filter(l => l.workerId === w.id && l.date === dateStr);
+      let segs;
+      if (dayLogs.length > 0) {
+        segs = dayLogs.map(l => ({
+          type: normWorkType(l.workType),
+          level: l.level || WORK_TYPE_LEVEL[l.workType || "地面作业"] || "中级",
+          hours: (Number(l.hours) || 0).toFixed(1),
+          note: l.note || ""
+        }));
+      } else {
+        let autoHours = workerAutoHours[w.id] || 0;
+        if (!isAssigned) {
+          const loggedHours = (p.workLogs || []).filter(l => l.workerId === w.id).reduce((s, l) => s + (Number(l.hours) || 0), 0);
+          if (loggedHours > 0) autoHours = loggedHours;
+        }
+        segs = [{ type: "地面施工", level: "中级", hours: autoHours > 0 ? autoHours.toFixed(1) : "", note: autoHours > 0 ? "系统自动计算" : "" }];
       }
-      
-      const existingLog = allLogs.find(l => l.date === dateStr);
-      const existingHours = autoHours > 0 ? autoHours.toFixed(1) : "";
-      const existingLevel = existingLog ? existingLog.level : "中级";
-      const existingNote = existingLog ? existingLog.note : (autoHours > 0 ? "系统自动计算" : "");
-      
+
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
-        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;">
-          <span style="min-width:80px;font-weight:500;flex-shrink:0;color:${isAssigned ? "#1f2937" : "#9ca3af"};">👷 ${esc(w.name)}${!isAssigned ? ` <span style="font-size:11px;color:#d1d5db;">(已移除)</span>` : ""}</span>
-          <div style="flex:0 0 auto;">
-            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">工时</label>
-            <input type="number" id="workerHours_${idx}" value="${existingHours}" placeholder="0" step="0.1" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
+        <div style="width:100%;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <span style="min-width:80px;font-weight:500;flex-shrink:0;color:${isAssigned ? "#1f2937" : "#9ca3af"};">👷 ${esc(w.name)}${!isAssigned ? ` <span style="font-size:11px;color:#d1d5db;">(已移除)</span>` : ""}</span>
+            <button type="button" class="btn small" onclick="addWorkerSeg(${idx},'w')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
+            <button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'w')" style="padding:2px 8px;font-size:12px;">设置比例</button>
           </div>
-          <div style="flex:0 0 auto;">
-            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">等级</label>
-            <select id="workerLevel_${idx}" class="input" style="width:80px;padding:4px 6px;font-size:13px;">
-              <option value="初级"${existingLevel === "初级" ? " selected" : ""}>初级</option>
-              <option value="中级"${existingLevel === "中级" ? " selected" : ""}>中级</option>
-              <option value="高级"${existingLevel === "高级" ? " selected" : ""}>高级</option>
-              <option value="特级"${existingLevel === "特级" ? " selected" : ""}>特级</option>
-            </select>
+          <div class="worker-alloc-panel" id="walloc_${idx}" style="display:none; margin-bottom:8px;">
+            ${workerAllocPanelHtml("walloc" + idx, idx, "w", w.name, workerAutoHours[w.id] || 0)}
           </div>
-          <div style="flex:1;min-width:150px;">
-            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">备注</label>
-            <input type="text" id="workerNote_${idx}" value="${esc(existingNote)}" placeholder="备注" class="input" style="width:100%;padding:4px 6px;font-size:13px;">
+          <div class="worker-segs" id="wsegs_${idx}">
+            ${segs.map(s => workerSegRowHtml(s)).join("")}
           </div>
         </div>
       </div>`;
@@ -6850,30 +7645,31 @@ function openCompleteProjectForm(id) {
     
     outsourcedWorkers.forEach((name, idx) => {
       const workerId = "outsourced:" + name;
-      const existingLog = (p.workLogs || []).find(l => l.workerId === workerId && l.date === dateStr);
-      const existingHours = existingLog ? existingLog.hours : "";
-      const existingLevel = existingLog ? existingLog.level : "中级";
-      const existingNote = existingLog ? existingLog.note : "";
-      
+      const dayLogs = (p.workLogs || []).filter(l => l.workerId === workerId && l.date === dateStr);
+      let segs;
+      if (dayLogs.length > 0) {
+        segs = dayLogs.map(l => ({
+          type: normWorkType(l.workType),
+          level: l.level || WORK_TYPE_LEVEL[l.workType || "地面作业"] || "中级",
+          hours: (Number(l.hours) || 0).toFixed(1),
+          note: l.note || ""
+        }));
+      } else {
+        segs = [{ type: "地面施工", level: "中级", hours: "", note: "" }];
+      }
+
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
-        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;">
-          <span style="min-width:80px;font-weight:500;flex-shrink:0;color:#8b5cf6;">👤 ${esc(name)}（外协）</span>
-          <div style="flex:0 0 auto;">
-            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">工时</label>
-            <input type="number" id="outsourcedHours_${idx}" value="${existingHours}" placeholder="0" step="0.1" min="0" max="24" class="input" style="width:70px;padding:4px 6px;font-size:13px;">
+        <div style="width:100%;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            <span style="min-width:80px;font-weight:500;flex-shrink:0;color:#8b5cf6;">👤 ${esc(name)}（外协）</span>
+            <button type="button" class="btn small" onclick="addWorkerSeg(${idx},'o')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
+            <button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'o')" style="padding:2px 8px;font-size:12px;">设置比例</button>
           </div>
-          <div style="flex:0 0 auto;">
-            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">等级</label>
-            <select id="outsourcedLevel_${idx}" class="input" style="width:80px;padding:4px 6px;font-size:13px;">
-              <option value="初级"${existingLevel === "初级" ? " selected" : ""}>初级</option>
-              <option value="中级"${existingLevel === "中级" ? " selected" : ""}>中级</option>
-              <option value="高级"${existingLevel === "高级" ? " selected" : ""}>高级</option>
-              <option value="特级"${existingLevel === "特级" ? " selected" : ""}>特级</option>
-            </select>
+          <div class="worker-alloc-panel" id="oalloc_${idx}" style="display:none; margin-bottom:8px;">
+            ${workerAllocPanelHtml("oalloc" + idx, idx, "o", name, window._completeWorkerAutoHours[workerId] || 0)}
           </div>
-          <div style="flex:1;min-width:150px;">
-            <label style="font-size:11px;color:#6b7280;display:block;margin-bottom:1px;">备注</label>
-            <input type="text" id="outsourcedNote_${idx}" value="${esc(existingNote)}" placeholder="备注" class="input" style="width:100%;padding:4px 6px;font-size:13px;">
+          <div class="worker-segs" id="osegs_${idx}">
+            ${segs.map(s => workerSegRowHtml(s)).join("")}
           </div>
         </div>
       </div>`;
@@ -6887,6 +7683,8 @@ function openCompleteProjectForm(id) {
   
   form += `</div>`;
   
+  setTimeout(() => renderCompleteAlloc(), 0);
+  
   modal.open("完成项目 - 填写工时", form, {
     confirmText: "确认完工",
     cancelText: "取消",
@@ -6895,40 +7693,50 @@ function openCompleteProjectForm(id) {
       const logs = [];
       
       workers.forEach((w, idx) => {
-        const hoursInput = document.getElementById(`workerHours_${idx}`);
-        const hours = hoursInput ? Number(hoursInput.value) : 0;
-        const level = document.getElementById(`workerLevel_${idx}`)?.value || "中级";
-        const note = document.getElementById(`workerNote_${idx}`)?.value;
-        if (!isNaN(hours) && hours > 0) {
-          totalHours += hours;
-          logs.push({
-            workerId: w.id,
-            workerName: w.name,
-            hours: hours,
-            level: level,
-            date: dateStr,
-            note: note || null
-          });
-        }
+        const segEls = document.querySelectorAll(`#wsegs_${idx} .worker-seg`);
+        segEls.forEach(seg => {
+          const hoursInput = seg.querySelector(".seg-hours");
+          const hours = hoursInput ? Number(hoursInput.value) : 0;
+          const type = seg.querySelector(".seg-type").value;
+          const level = seg.querySelector(".seg-level").value;
+          const note = seg.querySelector(".seg-note").value;
+          if (!isNaN(hours) && hours > 0) {
+            totalHours += hours;
+            logs.push({
+              workerId: w.id,
+              workerName: w.name,
+              hours: hours,
+              level: level,
+              workType: type,
+              date: dateStr,
+              note: note || null
+            });
+          }
+        });
       });
-      
+
       outsourcedWorkers.forEach((name, idx) => {
-        const hoursInput = document.getElementById(`outsourcedHours_${idx}`);
-        const hours = hoursInput ? Number(hoursInput.value) : 0;
-        const level = document.getElementById(`outsourcedLevel_${idx}`)?.value || "中级";
-        const note = document.getElementById(`outsourcedNote_${idx}`)?.value;
-        if (!isNaN(hours) && hours > 0) {
-          totalHours += hours;
-          logs.push({
-            workerId: "outsourced:" + name,
-            workerName: name,
-            hours: hours,
-            level: level,
-            date: dateStr,
-            note: note || null,
-            isOutsourced: true
-          });
-        }
+        const segEls = document.querySelectorAll(`#osegs_${idx} .worker-seg`);
+        segEls.forEach(seg => {
+          const hoursInput = seg.querySelector(".seg-hours");
+          const hours = hoursInput ? Number(hoursInput.value) : 0;
+          const type = seg.querySelector(".seg-type").value;
+          const level = seg.querySelector(".seg-level").value;
+          const note = seg.querySelector(".seg-note").value;
+          if (!isNaN(hours) && hours > 0) {
+            totalHours += hours;
+            logs.push({
+              workerId: "outsourced:" + name,
+              workerName: name,
+              hours: hours,
+              level: level,
+              workType: type,
+              date: dateStr,
+              note: note || null,
+              isOutsourced: true
+            });
+          }
+        });
       });
       
       if (workers.length === 0 && outsourcedWorkers.length === 0) {
@@ -7234,7 +8042,7 @@ function collectStats() {
     if (!rows[key].daily[dayKey]) {
       rows[key].daily[dayKey] = [];
     }
-    rows[key].daily[dayKey].push({ hours: hours, level: level, project: l.workType, isInternal: true });
+    rows[key].daily[dayKey].push({ hours: hours, level: level, project: normWorkType(l.workType), isInternal: true });
   });
   
   cache.leaveRecords.forEach((l) => {
@@ -7342,9 +8150,10 @@ function collectProjectStats() {
       const autoWorkerHours = [];
       if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && p.startedAt && p.finishedAt) {
         const workerPeriods = {};
+        const chWorkerName = {};
         const allWorkerIds = new Set([...(p.assignedWorkerIds || [])]);
         (p.workerChangeHistory || []).forEach(ch => {
-          if (ch.workerId) allWorkerIds.add(ch.workerId);
+          if (ch.workerId) { allWorkerIds.add(ch.workerId); chWorkerName[ch.workerId] = ch.workerName || chWorkerName[ch.workerId]; }
         });
         allWorkerIds.forEach((wid) => {
           workerPeriods[wid] = buildWorkerPeriods(p, wid);
@@ -7371,7 +8180,7 @@ function collectProjectStats() {
         allWorkerIds.forEach((wid) => {
           if (workerFilter && wid !== workerFilter) return;
           const worker = cache.workers.find(w => w.id === wid);
-          const name = worker ? worker.name : "未知";
+          const name = worker ? worker.name : (chWorkerName[wid] || "未知");
           const periods = workerPeriods[wid] || [];
           let hours = 0;
           periods.forEach(pr => {
@@ -7382,7 +8191,7 @@ function collectProjectStats() {
           });
           hours = Math.round(hours * 10) / 10;
           if (hours > 0) {
-            autoWorkerHours.push({ name, hours });
+            autoWorkerHours.push({ name, hours, isOutsourced: wid.startsWith("outsourced:") });
           }
         });
       } else {
@@ -7396,7 +8205,12 @@ function collectProjectStats() {
       }
       if ([STATUS.WORKING].includes(p.status) && p.startedAt) {
         const workerPeriods = {};
-        (p.assignedWorkerIds || []).forEach((wid) => {
+        const chWorkerName = {};
+        const allWids = new Set([...(p.assignedWorkerIds || [])]);
+        (p.workerChangeHistory || []).forEach((ch) => {
+          if (ch.workerId) { allWids.add(ch.workerId); chWorkerName[ch.workerId] = ch.workerName || chWorkerName[ch.workerId]; }
+        });
+        allWids.forEach((wid) => {
           workerPeriods[wid] = buildWorkerPeriods(p, wid);
         });
         (p.workerChangeHistory || []).forEach((ch) => {
@@ -7410,7 +8224,7 @@ function collectProjectStats() {
           }
         });
         const projectEndTime = getProjectEffectiveEndTime(p).toISOString();
-        (p.assignedWorkerIds || []).forEach((wid) => {
+        allWids.forEach((wid) => {
           if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
             const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
             if (!lastPeriod.end) {
@@ -7418,10 +8232,10 @@ function collectProjectStats() {
             }
           }
         });
-        (p.assignedWorkerIds || []).forEach((wid) => {
+        allWids.forEach((wid) => {
           if (workerFilter && wid !== workerFilter) return;
           const worker = cache.workers.find(w => w.id === wid);
-          const name = worker ? worker.name : "未知";
+          const name = worker ? worker.name : (chWorkerName[wid] || "未知");
           const periods = workerPeriods[wid] || [];
           let hours = 0;
           periods.forEach(pr => {
@@ -7432,7 +8246,7 @@ function collectProjectStats() {
           });
           hours = Math.round(hours * 10) / 10;
           if (hours > 0) {
-            autoWorkerHours.push({ name, hours });
+            autoWorkerHours.push({ name, hours, isOutsourced: wid.startsWith("outsourced:") });
           }
         });
       }
@@ -7511,6 +8325,15 @@ function renderStats() {
   const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
   const totalOutsourcedWorkers = rows.filter(r => r.isOutsourced).length;
 
+  const typeHours = {};
+  WORK_TYPES.forEach(t => typeHours[t] = 0);
+  allProjects.forEach(p => (p.workLogs || []).forEach(l => {
+    const t = normWorkType(l.workType);
+    if (typeof typeHours[t] !== "number") typeHours[t] = 0;
+    typeHours[t] += (Number(l.hours) || 0);
+  }));
+  const typeCards = WORK_TYPES.map(t => `<div class="stat-card"><div class="num">${fmtHours(typeHours[t] || 0)}</div><div class="lbl">${t}工时</div></div>`).join("");
+
   const internalRows = rows.filter(r => !r.isOutsourced);
   const avgHours = internalRows.length > 0 ? (internalRows.reduce((s, r) => s + r.hours, 0) / internalRows.length).toFixed(1) : 0;
   const topWorker = internalRows.length > 0 ? internalRows[0].name : "";
@@ -7530,6 +8353,7 @@ function renderStats() {
       <div class="stat-card"><div class="num">${fmtHours(totalAct)}</div><div class="lbl">实际工时(小时)</div></div>
       <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
       <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
+      ${typeCards}
     `;
   } else {
     summary.innerHTML = `
@@ -7542,6 +8366,7 @@ function renderStats() {
       <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
       <div class="stat-card"><div class="num">${avgHours}</div><div class="lbl">人均工时(小时)</div></div>
       <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
+      ${typeCards}
     `;
   }
 
@@ -7596,7 +8421,7 @@ function renderStats() {
           </div>` : `
           <div class="daily-hours-list">
             ${Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).flatMap(([date, logs]) => 
-              logs.map((log) => `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${fmtHours(log.hours)}h</span><span class="daily-level">${esc(log.level)}</span><span class="daily-project">${log.isInternal ? '📋 ' : ''}${esc(log.project || '')}</span></div>`)
+              logs.map((log) => `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${fmtHours(log.hours)}h</span><span class="daily-level">${esc(normWorkType(log.workType))} · ${esc(log.level)}</span><span class="daily-project">${log.isInternal ? '📋 ' : ''}${esc(log.project || '')}</span></div>`)
             ).join("")}
           </div>`;
           
@@ -7904,7 +8729,7 @@ function showInternalWorkLogModal() {
     <div class="internal-log-item">
       <div class="internal-log-info">
         <div class="internal-log-name">${esc(l.workerName)}</div>
-        <div class="internal-log-meta">${esc(l.workType)} · ${esc(l.level)}</div>
+        <div class="internal-log-meta">${esc(normWorkType(l.workType))} · ${esc(l.level)}</div>
         <div class="internal-log-time">⏰ ${esc(l.startTime || '-')} ~ ${esc(l.endTime || '-')}</div>
       </div>
       <div class="internal-log-date">${esc(l.date)}</div>
@@ -9020,12 +9845,12 @@ function exportStats() {
   });
   workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 10 }, { key: 'K', width: 12 }];
 
-  const dailyData = [['施工人员', '类型', '日期', '工时(小时)', '工时等级', '项目/工作类型', '是否请假']];
+  const dailyData = [['施工人员', '类型', '日期', '工时(小时)', '作业类型', '工时等级', '项目/工作类型', '是否请假']];
   rows.forEach((r) => {
     Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).forEach(([date, logs]) => {
       const isLeave = r.leaveRecords && r.leaveRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
       logs.forEach((log) => {
-        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, fmtHoursNum(log.hours), log.level, log.project || '', isLeave ? '是' : '']);
+        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, fmtHoursNum(log.hours), normWorkType(log.workType) || '', log.level, log.project || '', isLeave ? '是' : '']);
       });
     });
   });
@@ -10044,6 +10869,7 @@ const OPERATION_TYPES = {
   STORE_DELETE: "删除门店",
   WORK_LOG_ADD: "添加工时",
   WORK_LOG_DELETE: "删除工时",
+  WORK_LOG_UPDATE: "修改工时",
 };
 
 let logSaveTimer = null;
