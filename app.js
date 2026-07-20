@@ -67,7 +67,7 @@ function getAllowedStatuses(currentStatus) {
 const TIGHT_GAP_MINUTES = 30;
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [], vehicleTrips: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -1018,6 +1018,47 @@ const mapLog = (r) => ({
   isOutsourced: r.is_outsourced || false,
 });
 
+/* 车辆里程记录（云端 snake_case <-> 前端 camelCase） */
+const mapVehicleTrip = (r) => ({
+  id: r.id,
+  vehicleId: r.vehicle_id || r.vehicleId || "",
+  vehicleName: r.vehicle_name || r.vehicleName || "",
+  vehiclePlate: r.vehicle_plate || r.vehiclePlate || "",
+  type: r.type || "送货",
+  projectId: r.project_id || r.projectId || "",
+  projectName: r.project_name || r.projectName || "",
+  driverId: r.driver_id || r.driverId || "",
+  driverName: r.driver_name || r.driverName || "",
+  startKm: Number(r.start_km ?? r.startKm ?? 0),
+  endKm: Number(r.end_km ?? r.endKm ?? 0),
+  mileage: Number(r.mileage ?? r.mileage ?? 0),
+  outTime: r.out_time || r.outTime || "",
+  backTime: r.back_time || r.backTime || "",
+  date: r.date || "",
+  note: r.note || "",
+  createdAt: r.created_at || r.createdAt || "",
+});
+
+const vehicleTripToRow = (t) => ({
+  id: t.id,
+  vehicle_id: t.vehicleId || null,
+  vehicle_name: t.vehicleName || null,
+  vehicle_plate: t.vehiclePlate || null,
+  type: t.type || "送货",
+  project_id: t.projectId || null,
+  project_name: t.projectName || null,
+  driver_id: t.driverId || null,
+  driver_name: t.driverName || null,
+  start_km: Number(t.startKm) || 0,
+  end_km: Number(t.endKm) || 0,
+  mileage: Number(t.mileage) || 0,
+  out_time: t.outTime || null,
+  back_time: t.backTime || null,
+  date: t.date || null,
+  note: t.note || null,
+  created_at: t.createdAt || new Date().toISOString(),
+});
+
 /* ============================================================
  * 数据仓储层（统一接口，内部按 MODE 分流）
  * 上层业务只调用 repo.xxx，不关心存在哪
@@ -1026,7 +1067,7 @@ const repo = {
   /* ---- 载入全部数据到 cache ---- */
   async loadAll() {
     if (MODE === "cloud") {
-      const [wRes, pRes, lRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes] = await Promise.all([
+      const [wRes, pRes, lRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes] = await Promise.all([
         sb.from("workers").select("*"),
         sb.from("projects").select("*"),
         sb.from("work_logs").select("*"),
@@ -1038,6 +1079,7 @@ const repo = {
         sb.from("outsourced_workers").select("*"),
         sb.from("operation_logs").select("*").order("timestamp", { ascending: false }).limit(MAX_LOGS),
         sb.from("worker_schedules").select("*"),
+        sb.from("vehicle_trips").select("*"),
       ]);
       const allErrors = [
         { name: "workers", res: wRes },
@@ -1136,6 +1178,12 @@ const repo = {
         console.warn("worker_schedules 表读取失败（可能尚未创建）:", wsRes.error.message);
         cache.workerSchedules = [];
       }
+      if (!vtRes.error) {
+        cache.vehicleTrips = (vtRes.data || []).map((r) => mapVehicleTrip(r));
+      } else {
+        console.warn("vehicle_trips 表读取失败（可能尚未创建）:", vtRes.error.message);
+        cache.vehicleTrips = [];
+      }
     } else {
       loadLocal();
     }
@@ -1208,6 +1256,29 @@ const repo = {
       const { error } = await sb.from("role_permissions")
         .upsert({ role, perms, updated_at: new Date().toISOString() });
       if (error) return fail(error);
+    }
+  },
+
+  /* ---- 车辆里程记录 ---- */
+  async saveVehicleTrip(trip) {
+    const row = vehicleTripToRow(trip);
+    if (MODE === "cloud") {
+      const { error } = await sb.from("vehicle_trips").upsert(row);
+      if (error) return fail(error);
+    } else {
+      const idx = cache.vehicleTrips.findIndex((t) => t.id === row.id);
+      if (idx >= 0) cache.vehicleTrips[idx] = { ...cache.vehicleTrips[idx], ...trip };
+      else cache.vehicleTrips.push(trip);
+      saveLocal();
+    }
+  },
+  async deleteVehicleTrip(id) {
+    if (MODE === "cloud") {
+      const { error } = await sb.from("vehicle_trips").delete().eq("id", id);
+      if (error) return fail(error);
+    } else {
+      cache.vehicleTrips = cache.vehicleTrips.filter((t) => t.id !== id);
+      saveLocal();
     }
   },
 
@@ -1602,6 +1673,7 @@ function loadLocal() {
       cache.workerSchedules = data.workerSchedules || [];
       cache.operationLogs = data.operationLogs || [];
       cache.accounts = data.accounts || [];
+      cache.vehicleTrips = data.vehicleTrips || [];
     }
   } catch (e) {
     console.error("读取本地数据失败", e);
@@ -1629,7 +1701,8 @@ function saveLocal() {
       outsourcedWorkers: cache.outsourcedWorkers,
       workerSchedules: cache.workerSchedules,
       operationLogs: cache.operationLogs,
-      accounts: cache.accounts
+      accounts: cache.accounts,
+      vehicleTrips: cache.vehicleTrips
     }));
   } catch (e) {
     console.error("[app] localStorage 保存失败（可能已满）:", e);
@@ -11623,6 +11696,9 @@ function switchTab(name) {
   if (name === "internalTasks") {
     initInternalTasks();
   }
+  if (name === "vehicleTrips") {
+    renderVehicleTrips();
+  }
   if (name === "mine") {
     renderMine();
   }
@@ -11666,6 +11742,7 @@ function applyPermissions() {
     accounts: perm.manageAccounts() && MODE === "cloud",
     rolePerms: perm.manageAccounts() && MODE === "cloud",
     internalTasks: role != null && (isManager() || (!myStore() && (isStoreManager() || isWorker())) || (cache.stores.length > 0 && storeName(myStore()).includes("广告工程部"))),
+    vehicleTrips: role != null,
   };
   document.querySelectorAll(".tab-btn").forEach((b) => {
     b.classList.toggle("hidden", !tabVisible[b.dataset.tab]);
@@ -11690,6 +11767,7 @@ function applyPermissions() {
     projects: role != null,
     calendar: role != null,
     construction: role != null,
+    vehicleTrips: role != null,
     internalTasks: role != null && (isManager() || (!myStore() && (isStoreManager() || isWorker())) || (cache.stores.length > 0 && storeName(myStore()).includes("广告工程部"))),
     workers: perm.viewWorker() && role != null,
     mine: role != null,
@@ -11727,6 +11805,7 @@ function renderAll() {
   initScheduleFilters();
   renderWorkerSchedules();
   initInternalTasks();
+  renderVehicleTrips();
 }
 
 /* ============================================================
@@ -14036,3 +14115,467 @@ document.addEventListener("click", () => closeAllActionMenus());
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeAllActionMenus();
 });
+
+/* ============================================================
+ * 车辆里程记录
+ * 顶部三车「仪表盘」直接展示，点哪辆车即展开快速录入：
+ * 自动带入该车上次末尾公里数，仅需填本次回来读数 + 选项目/目的。
+ * ============================================================ */
+
+/* 三辆固定车辆（id 不要改动，否则历史记录会对不上） */
+const VEHICLES = [
+  { id: "wuling",   name: "五菱货车",  plate: "鲁HE6F66" },
+  { id: "toyota",   name: "丰田雅力士", plate: "鲁HB23E4" },
+  { id: "dongfeng", name: "东风面包车", plate: "鲁HA006Q" },
+];
+
+/* 仪表盘指针满偏对应的月度里程（km）：达到该值指针指向最大值 */
+const VEHICLE_MONTH_TARGET = 2000;
+
+/* 某车指定月份的「已还车」里程合计（用于仪表盘指针角度） */
+function getVehicleMonthKm(vid, monthKey) {
+  return (cache.vehicleTrips || [])
+    .filter((t) => t.vehicleId === vid && t.backTime && monthKeyOf(t) === monthKey)
+    .reduce((s, t) => s + (Number(t.mileage) || 0), 0);
+}
+
+/* Date -> 'YYYY-MM-DDTHH:MM'（用于 datetime-local 输入框，本地时区） */
+function toLocalInput(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/* 取某辆车最近一条「已还车」记录的「回来公里数」，作为下次用车起始预填值 */
+function getLastKmForVehicle(vid) {
+  const list = (cache.vehicleTrips || [])
+    .filter((t) => t.vehicleId === vid && t.backTime)
+    .sort((a, b) => new Date(b.createdAt || b.outTime || 0) - new Date(a.createdAt || a.outTime || 0));
+  return list.length ? (Number(list[0].endKm) || 0) : 0;
+}
+
+/* 取某辆车当前「未还车」的在用记录（无则 null） */
+function getOpenTrip(vid) {
+  const list = (cache.vehicleTrips || [])
+    .filter((t) => t.vehicleId === vid && !t.backTime)
+    .sort((a, b) => new Date(b.createdAt || b.outTime || 0) - new Date(a.createdAt || a.outTime || 0));
+  return list.length ? list[0] : null;
+}
+
+/* 车辆是否在使用中（未还车） */
+function isVehicleInUse(vid) {
+  return !!getOpenTrip(vid);
+}
+
+/* 渲染三车仪表盘 + 汇总 + 历史记录列表 */
+function renderVehicleTrips() {
+  renderVehicleDashboards();
+  renderVehicleSummary();
+  renderVehicleHistory();
+}
+
+/* 汽车仪表盘 SVG：清爽浅色表盘 + 彩色进度弧 + 270°刻度环 + 指针
+   opts: { id, inUse, km, monthKm } */
+function vehicleGaugeSvg(opts) {
+  const cx = 100, cy = 100, R = 82;
+  const START = 135, SWEEP = 270;
+  const ratio = Math.max(0, Math.min(1, (opts.monthKm || 0) / VEHICLE_MONTH_TARGET));
+  const endAngle = START + SWEEP * ratio;
+  const rad = (a) => a * Math.PI / 180;
+  const pt = (a, r) => [cx + r * Math.cos(rad(a)), cy + r * Math.sin(rad(a))];
+  const f = (n) => n.toFixed(1);
+  const [bx, by] = pt(START, R);
+  const [bex, bey] = pt(START + SWEEP, R);
+  const [px, py] = pt(endAngle, R);
+  const largeBg = SWEEP > 180 ? 1 : 0;
+  const largeFg = (SWEEP * ratio) > 180 ? 1 : 0;
+  const color = opts.inUse ? "#f97316" : "#0ea5e9";
+  const gid = "vgGlow_" + (opts.id || "x");
+  let ticks = "";
+  const N = 10;
+  for (let i = 0; i <= N; i++) {
+    const a = START + SWEEP * (i / N);
+    const [ox, oy] = pt(a, R - 3);
+    const [ix, iy] = pt(a, R - 14);
+    ticks += `<line x1="${f(ox)}" y1="${f(oy)}" x2="${f(ix)}" y2="${f(iy)}" stroke="rgba(15,23,42,.32)" stroke-width="2" stroke-linecap="round"/>`;
+  }
+  for (let i = 0; i < N; i++) {
+    const a = START + SWEEP * ((i + 0.5) / N);
+    const [ox, oy] = pt(a, R - 3);
+    const [ix, iy] = pt(a, R - 9);
+    ticks += `<line x1="${f(ox)}" y1="${f(oy)}" x2="${f(ix)}" y2="${f(iy)}" stroke="rgba(15,23,42,.14)" stroke-width="1.5" stroke-linecap="round"/>`;
+  }
+  const [nx, ny] = pt(endAngle, R - 22);
+  return `
+  <svg class="veh-gauge-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <radialGradient id="${gid}" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="${color}" stop-opacity="0.12"/>
+        <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <circle cx="${cx}" cy="${cy}" r="${R + 6}" fill="url(#${gid})"/>
+    <path d="M ${f(bx)} ${f(by)} A ${R} ${R} 0 ${largeBg} 1 ${f(bex)} ${f(bey)}" fill="none" stroke="rgba(15,23,42,.10)" stroke-width="9" stroke-linecap="round"/>
+    <path d="M ${f(bx)} ${f(by)} A ${R} ${R} 0 ${largeFg} 1 ${f(px)} ${f(py)}" fill="none" stroke="${color}" stroke-width="9" stroke-linecap="round" style="filter:drop-shadow(0 1px 3px ${color}66)"/>
+    ${ticks}
+    <line x1="${cx}" y1="${cy}" x2="${f(nx)}" y2="${f(ny)}" stroke="${color}" stroke-width="3.5" stroke-linecap="round" style="filter:drop-shadow(0 1px 2px ${color}66)"/>
+    <circle cx="${cx}" cy="${cy}" r="7" fill="${color}" stroke="#fff" stroke-width="2"/>
+  </svg>`;
+}
+
+/* 顶部三车「紧凑横向列表」：左小仪表 / 中车辆信息 / 右当前里程，点行展开菜单 */
+function renderVehicleDashboards() {
+  const wrap = document.getElementById("vehicleDashboards");
+  if (!wrap) return;
+  const cur = new Date();
+  const curKey = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`;
+  wrap.innerHTML = VEHICLES.map((v) => {
+    const inUse = isVehicleInUse(v.id);
+    const open = inUse ? getOpenTrip(v.id) : null;
+    const km = inUse ? (Number(open.startKm) || 0) : getLastKmForVehicle(v.id);
+    const monthKm = getVehicleMonthKm(v.id, curKey);
+    const ratio = Math.max(0, Math.min(1, monthKm / VEHICLE_MONTH_TARGET));
+    const pct = Math.round(ratio * 100);
+    const active = (window._vtqVehicleId === v.id) ? " active" : "";
+    const badge = inUse
+      ? `<span class="veh-dash-badge inuse">🔒 使用中 · ${esc(open.driverName || "未知")}</span>`
+      : `<span class="veh-dash-badge idle">✅ 空闲</span>`;
+    const cta = inUse ? "点击还车 ▾" : "点击用车 ▸";
+    const panel = (window._vtqVehicleId === v.id)
+      ? (inUse ? returnPanelHtml(v, open) : usePanelHtml(v))
+      : "";
+    return `
+    <div class="veh-row${active}${inUse ? " busy" : ""}">
+      <div class="veh-row-main" onclick="onVehicleCardClick('${v.id}')">
+        <div class="veh-row-gauge">
+          ${vehicleGaugeSvg({ id: v.id, inUse, km, monthKm })}
+          <div class="veh-gauge-readout ${inUse ? "inuse" : "idle"}">
+            <div class="veh-gauge-km">${pct}%</div>
+            <div class="veh-gauge-unit">本月</div>
+          </div>
+        </div>
+        <div class="veh-row-info">
+          <div class="veh-row-top">
+            <span class="veh-dash-name">${esc(v.name)}</span>
+            <span class="veh-dash-plate">${esc(v.plate)}</span>
+          </div>
+          <div class="veh-row-status">${badge}<span class="veh-dash-cta">${cta}</span></div>
+          <div class="veh-row-bar"><div class="veh-row-bar-fill" style="width:${pct}%"></div></div>
+          <div class="veh-row-foot">本月已跑 <b>${Number(monthKm).toFixed(1)}</b> / ${VEHICLE_MONTH_TARGET} km</div>
+        </div>
+        <div class="veh-row-km"><b>${Number(km).toFixed(1)}</b><span>km 当前</span></div>
+      </div>
+      ${panel}
+    </div>`;
+  }).join("");
+}
+
+/* 内联面板：用车（带可校准的起始公里数） */
+function usePanelHtml(v) {
+  const startKm = getLastKmForVehicle(v.id);
+  const type = window._vtqType || "送货";
+  return `
+    <div class="veh-dash-panel">
+      <div class="veh-panel-rule">—— 用车登记 · ${esc(v.name)} ——</div>
+      <div class="veh-quick-fields">
+        <div class="form-row">
+          <label>起始公里数 <span class="veh-hint">（请核对仪表，不符可修改）</span></label>
+          <input type="number" step="0.1" min="0" class="input veh-km-edit" id="vtqStart"
+                 value="${Number(startKm).toFixed(1)}" inputmode="decimal" />
+        </div>
+        <div class="form-row">
+          <label>开车目的</label>
+          <div class="seg-toggle" id="vtqTypeSeg">
+            <button type="button" class="seg-btn ${type === "送货" ? "active" : ""}" data-type="送货" onclick="setVtqType('送货')">送货</button>
+            <button type="button" class="seg-btn ${type === "接货" ? "active" : ""}" data-type="接货" onclick="setVtqType('接货')">接货</button>
+            <button type="button" class="seg-btn ${type === "安装" ? "active" : ""}" data-type="安装" onclick="setVtqType('安装')">安装</button>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>关联项目（可选）</label>
+          <select class="input" id="vtqProject">${vehicleProjectOptions("")}</select>
+        </div>
+        <div class="form-row">
+          <label>司机 <span style="color:#dc2626">*</span>（必填）</label>
+          <select class="input" id="vtqDriver">${vehicleWorkerOptions("")}</select>
+        </div>
+        <div class="form-row">
+          <label>备注 / 目的地</label>
+          <input type="text" class="input" id="vtqNote" placeholder="如：去 XX 工地安装" />
+        </div>
+      </div>
+      <div class="veh-quick-actions">
+        <button class="btn primary" onclick="saveUseVehicle()">确认用车</button>
+        <button class="btn" onclick="closeVehicleQuick()">取消</button>
+      </div>
+    </div>`;
+}
+
+/* 内联面板：还车（起始/回来均可核对校准，实时算里程） */
+function returnPanelHtml(v, trip) {
+  return `
+    <div class="veh-dash-panel">
+      <div class="veh-panel-rule">—— 还车结算 · ${esc(v.name)} ——</div>
+      <div class="veh-quick-body">
+        <div class="veh-quick-km">
+          <label>起始公里数 <span class="veh-lock">🔒 不可修改</span></label>
+          <input type="number" step="0.1" min="0" class="input veh-km-edit" id="vtqStart"
+                 value="${Number(trip.startKm).toFixed(1)}" inputmode="decimal" readonly />
+          <label style="margin-top:10px;">回来公里数</label>
+          <input type="number" step="0.1" min="0" class="input veh-km-big" id="vtqEnd"
+                 placeholder="填当前仪表读数" inputmode="decimal" oninput="calcQuickMileage()" />
+          <div id="vtqMileage" class="vtq-mileage">本次里程：0.0 km</div>
+        </div>
+        <div class="veh-quick-fields">
+          <div class="veh-ret-info">使用中：${esc(trip.driverName || "未知")}<br>出发 ${fmtDateTime(trip.outTime)}</div>
+          <div class="form-row">
+            <label>还车备注（可选）</label>
+            <input type="text" class="input" id="vtqNote" placeholder="如：车辆状况、加油等" />
+          </div>
+        </div>
+      </div>
+      <div class="veh-quick-actions">
+        <button class="btn primary" onclick="saveReturnVehicle()">确认还车</button>
+        <button class="btn" onclick="closeVehicleQuick()">取消</button>
+      </div>
+    </div>`;
+}
+
+/* 历史记录列表 */
+function renderVehicleHistory() {
+  const container = document.getElementById("vehicleTripList");
+  if (!container) return;
+  const trips = [...(cache.vehicleTrips || [])].sort((a, b) =>
+    new Date(b.createdAt || b.outTime || 0) - new Date(a.createdAt || a.outTime || 0));
+  if (trips.length === 0) {
+    container.innerHTML = `<div class="empty">暂无车辆里程记录。点击上方车辆卡片即可登记。</div>`;
+    return;
+  }
+  container.innerHTML = trips.map((t) => {
+    const open = !t.backTime;
+    const mileage = Number(t.mileage) || (Number(t.endKm) - Number(t.startKm));
+    const vName = t.vehicleName ? `${esc(t.vehicleName)}` : "未知车辆";
+    const icon = t.type === "接货" ? "📦" : (t.type === "安装" ? "🔧" : "🚚");
+    return `
+    <div class="card${open ? " card-open" : ""}">
+      <div class="card-status-bar"></div>
+      <div class="card-title">${icon} ${vName}${t.vehiclePlate ? " · " + esc(t.vehiclePlate) : ""}</div>
+      ${open ? `<div class="card-badge open">⏳ 未还车</div>` : ""}
+      <div class="card-row"><span>🎯 目的</span><b>${esc(t.type || "送货")}</b></div>
+      ${t.projectName ? `<div class="card-row"><span>🔗 项目</span><b>${esc(t.projectName)}</b></div>` : ""}
+      ${t.driverName ? `<div class="card-row"><span>👤 司机</span><b>${esc(t.driverName)}</b></div>` : ""}
+      <div class="card-row"><span>📏 里程</span><b>${open ? "—" : Number(mileage).toFixed(1) + " km"}</b></div>
+      <div class="card-row"><span>🔢 起始</span><b>${Number(t.startKm).toFixed(1)}</b></div>
+      <div class="card-row"><span>🔢 回来</span><b>${open ? "—" : Number(t.endKm).toFixed(1)}</b></div>
+      ${t.outTime ? `<div class="card-row"><span>🕐 出发</span><b>${fmtDateTime(t.outTime)}</b></div>` : ""}
+      ${t.backTime ? `<div class="card-row"><span>🏁 返回</span><b>${fmtDateTime(t.backTime)}</b></div>` : ""}
+      ${t.note ? `<div class="card-sub">${esc(t.note)}</div>` : ""}
+      <div class="card-actions">
+        ${open ? `<button class="btn small primary" onclick="openReturnVehicle('${t.vehicleId}')">还车</button>` : ""}
+        ${isManager()
+          ? `<button class="btn small danger" onclick="deleteVehicleTripHandler('${t.id}')">删除</button>`
+          : (open ? "" : `<span class="veh-readonly">🔒 只读</span>`)}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+/* 取记录所属的「年-月」key */
+function monthKeyOf(t) {
+  const d = t.createdAt ? new Date(t.createdAt) : (t.date ? new Date(t.date) : null);
+  if (!d || isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/* 按月 / 按车汇总 */
+function renderVehicleSummary() {
+  const wrap = document.getElementById("vehicleSummary");
+  if (!wrap) return;
+  const cur = new Date();
+  const curKey = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`;
+  const mk = window._vtMonth || curKey;
+  const [yy, mm] = mk.split("-");
+  const label = `${yy}年${Number(mm)}月`;
+
+  const list = (cache.vehicleTrips || []).filter((t) => monthKeyOf(t) === mk);
+  const perVeh = VEHICLES.map((v) => {
+    const sum = list.filter((t) => t.vehicleId === v.id)
+      .reduce((s, t) => s + (Number(t.mileage) || 0), 0);
+    return { ...v, sum: Math.round(sum * 10) / 10 };
+  });
+  const total = Math.round(perVeh.reduce((s, x) => s + x.sum, 0) * 10) / 10;
+  const days = new Set(list.map((t) =>
+    t.date || (t.createdAt ? String(t.createdAt).slice(0, 10) : "")).filter(Boolean)).size;
+
+  wrap.innerHTML = `
+    <div class="veh-sum-head">
+      <div class="veh-sum-title">📊 ${label} 里程汇总</div>
+      <input type="month" class="input veh-month" id="vtMonthPicker" value="${mk}" onchange="onVtMonthChange()" />
+    </div>
+    <div class="veh-sum-total">
+      <span>本月总里程</span>
+      <b>${total.toFixed(1)}</b><i>km</i>
+    </div>
+    <div class="veh-sum-cards">
+      ${perVeh.map((x) => `
+        <div class="veh-sum-card">
+          <div class="veh-sum-card-name">${esc(x.name)}</div>
+          <div class="veh-sum-card-km">${x.sum.toFixed(1)} <i>km</i></div>
+        </div>`).join("")}
+    </div>
+    <div class="veh-sum-foot">共 ${list.length} 条记录 · 出勤 ${days} 天</div>
+  `;
+}
+
+function onVtMonthChange() {
+  const el = document.getElementById("vtMonthPicker");
+  window._vtMonth = el ? el.value : "";
+  renderVehicleSummary();
+}
+
+function vehicleWorkerOptions(selectedId) {
+  const workers = cache.workers || [];
+  return `<option value="">请选择司机</option>` + workers.map((w) =>
+    `<option value="${w.id}" ${w.id === selectedId ? "selected" : ""}>${esc(w.name)}</option>`).join("");
+}
+
+function vehicleProjectOptions(selectedId) {
+  const projects = (cache.projects || []).slice().sort((a, b) =>
+    new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0));
+  return `<option value="">不关联项目</option>` + projects.map((p) =>
+    `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+}
+
+/* 点卡片：用车中 -> 还车；空闲 -> 用车 */
+/* 点卡片：再次点同一辆 -> 收起；否则展开内联菜单（用车/还车） */
+function onVehicleCardClick(vid) {
+  if (window._vtqVehicleId === vid) {
+    closeVehicleQuick();
+    return;
+  }
+  window._vtqVehicleId = vid;
+  window._vtqType = window._vtqType || "送货";
+  renderVehicleDashboards();
+  if (isVehicleInUse(vid)) {
+    setTimeout(() => { const e = document.getElementById("vtqEnd"); if (e) e.focus(); }, 30);
+  } else {
+    setTimeout(() => { const e = document.getElementById("vtqStart"); if (e) e.focus(); }, 30);
+  }
+}
+
+/* 历史卡片「还车」按钮入口，行为同点卡片 */
+function openUseVehicle(vid) { onVehicleCardClick(vid); }
+function openReturnVehicle(vid) { onVehicleCardClick(vid); }
+
+function setVtqType(type) {
+  window._vtqType = type;
+  document.querySelectorAll("#vtqTypeSeg .seg-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.type === type);
+  });
+}
+
+/* 还车时实时计算里程（起始、回来均可校准） */
+function calcQuickMileage() {
+  const startEl = document.getElementById("vtqStart");
+  const endEl = document.getElementById("vtqEnd");
+  const preview = document.getElementById("vtqMileage");
+  if (!endEl || !preview) return;
+  const start = startEl ? (Number(startEl.value) || 0) : 0;
+  const end = Number(endEl.value) || 0;
+  if (end > 0 && end < start) {
+    preview.textContent = `⚠️ 回来读数小于起始（${start.toFixed(1)}）`;
+    preview.classList.add("warn");
+    return;
+  }
+  preview.classList.remove("warn");
+  const m = Math.max(0, Math.round((end - start) * 10) / 10);
+  preview.textContent = `本次里程：${m.toFixed(1)} km`;
+}
+
+function closeVehicleQuick() {
+  window._vtqVehicleId = "";
+  renderVehicleDashboards();
+}
+
+/* 确认用车：创建一条未还车记录 */
+async function saveUseVehicle() {
+  const vid = window._vtqVehicleId;
+  if (!vid) return;
+  if (isVehicleInUse(vid)) { toast("该车尚未还车，无法再次用车"); return; }
+  const v = VEHICLES.find((x) => x.id === vid);
+  const driverSel = document.getElementById("vtqDriver");
+  const driverId = driverSel.value;
+  if (!driverId) { toast("请选择司机（用车必须填写）"); return; }
+  const driverName = driverSel.options[driverSel.selectedIndex].text;
+  const type = window._vtqType || "送货";
+  const projectSel = document.getElementById("vtqProject");
+  const projectId = projectSel.value;
+  const projectName = projectId ? projectSel.options[projectSel.selectedIndex].text : "";
+  const note = document.getElementById("vtqNote").value.trim();
+  const startKm = Number(document.getElementById("vtqStart").value) || 0;
+  const now = new Date().toISOString();
+
+  const trip = {
+    id: "vt_" + Date.now(),
+    vehicleId: v.id, vehicleName: v.name, vehiclePlate: v.plate,
+    type, projectId, projectName, driverId, driverName,
+    startKm, endKm: 0, mileage: 0,
+    outTime: now, backTime: "",
+    returned: false,
+    date: dateKey(new Date()),
+    note, createdAt: now
+  };
+  try {
+    await repo.saveVehicleTrip(trip);
+    await repo.loadAll();
+    closeVehicleQuick();
+    renderVehicleTrips();
+    toast(`已用车 · ${v.name}（${driverName}）`);
+  } catch (e) {
+    console.error(e);
+    toast("保存失败：" + (e.message || "未知错误"));
+  }
+}
+
+/* 确认还车：结算该次里程 */
+async function saveReturnVehicle() {
+  const vid = window._vtqVehicleId;
+  if (!vid) return;
+  const trip = getOpenTrip(vid);
+  if (!trip) { toast("未找到该车的在用记录"); return; }
+  const startKm = Number(document.getElementById("vtqStart").value) || 0;
+  const endKm = Number(document.getElementById("vtqEnd").value) || 0;
+  if (!(endKm >= startKm)) { toast("请填写不小于起始的回来公里数"); return; }
+  const mileage = Math.round((endKm - startKm) * 10) / 10;
+  const retNote = document.getElementById("vtqNote").value.trim();
+  const now = new Date().toISOString();
+
+  const updated = {
+    ...trip,
+    endKm, mileage,
+    backTime: now,
+    returned: true,
+    note: (trip.note ? trip.note + (retNote ? " | " : "") : "") + retNote
+  };
+  try {
+    await repo.saveVehicleTrip(updated);
+    await repo.loadAll();
+    closeVehicleQuick();
+    renderVehicleTrips();
+    toast(`已还车 · ${trip.vehicleName} 本次 ${mileage.toFixed(1)} km`);
+  } catch (e) {
+    console.error(e);
+    toast("保存失败：" + (e.message || "未知错误"));
+  }
+}
+
+async function deleteVehicleTripHandler(id) {
+  if (!(await confirmDialog("确定删除这条里程记录？", "删除里程"))) return;
+  try {
+    await repo.deleteVehicleTrip(id);
+    await repo.loadAll();
+    renderVehicleTrips();
+    toast("已删除");
+  } catch (e) {
+    toast("删除失败：" + (e.message || "未知错误"));
+  }
+}

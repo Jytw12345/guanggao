@@ -78,6 +78,7 @@
       <button class="tab-btn" data-tab="accounts">账号管理</button>
       <button class="tab-btn" data-tab="rolePerms">角色权限</button>
       <button class="tab-btn" data-tab="internalTasks">内部任务</button>
+      <button class="tab-btn" data-tab="vehicleTrips">车辆里程</button>
     </nav>
   </header>
 
@@ -96,6 +97,10 @@
     <button class="bottom-nav-item" data-tab="construction" title="施工管理">
       <span class="bnav-icon">🏗️</span>
       <span class="bnav-label">施工</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="vehicleTrips" title="车辆里程">
+      <span class="bnav-icon">🚚</span>
+      <span class="bnav-label">车辆</span>
     </button>
     <button class="bottom-nav-item" data-tab="internalTasks" title="任务">
       <span class="bnav-icon">✅</span>
@@ -384,6 +389,24 @@
     <!-- 我的（移动端聚合页） -->
     <section id="mine" class="tab-panel">
       <div id="mineContent"></div>
+    </section>
+
+    <!-- 车辆里程记录 -->
+    <section id="vehicleTrips" class="tab-panel">
+      <div class="section-head">
+        <h2>🚚 车辆里程记录</h2>
+      </div>
+      <p class="hint">点哪辆车，菜单就<b>直接在该车下方展开</b>。用车前请<b>核对起始公里数</b>，若与仪表不符可当场修改校准；还车时起始/回来均可核对修改，系统自动结算本次里程。车在使用中显示「🔒 使用中 · 司机」，<b>必须还车</b>后才能再给下一个人用。</p>
+
+      <!-- 三车仪表盘（点车后内联展开用车/还车菜单） -->
+      <div id="vehicleDashboards" class="veh-dash-grid"></div>
+
+      <!-- 按月 / 按车汇总 -->
+      <div id="vehicleSummary" class="veh-summary"></div>
+
+      <!-- 历史记录 -->
+      <h3 class="veh-history-title">📋 历史记录</h3>
+      <div id="vehicleTripList" class="card-grid"></div>
     </section>
   </main>
 
