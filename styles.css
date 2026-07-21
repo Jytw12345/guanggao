@@ -2693,17 +2693,7 @@ textarea.input { resize: vertical; min-height: 50px; }
 /* ===== 操作按钮分组 ===== */
 .action-groups { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 14px; }
 .action-group { display: flex; align-items: center; gap: 8px; }
-.action-group__label { font-size: 12px; color: var(--muted); white-space: nowrap; }
-/* 操作组内的状态下拉框：紧凑 */
-.action-group > select {
-  min-width: 0;
-  max-width: 100px;
-  padding: 5px 6px;
-  font-size: 13px;
-  height: auto;
-}
-/* 改造为自定义下拉后，select 被包在 .custom-select 内，原 > select 选择失效，
-   这里给状态选择器等一个合理的宽度范围，避免过窄或过宽 */
+/* 改造为自定义下拉后，select 被包在 .custom-select 内，这里给一个合理的宽度范围，避免过窄或过宽 */
 .action-group .custom-select {
   width: auto;
   min-width: 80px;
@@ -3657,11 +3647,19 @@ table.data.project-hours-diff td.wrap {
     padding: 2px 8px;
   }
   .schedule-progress-actions {
-    flex-wrap: wrap;
-    gap: 6px;
+    flex-wrap: nowrap;
+    gap: 5px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
   }
+  .schedule-progress-actions::-webkit-scrollbar { display: none; }
   .schedule-progress-actions .btn.tiny {
-    flex: 1 1 calc(50% - 6px);
+    flex: 0 1 auto;
+    padding: 5px 8px;
+    font-size: 11.5px;
     text-align: center;
   }
 
@@ -3979,13 +3977,14 @@ table.data.project-hours-diff td.wrap {
   /* 移动端：操作按钮分组堆叠 */
   .action-groups { gap: 8px; }
   .action-group {
+    flex: 1 1 100%;
     flex-wrap: wrap;
     gap: 6px;
   }
   .action-group > .btn.small {
-    flex: 1 1 calc(50% - 3px);
+    flex: 0 0 auto;
     min-width: 0;
-    padding: 6px 4px;
+    padding: 6px 10px;
     font-size: 12px;
     text-align: center;
     justify-content: center;
@@ -6224,13 +6223,14 @@ table.data.project-hours-diff td.wrap {
     gap: 6px;
   }
   .action-group {
+    flex: 1 1 100%;
     gap: 4px;
     flex-wrap: wrap;
   }
   .action-group > .btn.small {
-    flex: 1 1 calc(50% - 2px);
+    flex: 0 0 auto;
     min-width: 0;
-    padding: 5px 3px;
+    padding: 5px 8px;
     font-size: 11.5px;
     text-align: center;
     justify-content: center;
@@ -6597,8 +6597,10 @@ table.data.project-hours-diff td.wrap {
   box-shadow: 0 0 0 3px rgba(47,111,237,.12), 0 4px 16px rgba(15,23,42,.05);
 }
 .veh-card.active::before { background: #2f6fed; }
+.veh-card.busy { background: #fff8f1; }
 .veh-card.busy::before { background: #f97316; }
 .veh-card.busy.active {
+  background: #fff4ea;
   border-color: #fdba74;
   box-shadow: 0 0 0 3px rgba(249,115,22,.14), 0 4px 16px rgba(15,23,42,.05);
 }
@@ -6924,15 +6926,25 @@ table.data.project-hours-diff td.wrap {
   font-size: 13px;
 }
 .veh-filter__sep { color: #64748b; font-size: 13px; }
-.veh-filter .btn.small { padding: 6px 12px; }
-.veh-filter .btn.small.primary { margin-left: auto; }
+.veh-filter__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.veh-filter__actions .btn.small {
+  flex: 0 0 auto;
+  padding: 6px 18px;
+  text-align: center;
+  justify-content: center;
+}
 @media (max-width: 560px) {
   .veh-filter { gap: 6px; padding: 8px 10px; }
   .veh-filter__row { flex-wrap: nowrap !important; }
   .veh-filter__sel { flex: 1 1 0%; min-width: 0; }
   .veh-filter__dates { flex: 1 1 100%; justify-content: space-between; }
   .veh-filter__date { flex: 1 1 auto; }
-  .veh-filter .btn.small.primary { margin-left: 0; flex: 1 1 100%; }
+  .veh-filter__actions { flex: 1 1 100%; }
+  .veh-filter__actions .btn.small { flex: 1 1 0; padding: 6px 10px; font-size: 12px; }
 }
 
 /* 历史记录：列表视图（紧凑，适合长历史） */
@@ -6946,19 +6958,19 @@ table.data.project-hours-diff td.wrap {
   align-items: center;
   gap: 10px;
   background: #fff;
-  border: 1px solid #e2e6ef;
-  border-left: 3px solid #cbd5e1;
-  border-radius: 9px;
-  padding: 8px 12px;
+  border: 1px solid #e7ebf3;
+  border-left: 3px solid #34d399;
+  border-radius: 10px;
+  padding: 9px 13px;
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 .veh-row:hover {
-  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.07);
-  border-color: #b5beca;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  border-color: #cbd5e1;
 }
 .veh-row--open {
   border-left-color: #f59e0b;
-  background: linear-gradient(180deg, #fffdf7 0%, #fff 50%);
+  background: linear-gradient(180deg, #fffdf6 0%, #fff 55%);
 }
 .veh-row__main {
   flex: 1 1 auto;
@@ -6972,13 +6984,20 @@ table.data.project-hours-diff td.wrap {
 }
 .veh-row__veh {
   font-weight: 700;
-  color: #111827;
+  color: #0f172a;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px;
 }
-.veh-row__type { color: #475569; }
+.veh-row__type {
+  color: #475569;
+  font-weight: 600;
+  background: #eef2f7;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
 .veh-row__driver { color: #475569; white-space: nowrap; }
 .veh-row__km { font-weight: 600; color: var(--primary, #2563eb); white-space: nowrap; }
 .veh-row__fuel {
@@ -7042,47 +7061,56 @@ table.data.project-hours-diff td.wrap {
   gap: 12px;
 }
 .veh-trip {
+  position: relative;
   background: #fff;
-  border: 1px solid #e2e6ef;
-  border-left: 3px solid #cbd5e1;
-  border-radius: 10px;
-  padding: 12px 14px;
+  border: 1px solid #e7ebf3;
+  border-left: 3px solid #34d399;
+  border-radius: 12px;
+  padding: 13px 15px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
   transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 .veh-trip:hover {
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
-  border-color: #b5beca;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.10);
+  border-color: #cbd5e1;
   transform: translateY(-1px);
 }
 .veh-trip--open {
   border-left-color: #f59e0b;
-  background: linear-gradient(180deg, #fffdf7 0%, #fff 40%);
+  background: linear-gradient(180deg, #fffdf6 0%, #fff 45%);
 }
 .veh-trip__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.veh-trip__veh {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  min-width: 0;
 }
 .veh-trip__title {
   font-size: 14.5px;
   font-weight: 700;
-  color: #111827;
+  color: #0f172a;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
-.veh-trip__title em {
-  font-style: normal;
+.veh-trip__plate {
+  flex-shrink: 0;
+  font-size: 11.5px;
   font-weight: 600;
-  font-size: 12px;
-  color: #64748b;
+  letter-spacing: 0.5px;
+  color: #475569;
   background: #f1f5f9;
-  padding: 1px 6px;
-  border-radius: 5px;
-  margin-left: 2px;
+  border: 1px solid #e2e8f0;
+  padding: 2px 7px;
+  border-radius: 6px;
 }
 .veh-trip__badge {
   flex-shrink: 0;
@@ -7090,13 +7118,13 @@ table.data.project-hours-diff td.wrap {
   font-weight: 600;
   color: #b45309;
   background: #fef3c7;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
   white-space: nowrap;
 }
 .veh-trip__mileage {
   flex-shrink: 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 800;
   color: #2563eb;
   white-space: nowrap;
@@ -7106,29 +7134,60 @@ table.data.project-hours-diff td.wrap {
   font-size: 11px;
   font-weight: 600;
   color: #94a3b8;
-  margin-left: 1px;
+  margin-left: 2px;
 }
 .veh-trip__project {
   font-size: 12.5px;
   color: #475569;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.veh-trip__project-name {
+  font-weight: 700;
+  color: #1e293b;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.veh-trip__proj-addr {
+  margin-top: 5px;
+  font-size: 12px;
+  color: #0f766e;
+  background: #f0fdfa;
+  border-left: 3px solid #14b8a6;
+  padding: 3px 8px;
+  border-radius: 4px;
+  line-height: 1.4;
+}
+.veh-trip__trip-note {
+  margin-top: 5px;
+  font-size: 12px;
+  color: #92400e;
+  background: #fffbeb;
+  border-left: 3px solid #f59e0b;
+  padding: 3px 8px;
+  border-radius: 4px;
+  line-height: 1.4;
+}
 .veh-trip__stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 4px 8px;
-  padding: 8px 0;
+  gap: 8px;
+  padding: 10px 0;
   border-top: 1px dashed #eef1f6;
   border-bottom: 1px dashed #eef1f6;
 }
 .veh-stat {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 6px 8px;
 }
 .veh-stat i {
   font-style: normal;
@@ -7143,26 +7202,72 @@ table.data.project-hours-diff td.wrap {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.veh-trip__time {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  font-size: 11.5px;
-  color: #64748b;
-  margin-top: 8px;
-}
-.veh-trip__note {
+.veh-type {
+  align-self: flex-start;
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
   font-size: 12px;
-  color: #64748b;
-  background: #f8fafc;
-  border-radius: 6px;
-  padding: 5px 8px;
-  margin-top: 8px;
+  font-weight: 700;
+  color: #475569;
+  background: #eef2f7;
+}
+.veh-type--pickup { color: #b45309; background: #fef3c7; }
+.veh-type--install { color: #0f766e; background: #ccfbf1; }
+.veh-type--biz { color: #4338ca; background: #e0e7ff; }
+.veh-type--deliver { color: #1d4ed8; background: #dbeafe; }
+.veh-type--default { color: #475569; background: #eef2f7; }
+.veh-trip__timeline {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+  padding-left: 4px;
+}
+.veh-tl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  padding: 4px 0 4px 16px;
+}
+.veh-tl::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #e2e8f0;
+}
+.veh-tl:first-child::before { top: 50%; }
+.veh-tl:last-child::before { bottom: 50%; }
+.veh-tl__dot {
+  position: absolute;
+  left: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #cbd5e1;
+}
+.veh-tl__dot--out { background: #f59e0b; box-shadow: 0 0 0 1px #f59e0b; }
+.veh-tl__dot--back { background: #34d399; box-shadow: 0 0 0 1px #34d399; }
+.veh-tl__lbl {
+  font-size: 11px;
+  color: #94a3b8;
+  width: 28px;
+  flex-shrink: 0;
+}
+.veh-tl__val {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
 }
 .veh-trip__actions {
   display: flex;
   gap: 6px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 .veh-trip__actions .btn.small {
   flex: 1;
@@ -7170,7 +7275,7 @@ table.data.project-hours-diff td.wrap {
   justify-content: center;
 }
 @media (max-width: 480px) {
-  .veh-trip__stats { grid-template-columns: repeat(2, 1fr); gap: 6px 8px; }
+  .veh-trip__stats { grid-template-columns: repeat(2, 1fr); gap: 6px; }
 }
 
 /* ===== 车辆里程：按月 / 按车汇总 ===== */

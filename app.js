@@ -1831,6 +1831,47 @@ async function applyIncrementalUpdate(tableName) {
       }));
       break;
     }
+    case "vehicleTrips": {
+      const vtRes = await sb.from("vehicle_trips").select("*");
+      if (!vtRes.error) cache.vehicleTrips = (vtRes.data || []).map((r) => mapVehicleTrip(r));
+      break;
+    }
+    case "accounts": {
+      const { data, error } = await sb.from("profiles").select("*").order("email");
+      if (!error) cache.accounts = (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "" }));
+      break;
+    }
+    case "operationLogs": {
+      const opRes = await sb.from("operation_logs").select("*").order("timestamp", { ascending: false }).limit(MAX_LOGS);
+      if (!opRes.error) {
+        cache.operationLogs = (opRes.data || []).map((r) => ({
+          id: r.id, type: r.type, typeLabel: r.type_label,
+          target: r.target, detail: r.detail,
+          operator: r.operator, operatorName: r.operator_name,
+          operatorRole: r.operator_role, timestamp: r.timestamp,
+        }));
+      } else {
+        console.warn("operation_logs 实时同步读取失败:", opRes.error.message);
+        cache.operationLogs = [];
+      }
+      break;
+    }
+    case "leaveQuota": {
+      const lqRes = await sb.from("leave_quota").select("*");
+      if (!lqRes.error) {
+        cache.leaveQuota = (lqRes.data || []).map((r) => ({
+          id: r.id, workerId: r.worker_id,
+          personal_days: r.personal_days || 15,
+          sick_days: r.sick_days || 30,
+          annual_days: r.annual_days || 10,
+          comp_days: r.comp_days || 0,
+          year: r.year,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        }));
+      }
+      break;
+    }
     case "projects":
     case "work_logs": {
       const [pRes, lRes] = await Promise.all([
@@ -1872,6 +1913,10 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "outsourced_workers" }, () => pendingChanges.add("outsourced_workers"))
     .on("postgres_changes", { event: "*", schema: "public", table: "holidays" }, () => pendingChanges.add("holidays"))
     .on("postgres_changes", { event: "*", schema: "public", table: "worker_schedules" }, () => pendingChanges.add("worker_schedules"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "vehicle_trips" }, () => pendingChanges.add("vehicleTrips"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => pendingChanges.add("accounts"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "operation_logs" }, () => pendingChanges.add("operationLogs"))
+    .on("postgres_changes", { event: "*", schema: "public", table: "leave_quota" }, () => pendingChanges.add("leaveQuota"))
     .subscribe((status) => {
       if (status === "SUBSCRIBED") setSyncStatus("online", "● 实时同步中");
       else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setSyncStatus("offline", "● 同步连接异常");
@@ -4716,6 +4761,8 @@ function renderConstruction() {
           ${p.phone ? `<span>电话</span><b><a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></b>` : ""}
           <span>地址</span><b>${esc(p.address || "—")}</b>
         </div>
+        ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}</div>` : ""}
+        ${p.status === STATUS.DELAYED && p.delayReason ? `<div class="card-reason delayed">🕒 延期原因：${esc(p.delayReason)}</div>` : ""}
         ${p.estimatedHours > 0 ? `
         <div class="proj-hero__progress">
           <span style="font-size:13px;color:var(--muted)">项目进度</span>
@@ -4736,8 +4783,6 @@ function renderConstruction() {
               return '#3b82f6';
             })()};"></div>
           </div>
-          ${p.status === STATUS.PAUSED && p.pauseReason ? `<span class="proj-hero__reason proj-hero__reason--pause">暂停原因：${esc(p.pauseReason)}</span>` : ""}
-          ${p.status === STATUS.DELAYED && p.delayReason ? `<span class="proj-hero__reason proj-hero__reason--delay">延期原因：${esc(p.delayReason)}</span>` : ""}
         </div>` : ""}
       </div>
       <div class="info-grid">
@@ -4753,30 +4798,26 @@ function renderConstruction() {
       <div class="action-groups">
         <!-- 状态流转操作 -->
         <div class="action-group">
-          <span class="action-group__label">状态</span>
-          <select class="input assign-select" id="cStatus" onchange="updateProjectStatus('${p.id}', this.value)">
-            <option value="${p.status}" selected>${p.status}</option>
-            ${getAllowedStatuses(p.status).map((s) =>
-              `<option value="${s}">${s}</option>`).join("")}
-          </select>
           ${canEdit && p.status === STATUS.BOOKED ? `
           <button class="btn small primary" onclick="updateProjectStatus('${p.id}', '${STATUS.WORKING}')">🚀 开始施工</button>
-          <button class="btn small" onclick="delayProject('${p.id}')">📅 延期</button>
+          <button class="btn small warning" onclick="delayProject('${p.id}')">📅 延期</button>
           ` : ""}
           ${canEdit && p.status === STATUS.WORKING ? `
-          <button class="btn small" style="background:#f59e0b;color:#fff" onclick="pauseProject('${p.id}')">⏸️ 暂停施工</button>
-          <button class="btn small" style="background:#10b981;color:#fff" onclick="updateProjectStatus('${p.id}', '${STATUS.DONE}')">✅ 完成安装</button>
-          <button class="btn small" onclick="delayProject('${p.id}')">📅 延期</button>
+          <button class="btn small warning" onclick="pauseProject('${p.id}')">⏸️ 暂停施工</button>
+          <button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.DONE}')">✅ 完成安装</button>
+          <button class="btn small warning" onclick="delayProject('${p.id}')">📅 延期</button>
           ` : ""}
           ${canEdit && p.status === STATUS.PAUSED ? `
           <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
-          <button class="btn small" onclick="delayProject('${p.id}')">📅 延期</button>
+          <button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.DONE}')">✅ 完成安装</button>
+          <button class="btn small warning" onclick="delayProject('${p.id}')">📅 延期</button>
           ` : ""}
           ${canEdit && p.status === STATUS.DELAYED ? `
           <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
+          <button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.DONE}')">✅ 完成安装</button>
           ` : ""}
           ${canEdit && [STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED].includes(p.status) ? `
-          <button class="btn small danger" onclick="cancelProject('${p.id}')"><span style="font-size:16px;font-weight:bold;">×</span> 取消</button>
+          <button class="btn small danger" onclick="cancelProject('${p.id}')">✕ 取消</button>
           ` : ""}
         </div>
 
@@ -4784,22 +4825,22 @@ function renderConstruction() {
         ${canReview && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED) ? `<span class="action-group__divider"></span>` : ""}
         ${canReview && !reviewed && p.status === STATUS.DONE ? `
         <div class="action-group">
-          <button class="btn small primary" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>
+          <button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>
         </div>` : ""}
         ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `
         <div class="action-group">
-          <button class="btn small primary" onclick="reviewProject('${p.id}')">🔍 审核项目</button>
+          <button class="btn small success" onclick="reviewProject('${p.id}')">🔍 审核项目</button>
         </div>` : ""}
 
         <!-- 反审核 / 维修单 -->
         ${(reviewed && perm.unreviewProject(p)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) ? `<span class="action-group__divider"></span>` : ""}
         ${reviewed && perm.unreviewProject(p) ? `
         <div class="action-group">
-          <button class="btn small" onclick="unreviewProject('${p.id}')" style="color:var(--warn)">↩ 反审核</button>
+          <button class="btn small warning" onclick="unreviewProject('${p.id}')">↩ 反审核</button>
         </div>` : ""}
         ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `
         <div class="action-group">
-          <button class="btn small" onclick="openRepairOrderForm('${p.id}')" style="background:#f59e0b;color:#fff">🔧 发起维修单</button>
+          <button class="btn small warning" onclick="openRepairOrderForm('${p.id}')">🔧 发起维修单</button>
         </div>` : ""}
       </div>` : ""}
     </div>
@@ -14937,6 +14978,7 @@ async function exportVehicleTrips() {
     { header: "目的", key: "type", width: 10 },
     { header: "司机", key: "driver", width: 12 },
     { header: "关联项目", key: "project", width: 24 },
+    { header: "项目地址", key: "address", width: 30 },
     { header: "起始(km)", key: "startKm", width: 12 },
     { header: "回来(km)", key: "endKm", width: 12 },
     { header: "里程(km)", key: "mileage", width: 12 },
@@ -14951,12 +14993,14 @@ async function exportVehicleTrips() {
   trips.forEach((t) => {
     const open = !t.backTime;
     const mileage = Number(t.mileage) || (Number(t.endKm) - Number(t.startKm));
+    const proj = t.projectId ? getProject(t.projectId) : null;
     ws.addRow({
       vehicle: t.vehicleName || "",
       plate: t.vehiclePlate || "",
       type: t.type || "送货",
       driver: t.driverName || "",
       project: t.projectName || "",
+      address: proj ? (proj.address || "") : "",
       startKm: Number(t.startKm) || 0,
       endKm: open ? "" : (Number(t.endKm) || 0),
       mileage: open ? "" : Math.round(mileage * 10) / 10,
@@ -14990,27 +15034,40 @@ function vehicleHistoryCardHtml(trips) {
     const mileage = Number(t.mileage) || (Number(t.endKm) - Number(t.startKm));
     const vName = t.vehicleName ? `${esc(t.vehicleName)}` : "未知车辆";
     const icon = t.type === "接货" ? "📦" : (t.type === "安装" ? "🔧" : (t.type === "业务" ? "💼" : "🚚"));
+    const typeKey = t.type === "接货" ? "pickup" : (t.type === "安装" ? "install" : (t.type === "业务" ? "biz" : (t.type === "送货" ? "deliver" : "default")));
+    const proj = t.projectId ? getProject(t.projectId) : null;
+    const projName = proj ? proj.name : (t.projectName || "");
     return `
     <div class="veh-trip${open ? " veh-trip--open" : ""}">
       <div class="veh-trip__head">
-        <span class="veh-trip__title">${icon} ${vName}${t.vehiclePlate ? ` <em>${esc(t.vehiclePlate)}</em>` : ""}</span>
+        <div class="veh-trip__veh">
+          <span class="veh-trip__title">${icon} ${vName}</span>
+          ${t.vehiclePlate ? `<span class="veh-trip__plate">${esc(t.vehiclePlate)}</span>` : ""}
+        </div>
         ${open
           ? `<span class="veh-trip__badge">⏳ 未还车</span>`
           : `<span class="veh-trip__mileage">${Number(mileage).toFixed(1)} <i>km</i></span>`}
       </div>
-      ${t.projectName ? `<div class="veh-trip__project" title="${esc(t.projectName)}">🔗 ${esc(t.projectName)}</div>` : ""}
+      ${projName ? `
+      <div class="veh-trip__project">
+        <div class="veh-trip__project-name" title="${esc(projName)}">🔗 ${esc(projName)}</div>
+        ${proj && proj.address ? `<div class="veh-trip__proj-addr">📍 ${esc(proj.address)}</div>` : ""}
+        ${t.note ? `<div class="veh-trip__trip-note">📝 ${esc(t.note)}</div>` : ""}
+      </div>` : (t.note ? `
+      <div class="veh-trip__project">
+        <div class="veh-trip__trip-note">📝 ${esc(t.note)}</div>
+      </div>` : "")}
       <div class="veh-trip__stats">
-        <span class="veh-stat"><i>目的</i><b>${esc(t.type || "送货")}</b></span>
+        <span class="veh-stat"><i>目的</i><span class="veh-type veh-type--${typeKey}">${esc(t.type || "送货")}</span></span>
         ${t.driverName ? `<span class="veh-stat"><i>司机</i><b>${esc(t.driverName)}</b></span>` : ""}
         <span class="veh-stat"><i>起始</i><b>${Number(t.startKm).toFixed(1)}</b></span>
         <span class="veh-stat"><i>回来</i><b>${open ? "—" : Number(t.endKm).toFixed(1)}</b></span>
         ${t.fuelLevel != null ? `<span class="veh-stat"><i>油量</i><b>${Number(t.fuelLevel)}%</b></span>` : ""}
       </div>
-      ${(t.outTime || t.backTime) ? `<div class="veh-trip__time">
-        ${t.outTime ? `<span>🕐 ${fmtDateTime(t.outTime)}</span>` : ""}
-        ${t.backTime ? `<span>🏁 ${fmtDateTime(t.backTime)}</span>` : ""}
+      ${(t.outTime || t.backTime) ? `<div class="veh-trip__timeline">
+        ${t.outTime ? `<div class="veh-tl"><span class="veh-tl__dot veh-tl__dot--out"></span><span class="veh-tl__lbl">出发</span><b class="veh-tl__val">${fmtDateTime(t.outTime)}</b></div>` : ""}
+        ${t.backTime ? `<div class="veh-tl"><span class="veh-tl__dot veh-tl__dot--back"></span><span class="veh-tl__lbl">返回</span><b class="veh-tl__val">${fmtDateTime(t.backTime)}</b></div>` : ""}
       </div>` : ""}
-      ${t.note ? `<div class="veh-trip__note">${esc(t.note)}</div>` : ""}
       <div class="veh-trip__actions">
         ${open ? `<button class="btn small primary" onclick="openReturnVehicle('${t.vehicleId}')">还车</button>` : ""}
         ${isManager()

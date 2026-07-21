@@ -420,8 +420,10 @@
           <span class="veh-filter__sep">至</span>
           <input type="date" id="vtFilterTo" class="input veh-filter__date" onchange="applyVtFilter()" title="结束日期" />
         </div>
-        <button class="btn small" onclick="resetVtFilter()">重置</button>
-        <button class="btn small primary" onclick="exportVehicleTrips()">⬇ 导出</button>
+        <div class="veh-filter__actions">
+          <button class="btn small" onclick="resetVtFilter()">重置</button>
+          <button class="btn small primary" onclick="exportVehicleTrips()">⬇ 导出</button>
+        </div>
       </div>
       <div id="vehicleTripList" class="card-grid"></div>
     </section>
