@@ -1731,6 +1731,55 @@ textarea.input { resize: vertical; min-height: 50px; }
   color: #1f2937;
 }
 
+/* 施工人员安排：可折叠标题栏 */
+.schedule-worker-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 6px;
+  color: #1f2937;
+  border-radius: 3px;
+  padding: 2px 0;
+  transition: background-color .15s;
+}
+.schedule-worker-header:hover {
+  background-color: #f0f9ff;
+}
+.schedule-toggle-icon {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--primary, #2563eb);
+  transition: transform .2s ease;
+}
+
+/* 默认折叠：收起详情，仅显示标题栏与数量提示 */
+.schedule-item.collapsed .schedule-item-body {
+  display: none;
+}
+.sched-count {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b7280;
+  background: #f3f4f6;
+  padding: 1px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.schedule-item.leave .sched-count {
+  background: #fecaca;
+  color: #b91c1c;
+}
+.schedule-item.standby .sched-count {
+  background: #e5e7eb;
+}
+
 .schedule-task {
   font-size: 13px;
   color: #4b5563;

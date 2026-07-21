@@ -10,6 +10,10 @@ const CUSTOMER_HISTORY_KEY = "ad_install_customer_history";
 const DATA_VERSION = 2;
 const MAX_LOGS = 1000;
 
+// 工时合法范围（小时）：最低 0.1，最高 24。集中定义，避免散落字面量。
+const HOURS_MIN = 0.1;
+const HOURS_MAX = 24;
+
 function getCustomerHistory() {
   try {
     return JSON.parse(localStorage.getItem(CUSTOMER_HISTORY_KEY) || "[]");
@@ -47,6 +51,21 @@ const STATUS = {
   ACCEPTED: "已验收",
   REVIEWED: "已审核",
   CANCELLED: "已取消",
+};
+
+// 请假状态枚举（别名常量：值必须保持为原始字符串字面量，不可写成 LEAVE_STATUS.PENDING，否则会自引用触发 TDZ）
+const LEAVE_STATUS = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+};
+
+// 内部任务状态枚举（值与原存储字符串一致）
+const TASK_STATUS = {
+  PENDING: "pending",
+  IN_PROGRESS: "in_progress",
+  COMPLETED: "completed",
+  VERIFIED: "verified",
 };
 
 const STATUS_TRANSITIONS = {
@@ -327,7 +346,7 @@ function validatePhone(phone) {
 
 function validateHours(hours) {
   const h = Number(hours);
-  return !isNaN(h) && h >= 0.1 && h <= 24;
+  return !isNaN(h) && h >= HOURS_MIN && h <= HOURS_MAX;
 }
 
 function validateWorkerCount(count) {
@@ -1138,7 +1157,7 @@ const repo = {
         leaveType: r.leave_type || "personal",
         startDate: r.start_date, startType: r.start_type || "all", startTime: r.start_time,
         endDate: r.end_date, endType: r.end_type || "all", endTime: r.end_time,
-        reason: r.reason, status: r.status || "pending",
+        reason: r.reason, status: r.status || LEAVE_STATUS.PENDING,
         reviewerId: r.reviewer_id, reviewerName: r.reviewer_name,
         reviewNote: r.review_note, reviewedAt: r.reviewed_at,
         createdAt: r.created_at,
@@ -1567,7 +1586,7 @@ const repo = {
         leave_type: leave.leaveType || "personal",
         start_date: leave.startDate, start_type: leave.startType || "all", start_time: leave.startTime || null,
         end_date: leave.endDate, end_type: leave.endType || "all", end_time: leave.endTime || null,
-        reason: leave.reason || null, status: leave.status || "pending",
+        reason: leave.reason || null, status: leave.status || LEAVE_STATUS.PENDING,
         reviewer_id: leave.reviewerId || null, reviewer_name: leave.reviewerName || null,
         review_note: leave.reviewNote || null, reviewed_at: leave.reviewedAt || null,
       };
@@ -1778,7 +1797,7 @@ async function applyIncrementalUpdate(tableName) {
         leaveType: r.leave_type || "personal",
         startDate: r.start_date, startType: r.start_type || "all", startTime: r.start_time,
         endDate: r.end_date, endType: r.end_type || "all", endTime: r.end_time,
-        reason: r.reason, status: r.status || "pending",
+        reason: r.reason, status: r.status || LEAVE_STATUS.PENDING,
         reviewerId: r.reviewer_id, reviewerName: r.reviewer_name,
         reviewNote: r.review_note, reviewedAt: r.reviewed_at,
         createdAt: r.created_at,
@@ -1993,7 +2012,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   });
   
   const internalTasks = getInternalTasks().filter(t => {
-    if (t.status === 'verified') return false;
+    if (t.status === TASK_STATUS.VERIFIED) return false;
     return t.date === dateStr;
   });
   
@@ -2029,7 +2048,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     viewDate.setHours(0, 0, 0, 0);
     const workerLeaves = cache.leaveRecords.filter((lr) => {
       if (lr.workerId !== w.id) return false;
-      if (lr.status === "rejected") return false;
+      if (lr.status === LEAVE_STATUS.REJECTED) return false;
       const sd = new Date(lr.startDate);
       sd.setHours(0, 0, 0, 0);
       const ed = new Date(lr.endDate);
@@ -2183,8 +2202,8 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       const left = (startMinutes / 60) * hourWidth;
       const width = ((endMinutes - startMinutes) / 60) * hourWidth;
       
-      const statusIcon = t.status === 'in_progress' ? '🔨' : '📋';
-      const statusColor = t.status === 'in_progress' ? '#f59e0b' : '#8b5cf6';
+      const statusIcon = t.status === TASK_STATUS.IN_PROGRESS ? '🔨' : '📋';
+      const statusColor = t.status === TASK_STATUS.IN_PROGRESS ? '#f59e0b' : '#8b5cf6';
       const pad = (n) => String(n).padStart(2, "0");
       const timeStr = `${pad(sh)}:${pad(sm)} ~ ${pad(eh)}:${pad(em)}`;
       
@@ -2219,7 +2238,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   const dateFilter = new Date(dateStr);
   dateFilter.setHours(0, 0, 0, 0);
   const dayLeaveRecords = cache.leaveRecords.filter((lr) => {
-    if (lr.status === "rejected") return false;
+    if (lr.status === LEAVE_STATUS.REJECTED) return false;
     const sd = new Date(lr.startDate);
     sd.setHours(0, 0, 0, 0);
     const ed = new Date(lr.endDate);
@@ -2930,7 +2949,7 @@ async function saveWorkerSchedule(id) {
       const [endH, endM] = endTime.split(":").map(Number);
       let diffMinutes = (endH * 60 + endM) - (startH * 60 + startM);
       if (diffMinutes < 0) diffMinutes += 24 * 60;
-      estHours = Math.max(0.1, diffMinutes / 60);
+      estHours = Math.max(HOURS_MIN, diffMinutes / 60);
     }
     
     addInternalTask({
@@ -3288,7 +3307,7 @@ function calculateLeaveDays(startDate, endDate) {
 function calculateUsedLeaveDays(workerId, leaveType) {
   const year = new Date().getFullYear().toString();
   return cache.leaveRecords
-    .filter(l => l.workerId === workerId && l.status === "approved" && l.leaveType === leaveType)
+    .filter(l => l.workerId === workerId && l.status === LEAVE_STATUS.APPROVED && l.leaveType === leaveType)
     .reduce((sum, l) => sum + calculateLeaveDays(l.startDate, l.endDate), 0);
 }
 
@@ -3429,7 +3448,7 @@ async function submitLeaveForm() {
   const [startType, endType] = inferLeaveType(startTime, endTime);
 
   const isAutoApproved = isManager() || leaveType === "comp";
-  const status = isAutoApproved ? "approved" : "pending";
+  const status = isAutoApproved ? LEAVE_STATUS.APPROVED : LEAVE_STATUS.PENDING;
 
   await repo.saveLeaveRecord({
     workerId, workerName, leaveType,
@@ -3439,9 +3458,9 @@ async function submitLeaveForm() {
   await repo.loadAll();
   modal.close();
   renderAll();
-  toast(status === "approved" ? "请假已批准" : "请假申请已提交，等待审批");
+  toast(status === LEAVE_STATUS.APPROVED ? "请假已批准" : "请假申请已提交，等待审批");
 
-  if (status === "pending") {
+  if (status === LEAVE_STATUS.PENDING) {
     notify("新的请假申请", `${workerName} 申请了 ${LEAVE_TYPE_LABEL[leaveType]}，请及时审批`);
   }
   } catch (e) {
@@ -3669,7 +3688,7 @@ function renderProjects() {
     const pStart = new Date(p.appointmentTime || p.startTime);
     const pEnd = new Date(p.endTime || p.appointmentTime);
     const leaveConflicts = cache.leaveRecords.filter(r => {
-      if (r.status !== "approved") return false;
+      if (r.status !== LEAVE_STATUS.APPROVED) return false;
       if (!p.assignedWorkerIds || !p.assignedWorkerIds.includes(r.workerId)) return false;
       const leaveStart = new Date(`${r.startDate}T${r.startTime || "08:00"}`);
       const leaveEnd = new Date(`${r.endDate}T${r.endTime || "18:00"}`);
@@ -5213,7 +5232,7 @@ function isWorkerOnLeave(workerId, dateStr) {
   if (!workerId || !dateStr) return null;
   return cache.leaveRecords.find((l) => {
     if (l.workerId !== workerId) return false;
-    if (l.status !== "approved") return false;
+    if (l.status !== LEAVE_STATUS.APPROVED) return false;
     return dateStr >= l.startDate && dateStr <= l.endDate;
   });
 }
@@ -5286,7 +5305,7 @@ function getProjectScheduleConflict(workerId, projectStartDate, projectEndDate, 
 
 /* 获取工人的所有请假记录 */
 function getWorkerLeaveRecords(workerId) {
-  return cache.leaveRecords.filter((l) => l.workerId === workerId && l.status === "approved");
+  return cache.leaveRecords.filter((l) => l.workerId === workerId && l.status === LEAVE_STATUS.APPROVED);
 }
 
 /* 格式化请假时间显示 */
@@ -6367,7 +6386,7 @@ async function addWorkLog(id) {
   const level = document.getElementById("logLevel").value;
   const workType = document.getElementById("logWorkType").value;
   
-  if (!validateHours(hoursInput)) { toast("工时必须在 0.1-24 小时之间"); return; }
+  if (!validateHours(hoursInput)) { toast(`工时必须在 ${HOURS_MIN}-${HOURS_MAX} 小时之间`); return; }
   const hours = Number(hoursInput);
   if (!date) { toast("请选择施工日期"); return; }
   
@@ -6438,6 +6457,15 @@ function toggleProgressDetail(headerEl) {
   icon.textContent = isHidden ? '▼' : '▶';
 }
 
+/* 施工人员安排卡片：点击标题栏折叠/展开详情（默认折叠，用 .collapsed 类控制） */
+function toggleScheduleItem(itemId) {
+  const el = document.getElementById(itemId);
+  if (!el) return;
+  const collapsed = el.classList.toggle('collapsed');
+  const icon = el.querySelector('.schedule-toggle-icon');
+  if (icon) icon.textContent = collapsed ? '▶' : '▼';
+}
+
 function renderSliderAlloc() {
   const total = Number(document.getElementById("allocTotal").value) || 0;
   const sliders = WORK_TYPES.map((_, i) => document.getElementById("allocSlider" + i));
@@ -6500,20 +6528,41 @@ function openAllocSlider() {
   const workerOptions = (cache.workers || []).map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
   const init = [0, 30, 55, 15];
 
-  /* 计算本次系统计时（作为默认总工时） */
+  /* 计算本次默认总工时 */
+  /* 规则：
+   *   - 已完工/已取消：用项目的实际累计工时 actualHours（即已有工时记录之和）
+   *   - 施工中 且 今天开工的：算从 startedAt 到现在的时长（上限 12 小时）
+   *   - 其他情况：默认 8 小时（标准工作日）
+   *   - 最终结果不超过 HOURS_MAX（24）
+   */
   const now = new Date();
-  const accumulatedWorkHours = p.accumulatedWorkHours || 0;
-  let currentWorkDuration = 0;
-  if (p.startedAt) {
+  const todayStr = now.toISOString().slice(0, 10);
+  let defaultTotal = 8; // 默认标准工作日
+
+  if (p.status === STATUS.COMPLETED || p.status === STATUS.CANCELLED) {
+    // 已完工/取消：使用实际累计工时（最准确）
+    defaultTotal = p.actualHours > 0 ? Math.round(p.actualHours * 10) / 10 : 8;
+  } else if (p.startedAt) {
     const sessionStart = new Date(p.startedAt);
-    let endTime = now;
-    if (p.status === STATUS.PAUSED && p.pausedAt) {
-      endTime = new Date(p.pausedAt);
+    const startedDateStr = sessionStart.toISOString().slice(0, 10);
+    // 只有今天开工的项目才用实时计时；跨天的项目不应把历史时长当作"本次"
+    if (startedDateStr === todayStr) {
+      let endTime = now;
+      if (p.status === STATUS.PAUSED && p.pausedAt) {
+        endTime = new Date(p.pausedAt);
+      }
+      const hoursElapsed = (endTime - sessionStart) / (1000 * 60 * 60);
+      // 单次填报上限 12 小时（防止异常数据）
+      if (hoursElapsed > 0 && hoursElapsed <= 12) {
+        defaultTotal = Math.round(hoursElapsed * 10) / 10;
+      } else if (hoursElapsed > 12) {
+        defaultTotal = 12;
+      }
     }
-    currentWorkDuration = (endTime - sessionStart) / (1000 * 60 * 60);
+    // startedDateStr !== today 时保持默认 8
   }
-  const systemTrackedHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
-  const defaultTotal = systemTrackedHours > 0 ? Math.round(systemTrackedHours * 10) / 10 : 8;
+
+  defaultTotal = Math.min(defaultTotal, HOURS_MAX);
   const sliderRows = WORK_TYPES.map((t, i) => `
     <div class="alloc-row">
       <div class="alloc-label">${t} <span class="alloc-pct" id="allocPct${i}">${init[i]}%</span></div>
@@ -6565,7 +6614,7 @@ function openAllocSlider() {
       if (!date) { toast("请选择施工日期"); return false; }
       const vals = WORK_TYPES.map((_, i) => Number(document.getElementById("allocSlider" + i).value));
       const totalInput = document.getElementById("allocTotal").value;
-      if (!validateHours(totalInput)) { toast("总工时必须在 0.1-24 小时之间"); return false; }
+      if (!validateHours(totalInput)) { toast(`总工时必须在 ${HOURS_MIN}-${HOURS_MAX} 小时之间`); return false; }
       const total = Number(totalInput);
       const sum = vals.reduce((a, b) => a + b, 0);
       if (sum <= 0) { toast("请至少设置一个作业类型的占比"); return false; }
@@ -6671,7 +6720,7 @@ function editWorkLog(pid, lid) {
         workerId = "outsourced:" + workerName;
       }
       const hoursInput = document.getElementById("editHours").value;
-      if (!validateHours(hoursInput)) { toast("工时必须在 0.1-24 小时之间"); return false; }
+      if (!validateHours(hoursInput)) { toast(`工时必须在 ${HOURS_MIN}-${HOURS_MAX} 小时之间`); return false; }
       const hours = Number(hoursInput);
       const date = document.getElementById("editDate").value;
       if (!date) { toast("请选择施工日期"); return false; }
@@ -6731,7 +6780,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
     if (workerSchedule[wid] && workerSchedule[wid].length > 0) return false;
     
     const leaveRecords = cache.leaveRecords.filter(r => {
-      if (r.status === "rejected") return false;
+      if (r.status === LEAVE_STATUS.REJECTED) return false;
       const leaveStart = new Date(`${r.startDate}T${r.startTime || "08:00"}`);
       const leaveEnd = new Date(`${r.endDate}T${r.endTime || "18:00"}`);
       const checkDate = new Date(dateStrFormatted + "T09:00");
@@ -6743,7 +6792,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
   
   const onLeaveWorkers = cache.workers.filter(w => {
     const leaveRecords = cache.leaveRecords.filter(r => {
-      if (r.status === "rejected") return false;
+      if (r.status === LEAVE_STATUS.REJECTED) return false;
       if (r.workerId !== w.id) return false;
       const leaveStart = new Date(`${r.startDate}T${r.startTime || "08:00"}`);
       const leaveEnd = new Date(`${r.endDate}T${r.endTime || "18:00"}`);
@@ -6766,9 +6815,12 @@ function generateWorkerScheduleDescription(dateStr = null) {
     const worker = getWorker(wid);
     const name = worker ? worker.name : "未知人员";
     const projects = workerSchedule[wid];
-    
-    description += `<div class="schedule-item">`;
-    description += `<div class="schedule-worker">👤 ${name}</div>`;
+    const workerSchedules = cache.workerSchedules.filter(s => s.workerId === wid && s.startDate === dateStr);
+    const itemCount = projects.length + workerSchedules.length;
+
+    description += `<div class="schedule-item collapsed" id="sched-${wid}">`;
+    description += `<div class="schedule-worker-header" onclick="toggleScheduleItem('sched-${wid}')" title="点击展开/收起"><span class="schedule-toggle-icon">▶</span>👤 ${name}${itemCount > 0 ? ` <span class="sched-count">${itemCount}项安排，点开查看</span>` : ""}</div>`;
+    description += `<div class="schedule-item-body">`;
     
     projects.forEach((p, idx) => {
       const store = getStore(p.storeId);
@@ -6898,14 +6950,14 @@ function generateWorkerScheduleDescription(dateStr = null) {
       t.workerName === name && 
       t.date === dateStrFormatted && 
       t.actualStartTime && 
-      ['in_progress', 'completed', 'verified'].includes(t.status)
+      [TASK_STATUS.IN_PROGRESS, TASK_STATUS.COMPLETED, TASK_STATUS.VERIFIED].includes(t.status)
     );
     workerInternalTasks.forEach(t => {
       if (t.actualEndTime) {
         const start = new Date(`${t.date} ${t.actualStartTime}`);
         const end = new Date(`${t.date} ${t.actualEndTime}`);
         totalActualHours += (end - start) / (1000 * 60 * 60);
-      } else if (t.status === 'in_progress') {
+      } else if (t.status === TASK_STATUS.IN_PROGRESS) {
         const start = new Date(`${t.date} ${t.actualStartTime}`);
         const end = new Date();
         totalActualHours += (end - start) / (1000 * 60 * 60);
@@ -6978,7 +7030,6 @@ function generateWorkerScheduleDescription(dateStr = null) {
       description += `<div class="schedule-warning" style="background:#dbeafe;border-left:4px solid #3b82f6;">📍 <strong>地址相近提示</strong>：您今日有${nearbyProjects.length}组项目地址相近，建议提前规划路线，可顺路完成，提高效率。</div>`;
     }
     
-    const workerSchedules = cache.workerSchedules.filter(s => s.workerId === wid && s.startDate === dateStr);
     if (workerSchedules.length > 0) {
       description += `<div class="schedule-schedules">`;
       description += `<div class="schedule-schedules-title">📝 个人日程</div>`;
@@ -6991,12 +7042,13 @@ function generateWorkerScheduleDescription(dateStr = null) {
       description += `</div>`;
     }
     
-    description += `</div>`;
+    description += `</div></div>`;
   });
   
   if (availableWorkers.length > 0) {
-    description += `<div class="schedule-item standby">`;
-    description += `<div class="schedule-worker">👥 待命人员</div>`;
+    description += `<div class="schedule-item collapsed standby" id="sched-standby">`;
+    description += `<div class="schedule-worker-header" onclick="toggleScheduleItem('sched-standby')" title="点击展开/收起"><span class="schedule-toggle-icon">▶</span>👥 待命人员 <span class="sched-count">${availableWorkers.length}人在岗，点开查看</span></div>`;
+    description += `<div class="schedule-item-body">`;
     
     const standbyWithSchedules = availableWorkers.filter(w => 
       cache.workerSchedules.some(s => s.workerId === w.id && s.startDate === dateStr)
@@ -7024,14 +7076,15 @@ function generateWorkerScheduleDescription(dateStr = null) {
       description += `<div class="schedule-task">${standbyWithoutSchedules.map(w => w.name).join("、")} 今天没有安排任务，随时待命，有突发情况可以随时调配。</div>`;
     }
     
-    description += `</div>`;
+    description += `</div></div>`;
   }
   
   if (onLeaveWorkers.length > 0) {
-    description += `<div class="schedule-item leave">`;
-    description += `<div class="schedule-worker">🌴 请假人员</div>`;
+    description += `<div class="schedule-item collapsed leave" id="sched-leave">`;
+    description += `<div class="schedule-worker-header" onclick="toggleScheduleItem('sched-leave')" title="点击展开/收起"><span class="schedule-toggle-icon">▶</span>🌴 请假人员 <span class="sched-count">${onLeaveWorkers.length}人，点开查看</span></div>`;
+    description += `<div class="schedule-item-body">`;
     description += `<div class="schedule-task">${onLeaveWorkers.map(w => w.name).join("、")} 今天请假，不在岗，请大家注意人手安排。</div>`;
-    description += `</div>`;
+    description += `</div></div>`;
   }
   
   const allWorkerIds = new Set();
@@ -7172,14 +7225,14 @@ function generateWorkerScheduleDescription(dateStr = null) {
     const internalTasksToday = getInternalTasks().filter(t =>
       t.date === dateStrFormatted &&
       t.actualStartTime &&
-      ['in_progress', 'completed', 'verified'].includes(t.status)
+      [TASK_STATUS.IN_PROGRESS, TASK_STATUS.COMPLETED, TASK_STATUS.VERIFIED].includes(t.status)
     );
     const internalActualHours = internalTasksToday.reduce((sum, t) => {
       if (t.actualEndTime) {
         const start = new Date(`${t.date} ${t.actualStartTime}`);
         const end = new Date(`${t.date} ${t.actualEndTime}`);
         return sum + (end - start) / (1000 * 60 * 60);
-      } else if (t.status === 'in_progress') {
+      } else if (t.status === TASK_STATUS.IN_PROGRESS) {
         const start = new Date(`${t.date} ${t.actualStartTime}`);
         const end = new Date();
         return sum + (end - start) / (1000 * 60 * 60);
@@ -8375,7 +8428,7 @@ function collectStats() {
   });
   
   cache.leaveRecords.forEach((l) => {
-    if (l.status !== "approved") return;
+    if (l.status !== LEAVE_STATUS.APPROVED) return;
     if (workerFilter && l.workerId !== workerFilter) return;
     if (!rows[l.workerId]) {
       const w = getWorker(l.workerId);
@@ -9232,18 +9285,18 @@ function getInternalTasks() {
       let tasks = JSON.parse(stored);
       const migrated = localStorage.getItem("internalTasksMigrated_v2") === "true";
       tasks = tasks.map(t => {
-        if (!t.scheduledStartTime && t.startTime && t.status === 'pending') {
+        if (!t.scheduledStartTime && t.startTime && t.status === TASK_STATUS.PENDING) {
           t.scheduledStartTime = t.startTime;
           t.scheduledEndTime = t.endTime;
         }
-        if (!t.actualStartTime && t.startTime && (t.status === 'in_progress' || t.status === 'completed' || t.status === 'verified')) {
+        if (!t.actualStartTime && t.startTime && (t.status === TASK_STATUS.IN_PROGRESS || t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED)) {
           t.actualStartTime = t.startTime;
         }
-        if (!t.actualEndTime && t.endTime && (t.status === 'completed' || t.status === 'verified')) {
+        if (!t.actualEndTime && t.endTime && (t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED)) {
           t.actualEndTime = t.endTime;
         }
-        if (!migrated && !t.verifiedAt && t.status === 'completed' && t.actualHours) {
-          t.status = 'verified';
+        if (!migrated && !t.verifiedAt && t.status === TASK_STATUS.COMPLETED && t.actualHours) {
+          t.status = TASK_STATUS.VERIFIED;
           t.verifiedAt = new Date().toLocaleString('zh-CN');
         }
         return t;
@@ -9262,8 +9315,8 @@ function getInternalTasks() {
 
 function updateInternalTaskBadge() {
   const tasks = getInternalTasks();
-  const pendingCount = tasks.filter(t => t.status === 'pending').length;
-  const needVerifyCount = tasks.filter(t => t.status === 'completed').length;
+  const pendingCount = tasks.filter(t => t.status === TASK_STATUS.PENDING).length;
+  const needVerifyCount = tasks.filter(t => t.status === TASK_STATUS.COMPLETED).length;
   const totalCount = pendingCount + needVerifyCount;
   
   document.querySelectorAll('[data-tab="internalTasks"]').forEach(btn => {
@@ -9291,7 +9344,7 @@ function addInternalTask(task) {
   tasks.push({
     id: 'task_' + Date.now(),
     ...task,
-    status: 'pending',
+    status: TASK_STATUS.PENDING,
     createdAt: new Date().toISOString()
   });
   saveInternalTasks(tasks);
@@ -9517,7 +9570,7 @@ function saveNewInternalTask() {
 
 function startInternalTask(id) {
   updateInternalTask(id, {
-    status: 'in_progress',
+    status: TASK_STATUS.IN_PROGRESS,
     actualStartTime: new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'}),
     startTimestamp: Date.now()
   });
@@ -9546,7 +9599,7 @@ function completeInternalTask(id) {
   }
   
   updateInternalTask(id, {
-    status: 'completed',
+    status: TASK_STATUS.COMPLETED,
     actualEndTime,
     endTimestamp,
     actualHours: finalHours,
@@ -9657,7 +9710,7 @@ function doVerifyInternalTask(id) {
   if (!task) return;
   
   updateInternalTask(id, {
-    status: 'verified',
+    status: TASK_STATUS.VERIFIED,
     verifiedAt: new Date().toLocaleString('zh-CN'),
     actualHours: verifyHours,
     verifyNote: verifyNote
@@ -9909,13 +9962,13 @@ function renderInternalTasks() {
     if (typeFilter && t.workType !== typeFilter) return false;
     
     if (dateFilter === "3days") {
-      if (t.status === 'pending' || t.status === 'in_progress') return true;
+      if (t.status === TASK_STATUS.PENDING || t.status === TASK_STATUS.IN_PROGRESS) return true;
       const taskDate = new Date(t.date);
       taskDate.setHours(0, 0, 0, 0);
       const diffDays = (taskDate - today) / (1000 * 60 * 60 * 24);
       return diffDays >= -2 && diffDays <= 0;
     } else if (dateFilter === "7days") {
-      if (t.status === 'pending' || t.status === 'in_progress') return true;
+      if (t.status === TASK_STATUS.PENDING || t.status === TASK_STATUS.IN_PROGRESS) return true;
       const taskDate = new Date(t.date);
       taskDate.setHours(0, 0, 0, 0);
       const diffDays = (taskDate - today) / (1000 * 60 * 60 * 24);
@@ -9941,32 +9994,32 @@ function renderInternalTasks() {
     const statusColor = { pending: '#6b7280', in_progress: '#3b82f6', completed: '#f59e0b', verified: '#10b981' };
     
     let actionButtons = '';
-    if (t.status === 'pending') {
+    if (t.status === TASK_STATUS.PENDING) {
       actionButtons = `<button class="btn primary" onclick="startInternalTask('${t.id}')">任务开始</button>`;
-    } else if (t.status === 'in_progress') {
+    } else if (t.status === TASK_STATUS.IN_PROGRESS) {
       actionButtons = `<button class="btn success" onclick="completeInternalTask('${t.id}')">任务完成</button>`;
-    } else if (t.status === 'completed') {
+    } else if (t.status === TASK_STATUS.COMPLETED) {
       actionButtons = isManager() ? `<button class="btn primary" onclick="showVerifyModal('${t.id}')">审核</button>` : '';
     }
     
     const calcH = t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours);
-    const timeInfo = t.status === 'pending' && t.scheduledStartTime && t.scheduledEndTime
+    const timeInfo = t.status === TASK_STATUS.PENDING && t.scheduledStartTime && t.scheduledEndTime
       ? `<div class="it-time-box it-time-box--pending">
            <div class="it-tline">📅 安排：<b>${t.scheduledStartTime} ~ ${t.scheduledEndTime}</b></div>
          </div>`
-      : t.status === 'in_progress' 
+      : t.status === TASK_STATUS.IN_PROGRESS 
         ? `<div class="it-time-box it-time-box--in_progress">
              <div class="it-tline">📅 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
              <div class="it-tline">⏰ 实际开始：<b>${t.actualStartTime || '-'}</b></div>
            </div>`
-        : t.status === 'completed'
+        : t.status === TASK_STATUS.COMPLETED
           ? `<div class="it-time-box it-time-box--completed">
                <div class="it-tline">📅 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
                <div class="it-tline">⏰ 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
                <div class="it-tline">📊 预计：${fmtHours(t.estHours)}h / 记录：<b>${fmtHours(calcH)}h</b></div>
                <div class="it-tline it-tline--warn">⚠️ 等待审核</div>
              </div>`
-          : t.status === 'verified'
+          : t.status === TASK_STATUS.VERIFIED
             ? `<div class="it-time-box it-time-box--verified">
                  <div class="it-tline">📅 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
                  <div class="it-tline">⏰ 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
@@ -11850,7 +11903,7 @@ async function importLeaveRecord(row) {
     endDate: row["结束日期"] || row["endDate"] || "",
     endType: row["结束时段"] || row["endType"] || "",
     reason: row["原因"] || row["reason"] || "",
-    status: row["状态"] || row["status"] || "pending",
+    status: row["状态"] || row["status"] || LEAVE_STATUS.PENDING,
     reviewerName: row["审批人"] || row["reviewerName"] || "",
     reviewNote: row["审批意见"] || row["reviewNote"] || "",
     createdAt: row["创建时间"] || row["createdAt"] || now()
@@ -12163,8 +12216,8 @@ function renderLeaves() {
   
   records.sort((a, b) => new Date(b.createdAt || b.startDate) - new Date(a.createdAt || a.startDate));
   
-  const pendingRecords = records.filter(r => r.status === "pending");
-  const historyRecords = records.filter(r => r.status !== "pending");
+  const pendingRecords = records.filter(r => r.status === LEAVE_STATUS.PENDING);
+  const historyRecords = records.filter(r => r.status !== LEAVE_STATUS.PENDING);
   
   renderLeaveStats(statsEl);
   
@@ -12191,7 +12244,7 @@ function renderLeaveStats(container) {
   if (!container) return;
   
   const year = new Date().getFullYear();
-  const approvedRecords = cache.leaveRecords.filter(r => r.status === "approved");
+  const approvedRecords = cache.leaveRecords.filter(r => r.status === LEAVE_STATUS.APPROVED);
   
   const typeStats = {};
   let totalDays = 0;
@@ -12208,8 +12261,8 @@ function renderLeaveStats(container) {
     }
   });
   
-  const pendingCount = cache.leaveRecords.filter(r => r.status === "pending").length;
-  const rejectedCount = cache.leaveRecords.filter(r => r.status === "rejected").length;
+  const pendingCount = cache.leaveRecords.filter(r => r.status === LEAVE_STATUS.PENDING).length;
+  const rejectedCount = cache.leaveRecords.filter(r => r.status === LEAVE_STATUS.REJECTED).length;
   
   const workerStats = cache.workers.map(w => {
     const workerLeaves = approvedRecords.filter(r => r.workerId === w.id);
@@ -12408,9 +12461,9 @@ function renderLeaveCard(record, showActions) {
   const statusLabel = LEAVE_STATUS_LABEL[record.status] || record.status;
   
   let statusClass = "";
-  if (record.status === "pending") statusClass = "background:#fef3c7;color:#92400e;border-color:#f59e0b";
-  else if (record.status === "approved") statusClass = "background:#d1fae5;color:#065f46;border-color:#10b981";
-  else if (record.status === "rejected") statusClass = "background:#fee2e2;color:#991b1b;border-color:#dc2626";
+  if (record.status === LEAVE_STATUS.PENDING) statusClass = "background:#fef3c7;color:#92400e;border-color:#f59e0b";
+  else if (record.status === LEAVE_STATUS.APPROVED) statusClass = "background:#d1fae5;color:#065f46;border-color:#10b981";
+  else if (record.status === LEAVE_STATUS.REJECTED) statusClass = "background:#fee2e2;color:#991b1b;border-color:#dc2626";
   
   const conflicts = checkLeaveProjectConflict(record.workerId, record.startDate, record.endDate, record.startTime, record.endTime);
   
@@ -12446,18 +12499,18 @@ function renderLeaveCard(record, showActions) {
       ${record.reviewerName ? `<div class="card-row" style="color:var(--muted);font-size:12px;">审批人：${esc(record.reviewerName)}</div>` : ""}
       <div class="card-actions">
         ${showActions && perm.manageLeaves() ? `
-          ${record.status === "pending" ? `
+          ${record.status === LEAVE_STATUS.PENDING ? `
             <button class="btn small" onclick="approveLeave('${record.id}')">批准</button>
             <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
           ` : ""}
-          ${record.status === "approved" ? `
+          ${record.status === LEAVE_STATUS.APPROVED ? `
             <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回批准</button>
           ` : ""}
-          ${record.status === "rejected" ? `
+          ${record.status === LEAVE_STATUS.REJECTED ? `
             <button class="btn small danger" onclick="deleteLeaveRecord('${record.id}')">删除</button>
           ` : ""}
         ` : ""}
-        ${record.status === "pending" && record.workerId === currentProfile.id ? `
+        ${record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id ? `
           <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回</button>
         ` : ""}
         <button class="btn small" onclick="showLeaveDetail('${record.id}')">详情</button>
@@ -12497,7 +12550,7 @@ async function approveLeave(id) {
   
   await repo.saveLeaveRecord({
     ...record,
-    status: "approved",
+    status: LEAVE_STATUS.APPROVED,
     reviewerId: currentUser?.id || null,
     reviewerName: currentUser?.email || "系统",
     reviewedAt: new Date().toISOString(),
@@ -12524,7 +12577,7 @@ async function rejectLeave(id) {
   
   await repo.saveLeaveRecord({
     ...record,
-    status: "rejected",
+    status: LEAVE_STATUS.REJECTED,
     reviewNote: note,
     reviewerId: currentUser?.id || null,
     reviewerName: currentUser?.email || "系统",
@@ -12542,9 +12595,9 @@ async function withdrawLeave(id) {
   const record = getLeaveRecord(id);
   if (!record) return;
   
-  if (record.status === "approved") {
+  if (record.status === LEAVE_STATUS.APPROVED) {
     if (!(await confirmDialog(`确定要撤回 ${record.workerName} 的 ${LEAVE_TYPE_LABEL[record.leaveType]} 批准吗？`, "撤回批准"))) return;
-    record.status = "pending";
+    record.status = LEAVE_STATUS.PENDING;
     record.reviewNote = "";
     record.reviewerId = "";
     record.reviewerName = "";
@@ -13156,7 +13209,7 @@ function renderTimelineInDetail() {
             const d = new Date(today.getTime() + i * 24 * 60 * 60 * 1000);
             const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
             const leaves = cache.leaveRecords.filter((lr) => {
-              if (lr.status === "rejected") return false;
+              if (lr.status === LEAVE_STATUS.REJECTED) return false;
               const sd = new Date(lr.startDate);
               sd.setHours(0, 0, 0, 0);
               const ed = new Date(lr.endDate);
