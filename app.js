@@ -14657,19 +14657,31 @@ document.addEventListener("DOMContentLoaded", init);
 if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   // 首次安装时 controller 为 null；更新（已有旧 SW 控制）时为 true，用于过滤首次弹窗
   const hadController = !!navigator.serviceWorker.controller;
+
+  // 版本更新横幅：常驻顶部，点击即强制硬刷新，避免用户关闭提示后一直停留在旧版
+  function showUpdateBanner(version) {
+    if (document.getElementById("swUpdateBar")) return;
+    const bar = document.createElement("div");
+    bar.id = "swUpdateBar";
+    bar.innerHTML = `<span class="sw-update__text">🔄 发现新版本 <b>${version || ""}</b>，建议立即更新以使用最新功能与修复</span>
+      <button type="button" id="swUpdateBtn" class="sw-update__btn">立即更新</button>`;
+    document.body.appendChild(bar);
+    document.getElementById("swUpdateBtn").addEventListener("click", () => {
+      // 硬刷新：绕过 HTTP 缓存，确保拿到新程序
+      window.location.reload(true);
+    });
+  }
+
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("sw.js").then((registration) => {
       registration.update();
+      // 即使页面长时间不关，也每分钟检查一次是否有新版本上传到云端
+      setInterval(() => registration.update(), 60000);
 
-      // 注意：之前在 controllerchange 里直接 reload，导致新版本通过 skipWaiting+claim 静默接管页面时
-      // 页面被悄悄刷新（能自动更新），而 VERSION_UPDATED 的“是否刷新”提示被这次 reload 抢先冲掉。
-      // 改为仅在收到 VERSION_UPDATED 消息时弹提示，由用户确认后再刷新，恢复更新提示。
       navigator.serviceWorker.addEventListener("message", async (e) => {
         if (e.data && e.data.type === "VERSION_UPDATED") {
           if (!hadController) return; // 首次安装不弹提示，避免打扰
-          if (await confirmDialog(`应用已更新至新版本 ${e.data.version}！是否立即刷新？`, "应用更新")) {
-            window.location.reload();
-          }
+          showUpdateBanner(e.data.version);
         }
       });
     }).catch((err) => console.warn("Service Worker 注册失败", err));
@@ -15206,7 +15218,8 @@ function vehicleHistoryCardHtml(trips) {
 function vehicleHistoryListHtml(trips) {
   const rows = trips.map((t) => {
     const open = !t.backTime;
-    const mileage = Number(t.mileage) || (Number(t.endKm) - Number(t.startKm));
+    const rawMileage = Number(t.mileage);
+    const mileage = !open ? (rawMileage || Math.max(0, Number(t.endKm) - Number(t.startKm))) : null;
     const vName = t.vehicleName ? `${esc(t.vehicleName)}` : "未知车辆";
     const icon = t.type === "接货" ? "📦" : (t.type === "安装" ? "🔧" : (t.type === "业务" ? "💼" : "🚚"));
     const actions = open
@@ -15216,16 +15229,44 @@ function vehicleHistoryListHtml(trips) {
           : `<span class="veh-readonly">只读</span>`);
     return `
       <div class="veh-row${open ? " veh-row--open" : ""}">
-        <div class="veh-row__main">
-          <span class="veh-row__veh" title="${esc(vName)}${t.vehiclePlate ? " · " + esc(t.vehiclePlate) : ""}">${icon} ${vName}${t.vehiclePlate ? ` · ${esc(t.vehiclePlate)}` : ""}</span>
-          <span class="veh-row__type">${esc(t.type || "送货")}</span>
-          <span class="veh-row__driver" title="${esc(t.driverName || "")}">👤 ${esc(t.driverName || "—")}</span>
-          <span class="veh-row__km">${open ? "—" : Number(mileage).toFixed(1)} km</span>
-          ${t.fuelLevel != null ? `<span class="veh-row__fuel" title="还车时剩余油量">⛽ ${Number(t.fuelLevel)}%</span>` : ""}
-          ${t.projectName ? `<span class="veh-row__proj" title="${esc(t.projectName)}">🔗 ${esc(t.projectName)}</span>` : `<span class="veh-row__proj veh-row__proj--empty">—</span>`}
-          <span class="veh-row__time">🕐 ${t.outTime ? fmtDateTime(t.outTime) : "—"}</span>
-          <span class="veh-row__time">🏁 ${t.backTime ? fmtDateTime(t.backTime) : "—"}</span>
-          ${open ? `<span class="veh-row__badge">未还车</span>` : ""}
+        <div class="veh-row__content">
+          <div class="veh-row__header">
+            <div class="veh-row__veh-wrap">
+              <span class="veh-row__icon">${icon}</span>
+              <span class="veh-row__veh" title="${esc(vName)}${t.vehiclePlate ? " · " + esc(t.vehiclePlate) : ""}">${vName}</span>
+              ${t.vehiclePlate ? `<span class="veh-row__plate">${esc(t.vehiclePlate)}</span>` : ""}
+              <span class="veh-row__type">${esc(t.type || "送货")}</span>
+            </div>
+            <div class="veh-row__meta">
+              <span class="veh-row__driver" title="${esc(t.driverName || "")}">👤 ${esc(t.driverName || "未填写")}</span>
+              ${t.fuelLevel != null ? `<span class="veh-row__fuel" title="还车时剩余油量">⛽ ${Number(t.fuelLevel)}%</span>` : ""}
+              ${open
+                ? `<span class="veh-row__status">未还车</span>`
+                : `<span class="veh-row__km">${Number(mileage || 0).toFixed(1)}<i>km</i></span>`}
+            </div>
+          </div>
+          <div class="veh-row__timeline">
+            <div class="veh-row__tl-item">
+              <span class="veh-row__tl-dot veh-row__tl-dot--out"></span>
+              <div class="veh-row__tl-info">
+                <span class="veh-row__tl-label">出发</span>
+                <span class="veh-row__tl-datetime">${t.outTime ? `${fmtDateShort(t.outTime)} ${fmtTime(t.outTime)}` : "—"}</span>
+              </div>
+            </div>
+            <div class="veh-row__tl-arrow">→</div>
+            <div class="veh-row__tl-item">
+              <span class="veh-row__tl-dot veh-row__tl-dot--back"></span>
+              <div class="veh-row__tl-info">
+                <span class="veh-row__tl-label">${open ? "未回" : "返回"}</span>
+                <span class="veh-row__tl-datetime">${t.backTime ? `${fmtDateShort(t.backTime)} ${fmtTime(t.backTime)}` : "—"}</span>
+              </div>
+            </div>
+          </div>
+          ${t.projectName || t.note ? `
+          <div class="veh-row__project">
+            ${t.projectName ? `<div class="veh-row__proj-line"><span class="veh-row__proj-label">🔗 关联项目</span><span class="veh-row__proj-text" title="${esc(t.projectName)}">${esc(t.projectName)}</span></div>` : ""}
+            ${t.note ? `<div class="veh-row__proj-line"><span class="veh-row__proj-note" title="${esc(t.note)}">📝 ${esc(t.note)}</span></div>` : ""}
+          </div>` : ""}
         </div>
         <div class="veh-row__act">${actions}</div>
       </div>`;
