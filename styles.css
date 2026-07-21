@@ -7079,12 +7079,17 @@ table.data.project-hours-diff td.wrap {
   border-left-color: #f59e0b;
   background: linear-gradient(180deg, #fffdf6 0%, #fff 45%);
 }
-.veh-trip__head {
+.veh-trip__top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+}
+.veh-trip__icon {
+  font-size: 20px;
+  flex-shrink: 0;
+  line-height: 1;
 }
 .veh-trip__veh {
   display: flex;
@@ -7092,8 +7097,14 @@ table.data.project-hours-diff td.wrap {
   gap: 8px;
   min-width: 0;
 }
+.veh-trip__veh-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
 .veh-trip__title {
-  font-size: 14.5px;
+  font-size: 15px;
   font-weight: 700;
   color: #0f172a;
   overflow: hidden;
@@ -7102,48 +7113,223 @@ table.data.project-hours-diff td.wrap {
   min-width: 0;
 }
 .veh-trip__plate {
-  flex-shrink: 0;
-  font-size: 11.5px;
+  align-self: flex-start;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.5px;
   color: #475569;
   background: #f1f5f9;
   border: 1px solid #e2e8f0;
-  padding: 2px 7px;
+  padding: 1px 7px;
   border-radius: 6px;
 }
-.veh-trip__badge {
+.veh-trip__top-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: #b45309;
-  background: #fef3c7;
+}
+.veh-trip__top-right .veh-type {
   padding: 3px 10px;
+  font-size: 12px;
+}
+/* 还车状态：顶部右侧高亮标签 */
+.veh-trip__status {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
   border-radius: 999px;
   white-space: nowrap;
 }
-.veh-trip__mileage {
-  flex-shrink: 0;
-  font-size: 17px;
-  font-weight: 800;
-  color: #2563eb;
-  white-space: nowrap;
+.veh-trip__status--open {
+  color: #b45309;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
 }
-.veh-trip__mileage i {
-  font-style: normal;
+.veh-trip__status--done {
+  color: #047857;
+  background: #d1fae5;
+  border: 1px solid #a7f3d0;
+}
+/* HERO：司机 + 行驶里程，核心信息突出 */
+.veh-trip__hero {
+  display: flex;
+  align-items: stretch;
+  background: linear-gradient(135deg, #eef4ff 0%, #f3f0ff 100%);
+  border: 1px solid #e4ebf8;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.veh-hero__item {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.veh-hero__item--km { align-items: flex-end; text-align: right; }
+.veh-hero__label {
   font-size: 11px;
   font-weight: 600;
-  color: #94a3b8;
-  margin-left: 2px;
+  color: #64748b;
+  letter-spacing: 0.03em;
 }
-.veh-trip__project {
+.veh-hero__driver {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.veh-hero__avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.veh-hero__driver b {
+  font-size: 16px;
+  font-weight: 800;
+  color: #1e293b;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.veh-hero__none {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #94a3b8 !important;
+}
+.veh-hero__km {
+  font-size: 27px;
+  font-weight: 800;
+  color: #2563eb;
+  line-height: 1;
+  white-space: nowrap;
+}
+.veh-hero__km i {
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 700;
+  color: #93c5fd;
+  margin-left: 3px;
+}
+.veh-hero__divider {
+  width: 1px;
+  background: linear-gradient(180deg, transparent, #cdd8ec, transparent);
+  margin: 0 16px;
+}
+/* 时间-里程配对区 */
+.veh-trip__time-km {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 12px 0;
+}
+.veh-time-km__item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.veh-time-km__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.veh-time-km__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px currentColor;
+}
+.veh-time-km__dot--out { background: #f59e0b; color: #f59e0b; }
+.veh-time-km__dot--back { background: #34d399; color: #34d399; }
+.veh-time-km__datetime {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.veh-time-km__label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #94a3b8;
+  line-height: 1.2;
+}
+.veh-time-km__date {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #334155;
+  line-height: 1.3;
+}
+.veh-time-km__time {
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.2;
+}
+.veh-time-km__value {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px dashed #e2e8f0;
+}
+.veh-time-km__value span {
+  font-size: 10.5px;
+  color: #94a3b8;
+}
+.veh-time-km__value b {
+  font-size: 14px;
+  font-weight: 800;
+  color: #1e293b;
+  font-variant-numeric: tabular-nums;
+}
+.veh-trip__fuel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  font-size: 12px;
+  color: #475569;
+  background: #f0f9ff;
+  border: 1px solid #e0f2fe;
+  padding: 4px 10px;
+  border-radius: 999px;
+  margin-bottom: 10px;
+}
+.veh-trip__fuel b {
+  font-weight: 800;
+  color: #0369a1;
+}
+/* 底部：关联项目 / 地址 / 备注 */
+.veh-trip__bottom {
   font-size: 12.5px;
   color: #475569;
-  margin-bottom: 10px;
   background: #f8fafc;
   border: 1px solid #eef2f7;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
 }
 .veh-trip__project-name {
   font-weight: 700;
@@ -7153,55 +7339,24 @@ table.data.project-hours-diff td.wrap {
   white-space: nowrap;
 }
 .veh-trip__proj-addr {
-  margin-top: 5px;
+  margin-top: 6px;
   font-size: 12px;
   color: #0f766e;
   background: #f0fdfa;
   border-left: 3px solid #14b8a6;
-  padding: 3px 8px;
+  padding: 4px 9px;
   border-radius: 4px;
   line-height: 1.4;
 }
 .veh-trip__trip-note {
-  margin-top: 5px;
+  margin-top: 6px;
   font-size: 12px;
   color: #92400e;
   background: #fffbeb;
   border-left: 3px solid #f59e0b;
-  padding: 3px 8px;
+  padding: 4px 9px;
   border-radius: 4px;
   line-height: 1.4;
-}
-.veh-trip__stats {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-  padding: 10px 0;
-  border-top: 1px dashed #eef1f6;
-  border-bottom: 1px dashed #eef1f6;
-}
-.veh-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  background: #f8fafc;
-  border-radius: 8px;
-  padding: 8px 10px;
-}
-.veh-stat i {
-  font-style: normal;
-  font-size: 10.5px;
-  color: #94a3b8;
-}
-.veh-stat b,
-.veh-stat .veh-type {
-  font-size: 13px;
-  font-weight: 700;
-  color: #1f2937;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .veh-type {
   align-self: flex-start;
@@ -7218,53 +7373,6 @@ table.data.project-hours-diff td.wrap {
 .veh-type--biz { color: #4338ca; background: #e0e7ff; }
 .veh-type--deliver { color: #1d4ed8; background: #dbeafe; }
 .veh-type--default { color: #475569; background: #eef2f7; }
-.veh-trip__timeline {
-  display: flex;
-  flex-direction: column;
-  margin-top: 10px;
-  padding-left: 4px;
-}
-.veh-tl {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  position: relative;
-  padding: 4px 0 4px 16px;
-}
-.veh-tl::before {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: #e2e8f0;
-}
-.veh-tl:first-child::before { top: 50%; }
-.veh-tl:last-child::before { bottom: 50%; }
-.veh-tl__dot {
-  position: absolute;
-  left: 0;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #cbd5e1;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 1px #cbd5e1;
-}
-.veh-tl__dot--out { background: #f59e0b; box-shadow: 0 0 0 1px #f59e0b; }
-.veh-tl__dot--back { background: #34d399; box-shadow: 0 0 0 1px #34d399; }
-.veh-tl__lbl {
-  font-size: 11px;
-  color: #94a3b8;
-  width: 28px;
-  flex-shrink: 0;
-}
-.veh-tl__val {
-  font-size: 12px;
-  font-weight: 600;
-  color: #475569;
-}
 .veh-trip__actions {
   display: flex;
   gap: 6px;
@@ -7277,8 +7385,11 @@ table.data.project-hours-diff td.wrap {
 }
 @media (max-width: 480px) {
   #vehicleTripList.card-grid { grid-template-columns: 1fr; }
-  .veh-trip__stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-  .veh-stat { padding: 7px 8px; }
+  .veh-trip__time-km { gap: 8px; }
+  .veh-time-km__item { padding: 9px 10px; }
+  .veh-time-km__value b { font-size: 14px; }
+  .veh-hero__km { font-size: 24px; }
+  .veh-hero__divider { margin: 0 10px; }
 }
 
 /* ===== 车辆里程：按月 / 按车汇总 ===== */

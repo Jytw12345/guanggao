@@ -8171,130 +8171,132 @@ function openCompleteProjectForm(id) {
     cancelText: "取消",
     onClose: () => { window._openingCompleteProject = null; },
     onConfirm: async () => {
+      if (window._savingCompleteProject) return false;
+      window._savingCompleteProject = true;
       try {
-      let totalHours = 0;
-      const logs = [];
-      
-      workers.forEach((w, idx) => {
-        const segEls = document.querySelectorAll(`#wsegs_${idx} .worker-seg`);
-        segEls.forEach(seg => {
-          const hoursInput = seg.querySelector(".seg-hours");
-          const hours = hoursInput ? Number(hoursInput.value) : 0;
-          const type = seg.querySelector(".seg-type").value;
-          const level = seg.querySelector(".seg-level").value;
-          const note = seg.querySelector(".seg-note").value;
-          if (!isNaN(hours) && hours > 0) {
-            totalHours += hours;
-            logs.push({
-              workerId: w.id,
-              workerName: w.name,
-              hours: hours,
-              level: level,
-              workType: type,
-              date: dateStr,
-              note: note || null
-            });
-          }
-        });
-      });
+        let totalHours = 0;
+        const logs = [];
 
-      outsourcedWorkers.forEach((name, idx) => {
-        const segEls = document.querySelectorAll(`#osegs_${idx} .worker-seg`);
-        segEls.forEach(seg => {
-          const hoursInput = seg.querySelector(".seg-hours");
-          const hours = hoursInput ? Number(hoursInput.value) : 0;
-          const type = seg.querySelector(".seg-type").value;
-          const level = seg.querySelector(".seg-level").value;
-          const note = seg.querySelector(".seg-note").value;
-          if (!isNaN(hours) && hours > 0) {
-            totalHours += hours;
-            logs.push({
-              workerId: "outsourced:" + name,
-              workerName: name,
-              hours: hours,
-              level: level,
-              workType: type,
-              date: dateStr,
-              note: note || null,
-              isOutsourced: true
-            });
-          }
+        workers.forEach((w, idx) => {
+          const segEls = document.querySelectorAll(`#wsegs_${idx} .worker-seg`);
+          segEls.forEach(seg => {
+            const hoursInput = seg.querySelector(".seg-hours");
+            const hours = hoursInput ? Number(hoursInput.value) : 0;
+            const type = seg.querySelector(".seg-type").value;
+            const level = seg.querySelector(".seg-level").value;
+            const note = seg.querySelector(".seg-note").value;
+            if (!isNaN(hours) && hours > 0) {
+              totalHours += hours;
+              logs.push({
+                workerId: w.id,
+                workerName: w.name,
+                hours: hours,
+                level: level,
+                workType: type,
+                date: dateStr,
+                note: note || null
+              });
+            }
+          });
         });
-      });
-      
-      if (workers.length === 0 && outsourcedWorkers.length === 0) {
-        toast("项目未分配施工人员，无法登记工时");
-        return false;
-      }
-      
-      if (totalHours <= 0) {
-        toast("请至少填写一个人员的工时");
-        return false;
-      }
-      
-      const pauseCount = derivePauseCount(p);
-      if (pauseCount > 0) {
-        const pauseDurationTotal = derivePauseDuration(p);
-        const pauseHours = Math.floor(pauseDurationTotal);
-        const pauseMins = Math.floor((pauseDurationTotal - pauseHours) * 60);
-        const pauseTimeStr = pauseHours > 0 ? `${pauseHours}小时${pauseMins}分钟` : `${pauseMins}分钟`;
-        const confirmHtml = `该项目施工过程中曾暂停 ${pauseCount} 次，累计暂停 ${pauseTimeStr}，已从总用时中扣除。<br><br>确认要完成该项目吗？`;
-        if (!(await confirmDialog(confirmHtml, "确认完工"))) {
+
+        outsourcedWorkers.forEach((name, idx) => {
+          const segEls = document.querySelectorAll(`#osegs_${idx} .worker-seg`);
+          segEls.forEach(seg => {
+            const hoursInput = seg.querySelector(".seg-hours");
+            const hours = hoursInput ? Number(hoursInput.value) : 0;
+            const type = seg.querySelector(".seg-type").value;
+            const level = seg.querySelector(".seg-level").value;
+            const note = seg.querySelector(".seg-note").value;
+            if (!isNaN(hours) && hours > 0) {
+              totalHours += hours;
+              logs.push({
+                workerId: "outsourced:" + name,
+                workerName: name,
+                hours: hours,
+                level: level,
+                workType: type,
+                date: dateStr,
+                note: note || null,
+                isOutsourced: true
+              });
+            }
+          });
+        });
+
+        if (workers.length === 0 && outsourcedWorkers.length === 0) {
+          toast("项目未分配施工人员，无法登记工时");
           return false;
         }
-      }
-      
-      const now = new Date();
-      const nowStr = now.toISOString();
-      
-      const accumulatedWorkHours = p.accumulatedWorkHours || 0;
-      let currentWorkDuration = 0;
-      if (p.startedAt) {
-        const started = new Date(p.startedAt);
-        let endTime = now;
-        if (p.status === STATUS.PAUSED && (p.pausedAt)) {
-          endTime = new Date(p.pausedAt);
+
+        if (totalHours <= 0) {
+          toast("请至少填写一个人员的工时");
+          return false;
         }
-        currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
-      }
-      const totalWorkHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
-      
-      const workSessions = [...(p.workSessions || [])];
-      if (p.startedAt && currentWorkDuration > 0) {
-        let endTime = nowStr;
-        if (p.status === STATUS.PAUSED && (p.pausedAt)) {
-          endTime = p.pausedAt;
+
+        const pauseCount = derivePauseCount(p);
+        if (pauseCount > 0) {
+          const pauseDurationTotal = derivePauseDuration(p);
+          const pauseHours = Math.floor(pauseDurationTotal);
+          const pauseMins = Math.floor((pauseDurationTotal - pauseHours) * 60);
+          const pauseTimeStr = pauseHours > 0 ? `${pauseHours}小时${pauseMins}分钟` : `${pauseMins}分钟`;
+          const confirmHtml = `该项目施工过程中曾暂停 ${pauseCount} 次，累计暂停 ${pauseTimeStr}，已从总用时中扣除。<br><br>确认要完成该项目吗？`;
+          if (!(await confirmDialog(confirmHtml, "确认完工"))) {
+            return false;
+          }
         }
-        workSessions.push({
-          startTime: p.startedAt,
-          endTime: endTime,
-          duration: currentWorkDuration
-        });
-      }
-      
-      p.status = STATUS.DONE;
-      p.actualHours = totalHours;
-      p.finishedAt = nowStr;
-      p.accumulatedWorkHours = totalWorkHours;
-      p.workSessions = workSessions;
-      
-      const newLogs = logs.map(log => ({ id: uid(), ...log }));
-      const newLogKeys = new Set(newLogs.map(l => `${l.workerId}_${l.date}`));
-      const preservedLogs = (p.workLogs || []).filter(l => !newLogKeys.has(`${l.workerId}_${l.date}`));
-      p.workLogs = [...preservedLogs, ...newLogs];
-      
-      if (MODE === "cloud" && cloudConfigured()) {
-        sb.from("work_logs").delete().eq("project_id", id).eq("date", dateStr).then(() => {
-          return Promise.all([
-            sb.from("projects").update({ 
-              status: STATUS.DONE, 
-              actual_hours: p.actualHours, 
-              finished_at: nowStr, 
-              accumulated_work_hours: totalWorkHours, 
+
+        const now = new Date();
+        const nowStr = now.toISOString();
+
+        const accumulatedWorkHours = p.accumulatedWorkHours || 0;
+        let currentWorkDuration = 0;
+        if (p.startedAt) {
+          const started = new Date(p.startedAt);
+          let endTime = now;
+          if (p.status === STATUS.PAUSED && (p.pausedAt)) {
+            endTime = new Date(p.pausedAt);
+          }
+          currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
+        }
+        const totalWorkHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
+
+        const workSessions = [...(p.workSessions || [])];
+        if (p.startedAt && currentWorkDuration > 0) {
+          let endTime = nowStr;
+          if (p.status === STATUS.PAUSED && (p.pausedAt)) {
+            endTime = p.pausedAt;
+          }
+          workSessions.push({
+            startTime: p.startedAt,
+            endTime: endTime,
+            duration: currentWorkDuration
+          });
+        }
+
+        p.status = STATUS.DONE;
+        p.actualHours = totalHours;
+        p.finishedAt = nowStr;
+        p.accumulatedWorkHours = totalWorkHours;
+        p.workSessions = workSessions;
+
+        const newLogs = logs.map(log => ({ id: uid(), ...log }));
+        const newLogKeys = new Set(newLogs.map(l => `${l.workerId}_${l.date}`));
+        const preservedLogs = (p.workLogs || []).filter(l => !newLogKeys.has(`${l.workerId}_${l.date}`));
+        p.workLogs = [...preservedLogs, ...newLogs];
+
+        if (MODE === "cloud" && cloudConfigured()) {
+          await sb.from("work_logs").delete().eq("project_id", id).eq("date", dateStr);
+          await Promise.all([
+            sb.from("projects").update({
+              status: STATUS.DONE,
+              actual_hours: p.actualHours,
+              finished_at: nowStr,
+              accumulated_work_hours: totalWorkHours,
               work_sessions: workSessions,
-              updated_at: nowStr 
+              updated_at: nowStr
             }).eq("id", id),
-            ...newLogs.map(log => 
+            ...newLogs.map(log =>
               sb.from("work_logs").insert({
                 id: log.id, project_id: id, worker_id: log.workerId,
                 worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note,
@@ -8303,29 +8305,22 @@ function openCompleteProjectForm(id) {
               })
             )
           ]);
-        }).then(async () => {
-          await repo.loadAll();
-          toast(`项目已完工，总工时：${totalHours}小时`);
-          renderConstruction();
-          renderAll();
-        }).catch((error) => {
-          console.error("标记完工失败:", error);
-          toast("更新失败：" + (error.message || "未知错误"));
-        });
-      } else {
-        saveLocal();
+        } else {
+          saveLocal();
+        }
+
         await repo.loadAll();
         toast(`项目已完工，总工时：${totalHours}小时`);
         renderConstruction();
         renderAll();
+        return true;
+      } catch (error) {
+        console.error("确认完工失败:", error);
+        toast("确认完工失败：" + (error.message || "请重试"));
+        return false;
+      } finally {
+        window._savingCompleteProject = false;
       }
-      
-      return true;
-    } catch (error) {
-      console.error("确认完工失败:", error);
-      toast("确认完工失败：" + (error.message || "请重试"));
-      return false;
-    }
     }
   });
   } catch (error) {
@@ -11245,6 +11240,10 @@ const modal = {
       modalFooter.classList.remove("hidden");
       if (options.onConfirm) {
         modalOnConfirm = options.onConfirm;
+        // 嵌套弹窗会复用同一个按钮，必须重置禁用/透明/锁状态，否则新弹窗的确认按钮无法点击
+        window._modalConfirmLock = false;
+        confirmBtn.disabled = false;
+        confirmBtn.style.opacity = "";
         confirmBtn.textContent = options.confirmText || "确认";
         confirmBtn.classList.remove("hidden");
         cancelBtn.textContent = options.cancelText || "取消";
@@ -14459,6 +14458,9 @@ function bindEvents() {
         if (shouldClose) {
           modal.close();
         }
+      } catch (error) {
+        console.error("确认操作失败:", error);
+        toast("操作失败：" + (error.message || "请重试"));
       } finally {
         window._modalConfirmLock = false;
         // 弹窗仍打开（如校验失败未关闭）则恢复按钮供重试；已关闭则下次 open 会重置
@@ -15107,7 +15109,13 @@ async function exportVehicleTrips() {
 function vehicleHistoryCardHtml(trips) {
   return trips.map((t) => {
     const open = !t.backTime;
-    const mileage = Number(t.mileage) || (Number(t.endKm) - Number(t.startKm));
+    let mileage = null;
+    if (!open) {
+      mileage = Number(t.mileage);
+      if (isNaN(mileage) || mileage === 0) {
+        mileage = Number(t.endKm) - Number(t.startKm);
+      }
+    }
     const vName = t.vehicleName ? `${esc(t.vehicleName)}` : "未知车辆";
     const icon = t.type === "接货" ? "📦" : (t.type === "安装" ? "🔧" : (t.type === "业务" ? "💼" : "🚚"));
     const typeKey = t.type === "接货" ? "pickup" : (t.type === "安装" ? "install" : (t.type === "业务" ? "biz" : (t.type === "送货" ? "deliver" : "default")));
@@ -15115,35 +15123,75 @@ function vehicleHistoryCardHtml(trips) {
     const projName = proj ? proj.name : (t.projectName || "");
     return `
     <div class="veh-trip${open ? " veh-trip--open" : ""}">
-      <div class="veh-trip__head">
+      <div class="veh-trip__top">
         <div class="veh-trip__veh">
-          <span class="veh-trip__title">${icon} ${vName}</span>
-          ${t.vehiclePlate ? `<span class="veh-trip__plate">${esc(t.vehiclePlate)}</span>` : ""}
+          <span class="veh-trip__icon">${icon}</span>
+          <div class="veh-trip__veh-text">
+            <span class="veh-trip__title">${vName}</span>
+            ${t.vehiclePlate ? `<span class="veh-trip__plate">${esc(t.vehiclePlate)}</span>` : ""}
+          </div>
         </div>
-        ${open
-          ? `<span class="veh-trip__badge">⏳ 未还车</span>`
-          : `<span class="veh-trip__mileage">${Number(mileage).toFixed(1)} <i>km</i></span>`}
+        <div class="veh-trip__top-right">
+          <span class="veh-type veh-type--${typeKey}">${esc(t.type || "送货")}</span>
+          ${open
+            ? `<span class="veh-trip__status veh-trip__status--open">⏳ 未还车</span>`
+            : `<span class="veh-trip__status veh-trip__status--done">✓ 已还车</span>`}
+        </div>
       </div>
-      ${projName ? `
-      <div class="veh-trip__project">
-        <div class="veh-trip__project-name" title="${esc(projName)}">🔗 ${esc(projName)}</div>
+
+      <div class="veh-trip__hero">
+        <div class="veh-hero__item veh-hero__item--driver">
+          <span class="veh-hero__label">👤 司机</span>
+          ${t.driverName
+            ? `<span class="veh-hero__driver"><span class="veh-hero__avatar">${esc(t.driverName.slice(0, 1))}</span><b>${esc(t.driverName)}</b></span>`
+            : `<span class="veh-hero__driver"><b class="veh-hero__none">未填写</b></span>`}
+        </div>
+        <div class="veh-hero__divider"></div>
+        <div class="veh-hero__item veh-hero__item--km">
+          <span class="veh-hero__label">🛣 行驶里程</span>
+          <span class="veh-hero__km">${open || mileage == null || isNaN(mileage) ? "—" : Number(mileage).toFixed(1) + "<i>km</i>"}</span>
+        </div>
+      </div>
+
+      <div class="veh-trip__time-km">
+        <div class="veh-time-km__item">
+          <div class="veh-time-km__row">
+            <span class="veh-time-km__dot veh-time-km__dot--out"></span>
+            <div class="veh-time-km__datetime">
+              <span class="veh-time-km__label">出发</span>
+              <span class="veh-time-km__date">${t.outTime ? fmtDate(t.outTime) : "—"}</span>
+              <span class="veh-time-km__time">${t.outTime ? fmtTime(t.outTime) : ""}</span>
+            </div>
+          </div>
+          <div class="veh-time-km__value">
+            <span>起始公里</span>
+            <b>${Number(t.startKm).toFixed(1)} km</b>
+          </div>
+        </div>
+        <div class="veh-time-km__item">
+          <div class="veh-time-km__row">
+            <span class="veh-time-km__dot veh-time-km__dot--back"></span>
+            <div class="veh-time-km__datetime">
+              <span class="veh-time-km__label">${open ? "未回" : "回来"}</span>
+              <span class="veh-time-km__date">${t.backTime ? fmtDate(t.backTime) : "—"}</span>
+              <span class="veh-time-km__time">${t.backTime ? fmtTime(t.backTime) : ""}</span>
+            </div>
+          </div>
+          <div class="veh-time-km__value">
+            <span>回来公里</span>
+            <b>${open ? "—" : Number(t.endKm).toFixed(1) + " km"}</b>
+          </div>
+        </div>
+      </div>
+      ${t.fuelLevel != null ? `<div class="veh-trip__fuel">⛽ 还车油量 <b>${Number(t.fuelLevel)}%</b></div>` : ""}
+
+      ${projName || (proj && proj.address) || t.note ? `
+      <div class="veh-trip__bottom">
+        ${projName ? `<div class="veh-trip__project-name" title="${esc(projName)}">🔗 ${esc(projName)}</div>` : ""}
         ${proj && proj.address ? `<div class="veh-trip__proj-addr">📍 ${esc(proj.address)}</div>` : ""}
         ${t.note ? `<div class="veh-trip__trip-note">📝 ${esc(t.note)}</div>` : ""}
-      </div>` : (t.note ? `
-      <div class="veh-trip__project">
-        <div class="veh-trip__trip-note">📝 ${esc(t.note)}</div>
-      </div>` : "")}
-      <div class="veh-trip__stats">
-        <span class="veh-stat"><i>目的</i><span class="veh-type veh-type--${typeKey}">${esc(t.type || "送货")}</span></span>
-        ${t.driverName ? `<span class="veh-stat"><i>司机</i><b>${esc(t.driverName)}</b></span>` : ""}
-        <span class="veh-stat"><i>起始</i><b>${Number(t.startKm).toFixed(1)}</b></span>
-        <span class="veh-stat"><i>回来</i><b>${open ? "—" : Number(t.endKm).toFixed(1)}</b></span>
-        ${t.fuelLevel != null ? `<span class="veh-stat"><i>油量</i><b>${Number(t.fuelLevel)}%</b></span>` : ""}
-      </div>
-      ${(t.outTime || t.backTime) ? `<div class="veh-trip__timeline">
-        ${t.outTime ? `<div class="veh-tl"><span class="veh-tl__dot veh-tl__dot--out"></span><span class="veh-tl__lbl">出发</span><b class="veh-tl__val">${fmtDateTime(t.outTime)}</b></div>` : ""}
-        ${t.backTime ? `<div class="veh-tl"><span class="veh-tl__dot veh-tl__dot--back"></span><span class="veh-tl__lbl">返回</span><b class="veh-tl__val">${fmtDateTime(t.backTime)}</b></div>` : ""}
       </div>` : ""}
+
       <div class="veh-trip__actions">
         ${open ? `<button class="btn small primary" onclick="openReturnVehicle('${t.vehicleId}')">还车</button>` : ""}
         ${isManager()
