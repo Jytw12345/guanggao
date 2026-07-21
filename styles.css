@@ -7056,9 +7056,9 @@ table.data.project-hours-diff td.wrap {
 
 /* ===== 历史用车：紧凑卡片 ===== */
 #vehicleTripList.card-grid {
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   grid-auto-rows: auto;
-  gap: 12px;
+  gap: 14px;
 }
 .veh-trip {
   position: relative;
@@ -7174,8 +7174,8 @@ table.data.project-hours-diff td.wrap {
 }
 .veh-trip__stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
   padding: 10px 0;
   border-top: 1px dashed #eef1f6;
   border-bottom: 1px dashed #eef1f6;
@@ -7187,14 +7187,15 @@ table.data.project-hours-diff td.wrap {
   min-width: 0;
   background: #f8fafc;
   border-radius: 8px;
-  padding: 6px 8px;
+  padding: 8px 10px;
 }
 .veh-stat i {
   font-style: normal;
   font-size: 10.5px;
   color: #94a3b8;
 }
-.veh-stat b {
+.veh-stat b,
+.veh-stat .veh-type {
   font-size: 13px;
   font-weight: 700;
   color: #1f2937;
@@ -7275,7 +7276,9 @@ table.data.project-hours-diff td.wrap {
   justify-content: center;
 }
 @media (max-width: 480px) {
-  .veh-trip__stats { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  #vehicleTripList.card-grid { grid-template-columns: 1fr; }
+  .veh-trip__stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .veh-stat { padding: 7px 8px; }
 }
 
 /* ===== 车辆里程：按月 / 按车汇总 ===== */

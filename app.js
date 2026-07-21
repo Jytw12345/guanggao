@@ -775,6 +775,14 @@ function buildWorkerPeriods(p, wid) {
         if (p.startedAt && new Date(ch.time) < new Date(p.startedAt)) {
           periodStart = p.startedAt;
         }
+        /* 防御：同一工人连续被分配且前一段未关闭时，先关闭前一段再开启新一段，
+           避免 buildWorkerPeriods 生成重叠区间导致工时重复累加。 */
+        const last = periods[periods.length - 1];
+        if (last && !last.end) {
+          let endTime = periodStart;
+          if (new Date(endTime) < new Date(last.start)) endTime = last.start;
+          last.end = endTime;
+        }
         periods.push({ start: periodStart, end: null });
       } else if (ch.action === "unassign") {
         const last = periods[periods.length - 1];
@@ -4978,12 +4986,52 @@ function renderConstruction() {
         </div>
       </details>` : ""}
       
-      ${p.workSessions.length > 0 ? `
-      <details class="rec-details rec-details--blue">
-        <summary>🔧 施工时段明细（${p.workSessions.length}段）</summary>
+      ${(() => {
+        const allSessions = [...(p.workSessions || [])];
+        const now = new Date();
+        /* 施工中：补充当前正在进行的时段，避免顶部工时时长与明细对不上 */
+        if (p.startedAt && p.status === STATUS.WORKING) {
+          const sessionStarted = new Date(p.startedAt);
+          const lastWorkSessionEnd = allSessions.length > 0
+            ? new Date(allSessions[allSessions.length - 1].endTime)
+            : null;
+          const currentStart = lastWorkSessionEnd && lastWorkSessionEnd > sessionStarted
+            ? lastWorkSessionEnd
+            : sessionStarted;
+          if (now > currentStart) {
+            const duration = (now - currentStart) / (1000 * 60 * 60);
+            allSessions.push({
+              startTime: currentStart.toISOString(),
+              endTime: now.toISOString(),
+              duration: duration,
+              isCurrent: true
+            });
+          }
+        } else if (p.startedAt && [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && p.finishedAt && allSessions.length === 0) {
+          /* 已完工但无 workSessions（历史数据兜底）：用开工到完工生成一段 */
+          const endTime = new Date(p.finishedAt);
+          const sessionStarted = new Date(p.startedAt);
+          const duration = (endTime - sessionStarted) / (1000 * 60 * 60);
+          allSessions.push({
+            startTime: p.startedAt,
+            endTime: p.finishedAt,
+            duration: duration
+          });
+        }
+
+        if (allSessions.length === 0) return "";
+
+        const totalDuration = allSessions.reduce((sum, s) => sum + s.duration, 0);
+        const totalHours = Math.floor(totalDuration);
+        const totalMins = Math.floor((totalDuration - totalHours) * 60);
+        const totalStr = totalHours > 0 ? `${totalHours}小时${totalMins}分钟` : `${totalMins}分钟`;
+
+        return `
+      <details class="rec-details rec-details--blue" open>
+        <summary>🔧 施工时段明细（${allSessions.length}段）</summary>
         <div class="rec-details__body">
           <div class="rec-list">
-            ${p.workSessions.map((s, idx) => {
+            ${allSessions.map((s, idx) => {
               const start = new Date(s.startTime);
               const end = new Date(s.endTime);
               const hours = Math.floor(s.duration);
@@ -4992,22 +5040,18 @@ function renderConstruction() {
               const startStr = `${start.getMonth() + 1}/${start.getDate()} ${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`;
               const endStr = `${end.getMonth() + 1}/${end.getDate()} ${String(end.getHours()).padStart(2, "0")}:${String(end.getMinutes()).padStart(2, "0")}`;
               return `<div class="rec-list__item" style="justify-content:space-between;">
-                <span>第${idx + 1}段：${startStr} → ${endStr}</span>
+                <span>第${idx + 1}段：${startStr} → ${s.isCurrent ? "进行中" : endStr}${s.isCurrent ? " <span style=\"color:#3b82f6;font-size:11px\">(当前)</span>" : ""}</span>
                 <span style="font-weight:600;">${durationStr}</span>
               </div>`;
             }).join("")}
             <div class="rec-list__total">
               <span>合计</span>
-              <span>${(() => {
-                const total = p.workSessions.reduce((sum, s) => sum + s.duration, 0);
-                const hours = Math.floor(total);
-                const mins = Math.floor((total - hours) * 60);
-                return hours > 0 ? `${hours}小时${mins}分钟` : `${mins}分钟`;
-              })()}</span>
+              <span>${totalStr}</span>
             </div>
           </div>
         </div>
-      </details>` : ""}
+      </details>`;
+      })()}
       
       ${(() => {
         const workerLogs = {};
@@ -6241,6 +6285,7 @@ function delayProject(id) {
     confirmText: "确认延期",
     cancelText: "取消",
     onConfirm: async () => {
+      try {
       const reason = document.getElementById("delayReason").value.trim();
       const newDate = document.getElementById("delayDate").value;
       const newTime = document.getElementById("delayTime").value;
@@ -6337,6 +6382,11 @@ function delayProject(id) {
       toast(`项目已延期至 ${newDate} ${newTime}`);
       sendNotificationForProjectChange("delay", getProject(id));
       logOperation("PROJECT_DELAY", p.name || "项目", `ID: ${id}, 原时间: ${originalDateStr} ${originalTimeStr}, 新时间: ${newDate} ${newTime}, 原因: ${reason}`);
+      } catch (error) {
+        console.error("项目延期失败:", error);
+        toast("项目延期失败：" + (error.message || "请重试"));
+        return false;
+      }
     }
   });
 }
@@ -6567,7 +6617,7 @@ function openAllocSlider() {
   if (!pid) return;
   const p = getProject(pid);
   const workerOptions = (cache.workers || []).map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
-  const init = [0, 30, 55, 15];
+  const init = [0, 0, 80, 20];
 
   /* 计算本次默认总工时 */
   /* 规则：
@@ -6632,9 +6682,10 @@ function openAllocSlider() {
         <input class="input" type="date" id="allocDate" value="${new Date().toISOString().slice(0, 10)}" />
       </div>
       <div class="alloc-presets" id="allocPresets">
-        <button type="button" class="chip" onclick="applyAllocPreset([45,22,17,16])">高空为主</button>
-        <button type="button" class="chip" onclick="applyAllocPreset([0,70,20,10])">高级为主</button>
         <button type="button" class="chip" onclick="applyAllocPreset([0,0,80,20])">地面为主</button>
+        <button type="button" class="chip" onclick="applyAllocPreset([80,0,0,20])">高空为主</button>
+        <button type="button" class="chip" onclick="applyAllocPreset([0,80,0,20])">高级为主</button>
+        <button type="button" class="chip" onclick="applyAllocPreset([27,27,26,20])">均衡</button>
       </div>
       <div class="field" id="allocTotalField">
         <label>本次总工时(小时)</label>
@@ -6649,6 +6700,7 @@ function openAllocSlider() {
   modal.open("按占比分配工时", body, {
     confirmText: "生成工时",
     onConfirm: async () => {
+      try {
       const w = readAllocWorker();
       if (!w) return false;
       const date = document.getElementById("allocDate").value;
@@ -6684,6 +6736,11 @@ function openAllocSlider() {
       renderAll();
       modal.close();
       toast(`已生成 ${logs.length} 条工时`);
+      } catch (error) {
+        console.error("生成工时失败:", error);
+        toast("生成工时失败：" + (error.message || "请重试"));
+        return false;
+      }
     },
   });
   renderSliderAlloc();
@@ -6749,12 +6806,15 @@ function editWorkLog(pid, lid) {
   modal.open("修改施工工时", body, {
     confirmText: "保存修改",
     onConfirm: async () => {
+      try {
       const type = document.getElementById("editType").value;
       let workerId, workerName;
       if (type === "internal") {
         workerId = document.getElementById("editWorker").value;
         if (!workerId) { toast("请选择施工人员"); return false; }
-        workerName = getWorker(workerId).name;
+        const _w = getWorker(workerId);
+        if (!_w) { toast("该施工人员不存在或已被删除"); return false; }
+        workerName = _w.name;
       } else {
         workerName = document.getElementById("editOutsourcedName").value.trim();
         if (!workerName) { toast("请输入外协人员姓名"); return false; }
@@ -6776,6 +6836,11 @@ function editWorkLog(pid, lid) {
       renderAll();
       modal.close();
       toast("已保存修改");
+      } catch (error) {
+        console.error("保存工时修改失败:", error);
+        toast("保存失败：" + (error.message || "请重试"));
+        return false;
+      }
     },
   });
 }
@@ -7746,9 +7811,9 @@ function delWorkerSeg(btn) {
 function openCompleteProjectForm(id) {
   if (window._openingCompleteProject === id) return;
   window._openingCompleteProject = id;
+  try {
   const p = getProject(id);
   if (!p) {
-    window._openingCompleteProject = null;
     return;
   }
   
@@ -8106,6 +8171,7 @@ function openCompleteProjectForm(id) {
     cancelText: "取消",
     onClose: () => { window._openingCompleteProject = null; },
     onConfirm: async () => {
+      try {
       let totalHours = 0;
       const logs = [];
       
@@ -8255,8 +8321,18 @@ function openCompleteProjectForm(id) {
       }
       
       return true;
+    } catch (error) {
+      console.error("确认完工失败:", error);
+      toast("确认完工失败：" + (error.message || "请重试"));
+      return false;
+    }
     }
   });
+  } catch (error) {
+    console.error("打开完工表单失败:", error);
+    toast("打开完工表单失败：" + (error.message || "请重试"));
+    window._openingCompleteProject = null;
+  }
 }
 
 function openAcceptance(id) {
