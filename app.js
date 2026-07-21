@@ -19,7 +19,7 @@ function getCustomerHistory() {
 }
 
 function saveCustomerHistory(list) {
-  localStorage.setItem(CUSTOMER_HISTORY_KEY, JSON.stringify(list.slice(0, 50)));
+  lsSet(CUSTOMER_HISTORY_KEY, list.slice(0, 50));
 }
 
 function upsertCustomer(customer, phone, address) {
@@ -76,7 +76,6 @@ const ROLE_LABEL = { manager: "总经理", store_manager: "店长", worker: "施
 /* 运行时状态 */
 let MODE = "local";        // 'cloud' | 'local'
 let sb = null;             // supabase client (anon key)
-let sbAdmin = null;        // supabase admin client (service key, optional)
 let currentUser = null;    // 云端登录用户
 let currentProfile = { role: null, storeId: null }; // 当前用户角色与门店
 let reloadTimer = null;    // 实时刷新去抖
@@ -1245,14 +1244,11 @@ const repo = {
         const { error: profileError } = await sb.from("profiles").delete().eq("id", userId);
         if (profileError) {
           console.warn("删除 profiles 失败:", profileError);
+          return fail(profileError);
         }
-        if (sbAdmin) {
-          const { error: authError } = await sbAdmin.auth.admin.deleteUser(userId);
-          if (authError) {
-            console.warn("删除 Auth 用户失败:", authError);
-            return fail(new Error("删除 Auth 用户失败，请手动在 Supabase 控制台删除"));
-          }
-        }
+        // 出于安全考虑，前端不再持有 service_role 密钥，无法删除 Auth 用户，
+        // 仅删除 profiles 档案记录；登录凭据需到 Supabase 控制台手动清理。
+        toast("已删除账号档案。该用户的登录凭据（Auth 用户）需到 Supabase 控制台手动删除。");
       } catch (e) {
         return fail(e);
       }
@@ -1698,6 +1694,21 @@ function loadLocal() {
       { id: uid(), name: "王芳", phone: "13800000003", role: "电工" },
     ];
     saveLocal();
+  }
+}
+
+/* 安全的 localStorage 写入：捕获配额超限等异常，避免页面崩溃 */
+function lsSet(key, value) {
+  try {
+    if (typeof value !== "string") value = JSON.stringify(value);
+    localStorage.setItem(key, value);
+    return true;
+  } catch (e) {
+    console.error("[app] localStorage 写入失败:", key, e);
+    if (e && e.name === "QuotaExceededError") {
+      toast("⚠️ 本地存储空间不足，部分数据未能保存");
+    }
+    return false;
   }
 }
 
@@ -2336,29 +2347,39 @@ function editWorker(id) {
 }
 
 async function saveWorker(id) {
-  const name = document.getElementById("wName").value.trim();
-  if (!name) { toast("请填写姓名"); return; }
-  const payload = {
-    name,
-    phone: document.getElementById("wPhone").value.trim(),
-    role: document.getElementById("wRole").value.trim(),
-  };
-  await repo.saveWorker(payload, id);
-  await repo.loadAll();
-  modal.close();
-  renderAll();
-  toast("已保存");
+  try {
+    const name = document.getElementById("wName").value.trim();
+    if (!name) { toast("请填写姓名"); return; }
+    const payload = {
+      name,
+      phone: document.getElementById("wPhone").value.trim(),
+      role: document.getElementById("wRole").value.trim(),
+    };
+    await repo.saveWorker(payload, id);
+    await repo.loadAll();
+    modal.close();
+    renderAll();
+    toast("已保存");
+  } catch (e) {
+    console.error("保存施工人员失败:", e);
+    toast("保存失败：" + (e.message || "请重试"));
+  }
 }
 
 async function deleteWorker(id) {
-  if (!perm.deleteWorker()) { toast("权限不足"); return; }
-  const used = cache.projects.some((p) => (p.workLogs || []).some((l) => l.workerId === id));
-  if (used && !(await confirmDialog("该人员已有施工工时记录，删除不会移除历史记录。确定删除该人员？", "删除人员"))) return;
-  if (!used && !(await confirmDialog("确定删除该人员？", "删除人员"))) return;
-  await repo.deleteWorker(id);
-  await repo.loadAll();
-  renderAll();
-  toast("已删除");
+  try {
+    if (!perm.deleteWorker()) { toast("权限不足"); return; }
+    const used = cache.projects.some((p) => (p.workLogs || []).some((l) => l.workerId === id));
+    if (used && !(await confirmDialog("该人员已有施工工时记录，删除不会移除历史记录。确定删除该人员？", "删除人员"))) return;
+    if (!used && !(await confirmDialog("确定删除该人员？", "删除人员"))) return;
+    await repo.deleteWorker(id);
+    await repo.loadAll();
+    renderAll();
+    toast("已删除");
+  } catch (e) {
+    console.error("删除施工人员失败:", e);
+    toast("删除失败：" + (e.message || "请重试"));
+  }
 }
 
 /* ============================================================
@@ -2416,26 +2437,36 @@ function editOutsourcedWorker(id) {
 }
 
 async function saveOutsourcedWorker(id) {
-  const name = document.getElementById("owName").value.trim();
-  if (!name) { toast("请填写姓名"); return; }
-  const payload = {
-    name,
-    phone: document.getElementById("owPhone").value.trim(),
-  };
-  await repo.saveOutsourcedWorker(payload, id);
-  await repo.loadAll();
-  modal.close();
-  renderAll();
-  toast("已保存");
+  try {
+    const name = document.getElementById("owName").value.trim();
+    if (!name) { toast("请填写姓名"); return; }
+    const payload = {
+      name,
+      phone: document.getElementById("owPhone").value.trim(),
+    };
+    await repo.saveOutsourcedWorker(payload, id);
+    await repo.loadAll();
+    modal.close();
+    renderAll();
+    toast("已保存");
+  } catch (e) {
+    console.error("保存外协人员失败:", e);
+    toast("保存失败：" + (e.message || "请重试"));
+  }
 }
 
 async function deleteOutsourcedWorker(id) {
-  if (!perm.manageOutsourced()) { toast("权限不足"); return; }
-  if (!(await confirmDialog("确定删除该外协人员？", "删除外协人员"))) return;
-  await repo.deleteOutsourcedWorker(id);
-  await repo.loadAll();
-  renderAll();
-  toast("已删除");
+  try {
+    if (!perm.manageOutsourced()) { toast("权限不足"); return; }
+    if (!(await confirmDialog("确定删除该外协人员？", "删除外协人员"))) return;
+    await repo.deleteOutsourcedWorker(id);
+    await repo.loadAll();
+    renderAll();
+    toast("已删除");
+  } catch (e) {
+    console.error("删除外协人员失败:", e);
+    toast("删除失败：" + (e.message || "请重试"));
+  }
 }
 
 /* ============================================================
@@ -2845,6 +2876,7 @@ function editWorkerSchedule(id) {
 }
 
 async function saveWorkerSchedule(id) {
+  try {
   const workerId = document.getElementById("wsWorkerId").value;
   const title = document.getElementById("wsTitle").value.trim();
   const startDate = document.getElementById("wsStartDate").value;
@@ -2921,14 +2953,23 @@ async function saveWorkerSchedule(id) {
   
   modal.close();
   renderAll();
+  } catch (e) {
+    console.error("保存日程失败:", e);
+    toast("保存失败：" + (e.message || "请重试"));
+  }
 }
 
 async function deleteWorkerSchedule(id) {
-  if (!(await confirmDialog("确定删除该日程？", "删除日程"))) return;
-  await repo.deleteWorkerSchedule(id);
-  await repo.loadAll();
-  renderAll();
-  toast("已删除");
+  try {
+    if (!(await confirmDialog("确定删除该日程？", "删除日程"))) return;
+    await repo.deleteWorkerSchedule(id);
+    await repo.loadAll();
+    renderAll();
+    toast("已删除");
+  } catch (e) {
+    console.error("删除日程失败:", e);
+    toast("删除失败：" + (e.message || "请重试"));
+  }
 }
 
 function initScheduleFilters() {
@@ -3361,6 +3402,7 @@ function inferLeaveType(startTime, endTime) {
 }
 
 async function submitLeaveForm() {
+  try {
   const workerId = document.getElementById("leaveWorkerId").value;
   const workerName = document.getElementById("leaveWorkerName").value;
   const leaveType = document.getElementById("leaveType").value;
@@ -3369,14 +3411,14 @@ async function submitLeaveForm() {
   const endDate = document.getElementById("leaveEndDate").value;
   const endTime = document.getElementById("leaveEndTime").value;
   const reason = document.getElementById("leaveReason").value.trim();
-  
+
   if (!startDate) { toast("请选择开始日期"); return; }
   if (!endDate) { toast("请选择结束日期"); return; }
-  
+
   const startDt = new Date(`${startDate}T${startTime}`);
   const endDt = new Date(`${endDate}T${endTime}`);
   if (endDt <= startDt) { toast("结束时间不能早于开始时间"); return; }
-  
+
   const conflicts = checkLeaveProjectConflict(workerId, startDate, endDate, startTime, endTime);
   if (conflicts.length > 0) {
     if (!(await confirmDialog(`检测到 ${conflicts.length} 个项目排期冲突，确认继续提交请假申请吗？`, "排期冲突"))) {
@@ -3398,18 +3440,27 @@ async function submitLeaveForm() {
   modal.close();
   renderAll();
   toast(status === "approved" ? "请假已批准" : "请假申请已提交，等待审批");
-  
+
   if (status === "pending") {
     notify("新的请假申请", `${workerName} 申请了 ${LEAVE_TYPE_LABEL[leaveType]}，请及时审批`);
+  }
+  } catch (e) {
+    console.error("提交请假失败:", e);
+    toast("提交失败：" + (e.message || "请重试"));
   }
 }
 
 async function deleteLeaveRecord(id) {
-  if (!perm.manageLeaves()) { toast("权限不足"); return; }
-  if (!(await confirmDialog("确定删除该请假记录？", "删除请假记录"))) return;
-  await repo.deleteLeaveRecord(id);
-  renderAll();
-  toast("请假记录已删除");
+  try {
+    if (!perm.manageLeaves()) { toast("权限不足"); return; }
+    if (!(await confirmDialog("确定删除该请假记录？", "删除请假记录"))) return;
+    await repo.deleteLeaveRecord(id);
+    renderAll();
+    toast("请假记录已删除");
+  } catch (e) {
+    console.error("删除请假记录失败:", e);
+    toast("删除失败：" + (e.message || "请重试"));
+  }
 }
 
 /* 项目预约时间选择辅助函数 */
@@ -6289,16 +6340,21 @@ function onLogWorkTypeChange() {
 
 async function commitWorkLog(pid, log) {
   const p = getProject(pid);
+  if (!p) {
+    toast("项目不存在，无法记录工时");
+    return;
+  }
   await repo.addWorkLog(pid, log);
   logOperation("WORK_LOG_ADD", `${p.name} - ${log.workerName}`, `工时：${log.hours}小时，日期：${log.date}，作业类型：${log.workType}，等级：${log.level}，备注：${log.note || "无"}，类型：${log.isOutsourced ? "外协" : "内部"}`);
 }
 
-function recomputeActualHours(pid) {
+async function recomputeActualHours(pid) {
   const p = getProject(pid);
   if (!p) return 0;
   const total = (p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0);
   p.actualHours = total;
-  repo.patchProject(pid, { actualHours: total });
+  // 注意：必须 await，避免后续 loadAll 在 patch 完成前拉取旧数据导致工时更新丢失
+  await repo.patchProject(pid, { actualHours: total });
   return total;
 }
 
@@ -6320,6 +6376,10 @@ async function addWorkLog(id) {
     workerId = document.getElementById("logWorker").value;
     if (!workerId) { toast("请选择施工人员"); return; }
     const worker = getWorker(workerId);
+    if (!worker) {
+      toast("施工人员不存在，请刷新后重试");
+      return;
+    }
     workerName = worker.name;
   } else {
     workerName = document.getElementById("logOutsourcedName").value.trim();
@@ -6335,11 +6395,12 @@ async function addWorkLog(id) {
     }
     clearTimeout(reloadTimer);
     await repo.loadAll();
-    recomputeActualHours(id);
+    await recomputeActualHours(id);
     renderAll();
     toast("已添加施工工时");
   } catch (error) {
     console.error("添加工时失败:", error);
+    toast("添加工时失败：" + (error.message || "请重试"));
   }
 }
 
@@ -6529,7 +6590,7 @@ function openAllocSlider() {
       }
       clearTimeout(reloadTimer);
       await repo.loadAll();
-      recomputeActualHours(pid);
+      await recomputeActualHours(pid);
       renderAll();
       modal.close();
       toast(`已生成 ${logs.length} 条工时`);
@@ -6620,7 +6681,7 @@ function editWorkLog(pid, lid) {
       await repo.updateWorkLog(pid, lid, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
       clearTimeout(reloadTimer);
       await repo.loadAll();
-      recomputeActualHours(pid);
+      await recomputeActualHours(pid);
       logOperation("WORK_LOG_UPDATE", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}，作业类型：${workType}，等级：${level}，备注：${note || "无"}，类型：${type === "outsourced" ? "外协" : "内部"}`);
       renderAll();
       modal.close();
@@ -6635,7 +6696,7 @@ async function deleteWorkLog(pid, lid) {
   const log = (p.workLogs || []).find(l => l.id === lid);
   await repo.deleteWorkLog(pid, lid);
   await repo.loadAll();
-  recomputeActualHours(pid);
+  await recomputeActualHours(pid);
   logOperation("WORK_LOG_DELETE", `${p.name} - ${log?.workerName || ""}`, `工时：${log?.hours || 0}小时，日期：${log?.date || "未知"}，等级：${log?.level || "未知"}，类型：${log?.isOutsourced ? "外协" : "内部"}`);
   renderAll();
   toast("已删除");
@@ -8862,7 +8923,7 @@ function getWageConfig() {
 }
 
 function saveWageConfig(config) {
-  localStorage.setItem("wageConfig", JSON.stringify(config));
+  lsSet("wageConfig", config);
 }
 
 function closeWageConfigModal() {
@@ -8958,7 +9019,7 @@ function getInternalWorkLogs() {
 }
 
 function saveInternalWorkLogs(logs) {
-  localStorage.setItem("internalWorkLogs", JSON.stringify(logs));
+  lsSet("internalWorkLogs", logs);
 }
 
 function addInternalWorkLog(log) {
@@ -9188,8 +9249,8 @@ function getInternalTasks() {
         return t;
       });
       if (!migrated) {
-        localStorage.setItem("internalTasks", JSON.stringify(tasks));
-        localStorage.setItem("internalTasksMigrated_v2", "true");
+        lsSet("internalTasks", tasks);
+        lsSet("internalTasksMigrated_v2", "true");
       }
       return tasks;
     } catch (e) {
@@ -9222,7 +9283,7 @@ function updateInternalTaskBadge() {
 }
 
 function saveInternalTasks(tasks) {
-  localStorage.setItem("internalTasks", JSON.stringify(tasks));
+  lsSet("internalTasks", tasks);
 }
 
 function addInternalTask(task) {
@@ -10847,10 +10908,70 @@ function promptDialog(message, title = "输入", defaultValue = "") {
  * ============================================================ */
 const ADMIN_PWD_SALT = "ad-install-admin-2026";
 
-/* SHA-256 哈希，返回十六进制字符串 */
+/* SHA-256 哈希，返回十六进制字符串（仅用于旧管理密码格式的兼容迁移） */
 async function sha256(str) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/* ============================================================
+ * 管理密码哈希升级：PBKDF2（Web Crypto 原生支持）
+ * ------------------------------------------------------------
+ * 旧实现用 SHA-256 + 静态盐，抗暴力破解能力弱。现改为 PBKDF2-HMAC-SHA256，
+ * 每次生成随机盐并配合高迭代次数。存储格式：
+ *   pbkdf2$<iterations>$<saltHex>$<hashHex>
+ * 旧格式（纯 64 位十六进制、含静态盐）在首次验证成功时自动迁移为新格式。
+ * ============================================================ */
+const PBKDF2_ITERATIONS = 150000;
+
+function bufToHex(buf) {
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+function hexToBuf(hex) {
+  const arr = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < arr.length; i++) arr[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return arr.buffer;
+}
+async function pbkdf2Hex(pwd, saltHex, iterations) {
+  const enc = new TextEncoder();
+  const salt = hexToBuf(saltHex);
+  const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(pwd), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    keyMaterial, 256
+  );
+  return bufToHex(bits);
+}
+/* 派生管理密码哈希；可传入 saltHex/iterations 用于校验，否则随机生成盐 */
+async function deriveAdminPassword(pwd, saltHex = null, iterations = PBKDF2_ITERATIONS) {
+  const salt = saltHex || bufToHex(crypto.getRandomValues(new Uint8Array(16)));
+  const hashHex = await pbkdf2Hex(pwd, salt, iterations);
+  return `pbkdf2$${iterations}$${salt}$${hashHex}`;
+}
+/* 校验密码：兼容旧的纯 SHA-256（静态盐）格式，并在旧格式验证成功时自动迁移 */
+async function verifyAdminPassword(pwd) {
+  const stored = currentProfile.adminPasswordHash;
+  if (!stored) return false;
+  // 旧格式：64 位十六进制（SHA-256 + 静态盐），无分隔符
+  if (!stored.includes("$")) {
+    const legacy = await sha256(ADMIN_PWD_SALT + pwd);
+    if (legacy !== stored) return false;
+    try {
+      const newHash = await deriveAdminPassword(pwd);
+      const { error } = await sb.from("profiles").update({ admin_password_hash: newHash }).eq("id", currentUser.id);
+      if (!error) currentProfile.adminPasswordHash = newHash;
+    } catch (e) {
+      console.warn("管理密码自动迁移失败（仍可用旧格式）:", e);
+    }
+    return true;
+  }
+  const parts = stored.split("$");
+  if (parts[0] !== "pbkdf2") return false;
+  const iter = parseInt(parts[1], 10);
+  const saltHex = parts[2];
+  const expected = parts[3];
+  const got = await pbkdf2Hex(pwd, saltHex, iter);
+  return got === expected;
 }
 
 /* 密码输入框弹窗，返回明文或 null（取消） */
@@ -10902,7 +11023,7 @@ async function setAdminPassword() {
   if (p1 !== p2) { toast("两次输入的密码不一致"); return; }
 
   try {
-    const hash = await sha256(ADMIN_PWD_SALT + p1);
+    const hash = await deriveAdminPassword(p1);
     const { error } = await sb.from("profiles").update({ admin_password_hash: hash }).eq("id", currentUser.id);
     if (error) throw error;
     currentProfile.adminPasswordHash = hash;
@@ -10929,8 +11050,8 @@ async function requireAdminPassword(actionName) {
   const pwd = await promptPassword(`「${actionName || "高危操作"}」需要管理密码验证`, "管理密码验证");
   if (pwd === null) return false;
   if (pwd.length === 0) { toast("请输入管理密码"); return false; }
-  const hash = await sha256(ADMIN_PWD_SALT + pwd);
-  if (hash !== currentProfile.adminPasswordHash) {
+  const ok = await verifyAdminPassword(pwd);
+  if (!ok) {
     toast("管理密码错误");
     return false;
   }
@@ -11589,11 +11710,16 @@ function importFile(file, type) {
   reader.onload = async (e) => {
     try {
       const csv = parseCSV(e.target.result);
-      const count = await importData(type, csv.rows);
-      status.innerHTML = `<div style="color:#10b981;font-weight:600">✅ 成功导入 ${count} 条记录</div>`;
+      const result = await importData(type, csv.rows);
+      const total = csv.rows.length;
+      let msg = `成功导入 ${result.count} 条记录`;
+      if (result.errors.length > 0) {
+        msg += `（${result.errors.length} 条失败，共 ${total} 条）`;
+      }
+      status.innerHTML = `<div style="color:${result.errors.length ? '#d97706' : '#10b981'};font-weight:600">${result.errors.length ? '⚠️ ' : '✅ '}${esc(msg)}</div>`;
       setTimeout(() => loadData(), 1000);
     } catch (err) {
-      status.innerHTML = `<div style="color:#ef4444">❌ 导入失败: ${err.message}</div>`;
+      status.innerHTML = `<div style="color:#ef4444">❌ 导入失败: ${esc(err.message || "未知错误")}</div>`;
     }
   };
   reader.readAsText(file, "UTF-8");
@@ -11601,7 +11727,9 @@ function importFile(file, type) {
 
 async function importData(type, rows) {
   let count = 0;
-  for (const row of rows) {
+  const errors = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
     try {
       switch (type) {
         case "projects":
@@ -11625,10 +11753,11 @@ async function importData(type, rows) {
       }
       count++;
     } catch (e) {
-      console.warn("导入失败:", e);
+      console.warn(`第 ${i + 1} 行导入失败:`, e);
+      errors.push(`第 ${i + 1} 行：${e.message || e}`);
     }
   }
-  return count;
+  return { count, errors };
 }
 
 async function importProject(row) {
@@ -13047,6 +13176,8 @@ function renderTimelineInDetail() {
   if (detailBox) detailBox.innerHTML = timelineHtml;
 
   setTimeout(() => {
+    // 先移除再添加，避免重复渲染时间线时监听器累积导致内存泄漏与重复触发
+    document.removeEventListener("click", timelineCloseAllTasks);
     document.addEventListener("click", timelineCloseAllTasks);
   }, 0);
 }
@@ -13899,92 +14030,123 @@ function showAuthError(msg) {
   el.classList.toggle("hidden", !msg);
 }
 
+let authSubmitting = false; // 防止双击登录/注册按钮触发重复请求
+
 async function doLogin() {
+  if (authSubmitting) return;
   const email = document.getElementById("authEmail").value.trim();
   const password = document.getElementById("authPassword").value;
   const remember = document.getElementById("authRemember").checked;
   if (!email || !password) { showAuthError("请输入邮箱和密码"); return; }
-  const { error } = await sb.auth.signInWithPassword({ email, password });
-  if (error) { showAuthError("登录失败：" + error.message); return; }
-  showAuthError("");
-  if (remember) {
-    localStorage.setItem("auth_email", email);
-    localStorage.setItem("auth_remember", "true");
-  } else {
-    localStorage.removeItem("auth_email");
-    localStorage.removeItem("auth_remember");
+  authSubmitting = true;
+  try {
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) { showAuthError("登录失败：" + error.message); return; }
+    showAuthError("");
+    try {
+      if (remember) {
+        localStorage.setItem("auth_email", email);
+        localStorage.setItem("auth_remember", "true");
+      } else {
+        localStorage.removeItem("auth_email");
+        localStorage.removeItem("auth_remember");
+      }
+    } catch (e) { console.warn("保存登录信息失败", e); }
+    await startCloudSession();
+  } catch (e) {
+    console.error("登录异常:", e);
+    showAuthError("登录异常：" + (e.message || "请重试"));
+  } finally {
+    authSubmitting = false;
   }
-  await startCloudSession();
 }
 
 async function doSignup() {
+  if (authSubmitting) return;
   const email = document.getElementById("authEmail").value.trim();
   const password = document.getElementById("authPassword").value;
   if (!email || !password) { showAuthError("请输入邮箱和密码"); return; }
-  const { error } = await sb.auth.signUp({ email, password });
-  if (error) { showAuthError("注册失败：" + error.message); return; }
-  showAuthError("");
-  toast("注册成功，若开启了邮箱验证请先到邮箱确认，然后登录");
+  authSubmitting = true;
+  try {
+    const { error } = await sb.auth.signUp({ email, password });
+    if (error) { showAuthError("注册失败：" + error.message); return; }
+    showAuthError("");
+    toast("注册成功，若开启了邮箱验证请先到邮箱确认，然后登录");
+  } catch (e) {
+    console.error("注册异常:", e);
+    showAuthError("注册异常：" + (e.message || "请重试"));
+  } finally {
+    authSubmitting = false;
+  }
 }
 
 async function doLogout() {
-  await sb.auth.signOut();
-  location.reload();
+  try {
+    await sb.auth.signOut();
+  } catch (e) {
+    console.error("登出失败:", e);
+  } finally {
+    location.reload();
+  }
 }
 
 async function startCloudSession() {
-  const { data } = await sb.auth.getSession();
-  if (!data.session) {
-    const remember = localStorage.getItem("auth_remember");
-    const savedEmail = localStorage.getItem("auth_email");
-    document.getElementById("authScreen").classList.remove("hidden");
-    if (savedEmail) {
-      document.getElementById("authEmail").value = savedEmail;
-      document.getElementById("authRemember").checked = remember === "true";
+  try {
+    const { data } = await sb.auth.getSession();
+    if (!data.session) {
+      const remember = localStorage.getItem("auth_remember");
+      const savedEmail = localStorage.getItem("auth_email");
+      document.getElementById("authScreen").classList.remove("hidden");
+      if (savedEmail) {
+        document.getElementById("authEmail").value = savedEmail;
+        document.getElementById("authRemember").checked = remember === "true";
+      }
+      return;
     }
-    return;
+    currentUser = data.session.user;
+    document.getElementById("authScreen").classList.add("hidden");
+
+    document.getElementById("btnLogout").classList.remove("hidden");
+    document.getElementById("userMenu").classList.remove("hidden");
+    setSyncStatus("online", "● 连接中…");
+
+    // 载入当前用户的角色 / 门店
+    const { data: prof } = await sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
+    currentProfile = { role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null, adminPasswordHash: (prof && prof.admin_password_hash) || null };
+
+    const userInfo = document.getElementById("userInfo");
+    userInfo.textContent = currentProfile.name || currentUser.email;
+    userInfo.classList.remove("hidden");
+
+    document.getElementById("dropdownEmail").textContent = currentProfile.name || currentUser.email;
+    document.getElementById("dropdownRole").textContent = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
+
+    if (currentProfile.role !== ROLE.MANAGER) {
+      document.getElementById("btnExport").classList.add("hidden");
+    }
+
+    // 用 onclick 赋值（幂等）替代 addEventListener，避免重复登录时监听器累积
+    document.getElementById("btnLogoutMenu").onclick = () => {
+      document.getElementById("userDropdown").classList.add("hidden");
+      doLogout();
+    };
+
+    // 未分配角色：显示提示并停止后续加载
+    if (!currentProfile.role) {
+      showNoAccess(currentUser.email);
+      return;
+    }
+
+    await repo.loadAll();
+    renderRoleInfo();
+    applyPermissions();
+    updateInternalTaskBadge();
+    renderAll();
+    subscribeRealtime();
+  } catch (e) {
+    console.error("加载云端会话失败:", e);
+    showAuthError("加载会话失败：" + (e.message || "请重试"));
   }
-  currentUser = data.session.user;
-  document.getElementById("authScreen").classList.add("hidden");
-
-  document.getElementById("btnLogout").classList.remove("hidden");
-  document.getElementById("userMenu").classList.remove("hidden");
-  setSyncStatus("online", "● 连接中…");
-
-  // 载入当前用户的角色 / 门店
-  const { data: prof } = await sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
-  currentProfile = { role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null, adminPasswordHash: (prof && prof.admin_password_hash) || null };
-
-  const userInfo = document.getElementById("userInfo");
-  userInfo.textContent = currentProfile.name || currentUser.email;
-  userInfo.classList.remove("hidden");
-  
-  document.getElementById("dropdownEmail").textContent = currentProfile.name || currentUser.email;
-  document.getElementById("dropdownRole").textContent = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
-  
-  if (currentProfile.role !== ROLE.MANAGER) {
-    document.getElementById("btnExport").classList.add("hidden");
-  }
-
-  document.getElementById("btnLogoutMenu").addEventListener("click", () => {
-    document.getElementById("userDropdown").classList.add("hidden");
-    doLogout();
-  });
-
-  
-
-  // 未分配角色：显示提示并停止后续加载
-  if (!currentProfile.role) {
-    showNoAccess(currentUser.email);
-    return;
-  }
-
-  await repo.loadAll();
-  renderRoleInfo();
-  applyPermissions();
-  updateInternalTaskBadge();
-  renderAll();
-  subscribeRealtime();
 }
 
 /* 账号未授权时的提示遮罩 */
@@ -14223,16 +14385,9 @@ async function init() {
   if (cloudConfigured()) {
     MODE = "cloud";
     sb = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
-    if (window.APP_CONFIG.SUPABASE_SERVICE_KEY) {
-      sbAdmin = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_SERVICE_KEY);
-      // 安全检查：非本地部署时 service_key 会暴露在客户端代码中
-      if (window.APP_CONFIG.ENFORCE_KEY_SECURITY && 
-          !["localhost", "127.0.0.1", ""].includes(window.location.hostname)) {
-        console.warn("[安全警告] service_role 密钥在客户端代码中暴露！"
-          + "如果您部署在公开托管服务（如 GitHub Pages），请将 SUPABASE_SERVICE_KEY 设为空字符串。"
-          + "否则攻击者可以使用此密钥完全控制您的 Supabase 数据库。");
-      }
-    }
+    // 注意：出于安全考虑，前端不再持有 service_role 密钥。
+    // 彻底删除 Auth 用户等需要管理员权限的操作应放在服务端（Edge Function / 自有后端），
+    // 密钥仅保存在服务端环境变量中。当前未配置时，删除账号只会清除 profiles 记录。
     await startCloudSession();
   } else {
     MODE = "local";
@@ -14847,7 +15002,7 @@ function vehicleHistoryListHtml(trips) {
 /* 切换历史记录视图（卡片 / 列表） */
 function setVtView(view) {
   window._vtView = (view === "list") ? "list" : "card";
-  try { localStorage.setItem("vehHistView", window._vtView); } catch (e) {}
+  try { localStorage.setItem("vehHistView", window._vtView); } catch (e) { console.warn("保存车辆视图偏好失败", e); }
   renderVehicleHistory();
 }
 
@@ -14923,7 +15078,7 @@ function loadCustomDrivers() {
   if (!Array.isArray(cache.customDrivers)) cache.customDrivers = [];
 }
 function saveCustomDrivers() {
-  try { localStorage.setItem("customDrivers", JSON.stringify(cache.customDrivers || [])); } catch (e) {}
+  try { localStorage.setItem("customDrivers", JSON.stringify(cache.customDrivers || [])); } catch (e) { console.warn("保存自定义司机失败", e); }
 }
 
 /* 司机下拉：施工人员 + 已录入的自定义司机（公司其他人） */
