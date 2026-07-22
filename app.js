@@ -15210,9 +15210,9 @@ function vehicleHistoryCardHtml(trips) {
 
       ${projName || (proj && proj.address) || t.note ? `
       <div class="veh-trip__bottom">
-        ${projName ? `<div class="veh-trip__project-name" title="${esc(projName)}">🔗 ${esc(projName)}</div>` : ""}
-        ${proj && proj.address ? `<div class="veh-trip__proj-addr">📍 ${esc(proj.address)}</div>` : ""}
-        ${t.note ? `<div class="veh-trip__trip-note">📝 ${esc(t.note)}</div>` : ""}
+        ${projName ? `<div class="veh-trip__project-name"><span class="veh-trip__label-tag">项目</span>${esc(projName)}</div>` : ""}
+        ${proj && proj.address ? `<div class="veh-trip__proj-addr"><span class="veh-trip__label-tag">地址</span>${esc(proj.address)}</div>` : ""}
+        ${t.note ? `<div class="veh-trip__trip-note"><span class="veh-trip__label-tag">备注</span>${esc(t.note)}</div>` : ""}
       </div>` : ""}
 
       <div class="veh-trip__actions">
