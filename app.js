@@ -14832,6 +14832,10 @@ function renderVehicleDashboards() {
     const active = (window._vtqVehicleId === v.id) ? " active" : "";
     const stateTxt = inUse ? "使用中" : "空闲";
     const cta = inUse ? "还车 ▾" : "用车 ▸";
+    /* 使用中时单独标出当前用车人（司机），一眼看出「谁在用车」；空闲车不显示 */
+    const driverTag = inUse
+      ? `<span class="veh-card-driver">👤 ${esc(open.driverName || "未知")}</span>`
+      : "";
     const fuelBadge = (!inUse)
       ? (lastFuel != null
           ? `<span class="veh-fuel-badge" style="background:${lastFuel <= 20 ? 'linear-gradient(135deg,#fef2f2,#fee2e2);color:#dc2626;border-color:#fecaca' : lastFuel <= 40 ? 'linear-gradient(135deg,#fffbeb,#fef3c7);color:#d97706;border-color:#fde68a' : 'linear-gradient(135deg,#f0fdf4,#dcfce7);color:#16a34a;border-color:#bbf7d0'}">⛽ ${lastFuel}%</span>`
@@ -14847,7 +14851,10 @@ function renderVehicleDashboards() {
           <span class="veh-dash-name">${esc(v.name)}</span>
           <span class="veh-dash-plate">${esc(v.plate)}</span>
         </div>
-        <div class="veh-card-state"><span class="dot"></span>${stateTxt}</div>
+        <div class="veh-card-state-group">
+          ${driverTag}
+          <span class="veh-card-state"><span class="dot"></span>${stateTxt}</span>
+        </div>
       </div>
       <div class="veh-card-main">
         <div class="veh-card-gauge">
@@ -15129,7 +15136,7 @@ function vehicleHistoryCardHtml(trips) {
       }
     }
     const vName = t.vehicleName ? `${esc(t.vehicleName)}` : "未知车辆";
-    const icon = t.type === "接货" ? "📦" : (t.type === "安装" ? "🔧" : (t.type === "业务" ? "💼" : "🚚"));
+    const icon = t.type === "接货" ? "📦" : (t.type === "安装" ? "🖼️" : (t.type === "业务" ? "💼" : "🚚"));
     const typeKey = t.type === "接货" ? "pickup" : (t.type === "安装" ? "install" : (t.type === "业务" ? "biz" : (t.type === "送货" ? "deliver" : "default")));
     const proj = t.projectId ? getProject(t.projectId) : null;
     const projName = proj ? proj.name : (t.projectName || "");
@@ -15144,7 +15151,6 @@ function vehicleHistoryCardHtml(trips) {
           </div>
         </div>
         <div class="veh-trip__top-right">
-          <span class="veh-type veh-type--${typeKey}">${esc(t.type || "送货")}</span>
           ${open
             ? `<span class="veh-trip__status veh-trip__status--open">⏳ 未还车</span>`
             : `<span class="veh-trip__status veh-trip__status--done">✓ 已还车</span>`}
@@ -15157,6 +15163,11 @@ function vehicleHistoryCardHtml(trips) {
           ${t.driverName
             ? `<span class="veh-hero__driver"><span class="veh-hero__avatar">${esc(t.driverName.slice(0, 1))}</span><b>${esc(t.driverName)}</b></span>`
             : `<span class="veh-hero__driver"><b class="veh-hero__none">未填写</b></span>`}
+        </div>
+        <div class="veh-hero__divider"></div>
+        <div class="veh-hero__item veh-hero__item--purpose">
+          <span class="veh-hero__label">🎯 外出目的</span>
+          <span class="veh-hero__purpose veh-hero__purpose--${typeKey}">${esc(t.type || "送货")}</span>
         </div>
         <div class="veh-hero__divider"></div>
         <div class="veh-hero__item veh-hero__item--km">
@@ -15221,7 +15232,7 @@ function vehicleHistoryListHtml(trips) {
     const rawMileage = Number(t.mileage);
     const mileage = !open ? (rawMileage || Math.max(0, Number(t.endKm) - Number(t.startKm))) : null;
     const vName = t.vehicleName ? `${esc(t.vehicleName)}` : "未知车辆";
-    const icon = t.type === "接货" ? "📦" : (t.type === "安装" ? "🔧" : (t.type === "业务" ? "💼" : "🚚"));
+    const icon = t.type === "接货" ? "📦" : (t.type === "安装" ? "🖼️" : (t.type === "业务" ? "💼" : "🚚"));
     const actions = open
       ? `<button class="btn small primary" onclick="openReturnVehicle('${t.vehicleId}')">还车</button>`
       : (isManager()

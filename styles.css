@@ -6635,6 +6635,19 @@ table.data.project-hours-diff td.wrap {
   font-size: 12px; font-weight: 600; color: #16a34a;
   white-space: nowrap; flex-shrink: 0;
 }
+.veh-card-state-group {
+  display: inline-flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+.veh-card-driver {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 12px; font-weight: 700; color: #c2410c;
+  background: linear-gradient(135deg, #fff7ed, #ffedd5);
+  border: 1px solid #fed7aa;
+  padding: 3px 9px; border-radius: 8px;
+  white-space: nowrap; line-height: 1.3;
+  box-shadow: 0 1px 3px rgba(234,88,12,.12);
+}
 .veh-card-state .dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: #22c55e;
@@ -7301,6 +7314,23 @@ table.data.project-hours-diff td.wrap {
   gap: 7px;
 }
 .veh-hero__item--km { align-items: flex-end; text-align: right; }
+.veh-hero__item--purpose { align-items: center; text-align: center; flex: 0 0 auto; min-width: 0; }
+.veh-hero__purpose {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 18px;
+  font-weight: 800;
+  padding: 5px 14px;
+  border-radius: 9px;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.veh-hero__purpose--pickup { color: #b45309; background: #fef3c7; }
+.veh-hero__purpose--install { color: #0f766e; background: #ccfbf1; }
+.veh-hero__purpose--biz { color: #4338ca; background: #e0e7ff; }
+.veh-hero__purpose--deliver { color: #1d4ed8; background: #dbeafe; }
+.veh-hero__purpose--default { color: #475569; background: #eef2f7; }
 .veh-hero__label {
   font-size: 11px;
   font-weight: 600;
@@ -7330,7 +7360,7 @@ table.data.project-hours-diff td.wrap {
   font-size: 16px;
   font-weight: 800;
   color: #1e293b;
-  max-width: 130px;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -7521,6 +7551,8 @@ table.data.project-hours-diff td.wrap {
   .veh-time-km__value b { font-size: 14px; }
   .veh-hero__km { font-size: 24px; }
   .veh-hero__divider { margin: 0 10px; }
+  .veh-hero__purpose { font-size: 15px; padding: 4px 10px; }
+  .veh-hero__driver b { max-width: 110px; font-size: 14px; }
 }
 
 /* ===== 车辆里程：按月 / 按车汇总 ===== */
