@@ -12333,7 +12333,11 @@ function renderLeaves() {
   records.sort((a, b) => new Date(b.createdAt || b.startDate) - new Date(a.createdAt || a.startDate));
   
   const pendingRecords = records.filter(r => r.status === LEAVE_STATUS.PENDING);
-  const historyRecords = records.filter(r => r.status !== LEAVE_STATUS.PENDING);
+  /* 历史记录仅显示最近 3 天：结束日期在（今天-3天）之后（含进行中/未来请假）；待审批始终显示 */
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 3);
+  const cutoffKey = dateKey(cutoff);
+  const historyRecords = records.filter(r => r.status !== LEAVE_STATUS.PENDING && (r.endDate || "") >= cutoffKey);
   
   renderLeaveStats(statsEl);
   
@@ -12348,7 +12352,7 @@ function renderLeaves() {
   
   recordList.innerHTML = `
     ${historyRecords.length > 0 ? historyRecords.map(r => renderLeaveCard(r, perm.manageLeaves())).join("") : 
-      '<div style="text-align:center;color:var(--muted);padding:40px;">暂无请假记录</div>'}
+      '<div style="text-align:center;color:var(--muted);padding:40px;">最近 3 天内暂无请假记录</div>'}
   `;
   
   const holidayEl = document.getElementById("holidayManage");

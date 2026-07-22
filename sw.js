@@ -1,7 +1,7 @@
 // ⚠️ 每次把新版本上传到云端，【必须】把这里的版本号 +1（v146 → v147 → …）。
 // 否则浏览器认为 sw.js 没变，永远不会安装新版本，客户端也就永远停留在旧程序。
-const CACHE = "ad-install-v148";
-const VERSION = "v148";
+const CACHE = "ad-install-v150";
+const VERSION = "v150";
 
 const ASSETS = [
   "./",
