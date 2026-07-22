@@ -7205,6 +7205,8 @@ table.data.project-hours-diff td.wrap {
   gap: 14px;
 }
 .veh-trip {
+  display: flex;
+  flex-direction: column;
   position: relative;
   background: #fff;
   border: 1px solid #e7ebf3;
@@ -7492,6 +7494,19 @@ table.data.project-hours-diff td.wrap {
   padding: 10px 12px;
   margin-bottom: 12px;
 }
+.veh-trip__label-tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-right: 6px;
+  line-height: 1.6;
+  vertical-align: 1px;
+}
 .veh-trip__project-name {
   font-weight: 700;
   color: #1e293b;
@@ -7537,7 +7552,8 @@ table.data.project-hours-diff td.wrap {
 .veh-trip__actions {
   display: flex;
   gap: 6px;
-  margin-top: 12px;
+  margin-top: auto;  /* 桌面端：推到底部，同行卡片按钮对齐 */
+  padding-top: 12px;  /* 与上方内容保持间距 */
 }
 .veh-trip__actions .btn.small {
   flex: 1;
@@ -7546,6 +7562,7 @@ table.data.project-hours-diff td.wrap {
 }
 @media (max-width: 480px) {
   #vehicleTripList.card-grid { grid-template-columns: 1fr; }
+  .veh-trip__actions { margin-top: 12px; padding-top: 0; }  /* 移动端：自然高度，不强制对齐 */
   .veh-trip__time-km { gap: 8px; }
   .veh-time-km__item { padding: 9px 10px; }
   .veh-time-km__value b { font-size: 14px; }
