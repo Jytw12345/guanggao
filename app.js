@@ -5114,12 +5114,12 @@ function renderConstruction() {
           
           let hours = 0;
           
-          if (isAssigned && periods.length > 0) {
+          /* 优先根据实际在场时段计算工时（与下方显示的时间段同源，保证一致）；
+             仅在完全没有时段记录时才退回 workLogs 手动登记值（防止被手动改过后与时段矛盾） */
+          if (periods.length > 0) {
             hours = calcWorkerRealtimeHours(p, wid, periods);
           } else if (logEntry && logEntry.hours > 0) {
             hours = logEntry.hours;
-          } else if (periods.length > 0) {
-            hours = calcWorkerRealtimeHours(p, wid, periods);
           }
           
           hours = Math.round(hours * 10) / 10;
@@ -12159,6 +12159,19 @@ function switchTab(name) {
     s.classList.toggle("active", s.id === name));
   document.querySelectorAll(".bottom-nav-item").forEach((b) =>
     b.classList.toggle("active", b.dataset.tab === name));
+  /* 下拉子项高亮 + 父按钮高亮 + 切换时收起下拉 */
+  document.querySelectorAll(".tab-sub").forEach((b) =>
+    b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab-dropdown").forEach((dd) => {
+    const toggle = dd.querySelector(".tab-dropdown-toggle");
+    const childActive = dd.querySelector(`.tab-sub[data-tab="${name}"]`);
+    if (toggle) toggle.classList.toggle("active", !!childActive);
+  });
+  document.querySelectorAll(".tab-dropdown.open").forEach((o) => {
+    o.classList.remove("open");
+    const t = o.querySelector(".tab-dropdown-toggle");
+    if (t) t.setAttribute("aria-expanded", "false");
+  });
   document.querySelector(".tabs").classList.remove("open");
   window.scrollTo({ top: 0, behavior: "instant" });
 
@@ -12242,8 +12255,17 @@ function applyPermissions() {
     internalTasks: role != null && (isManager() || (!myStore() && (isStoreManager() || isWorker())) || (cache.stores.length > 0 && storeName(myStore()).includes("广告工程部"))),
     vehicleTrips: role != null,
   };
-  document.querySelectorAll(".tab-btn").forEach((b) => {
+  document.querySelectorAll(".tab-btn, .tab-sub").forEach((b) => {
+    // 下拉父按钮（带 data-dropdown）不在此处理，下面单独根据子项可见性决定
+    if (b.dataset.dropdown) return;
     b.classList.toggle("hidden", !tabVisible[b.dataset.tab]);
+  });
+  /* 下拉父按钮：仅当至少一个子项可见时才显示 */
+  document.querySelectorAll(".tab-dropdown").forEach((dd) => {
+    const toggle = dd.querySelector(".tab-dropdown-toggle");
+    const subs = Array.from(dd.querySelectorAll(".tab-sub"));
+    const anyVisible = subs.some((s) => !s.classList.contains("hidden"));
+    if (toggle) toggle.classList.toggle("hidden", !anyVisible);
   });
 
   const setHidden = (id, hidden) => {
@@ -14418,11 +14440,59 @@ async function exportCloudToLocal() {
  * 初始化
  * ============================================================ */
 function bindEvents() {
-  document.querySelectorAll(".tab-btn").forEach((b) =>
-    b.addEventListener("click", () => switchTab(b.dataset.tab)));
+  /* 帮助说明模态框：关闭按钮 / 点遮罩 / Esc 关闭，关闭即回到主界面 */
+  const helpModal = document.getElementById("helpModal");
+  const helpClose = document.getElementById("helpModalClose");
+  if (helpModal && helpClose) {
+    helpClose.addEventListener("click", closeHelp);
+    helpModal.addEventListener("click", (e) => { if (e.target === helpModal) closeHelp(); });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && helpModal.classList.contains("open")) closeHelp();
+    });
+  }
+
+  document.querySelectorAll(".tab-btn").forEach((b) => {
+    // 下拉父按钮（系统设置等）不触发 switchTab，单独处理
+    if (b.dataset.dropdown) return;
+    b.addEventListener("click", () => switchTab(b.dataset.tab));
+  });
 
   document.querySelectorAll(".bottom-nav-item").forEach((b) =>
     b.addEventListener("click", () => switchTab(b.dataset.tab)));
+
+  /* 顶部下拉菜单（系统设置）：点击父按钮展开/收起，点击子项跳转 */
+  document.querySelectorAll(".tab-dropdown-toggle").forEach((toggle) => {
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const dd = toggle.closest(".tab-dropdown");
+      // 关闭其他已展开的下拉
+      document.querySelectorAll(".tab-dropdown.open").forEach((o) => { if (o !== dd) o.classList.remove("open"); });
+      const willOpen = !dd.classList.contains("open");
+      dd.classList.toggle("open", willOpen);
+      toggle.setAttribute("aria-expanded", String(willOpen));
+      if (willOpen) {
+        // 固定定位，避免被 .tabs 的 overflow 裁切；按视口坐标对齐到父按钮右侧
+        const menu = dd.querySelector(".tab-dropdown-menu");
+        const rect = toggle.getBoundingClientRect();
+        const menuW = menu.offsetWidth || 168;
+        let left = rect.right - menuW;
+        if (left < 8) left = 8;
+        menu.style.top = (rect.bottom + 6) + "px";
+        menu.style.left = left + "px";
+      }
+    });
+  });
+  document.querySelectorAll(".tab-sub").forEach((sub) => {
+    sub.addEventListener("click", () => {
+      const dd = sub.closest(".tab-dropdown");
+      if (dd) {
+        dd.classList.remove("open");
+        const t = dd.querySelector(".tab-dropdown-toggle");
+        if (t) t.setAttribute("aria-expanded", "false");
+      }
+      switchTab(sub.dataset.tab);
+    });
+  });
 
   const menuToggle = document.getElementById("menuToggle");
   const tabs = document.querySelector(".tabs");
@@ -14431,6 +14501,13 @@ function bindEvents() {
   });
 
   document.addEventListener("click", (e) => {
+    if (!e.target.closest(".tab-dropdown")) {
+      document.querySelectorAll(".tab-dropdown.open").forEach((o) => {
+        o.classList.remove("open");
+        const t = o.querySelector(".tab-dropdown-toggle");
+        if (t) t.setAttribute("aria-expanded", "false");
+      });
+    }
     if (!tabs.contains(e.target) && !menuToggle.contains(e.target)) {
       tabs.classList.remove("open");
     }
@@ -14667,12 +14744,17 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     if (document.getElementById("swUpdateBar")) return;
     const bar = document.createElement("div");
     bar.id = "swUpdateBar";
-    bar.innerHTML = `<span class="sw-update__text">🔄 发现新版本 <b>${version || ""}</b>，建议立即更新以使用最新功能与修复</span>
-      <button type="button" id="swUpdateBtn" class="sw-update__btn">立即更新</button>`;
+    bar.innerHTML = `<span class="sw-update__icon">🔄</span>
+      <span class="sw-update__text">发现新版本 <b>${version || ""}</b>，建议立即更新以体验最新功能与修复</span>
+      <button type="button" id="swUpdateBtn" class="sw-update__btn">立即更新</button>
+      <button type="button" id="swUpdateClose" class="sw-update__close" aria-label="稍后更新" title="稍后更新">×</button>`;
     document.body.appendChild(bar);
     document.getElementById("swUpdateBtn").addEventListener("click", () => {
       // 硬刷新：绕过 HTTP 缓存，确保拿到新程序
       window.location.reload(true);
+    });
+    document.getElementById("swUpdateClose").addEventListener("click", () => {
+      bar.remove();
     });
   }
 
@@ -14709,7 +14791,16 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
 }
 
 function showHelp() {
-  window.open("help.html", "_blank");
+  const m = document.getElementById("helpModal");
+  if (!m) return;
+  m.classList.add("open");
+  m.setAttribute("aria-hidden", "false");
+}
+function closeHelp() {
+  const m = document.getElementById("helpModal");
+  if (!m) return;
+  m.classList.remove("open");
+  m.setAttribute("aria-hidden", "true");
 }
 
 /* ===== 卡片操作：更多菜单下拉交互 ===== */

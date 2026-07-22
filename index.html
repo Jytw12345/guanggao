@@ -66,17 +66,22 @@
       <button class="tab-btn active" data-tab="projects">项目预约</button>
       <button class="tab-btn" data-tab="calendar">预约日历</button>
       <button class="tab-btn" data-tab="construction">施工管理</button>
+      <button class="tab-btn" data-tab="vehicleTrips">车辆里程</button>
+      <button class="tab-btn" data-tab="internalTasks">内部任务</button>
+      <button class="tab-btn" data-tab="workers">施工人员</button>
+      <button class="tab-btn" data-tab="schedules">个人日程</button>
+      <button class="tab-btn" data-tab="leaves">请假管理</button>
       <button class="tab-btn" data-tab="stats">工时统计</button>
       <button class="tab-btn" data-tab="storeStats">店面统计</button>
-      <button class="tab-btn" data-tab="workers">施工人员</button>
       <button class="tab-btn" data-tab="outsourced">外协人员</button>
-      <button class="tab-btn" data-tab="leaves">请假管理</button>
-      <button class="tab-btn" data-tab="schedules">个人日程</button>
-      <button class="tab-btn" data-tab="stores">门店管理</button>
-      <button class="tab-btn" data-tab="accounts">账号管理</button>
-      <button class="tab-btn" data-tab="rolePerms">角色权限</button>
-      <button class="tab-btn" data-tab="internalTasks">内部任务</button>
-      <button class="tab-btn" data-tab="vehicleTrips">车辆里程</button>
+      <div class="tab-dropdown">
+        <button class="tab-btn tab-dropdown-toggle" data-dropdown="settings" type="button" aria-haspopup="true" aria-expanded="false">系统设置 <span class="tab-caret">▾</span></button>
+        <div class="tab-dropdown-menu">
+          <button class="tab-sub" data-tab="accounts" type="button">账号管理</button>
+          <button class="tab-sub" data-tab="rolePerms" type="button">角色权限</button>
+          <button class="tab-sub" data-tab="stores" type="button">门店管理</button>
+        </div>
+      </div>
     </nav>
   </header>
 
@@ -483,6 +488,17 @@
         <button class="btn primary" id="btnLogin">登录</button>
         <button class="btn" id="btnSignup">注册新账号</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 帮助说明模态弹窗 -->
+  <div id="helpModal" class="help-modal-overlay" aria-hidden="true">
+    <div class="help-modal" role="dialog" aria-modal="true" aria-label="使用说明书">
+      <div class="help-modal-head">
+        <span class="help-modal-title">📖 使用说明书</span>
+        <button type="button" class="help-modal-close" id="helpModalClose" aria-label="关闭">✕</button>
+      </div>
+      <iframe id="helpModalFrame" class="help-modal-frame" src="help.html" title="使用说明书"></iframe>
     </div>
   </div>
 
