@@ -1053,6 +1053,7 @@ const mapLog = (r) => ({
   note: r.note || "",
   level: r.level || "中级",
   isOutsourced: r.is_outsourced || false,
+  workType: r.work_type || r.workType || "",
 });
 
 /* 车辆里程记录（云端 snake_case <-> 前端 camelCase） */
@@ -3287,7 +3288,8 @@ function checkLeaveQuotaAndConflict() {
   
   const usedDays = calculateUsedLeaveDays(workerId, leaveType);
   const quota = getLeaveQuota(workerId);
-  const requestedDays = calculateLeaveDays(startDate, endDate);
+  const [startType, endType] = inferLeaveType(startTime, endTime);
+  const requestedDays = calculateLeaveDays(startDate, endDate, startType, endType);
   
   let quotaField = "";
   if (leaveType === "personal") quotaField = quota.personal_days || 15;
@@ -3340,16 +3342,24 @@ function isWorkDay(dateStr) {
   return !isHoliday(dateStr);
 }
 
-function calculateLeaveDays(startDate, endDate) {
+function calculateLeaveDays(startDate, endDate, startType, endType) {
   const start = new Date(startDate);
   const end = new Date(endDate);
   let workDays = 0;
   const current = new Date(start);
+  const startStr = startDate;
+  const endStr = endDate;
   
   while (current <= end) {
     const dateStr = current.toISOString().split("T")[0];
     if (isWorkDay(dateStr)) {
-      workDays++;
+      if (dateStr === startStr && startType && startType !== "all" && startType !== "custom") {
+        workDays += 0.5;
+      } else if (dateStr === endStr && endType && endType !== "all" && endType !== "custom") {
+        workDays += 0.5;
+      } else {
+        workDays += 1;
+      }
     }
     current.setDate(current.getDate() + 1);
   }
@@ -3360,8 +3370,8 @@ function calculateLeaveDays(startDate, endDate) {
 function calculateUsedLeaveDays(workerId, leaveType) {
   const year = new Date().getFullYear().toString();
   return cache.leaveRecords
-    .filter(l => l.workerId === workerId && l.status === LEAVE_STATUS.APPROVED && l.leaveType === leaveType)
-    .reduce((sum, l) => sum + calculateLeaveDays(l.startDate, l.endDate), 0);
+    .filter(l => l.workerId === workerId && l.status === LEAVE_STATUS.APPROVED && l.leaveType === leaveType && (l.startDate || "").slice(0, 4) === year)
+    .reduce((sum, l) => sum + calculateLeaveDays(l.startDate, l.endDate, l.startType, l.endType), 0);
 }
 
 function getLeaveQuota(workerId) {
@@ -12395,7 +12405,7 @@ function renderLeaveStats(container) {
   });
   
   approvedRecords.forEach(r => {
-    const days = calculateLeaveDays(r.startDate, r.endDate);
+    const days = calculateLeaveDays(r.startDate, r.endDate, r.startType, r.endType);
     totalDays += days;
     if (typeStats[r.leaveType]) {
       typeStats[r.leaveType].days += days;
@@ -12408,7 +12418,7 @@ function renderLeaveStats(container) {
   
   const workerStats = cache.workers.map(w => {
     const workerLeaves = approvedRecords.filter(r => r.workerId === w.id);
-    const workerDays = workerLeaves.reduce((sum, r) => sum + calculateLeaveDays(r.startDate, r.endDate), 0);
+    const workerDays = workerLeaves.reduce((sum, r) => sum + calculateLeaveDays(r.startDate, r.endDate, r.startType, r.endType), 0);
     return { name: w.name, days: workerDays, count: workerLeaves.length };
   }).sort((a, b) => b.days - a.days);
   
