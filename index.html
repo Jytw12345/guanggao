@@ -34,6 +34,7 @@
       <h1>广告施工预约</h1>
       <div class="header-right">
         <div class="mobile-sync-time" id="mobileSyncTime" title="上次同步时间"></div>
+        <button id="btnFullRefresh" class="sync-full-refresh" hidden onclick="forceFullRefresh()" title="从服务器全量刷新（绕过本地缓存，确保历史数据最新）">↻</button>
         <div class="global-search">
           <input type="text" id="globalSearch" placeholder="🔍 搜索项目、员工、门店..." />
           <div id="globalSearchResults" class="search-results"></div>

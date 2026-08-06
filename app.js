@@ -1430,8 +1430,23 @@ async function cloudQuery(build, retries = CLOUD_FETCH_RETRIES) {
 
 const repo = {
   /* ---- 载入全部数据到 cache ---- */
-  async loadAll() {
+  async loadAll(forceFull) {
     if (MODE === "cloud") {
+      // 强制全量刷新：取消挂起的节流合并，立即执行一次无条件全量拉取（绕过缓存融合），
+      // 用于「从服务器核对全部历史数据」。不进节流合并，保证用户点击后立即生效。
+      if (forceFull) {
+        if (_loadAllDebounceTimer) { clearTimeout(_loadAllDebounceTimer); _loadAllDebounceTimer = null; }
+        _loadAllDebouncePromise = null;
+        const p = (async () => {
+          try {
+            return await this._doLoadAll(true);
+          } finally {
+            _loadAllPromise = null;
+          }
+        })();
+        _loadAllPromise = p;
+        return p;
+      }
       // 并发锁：如果已有 loadAll 在执行，复用其 Promise，避免下拉刷新+实时同步+visibilitychange
       // 同时触发 loadAll 导致重复请求和缓存竞态。
       if (_loadAllPromise) return _loadAllPromise;
@@ -1463,7 +1478,12 @@ const repo = {
       return true;
     }
   },
-  async _doLoadAll() {
+  // 是否有进行中的 loadAll（含节流挂起 / 正在请求）：供「同步中」兜底判断，
+  // 避免云端数据尚未就绪就误报「同步完成」
+  isLoading() {
+    return MODE === "cloud" && !!(_loadAllPromise || _loadAllDebouncePromise || _loadAllDebounceTimer);
+  },
+  async _doLoadAll(forceFull) {
       // 全量拉取会用服务端快照整体覆盖内存，因此「开始之前」积压的待刷新表随即作废。
       // 拉取期间新到达的变更进入清空后的队列，不受影响，稍后照常触发刷新。
       const staleTables = Array.from(pendingChanges);
@@ -1479,7 +1499,8 @@ const repo = {
       } catch (e) {
         console.warn("[cloud-cache] loadAll 读取缓存失败，降级全量拉取：", e && e.message);
       }
-      const hasCache = !!(cachedSnap && cachedSnap.cache && Array.isArray(cachedSnap.cache.projects) && cachedSnap.cache.projects.length);
+      // 强制全量刷新（forceFull）时忽略本地缓存，走无条件全量 select *，从服务器核对全部历史
+      const hasCache = forceFull ? false : !!(cachedSnap && cachedSnap.cache && Array.isArray(cachedSnap.cache.projects) && cachedSnap.cache.projects.length);
       const sinceISO = new Date(Date.now() - CLOUD_HISTORY_LOOKBACK_DAYS * 86400000).toISOString().slice(0, 19) + "Z";
       const pRes = await cloudQuery(() => {
         const q = sb.from("projects").select("*");
@@ -2849,11 +2870,18 @@ function showSyncing() {
   el.classList.add("is-syncing");
   el.innerHTML = `<span class="sync-ico">🔄</span><span class="sync-txt">同步中…</span>`;
   el.title = "正在与云端同步…";
-  // 兜底：若一直停在进行中（如之后再无完成回调），4 秒后自动落定为「同步完成」
+  // 兜底：若一直停在进行中（如之后再无完成回调），4 秒后尝试落定为「同步完成」；
+  // 但若此刻云端拉取仍在进行中（节流挂起或正在请求），不要强行标完成，保持转圈；
+  // 让「完成」信号滞后到数据真正就绪之后，避免「显示完成但数据还没出来」的假象。
+  // 仅当已有成功同步记录（lastSyncTime 存在）才刷新「完成」显示；首次同步失败时不伪造完成，
+  // 交由登录流程的离线/失败提示处理。
   if (syncSyncingTimer) clearTimeout(syncSyncingTimer);
   syncSyncingTimer = setTimeout(() => {
     syncSyncingTimer = null;
-    if (el.classList.contains("is-syncing")) recordSyncTime();
+    if (el.classList.contains("is-syncing")) {
+      if (typeof repo !== "undefined" && repo.isLoading && repo.isLoading()) return;
+      if (lastSyncTime) recordSyncTime();
+    }
   }, 4000);
 }
 
@@ -14353,6 +14381,34 @@ async function doPullRefresh() {
   if (textEl) textEl.textContent = "下拉刷新";
 }
 
+// 强制全量刷新：绕过缓存融合，从服务器无条件拉取全部数据（含很老的历史），
+// 用于「核对全部历史数据是否最新」。仅云端模式可用；与下拉刷新共享同一套同步状态机。
+async function forceFullRefresh() {
+  const btn = document.getElementById("btnFullRefresh");
+  if (MODE !== "cloud") { toast("本地模式无需全量刷新"); return; }
+  if (repo.isLoading && repo.isLoading()) { toast("正在同步中，请稍候"); return; }
+  if (btn) { btn.classList.add("spinning"); btn.disabled = true; }
+  showSyncing(); // 顶栏转圈；数据就绪前不标「完成」，避免「完成但没出来」假象
+  try {
+    const ok = await repo.loadAll(true);
+    await loadWorkTimeoutSetting();
+    renderActiveTabOnly(); // 仅重绘当前可见 Tab，与下拉刷新一致
+    if (ok) {
+      recordSyncTime();
+      setSyncStatus("online", "● 已同步");
+      toast("已从服务器全量刷新，历史数据已最新");
+    } else {
+      setSyncStatus("offline", "● 离线，刷新失败");
+      toast("全量刷新失败，请检查网络后重试");
+    }
+  } catch (e) {
+    console.error("[full-refresh] 全量刷新失败", e);
+    toast("全量刷新失败：" + (e && e.message ? e.message : "未知错误"));
+  } finally {
+    if (btn) { btn.classList.remove("spinning"); btn.disabled = false; }
+  }
+}
+
 /* 头部角色标签 */
 function renderRoleInfo() {
   const el = document.getElementById("roleInfo");
@@ -16633,6 +16689,9 @@ async function startCloudSession() {
       setSyncStatus("offline", "● 离线（本地缓存）");
     }
     hideBootLoader(); // 数据已就绪，收起加载遮罩
+    // 云模式登录成功：显示「全量刷新」按钮（仅云端模式有意义，本地模式保持隐藏）
+    const fbtn = document.getElementById("btnFullRefresh");
+    if (fbtn) fbtn.hidden = false;
     subscribeRealtime();
   } catch (e) {
     console.error("加载云端会话失败:", e);
@@ -17167,7 +17226,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "ve9908143";
+  const APP_VERSION = "vadbb4b83";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

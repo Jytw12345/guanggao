@@ -388,6 +388,37 @@ body {
 }
 @keyframes syncSpin { 0% { transform: rotate(0); } 100% { transform: rotate(360deg); } }
 
+/* 顶部「全量刷新」按钮：与同步胶囊视觉协调（靛蓝药丸），点击时图标旋转 */
+.sync-full-refresh:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
+  color: #4338ca;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(79, 70, 229, 0.15);
+  transition: all .15s ease;
+  flex-shrink: 0;
+}
+.sync-full-refresh[hidden] { display: none; }
+.sync-full-refresh:hover:not([hidden]) {
+  background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
+  color: #3730a3;
+}
+.sync-full-refresh:active:not([hidden]) { transform: scale(0.94); }
+.sync-full-refresh.spinning { animation: syncSpin 0.7s linear infinite; pointer-events: none; }
+.sync-full-refresh[disabled] { opacity: 0.6; cursor: default; }
+@media (max-width: 768px) {
+  .sync-full-refresh:not([hidden]) { width: 32px; height: 32px; }
+}
+
 .user-info {
   font-size: 13px;
   color: var(--text);
