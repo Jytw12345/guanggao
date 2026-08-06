@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>广告安装施工预约管理系统</title>
+  <meta name="description" content="广告安装施工预约、施工工时与门店统计管理系统" />
+  <!-- 禁止移动端浏览器对入口页过度缓存，确保新版本发布后用户能尽快拿到最新 HTML -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <!-- PWA：可安装到桌面/主屏、离线可用 -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#2f6fed" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="施工预约" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 自定义下拉刷新指示器（仅移动端手势触发，禁用原生下拉刷新后由本元素呈现） -->
+  <div id="ptr-indicator" class="ptr" aria-hidden="true" style="transform: translateY(-100%);">
+    <span class="ptr-spinner"></span>
+    <span class="ptr-text">下拉刷新</span>
+  </div>
+
+  <header class="app-header">
+    <div class="brand">
+      <button class="menu-toggle" id="menuToggle" aria-label="菜单">☰</button>
+      <span class="logo">🏗️</span>
+      <h1>广告施工预约</h1>
+      <div class="header-right">
+        <div class="mobile-sync-time" id="mobileSyncTime" title="上次同步时间"></div>
+        <div class="global-search">
+          <input type="text" id="globalSearch" placeholder="🔍 搜索项目、员工、门店..." />
+          <div id="globalSearchResults" class="search-results"></div>
+        </div>
+        <span id="syncStatus" class="sync-status" title="同步状态">● 本地模式</span>
+        <button id="btnHelp" class="btn small" onclick="showHelp()">📖 帮助</button>
+        <button id="userMenu" class="user-menu-btn hidden" aria-label="用户菜单">👤</button>
+        <span id="userInfo" class="user-info hidden"></span>
+        <span id="roleInfo" class="role-info hidden"></span>
+        <button id="btnExport" class="btn small" onclick="showExportMenu()">📥 导出数据</button>
+        <button id="btnLogout" class="btn small hidden">登出</button>
+      </div>
+      <div id="userDropdown" class="user-dropdown hidden">
+        <div class="dropdown-item">
+          <span class="dropdown-label">账号</span>
+          <span id="dropdownEmail" class="dropdown-value"></span>
+        </div>
+        <div class="dropdown-item">
+          <span class="dropdown-label">角色</span>
+          <span id="dropdownRole" class="dropdown-value"></span>
+        </div>
+        <div class="dropdown-divider"></div>
+        <button class="dropdown-item dropdown-btn dropdown-btn-danger" id="btnLogoutMenu"><span class="dropdown-btn-icon">🚪</span><span class="dropdown-btn-text">登出</span></button>
+      </div>
+      <div id="exportMenu" class="user-dropdown hidden">
+        <div class="dropdown-item" onclick="showImportModal()">📥 导入数据</div>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-item" onclick="exportProjects()">📋 导出项目数据</div>
+        <div class="dropdown-item" onclick="exportWorkLogs()">📝 导出工时记录</div>
+        <div class="dropdown-item" onclick="exportLeaveRecords()">🏥 导出请假记录</div>
+        <div class="dropdown-item" onclick="exportWorkers()">👷 导出施工人员</div>
+        <div class="dropdown-item" onclick="exportStores()">🏪 导出门店数据</div>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-item" onclick="showOperationLogs()">📝 操作日志</div>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-item" onclick="exportAllData()">📦 导出全部数据</div>
+      </div>
+    </div>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="projects">项目预约</button>
+      <button class="tab-btn" data-tab="calendar">预约日历</button>
+      <button class="tab-btn" data-tab="construction">施工管理</button>
+      <button class="tab-btn" data-tab="vehicleTrips">车辆里程</button>
+      <button class="tab-btn" data-tab="internalTasks">内部任务</button>
+      <button class="tab-btn" data-tab="workers">施工人员</button>
+      <button class="tab-btn" data-tab="schedules">个人日程</button>
+      <button class="tab-btn" data-tab="leaves">请假管理</button>
+      <button class="tab-btn" data-tab="stats">工时统计</button>
+      <button class="tab-btn" data-tab="storeStats">店面统计</button>
+      <button class="tab-btn" data-tab="outsourced">外协人员</button>
+      <div class="tab-dropdown">
+        <button class="tab-btn tab-dropdown-toggle" data-dropdown="settings" type="button" aria-haspopup="true" aria-expanded="false">系统设置 <span class="tab-caret">▾</span></button>
+        <div class="tab-dropdown-menu">
+          <button class="tab-sub" data-tab="accounts" type="button">账号管理</button>
+          <button class="tab-sub" data-tab="rolePerms" type="button">角色权限</button>
+          <button class="tab-sub" data-tab="stores" type="button">门店管理</button>
+          <button class="tab-sub" data-action="reminderSettings" type="button">提醒设置</button>
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <nav class="bottom-nav">
+    <button class="bottom-nav-item active" data-tab="projects" title="项目预约">
+      <span class="bnav-icon">📋</span>
+      <span class="bnav-label">项目</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="calendar" title="预约日历">
+      <span class="bnav-icon calendar-icon">
+        <span class="calendar-day" id="calendarDay">20</span>
+      </span>
+      <span class="bnav-label">日历</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="construction" title="施工管理">
+      <span class="bnav-icon">🏗️</span>
+      <span class="bnav-label">施工</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="vehicleTrips" title="车辆里程">
+      <span class="bnav-icon">🚚</span>
+      <span class="bnav-label">车辆</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="internalTasks" title="任务">
+      <span class="bnav-icon">✅</span>
+      <span class="bnav-label">任务</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="workers" title="人员">
+      <span class="bnav-icon">👷</span>
+      <span class="bnav-label">人员</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="mine" title="我的">
+      <span class="bnav-icon">👤</span>
+      <span class="bnav-label">我的</span>
+    </button>
+  </nav>
+
+  <main class="container">
+    <!-- 项目预约 -->
+    <section id="projects" class="tab-panel active">
+      <div class="section-head">
+        <h2>项目预约</h2>
+        <button class="btn primary" id="btnNewProject">+ 新建预约</button>
+      </div>
+      <div class="toolbar">
+        <div class="project-filter-row" style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+          <input type="text" id="projectSearch" class="input" placeholder="搜索项目名称 / 客户 / 地址" style="flex:1;min-width:150px;max-width:350px;" />
+          <select id="projectStatusFilter" class="input" style="width:140px;">
+            <option value="">全部状态</option>
+            <option value="预约中">预约中</option>
+            <option value="施工中">施工中</option>
+            <option value="已暂停">已暂停</option>
+            <option value="已延期">已延期</option>
+            <option value="已完工">已完工</option>
+            <option value="已验收">已验收</option>
+            <option value="已审核">已审核</option>
+            <option value="已取消">已取消</option>
+          </select>
+          <select id="projectStoreFilter" class="input" style="width:140px;">
+            <option value="">全部门店</option>
+          </select>
+        </div>
+        <div class="toolbar-time-filter">
+          <button class="btn small" id="timeFilterAll" onclick="setProjectTimeFilter(0)">全部</button>
+          <button class="btn small" id="timeFilter3" onclick="setProjectTimeFilter(3)">3天</button>
+          <button class="btn small primary" id="timeFilter7" onclick="setProjectTimeFilter(7)">7天</button>
+          <button class="btn small" id="timeFilter15" onclick="setProjectTimeFilter(15)">15天</button>
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-left:auto;font-size:12px;color:var(--muted);">
+            <input type="checkbox" id="includeCompleted" onchange="renderProjects()" style="width:14px;height:14px;vertical-align:middle;"> 包含已完工
+          </label>
+        </div>
+      </div>
+      <div id="projectList" class="card-grid"></div>
+    </section>
+
+    <!-- 日历统计视图 -->
+    <section id="calendar" class="tab-panel">
+      <div class="calendar-header">
+        <div class="section-head compact">
+          <h2>预约日历</h2>
+          <p class="hint">按月查看每日预约，点击日期可查看时段安排与人员。</p>
+        </div>
+      </div>
+
+      <div class="cal-toolbar">
+        <div class="cal-nav-group">
+          <button class="btn small" id="calPrev" title="上月">◀</button>
+          <span id="calLabel" class="cal-label"></span>
+          <button class="btn small" id="calNext" title="下月">▶</button>
+        </div>
+        <div class="cal-action-group">
+          <button class="btn small" id="calToday">今天</button>
+          <button class="btn small" id="calToggleView">📋 视图</button>
+        </div>
+      </div>
+
+      <div class="cal-legend-wrap">
+        <div class="cal-legend status-legend">
+          <span><span class="dot booked"></span>预约中</span>
+          <span><span class="dot working"></span>施工中</span>
+          <span><span class="dot done"></span>已完工</span>
+          <span><span class="dot accepted"></span>已验收</span>
+        </div>
+        <div class="cal-legend hours-legend">
+          <span><span class="legend-hours normal">正常</span></span>
+          <span><span class="legend-hours warn">排满</span></span>
+          <span><span class="legend-hours danger">超载</span></span>
+        </div>
+      </div>
+      <div id="calWeekdays" class="cal-weekdays"></div>
+      <div id="calGrid" class="cal-grid"></div>
+      <div id="calDayDetail" class="cal-day-detail"></div>
+    </section>
+
+    <!-- 施工管理 -->
+    <section id="construction" class="tab-panel">
+      <div class="section-head">
+        <h2>施工管理</h2>
+        <div class="project-select-wrapper">
+          <label>选择项目：</label>
+          <button type="button" id="constructionProjectSelect" class="project-select-btn" onclick="openProjectPicker()" aria-haspopup="dialog" aria-expanded="false">
+            <span class="project-select-text" id="constructionProjectSelectLabel">— 请选择项目 —</span>
+            <span class="project-select-arrow" aria-hidden="true">▾</span>
+          </button>
+        </div>
+      </div>
+      <p class="hint">👆 选择项目后，可分配人员、登记工时与验收信息</p>
+      <div id="constructionDetail" class="construction-detail"></div>
+      <div id="workerScheduleDescription"></div>
+    </section>
+
+    <!-- 工时统计 -->
+    <section id="stats" class="tab-panel">
+      <div class="section-head">
+        <h2>月底工时统计</h2>
+      </div>
+      <div class="toolbar">
+        <select id="statsPeriod" class="input">
+          <option value="month">月度统计</option>
+          <option value="quarter">季度统计</option>
+          <option value="year">年度统计</option>
+        </select>
+        <input type="month" id="statsMonth" class="input" />
+        <select id="statsStore" class="input">
+          <option value="">全部店面</option>
+        </select>
+        <select id="statsWorker" class="input">
+          <option value="">全部人员</option>
+        </select>
+        <select id="statsStatus" class="input">
+          <option value="">全部状态</option>
+          <option value="施工中">施工中</option>
+          <option value="已完工">已完工</option>
+          <option value="已验收">已验收</option>
+          <option value="已审核">已审核</option>
+          <option value="已暂停">已暂停</option>
+          <option value="已延期">已延期</option>
+          <option value="预约中">预约中</option>
+          <option value="已取消">已取消</option>
+        </select>
+        <button class="btn" id="btnExportStats">导出统计数据</button>
+        <button class="btn" id="btnWageConfig">工时单价设置</button>
+        <button class="btn" id="btnInternalWorkLog">内部工时记录</button>
+      </div>
+      <div id="statsSummary" class="stats-summary"></div>
+      <div id="statsTable"></div>
+    </section>
+
+    <!-- 内部任务管理 -->
+    <section id="internalTasks" class="tab-panel">
+      <div class="section-head it-section-head">
+        <h2>📋 内部任务管理</h2>
+        <button class="btn primary" id="btnNewInternalTask">+ 下达任务</button>
+      </div>
+      <div class="it-toolbar">
+        <select id="internalTaskStatusFilter" class="input" onchange="renderInternalTasks()">
+          <option value="">全部状态</option>
+          <option value="pending">待开始</option>
+          <option value="in_progress">进行中</option>
+          <option value="completed">待审核</option>
+          <option value="verified">已审核</option>
+        </select>
+        <select id="internalTaskWorkerFilter" class="input" onchange="renderInternalTasks()">
+          <option value="">全部人员</option>
+        </select>
+        <select id="internalTaskTypeFilter" class="input" onchange="renderInternalTasks()">
+          <option value="">全部类型</option>
+          <option value="仓库工作">仓库工作</option>
+          <option value="送货">送货</option>
+          <option value="外出安装">外出安装</option>
+          <option value="其他">其他</option>
+        </select>
+        <select id="internalTaskDateFilter" class="input" onchange="renderInternalTasks()">
+          <option value="3days" selected>最近 3 天</option>
+          <option value="7days">最近 7 天</option>
+          <option value="all">全部任务</option>
+        </select>
+      </div>
+      <div id="internalTaskList" class="card-grid"></div>
+    </section>
+
+    <!-- 店面统计（总经理） -->
+    <section id="storeStats" class="tab-panel">
+      <div class="section-head">
+        <h2>店面预约统计</h2>
+      </div>
+      <div class="toolbar">
+        <input type="month" id="storeStatsMonth" class="input" />
+        <button class="btn" id="btnExportStoreStats">导出 CSV</button>
+      </div>
+      <div id="storeStatsTable"></div>
+    </section>
+
+    <!-- 施工人员 -->
+    <section id="workers" class="tab-panel">
+      <div class="section-head">
+        <h2>施工人员</h2>
+        <button class="btn primary" id="btnNewWorker">+ 添加人员</button>
+      </div>
+      <div id="workerList"></div>
+    </section>
+
+    <!-- 外协人员管理 -->
+    <section id="outsourced" class="tab-panel">
+      <div class="section-head">
+        <h2>外协人员管理</h2>
+        <button class="btn primary" id="btnNewOutsourced">+ 添加外协人员</button>
+      </div>
+      <p class="hint">管理常用外协人员列表，在添加工时表单中可以直接选择，无需每次手动输入。</p>
+      <div id="outsourcedWorkerList" class="card-grid"></div>
+    </section>
+
+    <!-- 门店管理（总经理） -->
+    <section id="stores" class="tab-panel">
+      <div class="section-head">
+        <h2>门店管理</h2>
+        <button class="btn primary" id="btnNewStore">+ 添加门店</button>
+      </div>
+      <div id="storeList" class="card-grid"></div>
+    </section>
+
+    <!-- 账号管理（总经理，仅云端） -->
+    <section id="accounts" class="tab-panel">
+      <div class="section-head">
+        <h2>账号与权限管理</h2>
+      </div>
+      <p class="hint">为注册账号分配角色与门店。新注册账号默认无权限，需在此指定后方可使用系统。</p>
+      <div id="accountList"></div>
+    </section>
+
+    <!-- 角色权限配置（总经理，仅云端） -->
+    <section id="rolePerms" class="tab-panel">
+      <div class="section-head">
+        <h2>角色权限配置</h2>
+      </div>
+      <p class="hint">按角色勾选可执行的操作，保存后同角色的所有账号立即生效（总经理恒拥有全部权限，无需配置）。“编辑/删除预约”对店长仍限本门店范围。</p>
+      <div id="rolePermList"></div>
+    </section>
+
+    <!-- 请假管理 -->
+    <section id="leaves" class="tab-panel">
+      <div class="section-head">
+        <h2>请假管理</h2>
+        <div class="toolbar" style="margin-top:0;">
+          <select id="leaveStatusFilter" class="input" style="width:auto;">
+            <option value="">全部状态</option>
+            <option value="pending">待审批</option>
+            <option value="approved">已批准</option>
+            <option value="rejected">已拒绝</option>
+          </select>
+          <select id="leaveTypeFilter" class="input" style="width:auto;">
+            <option value="">全部类型</option>
+            <option value="personal">事假</option>
+            <option value="sick">病假</option>
+            <option value="annual">年假</option>
+            <option value="comp">调休</option>
+            <option value="rotational">轮休</option>
+            <option value="other">其他</option>
+          </select>
+          <select id="leaveWorkerFilter" class="input" style="width:auto;">
+            <option value="">全部人员</option>
+          </select>
+        </div>
+      </div>
+      <div id="leaveStats" class="card-grid" style="margin-bottom:20px;"></div>
+      <div id="leavePendingList" class="card-grid" style="margin-bottom:20px;"></div>
+      <div id="leaveRecordList" class="card-grid" style="margin-bottom:20px;"></div>
+      <div id="holidayManage" class="card-grid"></div>
+    </section>
+
+    <!-- 个人日程 -->
+    <section id="schedules" class="tab-panel">
+      <div class="section-head">
+        <h2>个人日程</h2>
+        <button class="btn primary" id="btnNewSchedule" onclick="newWorkerSchedule()">+ 添加日程</button>
+      </div>
+      <div class="sched-toolbar">
+        <select id="scheduleWorkerFilter" class="input" style="width:auto;">
+          <option value="">全部人员</option>
+        </select>
+        <select id="scheduleTypeFilter" class="input" style="width:auto;">
+          <option value="">全部类型</option>
+        </select>
+      </div>
+      <div id="scheduleCalendar"></div>
+      <div id="scheduleList"></div>
+    </section>
+
+    <!-- 我的（移动端聚合页） -->
+    <section id="mine" class="tab-panel">
+      <div id="mineContent"></div>
+    </section>
+
+    <!-- 车辆里程记录 -->
+    <section id="vehicleTrips" class="tab-panel">
+      <div class="section-head">
+        <h2>🚚 车辆里程记录</h2>
+      </div>
+      <p class="hint">用车时选择：目的、关联项目或填写备注；若与仪表不符可当场修改校准。还车时请填写仪表里程和剩余油量，系统自动结算本次里程。车在使用中显示「🔒 使用中 · 司机」，用车完毕请及时还车。</p>
+
+      <!-- 三车仪表盘（点车后内联展开用车/还车菜单） -->
+      <div id="vehicleDashboards" class="veh-dash-grid"></div>
+
+      <!-- 按月 / 按车汇总 -->
+      <div id="vehicleSummary" class="veh-summary"></div>
+
+      <!-- 按月 / 按人员汇总 -->
+      <div id="driverSummary" class="veh-summary"></div>
+
+      <!-- 历史记录 -->
+      <div class="veh-history-head">
+        <h3 class="veh-history-title">📋 历史记录</h3>
+        <div class="seg-toggle veh-view-seg" id="vtViewSeg">
+          <button type="button" class="seg-btn" data-view="card" onclick="setVtView('card')">卡片</button>
+          <button type="button" class="seg-btn" data-view="list" onclick="setVtView('list')">列表</button>
+        </div>
+      </div>
+      <div class="veh-filter" id="vtFilterBar">
+        <div class="veh-filter__row">
+          <select id="vtFilterVehicle" class="input veh-filter__sel" onchange="applyVtFilter()"></select>
+          <select id="vtFilterDriver" class="input veh-filter__sel" onchange="applyVtFilter()"></select>
+        </div>
+        <div class="veh-filter__dates">
+          <input type="date" id="vtFilterFrom" class="input veh-filter__date" onchange="applyVtFilter()" title="起始日期" />
+          <span class="veh-filter__sep">至</span>
+          <input type="date" id="vtFilterTo" class="input veh-filter__date" onchange="applyVtFilter()" title="结束日期" />
+        </div>
+        <div class="veh-filter__actions">
+          <button class="btn small" onclick="resetVtFilter()">重置</button>
+          <button class="btn small primary" onclick="exportVehicleTrips()">⬇ 导出</button>
+        </div>
+      </div>
+      <div id="vehicleTripList" class="card-grid"></div>
+    </section>
+  </main>
+
+  <!-- 通用弹窗 -->
+  <div id="modal" class="modal-mask hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="modalTitle">标题</h3>
+        <button class="modal-close" id="modalClose">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-footer" id="modalFooter">
+        <button class="btn" id="modalCancel">取消</button>
+        <button class="btn primary" id="modalConfirm">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- 安装引导横幅（可安装到桌面/主屏时显示） -->
+  <div id="installBar" class="install-bar hidden">
+    <span class="install-bar__icon">📲</span>
+    <span class="install-bar__text" id="installBarText">安装到桌面，使用更流畅</span>
+    <button type="button" class="install-bar__btn" id="installBtn">安装</button>
+    <button type="button" class="install-bar__close" id="installClose" aria-label="关闭">×</button>
+  </div>
+
+  <!-- 安装引导弹窗：浏览器支持 PWA 安装时自动弹出（比横幅更醒目） -->
+  <div id="installModal" class="install-modal hidden">
+    <div class="install-modal__card">
+      <button type="button" class="install-modal__close" id="installModalClose" aria-label="关闭">×</button>
+      <div class="install-modal__icon">📲</div>
+      <h3 class="install-modal__title">安装到桌面 / 主屏幕</h3>
+      <p class="install-modal__desc">安装后可像原生 App 一样使用，<br />全屏运行、离线可用、启动更快。</p>
+      <button type="button" class="install-modal__btn" id="installModalBtn">立即安装</button>
+      <button type="button" class="install-modal__later" id="installModalLater">以后再说</button>
+    </div>
+  </div>
+
+  <!-- 账号待授权提示（云端模式，注册后尚未分配角色时） -->
+  <div id="noAccessScreen" class="auth-mask hidden">
+    <div class="auth-box">
+      <div class="auth-logo">🔒</div>
+      <h2>账号待授权</h2>
+      <p class="auth-sub">你的账号（<span id="noAccessEmail"></span>）尚未分配角色权限，<br />请联系总经理在「账号管理」中为你分配角色后再使用。</p>
+      <div class="auth-actions">
+        <button class="btn" id="btnLogout2">登出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 登录面板（云端模式且未登录时显示） -->
+  <div id="authScreen" class="auth-mask hidden">
+    <div class="auth-box">
+      <div class="auth-logo">🏗️</div>
+      <h2>广告安装施工预约管理系统</h2>
+      <p class="auth-sub">请登录以进行多人协同</p>
+      <div class="form-row">
+        <label>邮箱</label>
+        <input class="input" id="authEmail" type="email" placeholder="you@example.com" autocomplete="username" />
+      </div>
+      <div class="form-row">
+        <label>密码</label>
+        <div class="password-field">
+          <input class="input" id="authPassword" type="password" placeholder="密码" autocomplete="current-password" />
+          <button type="button" class="password-toggle" id="btnTogglePassword" aria-label="显示密码" title="显示密码">
+            <svg id="iconEye" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            <svg id="iconEyeOff" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
+          </button>
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="authRemember" />
+          <span>记住我，下次自动登录</span>
+        </label>
+      </div>
+      <div id="authError" class="auth-error hidden"></div>
+      <div class="auth-actions">
+        <button class="btn primary" id="btnLogin">登录</button>
+        <button class="btn" id="btnSignup">注册新账号</button>
+      </div>
+      <button class="btn install-login-btn" id="loginInstallBtn" type="button" style="display:none;">📲 安装到桌面 / 主屏</button>
+      <p class="install-login-hint" id="loginInstallHint" style="display:none;">📲 在 Safari 中：点击底部「分享 ⤴」→「添加到主屏幕」</p>
+    </div>
+  </div>
+
+  <!-- 启动数据加载遮罩：仅在「界面已空、数据仍在拉取」时出现，秒开场景不显示 -->
+  <div id="bootLoader" class="boot-loader" role="status" aria-live="polite">
+    <span class="boot-spinner"></span>
+    <span class="boot-loader-text">数据加载中…</span>
+  </div>
+
+  <!-- 帮助说明模态弹窗 -->
+  <div id="helpModal" class="help-modal-overlay" aria-hidden="true">
+    <div class="help-modal" role="dialog" aria-modal="true" aria-label="使用说明书">
+      <div class="help-modal-head">
+        <span class="help-modal-title">📖 使用说明书</span>
+        <button type="button" class="help-modal-close" id="helpModalClose" aria-label="关闭">✕</button>
+      </div>
+      <iframe id="helpModalFrame" class="help-modal-frame" src="help.html" title="使用说明书"></iframe>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

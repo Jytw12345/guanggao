@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>广告安装施工预约管理系统 - 使用说明书</title>
+  <style>
+    :root {
+      --bg: #f4f6fb;
+      --card: #ffffff;
+      --primary: #2f6fed;
+      --primary-dark: #2456c0;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --success: #16a34a;
+      --warn: #d97706;
+      --danger: #dc2626;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    .header {
+      background: linear-gradient(135deg, var(--primary), #4f46e5);
+      color: white;
+      padding: 40px 20px;
+      margin-bottom: 30px;
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+    .header h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+      font-weight: 600;
+    }
+    .header p {
+      margin: 0;
+      opacity: 0.9;
+      font-size: 15px;
+    }
+    .toc {
+      background: var(--card);
+      padding: 20px;
+      border-radius: 12px;
+      margin-bottom: 30px;
+      box-shadow: var(--shadow);
+    }
+    .toc h3 {
+      margin: 0 0 15px;
+      font-size: 16px;
+      color: var(--primary);
+    }
+    .toc ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      columns: 2;
+      gap: 10px;
+    }
+    .toc li {
+      margin-bottom: 8px;
+    }
+    .toc a {
+      color: var(--text);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    .toc a:hover {
+      color: var(--primary);
+      text-decoration: underline;
+    }
+    .section {
+      background: var(--card);
+      padding: 28px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow);
+    }
+    .section h2 {
+      margin: 0 0 20px;
+      font-size: 20px;
+      color: var(--primary);
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 10px;
+    }
+    .section h3 {
+      margin: 20px 0 12px;
+      font-size: 16px;
+      color: var(--text);
+    }
+    .section h4 {
+      margin: 16px 0 10px;
+      font-size: 14px;
+      color: var(--text);
+    }
+    .section p {
+      margin: 8px 0;
+      color: var(--muted);
+    }
+    .section ul, .section ol {
+      margin: 8px 0 16px;
+      padding-left: 24px;
+      color: var(--muted);
+    }
+    .section li {
+      margin-bottom: 6px;
+    }
+    .section strong {
+      color: var(--text);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      background: #f9fafb;
+      font-weight: 600;
+      color: var(--text);
+    }
+    td {
+      color: var(--muted);
+    }
+    .note {
+      background: #fffbeb;
+      border-left: 4px solid var(--warn);
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .note h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: var(--warn);
+    }
+    .note p {
+      margin: 0;
+      font-size: 13px;
+      color: #92400e;
+    }
+    .warning {
+      background: #fef2f2;
+      border-left: 4px solid var(--danger);
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .warning h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: var(--danger);
+    }
+    .warning p {
+      margin: 0;
+      font-size: 13px;
+      color: #991b1b;
+    }
+    .tip {
+      background: #ecfdf5;
+      border-left: 4px solid var(--success);
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .tip h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: var(--success);
+    }
+    .tip p {
+      margin: 0;
+      font-size: 13px;
+      color: #065f46;
+    }
+    .code {
+      background: #1f2937;
+      color: #f9fafb;
+      padding: 16px;
+      border-radius: 8px;
+      font-family: "Consolas", "Monaco", monospace;
+      font-size: 13px;
+      overflow-x: auto;
+      margin: 12px 0;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      background: #e0e7ff;
+      color: #4338ca;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-right: 4px;
+    }
+    .flow-step {
+      background: #f3f4f6;
+      padding: 12px 16px;
+      margin: 8px 0;
+      border-radius: 8px;
+      border-left: 4px solid var(--primary);
+    }
+    .flow-step h4 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      color: var(--primary);
+    }
+    .flow-step p {
+      margin: 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .footer {
+      text-align: center;
+      padding: 20px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    @media (max-width: 600px) {
+      .container {
+        padding: 20px 15px;
+      }
+      .header {
+        padding: 25px 15px;
+      }
+      .header h1 {
+        font-size: 22px;
+      }
+      .section {
+        padding: 20px 15px;
+      }
+      .toc ul {
+        columns: 1;
+      }
+      table {
+        font-size: 12px;
+      }
+      th, td {
+        padding: 8px 6px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🏗️ 广告安装施工预约管理系统</h1>
+      <p>使用说明书 v3.3 · 重点工作流程</p>
+    </div>
+
+    <div class="toc">
+      <h3>📋 目录</h3>
+      <ul>
+        <li><a href="#workflow">核心工作流程</a></li>
+        <li><a href="#status">项目状态流转</a></li>
+        <li><a href="#project">项目预约流程</a></li>
+        <li><a href="#construction">施工管理流程</a></li>
+        <li><a href="#workers">人员管理流程</a></li>
+        <li><a href="#hours">工时管理流程</a></li>
+        <li><a href="#review">验收审核流程</a></li>
+        <li><a href="#vehicle">车辆管理</a></li>
+        <li><a href="#reminder">预警提醒设置</a></li>
+        <li><a href="#accounts">账号管理与权限</a></li>
+        <li><a href="#dataio">数据导入与导出</a></li>
+        <li><a href="#settings">个人中心与系统设置</a></li>
+        <li><a href="#records">施工记录查询</a></li>
+        <li><a href="#tips">操作技巧</a></li>
+      </ul>
+    </div>
+
+    <div class="section" id="workflow">
+      <h2>🔄 核心工作流程总览</h2>
+      <div class="code">新建预约 → 分配人员 → 开始施工 → 施工中/暂停/恢复 → 完成施工（登记工时）→ 验收 → 审核</div>
+      <p>系统围绕项目生命周期设计，从预约创建到最终审核，每个环节都有明确的操作和数据记录。</p>
+      
+      <div class="tip">
+        <h4>💡 流程特点</h4>
+        <p>系统支持灵活的人员变动管理（加人/减人），自动计算已移除人员的工时；支持多次暂停/恢复，暂停期间不计入工时；完工时自动汇总所有参与人员的工时记录。</p>
+      </div>
+    </div>
+
+    <div class="section" id="status">
+      <h2>📊 项目状态流转</h2>
+      <div class="code">预约中 → 施工中 ↔ 已暂停 → 已完工 → 已验收 → 已审核
+   ↓                ↓
+  已取消           已延期</div>
+      
+      <h3>状态说明</h3>
+      <table>
+        <thead>
+          <tr><th>状态</th><th>颜色</th><th>说明</th><th>进度条颜色</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>预约中</strong></td><td>🔵 蓝色</td><td>项目已创建，等待施工</td><td>蓝色</td></tr>
+          <tr><td><strong>施工中</strong></td><td>🔵 蓝色</td><td>项目正在进行</td><td>蓝色</td></tr>
+          <tr><td><strong>已暂停</strong></td><td>🟠 橙色</td><td>项目暂时停止，可恢复</td><td>橙色</td></tr>
+          <tr><td><strong>已延期</strong></td><td>🔴 红色</td><td>项目超出预计时间未完工</td><td>红色</td></tr>
+          <tr><td><strong>已完工</strong></td><td>🟢 绿色</td><td>安装完成，工时已登记</td><td>绿色（100%）</td></tr>
+          <tr><td><strong>已验收</strong></td><td>🟣 紫色</td><td>验收通过</td><td>绿色（100%）</td></tr>
+          <tr><td><strong>已审核</strong></td><td>🔵 青色</td><td>财务审核完成</td><td>绿色（100%）</td></tr>
+          <tr><td><strong>已取消</strong></td><td>🔴 红色</td><td>项目已取消</td><td>灰色</td></tr>
+        </tbody>
+      </table>
+
+      <h3>状态流转规则</h3>
+      <ul>
+        <li><strong>预约中 → 施工中</strong>：点击"开始施工"，必须先分配安装人员</li>
+        <li><strong>施工中 ↔ 已暂停</strong>：可多次暂停和恢复，暂停期间不计入工时</li>
+        <li><strong>施工中/已暂停 → 已延期</strong>：系统自动检测，超出预计结束时间自动标记</li>
+        <li><strong>任意状态 → 已取消</strong>：需填写取消原因，取消后只读</li>
+        <li><strong>施工中/已暂停/已延期 → 已完工</strong>：必须登记工时</li>
+        <li><strong>已完工 → 已验收 → 已审核</strong>：逐级审批，不可逆</li>
+      </ul>
+    </div>
+
+    <div class="section" id="project">
+      <h2>📝 项目预约流程</h2>
+      
+      <h3>第一步：新建项目预约</h3>
+      <div class="flow-step">
+        <h4>1.1 填写项目基本信息</h4>
+        <p>项目名称、客户名称、联系电话、门店、安装地址</p>
+      </div>
+      <div class="flow-step">
+        <h4>1.2 设置预约时间</h4>
+        <p>选择日期和开始时间。结束时间可点「计算」按钮，按 <strong>预计工时 ÷ 施工人数</strong> 推算现场占用时长（开始时间 + 该时长），也可手动选择。</p>
+        <p><strong>快捷时间</strong>：提供「2小时 / 上午 / 下午 / 全天」一键填入开始与结束时间——上午 08:00–12:00、下午 13:00–18:00、全天 08:00–18:00、"2小时"以当前开始时间为准往后推 2 小时。</p>
+      </div>
+      <div class="flow-step">
+        <h4>1.3 设置预计总工时</h4>
+        <p>预计总工时<strong>非强制必填</strong>：留空或保存时未手动改动，系统会自动按"施工时长 × 施工人数"计算并给出提示。</p>
+      </div>
+      <div class="flow-step">
+        <h4>1.4 分配施工人员</h4>
+        <p>选择内部施工人员或填写外协人员（外协人员不参与时间冲突检测）</p>
+      </div>
+      <div class="flow-step">
+        <h4>1.5 保存项目</h4>
+        <p>点击"保存"完成创建，项目进入"预约中"状态</p>
+      </div>
+
+      <div class="tip">
+        <h4>💡 快捷操作</h4>
+        <p>当选择今天日期时，开始时间自动根据当前系统时间向上取整，结束时间默认往后推2小时</p>
+      </div>
+
+      <h3>人员冲突检测</h3>
+      <p>分配人员时系统会自动检测时间冲突，如果该人员在此时间段已被分配到其他项目，会弹出提示。您可以选择是否继续分配。</p>
+    </div>
+
+    <div class="section" id="construction">
+      <h2>⚙️ 施工管理流程</h2>
+      
+      <h3>第一步：进入施工管理</h3>
+      <p>从项目预约卡片点击「施工管理」按钮，进入项目详细管理页面。</p>
+
+      <h3>第二步：分配安装人员</h3>
+      <div class="flow-step">
+        <h4>2.1 添加人员</h4>
+        <p>在"安装人员分配"区域，点击"+"按钮选择施工人员，系统自动记录分配时间</p>
+      </div>
+      <div class="flow-step">
+        <h4>2.2 移除人员</h4>
+        <p>点击人员旁边的"×"按钮移除，系统自动计算该人员从开工到移除的工时并记录</p>
+      </div>
+
+      <div class="tip">
+        <h4>💡 自动工时计算</h4>
+        <p>移除人员时，系统自动计算：工时 = 总施工时间 / 施工人数（平均分配），并自动创建工人工时记录</p>
+      </div>
+
+      <h3>第三步：开始施工</h3>
+      <div class="flow-step">
+        <h4>3.1 检查人员分配</h4>
+        <p>系统自动检查是否已分配安装人员，未分配时提示先分配人员</p>
+      </div>
+      <div class="flow-step">
+        <h4>3.2 记录开工时间</h4>
+        <p>点击"开始施工"按钮，系统记录当前时间为开工时间，项目状态变为"施工中"</p>
+      </div>
+
+      <h3>第四步：施工过程管理</h3>
+      <div class="flow-step">
+        <h4>4.1 暂停施工</h4>
+        <p>点击"暂停施工"按钮，填写暂停原因（可选，支持快速选择或手动输入），系统记录暂停时间，暂停期间不计入工时</p>
+      </div>
+      <div class="flow-step">
+        <h4>4.2 恢复施工</h4>
+        <p>点击"恢复施工"按钮，系统记录恢复时间，从当前时间重新开始计时</p>
+      </div>
+      <div class="flow-step">
+        <h4>4.3 项目延期</h4>
+        <p>点击"项目延期"按钮，设置新预约时间（默认8:00）和延期原因，系统记录延期历史</p>
+      </div>
+
+      <div class="tip">
+        <h4>💡 进度条显示规则</h4>
+        <p>施工中：蓝色进度条，根据墙钟时间（累计工时+当前工作时长）×施工人数计算进度</p>
+        <p>已暂停：橙色进度条，暂停期间进度不再增加</p>
+        <p>已延期：红色进度条，提示项目超期</p>
+        <p>已完工：绿色进度条，固定显示100%</p>
+      </div>
+
+      <h3>第五步：完成施工</h3>
+      <div class="flow-step">
+        <h4>5.1 打开完工表单</h4>
+        <p>点击"完成施工"按钮，系统自动汇总所有参与人员（包括已移除人员）</p>
+      </div>
+      <div class="flow-step">
+        <h4>5.2 登记工时</h4>
+        <p>已移除人员的工时自动填入（系统自动计算的结果），当前人员需手动填写工时、等级和备注</p>
+      </div>
+      <div class="flow-step">
+        <h4>5.3 确认完工</h4>
+        <p>确认总工时，系统自动记录完工时间，项目状态变为"已完工"</p>
+      </div>
+
+      <div class="tip">
+        <h4>💡 工时自动汇总</h4>
+        <p>完工表单会显示所有曾经参与过该项目的工人，包括：</p>
+        <ul>
+          <li>当前分配的工人（显示为正常颜色）</li>
+          <li>已移除的工人（显示为灰色，标注"已移除"）</li>
+          <li>已移除工人的工时会自动填入（基于系统自动计算）</li>
+        </ul>
+      </div>
+
+      <h3>取消项目</h3>
+      <div class="warning">
+        <h4>⚠️ 不可逆操作</h4>
+        <p>点击"取消项目"按钮，填写取消原因，项目将标记为"已取消"，保留在系统中便于追溯，但无法再进行任何操作</p>
+      </div>
+    </div>
+
+    <div class="section" id="workers">
+      <h2>👷 人员管理流程</h2>
+      
+      <h3>人员分配流程</h3>
+      <div class="code">添加人员 → 记录分配时间 → 参与施工 → 移除人员（自动计算工时）→ 记录移除时间</div>
+      
+      <h3>人员变动记录</h3>
+      <p>每次人员分配和移除操作都会记录到施工记录中，包括：</p>
+      <ul>
+        <li>操作时间</li>
+        <li>操作类型（分配/移除）</li>
+        <li>人员姓名和联系方式</li>
+        <li>移除时自动计算的工时</li>
+      </ul>
+
+      <h3>工人工时统计</h3>
+      <p>施工记录中的"工人工时统计"区块显示：</p>
+      <ul>
+        <li>每个工人的累计工时</li>
+        <li>当前施工人员（绿色）和已移除人员（灰色）</li>
+        <li>内部人员和外协人员（紫色标识）</li>
+        <li>每个工人的工作时间段</li>
+        <li>自动记录工时的标记</li>
+      </ul>
+    </div>
+
+    <div class="section" id="hours">
+      <h2>⏱️ 工时管理流程</h2>
+      
+      <h3>工时计算规则</h3>
+      <div class="code">实际工时 = 所有工人工时记录之和（包括自动记录和手动登记）</div>
+      
+      <h3>工时记录方式</h3>
+      <ul>
+        <li><strong>自动记录</strong>：移除工人时系统自动计算并记录工时</li>
+        <li><strong>手动登记</strong>：完工时在表单中手动填写工时</li>
+        <li><strong>外协工时</strong>：单独登记外协人员工时，以紫色标识</li>
+      </ul>
+
+      <h3>工时等级</h3>
+      <table>
+        <thead>
+          <tr><th>等级</th><th>说明</th><th>用途</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>初级</strong></td><td>简单安装任务，技术要求低</td><td>基础工时结算</td></tr>
+          <tr><td><strong>中级</strong></td><td>常规安装任务，标准技术要求（默认）</td><td>标准工时结算</td></tr>
+          <tr><td><strong>高级</strong></td><td>复杂安装任务，需要专业技能</td><td>较高工时结算</td></tr>
+          <tr><td><strong>特级</strong></td><td>高难度任务，需要特殊资质或高空作业</td><td>最高工时结算</td></tr>
+        </tbody>
+      </table>
+
+      <h3>工时差异计算</h3>
+      <p>工时差异 = 实际工时 - 预计工时</p>
+      <ul>
+        <li><strong>正数（超）</strong>：实际工时超过预计工时</li>
+        <li><strong>负数（省）</strong>：实际工时少于预计工时</li>
+      </ul>
+
+      <h3>预计工时自动计算</h3>
+      <div class="tip">
+        <h4>💡 智能计算（新建 / 编辑均适用）</h4>
+        <p>预计总工时采用"按需自动计算"策略，<strong>新建与编辑保存时都生效</strong>：</p>
+        <ul>
+          <li><strong>未填写</strong>预计总工时：保存时系统自动按 <strong>施工时长 × 施工人数</strong> 计算并保存，同时给出提示。</li>
+          <li><strong>未手动改动过工时框</strong>：保存时同样以 <strong>施工时长 × 施工人数</strong> 重算——即<strong>修改了施工起止时间段后</strong>，只要没手动改工时，总工时会<strong>自动跟随重算</strong>。</li>
+          <li><strong>手动填写 / 修改过工时框</strong>：以手动输入值为准，不再被自动覆盖。</li>
+        </ul>
+        <p>计算公式：<strong>预计总工时 = 施工时长 × 施工人数</strong>。例如：施工时间 2 小时、2 人施工，预计总工时 = 4 小时。</p>
+      </div>
+    </div>
+
+    <div class="section" id="review">
+      <h2>✅ 验收审核流程</h2>
+      
+      <h3>验收流程</h3>
+      <div class="flow-step">
+        <h4>1. 填写验收信息</h4>
+        <p>验收人、验收时间、验收类型、验收方式、验收结果、验收结论</p>
+      </div>
+      <div class="flow-step">
+        <h4>2. 验收项检查</h4>
+        <p>安装位置准确、安装牢固、外观整洁等检查项</p>
+      </div>
+      <div class="flow-step">
+        <h4>3. 提交验收</h4>
+        <p>点击"确认验收"，项目状态变为"已验收"</p>
+      </div>
+
+      <h3>审核流程</h3>
+      <div class="flow-step">
+        <h4>1. 审核工时</h4>
+        <p>查看项目工时记录和工时差异</p>
+      </div>
+      <div class="flow-step">
+        <h4>2. 审核验收结果</h4>
+        <p>确认验收结论和检查项</p>
+      </div>
+      <div class="flow-step">
+        <h4>3. 提交审核</h4>
+        <p>点击"审核项目"，项目状态变为"已审核"，记录审核时间</p>
+      </div>
+
+      <h3>取消审核</h3>
+      <p>已审核项目如核对有误，可在审核/验收页「取消审核」，退回为「已完工」状态重新走验收流程。</p>
+
+      <div class="warning">
+        <h4>⚠️ 开工锁定与终态锁定</h4>
+        <p><strong>① 开工即锁定：</strong>项目一旦<strong>开始施工</strong>（进入「施工中」「已暂停」，或曾经开工过），其<strong>预约时间与预约工时（预计工时）</strong>立即锁定，<strong>即使拥有「修改所有项目预约时间 / 预约工时」权限也无法再改</strong>。因为预约时间与预约工时在开工那一刻就成为考核基准（用于对比实际工时、统计准点率），事后修改会让统计失真。</p>
+        <p><strong>需要改期怎么办？</strong>使用施工管理页的<strong>「📅 延期」</strong>功能——它会要求填写延期原因，并完整保留原预约时间与延期记录，既能改期又不破坏可追溯性。实际耗时则通过「登记工时」记录。</p>
+        <p><strong>② 终态锁定：</strong>项目进入<strong>已完工 / 已验收 / 已审核</strong>后同样锁定，编辑页相关字段变为只读。取消审核退回「已完工」后仍属终态保护，预约时间与工时保持锁定。</p>
+        <p><strong>不受影响的情况：</strong>「预约中」的项目，以及由「预约中」延期而来（尚未开过工）的项目，仍可正常修改预约时间与工时。项目的名称、客户、地址、备注等基本信息在开工后也仍可编辑（需「编辑项目」权限），只有预约时间与预约工时被锁。</p>
+      </div>
+    </div>
+
+    <div class="section" id="vehicle">
+      <h2>🚗 车辆管理</h2>
+      <p>系统提供车辆使用与里程管理，记录每辆车的使用人、里程与油耗，便于车辆调度与成本核算。</p>
+
+      <h3>车辆看板</h3>
+      <p>首页「车辆」页以卡片展示每辆车的状态概览：</p>
+      <ul>
+        <li><strong>车型 / 车牌</strong>：车辆基本信息</li>
+        <li><strong>状态</strong>：<span style="color:#f97316">🔒 使用中</span> 或 空闲；使用中卡片会显示当前司机「👤 司机姓名」</li>
+        <li><strong>当前里程</strong>：使用中显示出发时里程，空闲显示最近一次还车里程</li>
+        <li><strong>本月里程</strong>：当月累计里程，与「月度目标里程」对照，圆环显示完成比例</li>
+        <li><strong>剩余油量</strong>：空闲时显示上次还车记录的油量（低于 20% 红色、40% 橙色提醒），未记录则提示</li>
+      </ul>
+
+      <h3>用车登记</h3>
+      <div class="flow-step">
+        <h4>1. 选择车辆</h4>
+        <p>在车辆卡片上点击展开「用车」面板（空闲车显示「用车 ▸」）</p>
+      </div>
+      <div class="flow-step">
+        <h4>2. 核对起始公里数</h4>
+        <p>系统默认带出上次里程，请<strong>对照仪表核对</strong>，如不符可当场修改校准</p>
+      </div>
+      <div class="flow-step">
+        <h4>3. 填写用车信息</h4>
+        <p><strong>开车目的</strong>：送货 / 接货 / 安装 / 业务（分段选择）；<strong>关联项目</strong>（可选，自动过滤已完工、已验收、已审核的项目）；<strong>司机</strong>（必填，可输入新增）；<strong>备注 / 目的地</strong></p>
+      </div>
+      <div class="flow-step">
+        <h4>4. 确认用车</h4>
+        <p>点击「确认用车」后车辆进入「🔒 使用中」状态，卡片显示司机姓名，其他人可见谁在用车</p>
+      </div>
+
+      <h3>还车结算</h3>
+      <div class="flow-step">
+        <h4>1. 展开还车面板</h4>
+        <p>在使用中卡片上点击「还车 ▾」</p>
+      </div>
+      <div class="flow-step">
+        <h4>2. 填写回来公里数</h4>
+        <p>起始公里数已锁定不可改，填写当前仪表读数后系统<strong>自动结算本次里程</strong></p>
+      </div>
+      <div class="flow-step">
+        <h4>3. 登记剩余油量与备注</h4>
+        <p>填写剩余油量（0–100%）及还车备注（如车辆状况、是否加油）</p>
+      </div>
+      <div class="flow-step">
+        <h4>4. 确认还车</h4>
+        <p>点击「确认还车」，车辆转为空闲并记录本次行程（里程、油耗、司机、时间）</p>
+      </div>
+
+      <div class="tip">
+        <h4>💡 用车提示</h4>
+        <p>用车时选择：目的、关联项目或填写备注；若与仪表不符可当场修改校准。还车时请填写仪表里程和剩余油量，系统自动结算本次里程。车在使用中显示「🔒 使用中 · 司机」，用车完毕请及时还车。</p>
+      </div>
+
+      <h3>历史记录与导出</h3>
+      <ul>
+        <li>支持<strong>卡片 / 列表</strong>两种视图，可按<strong>车辆、司机、日期</strong>筛选；列表视图以表格展示，列含：车辆、用途、司机、出发、返回、里程、操作（车辆信息单行显示，用途如安装/送货为独立列）</li>
+        <li>可将筛选后的用车记录<strong>导出为 Excel</strong>，便于报销与核算</li>
+      </ul>
+    </div>
+
+    <div class="section" id="reminder">
+      <h2>🔔 预警提醒设置</h2>
+      <div class="note">
+        <h4>📌 仅总经理可设置</h4>
+        <p>提醒标准为<strong>全局统一配置</strong>，由总经理在「我的 → 管理员设置 → 提醒设置」中调整，对全体成员的提醒标准一致。其他角色在界面上看不到该入口。</p>
+      </div>
+      <p>项目被点「开工」后，若<strong>连续施工</strong>超过设定时长仍未点「完工」，会在「项目预约」列表自动<strong>置顶并标红</strong>提醒（中途暂停施工不计入时长，适合需要多天完成的工程）。</p>
+      <ul>
+        <li><strong>默认阈值</strong>：12 小时（建议 10–12 小时，约一个满工作日加加班）</li>
+        <li><strong>可调范围</strong>：1 – 168 小时</li>
+        <li><strong>生效方式</strong>：云端模式下写入数据库，全员立即生效；本地模式仅本机生效</li>
+      </ul>
+    </div>
+
+    <div class="section" id="accounts">
+      <h2>👤 账号管理与权限</h2>
+      <p>总经理 / 具备「管理账户」权限者，可在「我的 → 账号管理」中维护团队成员。</p>
+
+      <h3>账号信息维护</h3>
+      <ul>
+        <li><strong>姓名</strong>：支持行内直接修改</li>
+        <li><strong>角色</strong>：待分配 / 施工人员 / 店长 / 总经理（决定默认权限集合）</li>
+        <li><strong>所属门店</strong>：绑定门店后仅能查看本门店数据（店长及以上可跨门店）</li>
+        <li><strong>删除</strong>：删除操作不可撤销，需二次确认</li>
+      </ul>
+
+      <h3>分人个性权限（云端）</h3>
+      <div class="tip">
+        <h4>💡 在角色默认之上单独设置</h4>
+        <p>管理员可对<strong>单个非总经理的云端用户</strong>单独授予或收回某项能力。未改动的项自动<strong>继承该角色的默认权限</strong>；改动过的项显示「已单独设置」，实时对全员生效。</p>
+      </div>
+      <p>权限项覆盖业务全流程，常见包括：</p>
+      <ul>
+        <li>预约类：新建预约、编辑/删除自己的或所有的预约、<strong>修改自己项目预约时间</strong>/<strong>修改所有项目预约时间</strong>、<strong>修改自己项目预约工时</strong>/<strong>修改所有项目预约工时</strong>（勾选「编辑所有项目」或「编辑自己项目」也自动包含改预约时间/工时）、查看所有门店项目<br><span style="color:#b45309;">⚠️ 注意：这些预约类权限<strong>只在项目开工前有效</strong>。项目一旦开始施工或进入终态，预约时间与预约工时即被锁定，任何权限都无法修改，改期请走「延期」流程。</span></li>
+        <li>施工类：开始/暂停/恢复/完成施工、填写施工工时与外协工时、分配/移除安装人员</li>
+        <li>人员类：添加/编辑/删除施工人员、查看施工人员</li>
+        <li>审批类：申请/批准/拒绝请假、验收项目、审核/反审核项目</li>
+        <li>统计与管理类：查看全局或门店统计、管理门店、管理账户、管理节假日、管理外协、管理工时单价、维修单等</li>
+        <li>数据工具类（各自独立开关）：<strong>导出项目数据 / 工时记录 / 请假记录 / 施工人员 / 门店数据 / 全部数据</strong>、<strong>数据导入</strong>、<strong>查看操作日志</strong></li>
+        <li>个人日程类（各自独立开关）：<strong>查看个人日程</strong>、<strong>查看全员日程</strong>、<strong>添加日程</strong>、<strong>编辑自己的日程 / 编辑所有日程</strong>、<strong>删除自己的日程 / 删除所有日程</strong></li>
+        <li>内部任务类（各自独立开关）：<strong>查看内部任务</strong>、<strong>下达内部任务</strong>、<strong>开始内部任务</strong>、<strong>完成内部任务</strong>、<strong>编辑内部任务</strong>、<strong>删除内部任务</strong>、<strong>审核内部任务</strong></li>
+      </ul>
+    </div>
+
+    <div class="section" id="dataio">
+      <h2>📤 数据导入与导出</h2>
+      <p>「我的 → 数据工具」中的每一项功能，均由对应的独立权限开关控制，可精确授权给需要的成员（无需整体开放）：</p>
+
+      <h3>数据导出（各自独立权限）</h3>
+      <ul>
+        <li><strong>导出项目数据 / 工时记录 / 请假记录 / 施工人员 / 门店数据</strong>：分别由对应的导出权限控制，可只放开其中一类</li>
+        <li><strong>导出全部数据</strong>：打包所有业务数据，便于备份或迁移（单独的「导出全部数据」权限）</li>
+        <li><strong>车辆记录导出 Excel</strong>：在车辆页将筛选后的用车记录导出为 Excel</li>
+        <li><strong>操作日志</strong>：由「查看操作日志」权限控制，查看系统关键操作记录，便于审计追溯</li>
+      </ul>
+
+      <h3>数据导入</h3>
+      <p>具备「数据导入」权限的成员，可导入 CSV 文件批量录入数据，支持类型：</p>
+      <ul>
+        <li>项目数据、工时记录、施工人员、门店数据、请假记录、外协人员</li>
+      </ul>
+      <div class="flow-step">
+        <h4>导入方式</h4>
+        <p>点击「数据导入」→ 选择文件类型按钮，或直接<strong>拖拽 CSV 文件</strong>到窗口；系统也可根据文件名（含「工时」「人员」「门店」「请假」「外协」等）自动识别类型</p>
+      </div>
+      <div class="tip">
+        <h4>💡 导入结果</h4>
+        <p>导入后界面会显示成功条数与失败条数；部分失败不影响其余记录，可修正后重新导入。</p>
+      </div>
+    </div>
+
+    <div class="section" id="settings">
+      <h2>📱 个人中心与系统设置</h2>
+      <h3>个人中心（我的）</h3>
+      <p>底部「我的」页汇总个人与团队入口：</p>
+      <ul>
+        <li><strong>功能中心</strong>：按权限展示施工人员、外协、请假、个人日程、门店、统计、内部任务、账号管理等</li>
+        <li><strong>数据工具</strong>（管理员/有权限者）：各类导出、操作日志、数据导入、导出全部、帮助与反馈</li>
+        <li><strong>管理员设置</strong>（仅云端总经理）：提醒设置、管理密码设置</li>
+        <li><strong>登出</strong>：云端模式提供退出登录</li>
+      </ul>
+
+      <h3>本地模式与云端模式</h3>
+      <ul>
+        <li><strong>本地模式</strong>：数据仅存本机，适合单机使用；可添加本地账号</li>
+        <li><strong>云端模式</strong>：数据存于云端，<strong>多设备实时同步</strong>，支持团队协作与权限分级</li>
+      </ul>
+      <div class="tip">
+        <h4>💡 实时同步</h4>
+        <p>云端模式下，预约、施工、工时、车辆、权限等变更会通过实时通道推送到其他已登录成员，无需手动刷新即可看到最新数据。</p>
+      </div>
+
+      <h3>管理密码（云端总经理）</h3>
+      <p>云端总经理可设置管理密码，作为敏感操作（如权限调整）的二次校验；未设置时入口会提示「（未设置）」。</p>
+
+      <h3>安装为桌面 / 主屏应用</h3>
+      <div class="tip">
+        <h4>💡 像 App 一样使用</h4>
+        <p>本系统支持 PWA（渐进式 Web 应用），可像原生 App 一样安装到桌面或手机主屏，全屏运行、可离线使用。</p>
+        <ul>
+          <li><strong>Chrome / Edge / 安卓浏览器</strong>：在<strong>登录界面</strong>点击「📲 安装到桌面 / 主屏」按钮（仅在浏览器支持安装时显示），或直接接受浏览器弹出的安装提示，即可一键安装；安装后从桌面 / 主屏图标打开即进入应用。</li>
+          <li><strong>iOS Safari</strong>：暂不支持代码呼出安装框，请在登录界面按提示，点击底部「分享 ⤴」→「添加到主屏幕」。</li>
+          <li>已安装后，安装入口会自动隐藏；如需卸载，在桌面 / 主屏长按图标删除即可。</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section" id="records">
+      <h2>📋 施工记录查询</h2>
+      
+      <h3>施工记录包含内容</h3>
+      <div class="flow-step">
+        <h4>📅 时间记录</h4>
+        <p>开工时间、完工时间、审核时间</p>
+      </div>
+      <div class="flow-step">
+        <h4>⏱️ 工时时长</h4>
+        <p>累计施工时长、暂停次数和累计暂停时间</p>
+      </div>
+      <div class="flow-step">
+        <h4>🔧 施工时段明细</h4>
+        <p>每次施工的时间段和时长，自动扣除暂停时间</p>
+      </div>
+      <div class="flow-step">
+        <h4>👷 工人工时统计</h4>
+        <p>每个工人的累计工时、工作时间段、当前/已移除状态</p>
+      </div>
+      <div class="flow-step">
+        <h4>⏸️ 暂停/恢复记录</h4>
+        <p>每次暂停的时间、恢复时间、暂停时长和暂停原因</p>
+      </div>
+      <div class="flow-step">
+        <h4>⚠️ 延期记录</h4>
+        <p>每次延期的操作时间、原预约时间、新预约时间和延期原因</p>
+      </div>
+      <div class="flow-step">
+        <h4>👥 人员变动记录</h4>
+        <p>每次人员分配/移除的时间、人员姓名、移除时自动计算的工时</p>
+      </div>
+      <div class="flow-step">
+        <h4>📝 操作日志</h4>
+        <p>所有关键操作的记录，包括开始施工、暂停、恢复、延期、分配人员等</p>
+      </div>
+
+      <h3>进度条显示规则</h3>
+      <p>项目详情卡片中，进度条显示规则：</p>
+      <ul>
+        <li><strong>已完工/已验收/已审核</strong>：进度条显示100%</li>
+        <li><strong>已暂停</strong>：橙色进度条，显示暂停时的进度</li>
+        <li><strong>已延期</strong>：红色进度条</li>
+        <li><strong>施工中</strong>：蓝色进度条，实时更新</li>
+      </ul>
+    </div>
+
+    <div class="section" id="tips">
+      <h2>💡 操作技巧</h2>
+      
+      <h3>移动端优化</h3>
+      <ul>
+        <li>底部菜单按钮间距优化，图标居中显示</li>
+        <li>暂停施工弹窗上移，避免被系统键盘遮挡</li>
+        <li>暂停原因支持快速选择和手动输入</li>
+      </ul>
+
+      <h3>高效操作</h3>
+      <ul>
+        <li>选择今天日期时，开始时间自动根据当前时间设置</li>
+        <li>预计工时未填写时，系统自动计算并提示</li>
+        <li>移除人员时自动计算工时，无需手动录入</li>
+        <li>完工表单自动汇总所有参与人员的工时记录</li>
+      </ul>
+
+      <h3>数据追溯</h3>
+      <ul>
+        <li>完整的施工记录，可追溯项目全过程</li>
+        <li>操作日志记录所有关键操作</li>
+        <li>人员变动记录保留所有加人/减人操作</li>
+        <li>暂停/延期记录包含详细原因</li>
+      </ul>
+
+      <h3>多端协作</h3>
+      <ul>
+        <li>云端模式下多设备实时同步，团队成员无需手动刷新即可看到最新数据（详见「个人中心与系统设置」）</li>
+        <li>本地模式适合单机使用，数据仅存本机；如需团队协同请切换云端模式</li>
+      </ul>
+    </div>
+
+    <div class="footer">
+      <p>文档版本：v3.3 | 更新日期：2026年8月5日</p>
+    </div>
+  </div>
+</body>
+</html>
