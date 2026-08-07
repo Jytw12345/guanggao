@@ -7069,7 +7069,7 @@ function showWorkerSchedule(pid, workerId) {
     const dailyHours = getWorkerDailyHours(dateStr, workerId);
     container.innerHTML = `
       <div class="worker-schedule-box">
-        <div class="worker-schedule-title">${svgCal(16)} ${workerName} 在 ${dateStr} 的安排</div>
+        <div class="worker-schedule-title">${svgCal(16)} ${esc(workerName)} 在 ${dateStr} 的安排</div>
         ${workerDailyTotalHtml(dateStr, workerId)}
         <div class="worker-schedule-empty">✓ 当天暂无其他分配</div>
       </div>`;
@@ -7093,7 +7093,7 @@ function showWorkerSchedule(pid, workerId) {
 
   container.innerHTML = `
     <div class="worker-schedule-box">
-      <div class="worker-schedule-title">${svgCal(16)} ${workerName} 在 ${dateStr} 的安排</div>
+      <div class="worker-schedule-title">${svgCal(16)} ${esc(workerName)} 在 ${dateStr} 的安排</div>
       ${workerDailyTotalHtml(dateStr, workerId)}
       <div class="worker-schedule-list">${itemsHtml}</div>
       ${currentProject ? `<div class="worker-schedule-hint">当前项目已标记</div>` : ""}
@@ -8888,7 +8888,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const toggleIcon = isSelf ? "▼" : "▶";
       description += `<div class="schedule-item ${collapsedCls}" id="sched-${wid}">`;
       const hrsText = workerHours[name] ? ` · ${workerHours[name]}h` : "";
-      description += `<div class="schedule-worker-header" onclick="toggleScheduleItem('sched-${wid}')" title="点击展开/收起"><span class="schedule-toggle-icon">${toggleIcon}</span><span class="sched-avatar">${esc(name.charAt(0))}</span><span class="sched-who">${name}</span>${itemCount > 0 ? ` <span class="sched-count">${itemCount}项${hrsText}</span>` : ""}</div>`;
+      description += `<div class="schedule-worker-header" onclick="toggleScheduleItem('sched-${wid}')" title="点击展开/收起"><span class="schedule-toggle-icon">${toggleIcon}</span><span class="sched-avatar">${esc(name.charAt(0))}</span><span class="sched-who">${esc(name)}</span>${itemCount > 0 ? ` <span class="sched-count">${itemCount}项${hrsText}</span>` : ""}</div>`;
       description += `<div class="schedule-item-body">`;
     
       projects.forEach((p, idx) => {
@@ -8964,7 +8964,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
         }
       
         if (pWorkers) {
-          taskDesc += `，一起去的有 <strong>${pWorkers}</strong>`;
+          taskDesc += `，一起去的有 <strong>${esc(pWorkers)}</strong>`;
         }
       
         if (p.workContent && p.workContent.length) {
@@ -17282,7 +17282,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc915d7c4";
+  const APP_VERSION = "ve22e21ee";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
