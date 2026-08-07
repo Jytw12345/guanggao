@@ -26,6 +26,44 @@
   --tc-indigo-bg: #e0e7ff; --tc-indigo-label: #6366f1; --tc-indigo-value: #4338ca;
 }
 
+/* 夜间模式：跟随系统（prefers-color-scheme: dark）。
+   仅覆盖语义变量与 body，app.js 内联写死的约195处颜色不受此影响，
+   暗背景下个别卡片可能偏白，属轻量方案的已知局限。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1320;
+    --card: #1a2030;
+    --primary: #6366f1;
+    --primary-dark: #818cf8;
+    --primary-light: #312e81;
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --border: #2c3344;
+    --success: #22c55e;
+    --warn: #fbbf24;
+    --danger: #f87171;
+    --info: #22d3ee;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
+
+    /* 施工记录折叠面板（暗化：深底 + 亮边框/文字） */
+    --rec-blue-bg: #0e1b33; --rec-blue-border: #3b82f6; --rec-blue-text: #93c5fd; --rec-blue-label: #93c5fd; --rec-blue-dash: #1e3a8a;
+    --rec-green-bg: #0c2a1a; --rec-green-border: #22c55e; --rec-green-text: #86efac; --rec-green-label: #86efac; --rec-green-dash: #14532d;
+    --rec-amber-bg: #2a1f08; --rec-amber-border: #f59e0b; --rec-amber-text: #fcd34d; --rec-amber-label: #fcd34d; --rec-amber-dash: #78350f;
+    --rec-red-bg: #2a0f0f; --rec-red-border: #ef4444; --rec-red-text: #fca5a5; --rec-red-label: #fca5a5; --rec-red-dash: #7f1d1d;
+    --rec-gray-bg: #1a1d24; --rec-gray-border: #6b7280; --rec-gray-text: #d1d5db; --rec-gray-label: #d1d5db; --rec-gray-dash: #374151;
+    /* 时间节点小卡片（暗化） */
+    --tc-blue-bg: #0e1b33; --tc-blue-label: #93c5fd; --tc-blue-value: #bfdbfe;
+    --tc-green-bg: #0c2a1a; --tc-green-label: #6ee7b7; --tc-green-value: #a7f3d0;
+    --tc-amber-bg: #2a1f08; --tc-amber-label: #fcd34d; --tc-amber-value: #fde68a;
+    --tc-indigo-bg: #1e1b4b; --tc-indigo-label: #a5b4fc; --tc-indigo-value: #c7d2fe;
+  }
+
+  body {
+    background: #0f1320;
+    color: var(--text);
+  }
+}
+
 * { box-sizing: border-box; }
 
 body {
