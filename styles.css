@@ -5091,6 +5091,19 @@ table.data.project-hours-diff thead th {
     font-size: 14px;
   }
 
+  /* 手机端右上角主操作按钮统一缩小，与标题和筛选器更协调 */
+  .section-head > .btn.primary,
+  #btnNewProject,
+  #btnNewInternalTask,
+  #btnNewWorker,
+  #btnNewOutsourced {
+    padding: 6px 10px;
+    font-size: 12px;
+    border-radius: 6px;
+    min-height: 32px;
+    line-height: 1.2;
+  }
+
   .input {
     padding: 12px 14px;
     font-size: 15px;

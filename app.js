@@ -17862,6 +17862,17 @@ document.addEventListener("DOMContentLoaded", init);
 if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   let swRegistration = null;
   let refreshing = false;
+  let updateRequested = false;
+
+  // 统一的硬刷新：清掉所有 SW 缓存后带 cache-busting 参数刷新，确保从网络拿最新资源。
+  // refreshing 标志保证无论 controllerchange 还是兜底定时器触发，都只会刷新一次。
+  function hardReloadNow() {
+    if (refreshing) return;
+    refreshing = true;
+    caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).finally(() => {
+      window.location.href = window.location.pathname + "?v=" + Date.now();
+    });
+  }
 
   // 版本更新横幅：常驻顶部，点击即强制硬刷新，避免用户关闭提示后一直停留在旧版
   // dismissedVer 记录用户已关闭的版本号（sessionStorage），同一版本不再重复弹
@@ -17870,7 +17881,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     const v = version || "";
     // 用户已主动关闭过此版本的更新提示 → 本会话不再弹（避免"老是弹同一更新"）
     try {
-      if (v && sessionStorage.getItem("sw_update_dismissed") === v) return;
+      if (v && localStorage.getItem("sw_update_dismissed") === v) return;
     } catch (_) {}
     const bar = document.createElement("div");
     bar.id = "swUpdateBar";
@@ -17881,7 +17892,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     document.body.appendChild(bar);
     document.getElementById("swUpdateBtn").addEventListener("click", () => applyUpdate());
     document.getElementById("swUpdateClose").addEventListener("click", () => {
-      try { if (v) sessionStorage.setItem("sw_update_dismissed", v); } catch (_) {}
+      try { if (v) localStorage.setItem("sw_update_dismissed", v); } catch (_) {}
       bar.remove();
     });
   }
@@ -17906,30 +17917,22 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   function applyUpdate() {
     const bar = document.getElementById("swUpdateBar");
     if (bar) bar.remove();
-    // 统一的硬刷新：清掉所有 SW 缓存后带 cache-busting 参数刷新，确保从网络拿最新资源。
-    // refreshing 标志防重复刷新（controllerchange 与兜底定时器只会触发一次）。
-    const hardReload = () => {
-      if (refreshing) return;
-      refreshing = true;
-      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).finally(() => {
-        window.location.href = window.location.pathname + "?v=" + Date.now();
-      });
-    };
+    // 标记“用户已主动请求更新”，让 controllerchange 监听器知道该刷新（而不是其它来源的 controllerchange）。
+    updateRequested = true;
+    // 通知等待中的新 SW 立即接管（skipWaiting）。
+    // 刷新由 controllerchange 统一处理；若极少数浏览器 skipWaiting 后不触发 controllerchange，
+    // 则 2.5s 兜底定时器强制从网络硬刷，确保一定更新成功。
     if (swRegistration && swRegistration.waiting) {
-      // 仅通知等待中的新 SW 立即接管；刷新由 controllerchange 统一处理——
-      // 它会等“新 SW 已真正接管页面”之后才清缓存 + 硬刷，避免“SW 还没接管就提前硬刷、
-      // 导致 controller 仍是旧版、刷新后又误报更新”的死循环。
       swRegistration.waiting.postMessage({ type: "SKIP_WAITING" });
-      // 兜底：极少数浏览器 skipWaiting 后不触发 controllerchange 时，4s 后手动刷新
-      setTimeout(hardReload, 4000);
+      setTimeout(hardReloadNow, 2500);
     } else {
-      // 没有 waiting 的 SW（罕见路径）→ 直接清缓存硬刷
-      hardReload();
+      // 没有 waiting 的 SW（罕见路径，例如本标签页尚未检测到新 SW）→ 直接清缓存硬刷，从网络拿最新
+      hardReloadNow();
     }
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v8b7f9e07";
+  const APP_VERSION = "va1d21edc";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -17991,11 +17994,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
       // 新 SW 接管页面后刷新一次以加载最新代码（refreshing 防重复刷新）
       // 同时清缓存，避免刷新后仍命中旧 app.js 导致版本不一致死循环
       navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if (refreshing) return;
-        refreshing = true;
-        caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).finally(() => {
-          window.location.href = window.location.pathname + "?v=" + Date.now();
-        });
+        // 仅当用户主动点了“立即更新”（skipWaiting 触发）才刷新；
+        // 普通 controllerchange（如首次激活）不刷新，避免误刷。
+        if (updateRequested) hardReloadNow();
       });
     }).catch((err) => console.warn("Service Worker 注册失败", err));
   });
