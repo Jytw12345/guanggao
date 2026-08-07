@@ -10648,6 +10648,16 @@ function renderStats() {
   if (!perm.viewGlobalStats() && myStore() && !storeFilter) {
     storeFilter = myStore();
   }
+
+  // 本月标准工时：每月固定休息4天（每周休1天，不含法定假日）× 每日8小时。
+  // 例：8 月 31 天 − 4 天休息 = 27 个工作日 → 216 小时，而非写死的 40 小时。
+  const _ms = month ? month.split("-").map(Number) : [];
+  const _year = _ms.length === 2 ? _ms[0] : new Date().getFullYear();
+  const _mo = _ms.length === 2 ? _ms[1] : (new Date().getMonth() + 1);
+  const _daysInMonth = new Date(_year, _mo, 0).getDate();
+  const _restDays = 4; // 每月固定休息4天（每周休1天，不含法定假日）
+  const workdaysInMonth = Math.max(0, _daysInMonth - _restDays);
+  const monthStandardHours = workdaysInMonth * 8;
   
   function isInPeriod(dateStr) {
     if (!month) return true;
@@ -10903,10 +10913,10 @@ function renderStats() {
   let smartAnalysis = "";
   if (rows.length > 0 && perm.viewGlobalStats()) {
     const lowEfficiencyWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
-    const highWorkloadWorkers = internalRows.filter(r => r.hours > 40);
-    
+    const highWorkloadWorkers = internalRows.filter(r => r.hours > monthStandardHours);
+
     if (highWorkloadWorkers.length > 0) {
-      smartAnalysis += `<div class="stats-analysis warning">🔥 <strong>高负荷预警</strong>：${highWorkloadWorkers.map(w => esc(w.name)).join("、")} 本月工时超过40小时，建议关注工作强度！</div>`;
+      smartAnalysis += `<div class="stats-analysis warning">🔥 <strong>高负荷预警</strong>：${highWorkloadWorkers.map(w => esc(w.name)).join("、")} 本月工时超过 ${monthStandardHours} 小时（按每月休息4天、每日8小时计），建议关注工作强度！</div>`;
     }
     
     if (lowEfficiencyWorkers.length > 0) {
@@ -17282,7 +17292,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "ve22e21ee";
+  const APP_VERSION = "v1219b115";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
