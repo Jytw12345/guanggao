@@ -558,8 +558,51 @@ function linkifyPhones(text) {
   const phoneRe = /(\+?86[-\s]?)?(1[3-9]\d{9}|\d{3,4}[-\s]?\d{7,8})/g;
   return esc(raw).replace(phoneRe, (match) => {
     const digits = match.replace(/[-\s]/g, "");
-    return `<a href="tel:${digits}" class="tel-link" onclick="event.stopPropagation()">${match}</a>`;
+    return `<a href="tel:${digits}" class="tel-link" onclick="event.stopPropagation(); callPhone(event)">${match}</a>`;
   });
+}
+
+// 统一拨号处理：拦截 tel: 链接的默认行为，避免部分手机浏览器 / PWA standalone 模式
+// 把 tel: 当成普通网页 URL（表现为点击后出现 tel:// 并打开搜索引擎）。改为由 JS 主动
+// 触发系统拨号；对不识别 tel: scheme 的环境（独立 PWA / 老旧 iOS / 桌面）用可见性变化 +
+// 超时兜底复制号码并提示，绝不再跳搜索页。
+function callPhone(event) {
+  event.preventDefault();
+  const a = event.currentTarget;
+  const href = a.getAttribute("href") || "";
+  // 提取 tel: 后的纯号码（兼容 tel:// 写法）
+  const digits = href.replace(/^tel[:]?\/?\/?/i, "").replace(/[^\d+]/g, "");
+  if (!digits) { toast("没有可拨打的电话"); return; }
+  try {
+    window.location.href = "tel:" + digits;
+    // location 跳转通常是同步离页（打开电话 app）；若没有离页，说明环境不支持 tel:，兜底复制
+    const t = setTimeout(() => { if (!document.hidden) copyPhone(digits); }, 1200);
+    document.addEventListener("visibilitychange", function onHide() {
+      if (document.hidden) clearTimeout(t);
+      document.removeEventListener("visibilitychange", onHide);
+    });
+  } catch (e) {
+    copyPhone(digits);
+  }
+}
+
+// 复制号码到剪贴板（tel: 不可用时兜底），并提示用户手动拨打
+function copyPhone(digits) {
+  const hint = "已复制号码：" + digits + "（当前环境无法直接拨号，请手动拨打）";
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(digits).then(() => toast(hint), () => toast("号码：" + digits + "（请手动拨打）"));
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = digits; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); } catch (_) {}
+      document.body.removeChild(ta);
+      toast(hint);
+    }
+  } catch (e) {
+    toast("号码：" + digits + "（请手动拨打）");
+  }
 }
 
 function safeJsonParse(str, defaultValue = null) {
@@ -4952,7 +4995,7 @@ function renderProjects() {
 
         <!-- 电话 + 地址 -->
         <div class="card-sub">
-          ${p.phone ? `<a href="tel:${esc(p.phone)}" class="card-sub__link">${esc(p.phone)}</a>` : ""}
+          ${p.phone ? `<a href="tel:${esc(p.phone)}" class="card-sub__link" onclick="callPhone(event)">${esc(p.phone)}</a>` : ""}
           ${p.address ? `<span class="card-sub__addr">${esc(p.address)}</span>` : ""}
         </div>
 
@@ -6240,7 +6283,7 @@ function renderConstruction() {
           <span>门店</span><b>${esc(storeName(p.storeId))}</b>
           <span>客户</span><b>${esc(p.customer || "—")}</b>
           <span>预约</span><b>${fmtTimeRange(p)}</b>
-          ${p.phone ? `<span>电话</span><b><a href="tel:${esc(p.phone)}">${esc(p.phone)}</a></b>` : ""}
+          ${p.phone ? `<span>电话</span><b><a href="tel:${esc(p.phone)}" onclick="callPhone(event)">${esc(p.phone)}</a></b>` : ""}
           <span>地址</span><b>${esc(p.address || "—")}</b>
         </div>
         ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}</div>` : ""}
@@ -9300,7 +9343,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
               ${p.note ? `<div class="detail-row"><span class="detail-label">💬 注意事项</span><span class="detail-value" style="white-space:pre-wrap;">${esc(p.note)}</span></div>` : ''}
               ${p.customer ? `<div class="detail-row"><span class="detail-label">👤 客户</span><span class="detail-value">${esc(p.customer)}</span></div>` : ''}
               ${p.contactName ? `<div class="detail-row"><span class="detail-label">📇 联系人</span><span class="detail-value">${esc(p.contactName)}${p.contactPhone ? ' ' + esc(p.contactPhone) : ''}</span></div>` : ''}
-              ${p.phone ? `<div class="detail-row"><span class="detail-label">📞 电话</span><a class="detail-value" href="tel:${esc(p.phone)}" onclick="event.stopPropagation()">${esc(p.phone)}</a></div>` : ''}
+              ${p.phone ? `<div class="detail-row"><span class="detail-label">📞 电话</span><a class="detail-value" href="tel:${esc(p.phone)}" onclick="event.stopPropagation(); callPhone(event)">${esc(p.phone)}</a></div>` : ''}
               ${p.address ? `<div class="detail-row"><span class="detail-label">📍 地址</span><span class="detail-value">${esc(p.address)}</span></div>` : ''}
               <div class="detail-row"><span class="detail-label">⏱ 预计工时</span><span class="detail-value">${estHours > 0 ? estHours + ' 小时' : '未设置'}</span></div>
               <div class="detail-row"><span class="detail-label">✅ 实际工时</span><span class="detail-value" style="color:${statusColor};font-weight:600;">${actualHours > 0 ? actualHours.toFixed(1) + ' 小时' : '暂无'}</span></div>
@@ -16200,8 +16243,8 @@ function timelineTouchEnd(e) {
   if (!p) return;
 
   const store = getStore(p.storeId);
-  const customerPhone = p.phone || "未填写";
-  const storePhone = (store && store.phone) || "未填写";
+  const customerPhone = p.phone || "";
+  const storePhone = (store && store.phone) || "";
 
   const oldStartStr = fmtDateTime(originalStart);
   const newStartStr = fmtDateTime(timelineStart);
@@ -16216,8 +16259,8 @@ function timelineTouchEnd(e) {
         <div class="tl-drag-row"><span>项目名称</span><span>${esc(p.name)}</span></div>
         <div class="tl-drag-row"><span>原时间</span><span>${oldStartStr}</span></div>
         <div class="tl-drag-row"><span>新时间</span><span>${newStartStr}</span></div>
-        <div class="tl-drag-row"><span>客户电话</span><span><a href="tel:${customerPhone}" class="tl-drag-phone">📞 ${customerPhone}</a></span></div>
-        <div class="tl-drag-row"><span>门店电话</span><span><a href="tel:${storePhone}" class="tl-drag-phone">📞 ${storePhone}</a></span></div>
+        <div class="tl-drag-row"><span>客户电话</span><span>${customerPhone ? `<a href="tel:${esc(customerPhone)}" class="tl-drag-phone" onclick="callPhone(event)">📞 ${esc(customerPhone)}</a>` : "未填写"}</span></div>
+        <div class="tl-drag-row"><span>门店电话</span><span>${storePhone ? `<a href="tel:${esc(storePhone)}" class="tl-drag-phone" onclick="callPhone(event)">📞 ${esc(storePhone)}</a>` : "未填写"}</span></div>
       </div>
       ${overtimeWarn}
       <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
@@ -16280,8 +16323,8 @@ function timelineDragEnd(e) {
   if (!p) return;
 
   const store = getStore(p.storeId);
-  const customerPhone = p.phone || "未填写";
-  const storePhone = (store && store.phone) || "未填写";
+  const customerPhone = p.phone || "";
+  const storePhone = (store && store.phone) || "";
 
   const oldStartStr = fmtDateTime(originalStart);
   const newStartStr = fmtDateTime(timelineStart);
@@ -16296,8 +16339,8 @@ function timelineDragEnd(e) {
         <div class="tl-drag-row"><span>项目名称</span><span>${esc(p.name)}</span></div>
         <div class="tl-drag-row"><span>原时间</span><span>${oldStartStr}</span></div>
         <div class="tl-drag-row"><span>新时间</span><span>${newStartStr}</span></div>
-        <div class="tl-drag-row"><span>客户电话</span><span><a href="tel:${customerPhone}" class="tl-drag-phone">📞 ${customerPhone}</a></span></div>
-        <div class="tl-drag-row"><span>门店电话</span><span><a href="tel:${storePhone}" class="tl-drag-phone">📞 ${storePhone}</a></span></div>
+        <div class="tl-drag-row"><span>客户电话</span><span>${customerPhone ? `<a href="tel:${esc(customerPhone)}" class="tl-drag-phone" onclick="callPhone(event)">📞 ${esc(customerPhone)}</a>` : "未填写"}</span></div>
+        <div class="tl-drag-row"><span>门店电话</span><span>${storePhone ? `<a href="tel:${esc(storePhone)}" class="tl-drag-phone" onclick="callPhone(event)">📞 ${esc(storePhone)}</a>` : "未填写"}</span></div>
       </div>
       ${overtimeWarn}
       <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
@@ -16456,8 +16499,8 @@ function timelineMouseUp(e) {
   if (!p) return;
 
   const store = getStore(p.storeId);
-  const customerPhone = p.phone || "未填写";
-  const storePhone = (store && store.phone) || "未填写";
+  const customerPhone = p.phone || "";
+  const storePhone = (store && store.phone) || "";
 
   const oldStartStr = fmtDateTime(originalStart);
   const newStartStr = fmtDateTime(timelineStart);
@@ -16472,8 +16515,8 @@ function timelineMouseUp(e) {
         <div class="tl-drag-row"><span>项目名称</span><span>${esc(p.name)}</span></div>
         <div class="tl-drag-row"><span>原时间</span><span>${oldStartStr}</span></div>
         <div class="tl-drag-row"><span>新时间</span><span>${newStartStr}</span></div>
-        <div class="tl-drag-row"><span>客户电话</span><span><a href="tel:${customerPhone}" class="tl-drag-phone">📞 ${customerPhone}</a></span></div>
-        <div class="tl-drag-row"><span>门店电话</span><span><a href="tel:${storePhone}" class="tl-drag-phone">📞 ${storePhone}</a></span></div>
+        <div class="tl-drag-row"><span>客户电话</span><span>${customerPhone ? `<a href="tel:${esc(customerPhone)}" class="tl-drag-phone" onclick="callPhone(event)">📞 ${esc(customerPhone)}</a>` : "未填写"}</span></div>
+        <div class="tl-drag-row"><span>门店电话</span><span>${storePhone ? `<a href="tel:${esc(storePhone)}" class="tl-drag-phone" onclick="callPhone(event)">📞 ${esc(storePhone)}</a>` : "未填写"}</span></div>
       </div>
       ${overtimeWarn}
       <div class="tl-drag-hint">请确认已与客户沟通好新的预约时间！</div>
@@ -17226,7 +17269,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vadbb4b83";
+  const APP_VERSION = "v0cd0b24e";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
