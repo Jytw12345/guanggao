@@ -186,6 +186,9 @@ const CAP = {
   LEAVE_APPROVE: "leave_approve",
   LEAVE_REJECT: "leave_reject",
   LEAVE_VIEW_ALL: "leave_view_all",
+  LEAVE_DELETE: "leave_delete",
+  LEAVE_WITHDRAW: "leave_withdraw",
+  LEAVE_BATCH_ROTATIONAL: "leave_batch_rotational",
   REVIEW_PROJECT: "review_project",
   UNREVIEW_PROJECT: "unreview_project",
   ACCEPT_PROJECT: "accept_project",
@@ -193,7 +196,6 @@ const CAP = {
   VIEW_STATS_STORE: "view_stats_store",
   MANAGE_STORES: "manage_stores",
   MANAGE_ACCOUNTS: "manage_accounts",
-  MANAGE_HOLIDAYS: "manage_holidays",
   MANAGE_OUTSOURCED: "manage_outsourced",
   REPAIR_CREATE: "repair_create",
   REPAIR_COMPLETE: "repair_complete",
@@ -250,6 +252,9 @@ const CAP_LABEL = {
   leave_approve: "批准请假",
   leave_reject: "拒绝请假",
   leave_view_all: "查看所有休假记录",
+  leave_delete: "删除休假记录",
+  leave_withdraw: "撤回批准",
+  leave_batch_rotational: "批量轮休设置",
   review_project: "审核项目",
   unreview_project: "反审核项目",
   accept_project: "验收项目",
@@ -257,7 +262,6 @@ const CAP_LABEL = {
   view_stats_store: "查看本门店统计",
   manage_stores: "管理门店",
   manage_accounts: "管理账户",
-  manage_holidays: "管理节假日",
   manage_outsourced: "管理外协人员",
   project_edit_appointment_own: "修改自己项目预约时间",
   project_edit_appointment_all: "修改所有项目预约时间",
@@ -295,7 +299,7 @@ const CAP_GROUPS = [
   { label: "项目预约", caps: ["project_create","project_edit_own","project_edit_all","project_edit_appointment_own","project_edit_appointment_all","project_edit_hours_own","project_edit_hours_all","project_delete_own","project_delete_all","project_view_all"] },
   { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","construction_log_work","construction_log_outsourced","worker_assign","worker_unassign"] },
   { label: "人员管理", caps: ["worker_add","worker_edit","worker_delete","worker_view","manage_outsourced"] },
-  { label: "休假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","manage_holidays"] },
+  { label: "休假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","leave_delete","leave_withdraw","leave_batch_rotational"] },
   { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_complete"] },
   { label: "数据统计", caps: ["view_stats_global","view_stats_store"] },
   { label: "数据工具", caps: ["export_projects","export_worklogs","export_leaves","export_workers","export_stores","export_all","import_data","view_operation_logs"] },
@@ -314,9 +318,10 @@ const DEFAULT_ROLE_PERMS = {
     worker_assign: false, worker_unassign: false, worker_add: false,
     worker_edit: false, worker_delete: false, worker_view: true,
     leave_apply: true, leave_approve: true, leave_reject: true, leave_view_all: true,
+    leave_delete: true, leave_withdraw: true, leave_batch_rotational: true,
     review_project: true, unreview_project: true, accept_project: false,
     view_stats_global: false, view_stats_store: true,
-    manage_stores: false, manage_accounts: false, manage_holidays: false,
+    manage_stores: false, manage_accounts: false,
     manage_outsourced: true,
     project_edit_appointment_own: true, project_edit_appointment_all: true, project_edit_hours_own: true, project_edit_hours_all: true,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
@@ -333,9 +338,10 @@ const DEFAULT_ROLE_PERMS = {
     worker_assign: true, worker_unassign: true, worker_add: false,
     worker_edit: false, worker_delete: false, worker_view: true,
     leave_apply: true, leave_approve: false, leave_reject: false, leave_view_all: false,
+    leave_delete: false, leave_withdraw: false, leave_batch_rotational: false,
     review_project: false, accept_project: false,
     view_stats_global: false, view_stats_store: false,
-    manage_stores: false, manage_accounts: false, manage_holidays: false,
+    manage_stores: false, manage_accounts: false,
     repair_create: false, repair_complete: true,
     manage_outsourced: false,
     project_edit_appointment_own: false, project_edit_appointment_all: false, project_edit_hours_own: false, project_edit_hours_all: false,
@@ -398,6 +404,9 @@ const perm = {
   approveLeave: () => can(CAP.LEAVE_APPROVE),
   rejectLeave: () => can(CAP.LEAVE_REJECT),
   viewAllLeaves: () => can(CAP.LEAVE_VIEW_ALL),
+  deleteLeave: () => can(CAP.LEAVE_DELETE),
+  withdrawLeave: () => can(CAP.LEAVE_WITHDRAW),
+  batchRotational: () => can(CAP.LEAVE_BATCH_ROTATIONAL),
   reviewProject: (p) => can(CAP.REVIEW_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
   unreviewProject: (p) => can(CAP.UNREVIEW_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
   acceptProject: (p) => can(CAP.ACCEPT_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
@@ -405,7 +414,6 @@ const perm = {
   viewStoreStats: () => can(CAP.VIEW_STATS_STORE),
   manageStores: () => can(CAP.MANAGE_STORES),
   manageAccounts: () => isManager() || can(CAP.MANAGE_ACCOUNTS),
-  manageHolidays: () => can(CAP.MANAGE_HOLIDAYS),
   manageOutsourced: () => can(CAP.MANAGE_OUTSOURCED),
   exportData: () => can(CAP.EXPORT_PROJECTS) || can(CAP.EXPORT_WORKLOGS) || can(CAP.EXPORT_LEAVES) || can(CAP.EXPORT_WORKERS) || can(CAP.EXPORT_STORES) || can(CAP.EXPORT_ALL) || can(CAP.IMPORT_DATA) || can(CAP.VIEW_OPERATION_LOGS),
   createRepair: () => can(CAP.REPAIR_CREATE),
@@ -2122,30 +2130,6 @@ const repo = {
     }
     cache.leaveRecords = cache.leaveRecords.filter((l) => l.id !== id);
     if (MODE !== "cloud") saveLocal();
-  },
-  async saveHoliday(holiday, id) {
-    if (MODE === "cloud") {
-      const row = {
-        id: id || uid(), date: holiday.date, name: holiday.name,
-        is_workday: holiday.isWorkday || false,
-      };
-      const { error } = await sb.from("holidays").upsert(row);
-      if (error) return fail(error);
-    } else {
-      const existing = cache.holidays.find(h => h.date === holiday.date);
-      if (existing) Object.assign(existing, holiday);
-      else cache.holidays.push({ id: uid(), ...holiday });
-      saveLocal();
-    }
-  },
-  async deleteHoliday(id) {
-    if (MODE === "cloud") {
-      const { error } = await sb.from("holidays").delete().eq("id", id);
-      if (error) return fail(error);
-    } else {
-      cache.holidays = cache.holidays.filter((h) => h.id !== id);
-      saveLocal();
-    }
   },
 };
 
@@ -4894,7 +4878,7 @@ function collectRotCustomPlan() {
 }
 
 function openBatchRotational() {
-  if (!perm.applyLeave()) { toast("权限不足：无法设置轮休"); return; }
+  if (!perm.batchRotational()) { toast("权限不足：无法进行批量轮休设置"); return; }
   rotMode = "weekend";
   rotPlanBatches = [];
   // 默认选「即将到来的周六」所在周
@@ -5078,7 +5062,7 @@ async function submitBatchRotational() {
 
 async function deleteLeaveRecord(id) {
   try {
-    if (!perm.manageLeaves()) { toast("权限不足"); return; }
+    if (!perm.deleteLeave()) { toast("权限不足：无法删除休假记录"); return; }
     if (!(await confirmDialog("确定删除该休假记录？", "删除休假记录"))) return;
     await repo.deleteLeaveRecord(id);
     renderAll();
@@ -15119,7 +15103,7 @@ function renderLeaves() {
   refreshLeaveWorkerFilter();
   
   document.querySelectorAll(".btn-add-leave").forEach(btn => btn.style.display = perm.applyLeave() ? "" : "none");
-  document.querySelectorAll(".btn-batch-rot").forEach(btn => btn.style.display = perm.applyLeave() ? "" : "none");
+  document.querySelectorAll(".btn-batch-rot").forEach(btn => btn.style.display = perm.batchRotational() ? "" : "none");
   
   const statsEl = document.getElementById("leaveStats");
   const pendingList = document.getElementById("leavePendingList");
@@ -15344,122 +15328,6 @@ function toggleLeaveRankShowAll() {
   renderLeaves();
 }
 
-function renderHolidayManage(container) {
-  if (!container) return;
-  
-  if (!perm.manageHolidays()) {
-    container.innerHTML = "";
-    return;
-  }
-  
-  const holidays = cache.holidays.sort((a, b) => a.date.localeCompare(b.date));
-  
-  container.innerHTML = `
-    <div class="card" style="grid-column:1/-1;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3>🎊 节假日管理</h3>
-        <button class="btn small primary" onclick="openHolidayForm()">+ 添加节假日</button>
-      </div>
-      <div style="overflow-x:auto;">
-        <table style="width:100%;border-collapse:collapse;">
-          <thead>
-            <tr style="border-bottom:1px solid #e5e7eb;">
-              <th style="text-align:left;padding:8px;font-size:12px;color:var(--muted);">日期</th>
-              <th style="text-align:left;padding:8px;font-size:12px;color:var(--muted);">名称</th>
-              <th style="text-align:center;padding:8px;font-size:12px;color:var(--muted);">类型</th>
-              <th style="text-align:right;padding:8px;font-size:12px;color:var(--muted);">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${holidays.map(h => `
-              <tr style="border-bottom:1px solid #f3f4f6;">
-                <td style="padding:8px;font-size:13px;">${esc(h.date)}</td>
-                <td style="padding:8px;font-size:13px;">${esc(h.name)}</td>
-                <td style="text-align:center;padding:8px;">
-                  <span style="padding:2px 8px;border-radius:4px;font-size:12px;${h.isWorkday ? 'background:#fef3c7;color:#92400e;' : 'background:#e0e7ff;color:#4338ca;'}">
-                    ${h.isWorkday ? '调休上班' : '节假日'}
-                  </span>
-                </td>
-                <td style="text-align:right;padding:8px;">
-                  <button class="btn small" onclick="deleteHoliday('${h.id}')">删除</button>
-                </td>
-              </tr>
-            `).join("")}
-            ${holidays.length === 0 ? `
-              <tr>
-                <td colspan="4" style="text-align:center;padding:20px;color:var(--muted);">暂无节假日设置</td>
-              </tr>
-            ` : ""}
-          </tbody>
-        </table>
-      </div>
-      <p style="font-size:12px;color:var(--muted);margin-top:12px;">
-        💡 提示：节假日会在计算请假天数时自动排除；调休上班日视为工作日。
-      </p>
-    </div>
-  `;
-  initCustomSelects(container);
-}
-
-function openHolidayForm() {
-  const today = todayStr();
-  const form = `
-    <div class="repair-form">
-      <div class="form-row">
-        <label>日期 *</label>
-        <input class="input" type="date" id="holidayDate" value="${today}" />
-      </div>
-      <div class="form-row">
-        <label>名称 *</label>
-        <input class="input" type="text" id="holidayName" placeholder="如：春节、元旦等" />
-      </div>
-      <div class="form-row">
-        <label>类型</label>
-        <select class="input" id="holidayIsWorkday">
-          <option value="false">节假日（休息）</option>
-          <option value="true">调休上班</option>
-        </select>
-      </div>
-      <div class="form-actions">
-        <button class="btn" onclick="modal.close()">取消</button>
-        <button class="btn primary" onclick="submitHolidayForm()">保存</button>
-      </div>
-    </div>
-  `;
-  modal.open("添加节假日", form);
-}
-
-async function submitHolidayForm() {
-  if (!perm.manageHolidays()) { toast("权限不足：无法管理节假日"); return; }
-  const date = document.getElementById("holidayDate").value;
-  const name = document.getElementById("holidayName").value.trim();
-  const isWorkday = document.getElementById("holidayIsWorkday").value === "true";
-  
-  if (!date) { toast("请选择日期"); return; }
-  if (!name) { toast("请输入名称"); return; }
-  
-  const existing = cache.holidays.find(h => h.date === date);
-  if (existing) {
-    if (!(await confirmDialog("该日期已存在节假日设置，确定覆盖吗？", "覆盖节假日"))) return;
-  }
-  
-  await repo.saveHoliday({ date, name, isWorkday });
-  await repo.loadAll();
-  renderLeaves();
-  modal.close();
-  toast("节假日已保存");
-}
-
-async function deleteHoliday(id) {
-  if (!perm.manageHolidays()) { toast("权限不足：无法管理节假日"); return; }
-  if (!(await confirmDialog("确定删除该节假日设置？", "删除节假日"))) return;
-  
-  await repo.deleteHoliday(id);
-  await repo.loadAll();
-  renderLeaves();
-  toast("节假日已删除");
-}
-
 function refreshLeaveWorkerFilter() {
   const filter = document.getElementById("leaveWorkerFilter");
   if (!filter) return;
@@ -15596,10 +15464,10 @@ function renderLeaveCard(record, showActions) {
             ${record.status === LEAVE_STATUS.PENDING && perm.rejectLeave() ? `
               <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
             ` : ""}
-            ${record.status === LEAVE_STATUS.APPROVED && perm.approveLeave() && record.endDate >= todayStr() ? `
+            ${record.status === LEAVE_STATUS.APPROVED && perm.approveLeave() && perm.withdrawLeave() && record.endDate >= todayStr() ? `
               <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回批准</button>
             ` : ""}
-            ${record.status === LEAVE_STATUS.REJECTED && perm.rejectLeave() ? `
+            ${record.status === LEAVE_STATUS.REJECTED && perm.rejectLeave() && perm.deleteLeave() ? `
               <button class="btn small danger" onclick="deleteLeaveRecord('${record.id}')">删除</button>
             ` : ""}
           ` : ""}
@@ -15689,6 +15557,7 @@ async function withdrawLeave(id) {
   if (!record) return;
   
   if (record.status === LEAVE_STATUS.APPROVED) {
+    if (!perm.withdrawLeave()) { toast("权限不足：无法撤回批准"); return; }
     // 已结束的休假（结束日期早于今天）不允许再撤回批准
     if (record.endDate && record.endDate < todayStr()) {
       toast("该休假已结束，不能撤回批准", "warn");
@@ -17909,7 +17778,7 @@ function registerSubmitGuards() {
     "saveWorker", "saveOutsourcedWorker", "saveWorkerSchedule",
     "saveStoreForm", "saveAcceptance", "saveUseVehicle", "saveReturnVehicle",
     "addWorkLog", "submitRepairOrder", "submitLeaveForm",
-    "saveWageConfigFromDialog", "saveInternalWorkLog", "saveNewInternalTask", "submitHolidayForm",
+    "saveWageConfigFromDialog", "saveInternalWorkLog", "saveNewInternalTask",
     // —— 新增：直接点击 / 下拉 / onchange 触发的云写操作（不走弹窗确认按钮，需函数级防重入）——
     // 项目生命周期 / 状态
     "deleteProject", "cancelProject", "pauseProject", "resumeProject",
@@ -17921,8 +17790,6 @@ function registerSubmitGuards() {
     // 门店 / 账号
     "removeStore", "changeAccountName", "changeAccountRole", "changeAccountStore", "deleteAccount",
     "openUserPermModal", "saveUserPerms",
-    // 节假日
-    "deleteHoliday",
     // 时间线快捷操作（自定义按钮，弹窗 _modalConfirmLock 不生效）
     "timelineQuickAssignWorker", "timelineUnassignWorker", "saveTimelineTaskTime",
     // 项目卡片「修改」快捷保存（自定义按钮，同上）
@@ -18040,7 +17907,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v62451a85";
+  const APP_VERSION = "v326910cb";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
