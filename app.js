@@ -573,17 +573,6 @@ function callPhone(event) {
   const raw = a.getAttribute("data-tel") || a.getAttribute("href") || "";
   const digits = raw.replace(/^tel[:]?\/?\/?/i, "").replace(/[^\d+]/g, "");
   if (!digits) { toast("没有可拨打的电话"); return; }
-  const ua = (navigator.userAgent || "").toLowerCase();
-  const isIOS = /iphone|ipad|ipod/.test(ua) && !/android/.test(ua);
-  const isStandalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
-  // 安卓 PWA（小米/华为等第三方浏览器的 standalone WebView）：不转发 tel:/intent:// 给系统
-  // 电话 app，硬跳会被当网页显示“网页不存在”。这是浏览器系统级限制，前端无法自动唤起拨号，
-  // 故直接复制号码 + 提示手动拨打，绝不产生 tel:// 网页。（iOS PWA 16.4+ 原生支持 tel:，浏览器
-  // 标签页也支持，两者仍走下面的真实拨号分支。）
-  if (isStandalone && !isIOS) {
-    copyPhone(digits);
-    return;
-  }
   try {
     window.location.href = "tel:" + digits;
     // location 跳转通常是同步离页（打开电话 app）；若没有离页，说明环境不支持 tel:，兜底复制
@@ -17250,6 +17239,19 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     });
   }
 
+  // 询问正在 waiting 的新 SW 真实版本号，再弹出更新横幅（横幅显示“新版本号”而非当前页旧版号）
+  function promptUpdateBanner() {
+    try {
+      if (swRegistration && swRegistration.waiting) {
+        const ch = new MessageChannel();
+        ch.port1.onmessage = (ev) => { if (ev.data && ev.data.version) showUpdateBanner(ev.data.version); };
+        swRegistration.waiting.postMessage({ type: "GET_VERSION" }, [ch.port2]);
+        return;
+      }
+    } catch (_) {}
+    showUpdateBanner(APP_VERSION);
+  }
+
   // 点击「立即更新」：通知等待中的新 Service Worker 立即接管（skipWaiting），
   // 接管后触发 controllerchange，由该处统一刷新页面，避免"刷新了但旧 SW 仍控制页面"的死循环。
   // 关键：reload 前先清掉所有 SW 缓存，确保刷新后从网络拿最新资源，
@@ -17257,30 +17259,30 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   function applyUpdate() {
     const bar = document.getElementById("swUpdateBar");
     if (bar) bar.remove();
-    const doReload = () => {
-      if (!refreshing) {
-        refreshing = true;
-        // 加 cache-busting 参数强制浏览器从网络拿最新 HTML（绕过 HTTP 缓存）
+    // 统一的硬刷新：清掉所有 SW 缓存后带 cache-busting 参数刷新，确保从网络拿最新资源。
+    // refreshing 标志防重复刷新（controllerchange 与兜底定时器只会触发一次）。
+    const hardReload = () => {
+      if (refreshing) return;
+      refreshing = true;
+      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).finally(() => {
         window.location.href = window.location.pathname + "?v=" + Date.now();
-      }
+      });
     };
     if (swRegistration && swRegistration.waiting) {
-      // 先清所有缓存（旧版本 app.js/styles.css 等），再让新 SW 接管
-      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).then(() => {
-        swRegistration.waiting.postMessage({ type: "SKIP_WAITING" });
-        setTimeout(doReload, 1500);
-      }).catch(() => {
-        swRegistration.waiting.postMessage({ type: "SKIP_WAITING" });
-        setTimeout(doReload, 1500);
-      });
+      // 仅通知等待中的新 SW 立即接管；刷新由 controllerchange 统一处理——
+      // 它会等“新 SW 已真正接管页面”之后才清缓存 + 硬刷，避免“SW 还没接管就提前硬刷、
+      // 导致 controller 仍是旧版、刷新后又误报更新”的死循环。
+      swRegistration.waiting.postMessage({ type: "SKIP_WAITING" });
+      // 兜底：极少数浏览器 skipWaiting 后不触发 controllerchange 时，4s 后手动刷新
+      setTimeout(hardReload, 4000);
     } else {
-      // 没有 waiting 的 SW（可能是同版本但缓存竞态）→ 直接清缓存 + 硬刷
-      caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).then(doReload).catch(doReload);
+      // 没有 waiting 的 SW（罕见路径）→ 直接清缓存硬刷
+      hardReload();
     }
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v0162033d";
+  const APP_VERSION = "vc915d7c4";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -17303,7 +17305,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
       // 检测到新版本：统一只弹常驻横幅，由用户点「立即更新」主动刷新。
       // 不再自动 location.reload() —— 自动刷新会把刚弹出的横幅冲掉（表现为“一闪就没”）。
       // 若一开始就存在等待激活的新 SW（如页面加载时已在 waiting），立即提示
-      if (registration.waiting) showUpdateBanner(APP_VERSION);
+      if (registration.waiting) promptUpdateBanner();
 
       // 检测到新版本：新 SW 进入 waiting 后提示更新（不自动刷新，等用户点「立即更新」）
       registration.addEventListener("updatefound", () => {
@@ -17311,7 +17313,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
         if (!newWorker) return;
         newWorker.addEventListener("statechange", () => {
           if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
-            showUpdateBanner(APP_VERSION);
+            promptUpdateBanner();
           }
         });
       });
