@@ -12282,13 +12282,35 @@ function initCustomSelect(selectEl) {
   }
 
   function onDocScrollResize() { positionDropdown(); }
+
+  /* 滚动任意可滚动祖先容器时，关闭下拉框（fixed 面板会停留在视口，
+     与滚动内容脱节，导致“悬浮到标题上方”等问题；关闭=原生行为） */
+  let _scrollAncestors = [];
+  function onAncestorScrollClose() { close(); }
+  function getScrollableAncestors(el) {
+    const list = [];
+    let node = el && el.parentElement;
+    while (node && node !== document.body) {
+      const style = window.getComputedStyle(node);
+      const overflow = style.overflow + style.overflowY + style.overflowX;
+      if (/auto|scroll|hidden/.test(overflow) && node.scrollHeight > node.clientHeight) {
+        list.push(node);
+      }
+      node = node.parentElement;
+    }
+    return list;
+  }
   function addDocListeners() {
     window.addEventListener("scroll", onDocScrollResize, true);
     window.addEventListener("resize", onDocScrollResize, true);
+    _scrollAncestors = getScrollableAncestors(wrapper);
+    _scrollAncestors.forEach(a => a.addEventListener("scroll", onAncestorScrollClose, true));
   }
   function removeDocListeners() {
     window.removeEventListener("scroll", onDocScrollResize, true);
     window.removeEventListener("resize", onDocScrollResize, true);
+    _scrollAncestors.forEach(a => a.removeEventListener("scroll", onAncestorScrollClose, true));
+    _scrollAncestors = [];
   }
 
   /** 打开 */
@@ -17907,7 +17929,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v326910cb";
+  const APP_VERSION = "v8b7f9e07";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
