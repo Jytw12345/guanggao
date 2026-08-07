@@ -573,6 +573,23 @@ function callPhone(event) {
   const raw = a.getAttribute("data-tel") || a.getAttribute("href") || "";
   const digits = raw.replace(/^tel[:]?\/?\/?/i, "").replace(/[^\d+]/g, "");
   if (!digits) { toast("没有可拨打的电话"); return; }
+  // 小米自带浏览器的 PWA（standalone）不转发 tel: scheme：哪怕用 JS 设 location.href='tel:'
+  // 也会被当网页 URL 打开，地址栏出现 tel:// 并提示“网页不存在”。此时改用 Android 的
+  // intent:// 机制唤起拨号界面；若 intent 仍不可用（被当网页或忽略），则复制号码并提示手动拨打。
+  const isStandalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
+  const ua = (navigator.userAgent || "").toLowerCase();
+  const isXiaomi = /miui|xiaomi|redmi|mibrowser|mi browser/.test(ua);
+  if (isStandalone && isXiaomi) {
+    try {
+      window.location.href = `intent://tel/${digits}#Intent;scheme=tel;action=android.intent.action.DIAL;end`;
+    } catch (_) {}
+    const t = setTimeout(() => { if (!document.hidden) copyPhone(digits); }, 1500);
+    document.addEventListener("visibilitychange", function onHide() {
+      if (document.hidden) clearTimeout(t);
+      document.removeEventListener("visibilitychange", onHide);
+    });
+    return;
+  }
   try {
     window.location.href = "tel:" + digits;
     // location 跳转通常是同步离页（打开电话 app）；若没有离页，说明环境不支持 tel:，兜底复制
@@ -17269,7 +17286,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vb3dffb29";
+  const APP_VERSION = "v1bef7682";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
