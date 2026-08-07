@@ -64,7 +64,7 @@
         <div class="dropdown-divider"></div>
         <div class="dropdown-item" onclick="exportProjects()">📋 导出项目数据</div>
         <div class="dropdown-item" onclick="exportWorkLogs()">📝 导出工时记录</div>
-        <div class="dropdown-item" onclick="exportLeaveRecords()">🏥 导出请假记录</div>
+        <div class="dropdown-item" onclick="exportLeaveRecords()">🏥 导出休假记录</div>
         <div class="dropdown-item" onclick="exportWorkers()">👷 导出施工人员</div>
         <div class="dropdown-item" onclick="exportStores()">🏪 导出门店数据</div>
         <div class="dropdown-divider"></div>
@@ -81,7 +81,7 @@
       <button class="tab-btn" data-tab="internalTasks">内部任务</button>
       <button class="tab-btn" data-tab="workers">施工人员</button>
       <button class="tab-btn" data-tab="schedules">个人日程</button>
-      <button class="tab-btn" data-tab="leaves">请假管理</button>
+      <button class="tab-btn" data-tab="leaves">休假管理</button>
       <button class="tab-btn" data-tab="stats">工时统计</button>
       <button class="tab-btn" data-tab="storeStats">店面统计</button>
       <button class="tab-btn" data-tab="outsourced">外协人员</button>
@@ -352,35 +352,52 @@
       <div id="rolePermList"></div>
     </section>
 
-    <!-- 请假管理 -->
+    <!-- 休假管理 -->
     <section id="leaves" class="tab-panel">
-      <div class="section-head">
-        <h2>请假管理</h2>
-        <div class="toolbar" style="margin-top:0;">
-          <select id="leaveStatusFilter" class="input" style="width:auto;">
-            <option value="">全部状态</option>
-            <option value="pending">待审批</option>
-            <option value="approved">已批准</option>
-            <option value="rejected">已拒绝</option>
-          </select>
-          <select id="leaveTypeFilter" class="input" style="width:auto;">
-            <option value="">全部类型</option>
-            <option value="personal">事假</option>
-            <option value="sick">病假</option>
-            <option value="annual">年假</option>
-            <option value="comp">调休</option>
-            <option value="rotational">轮休</option>
-            <option value="other">其他</option>
-          </select>
-          <select id="leaveWorkerFilter" class="input" style="width:auto;">
-            <option value="">全部人员</option>
-          </select>
+      <div class="section-head leave-head">
+        <h2>休假管理</h2>
+        <div class="leave-actions-mobile">
+          <button class="btn primary small btn-add-leave" id="btnAddLeave" style="display:none;" onclick="openLeaveForm()">+ 添加休假</button>
+          <button class="btn primary small btn-batch-rot" id="btnBatchRotational" style="display:none;" onclick="openBatchRotational()">🌴 批量轮休</button>
         </div>
       </div>
-      <div id="leaveStats" class="card-grid" style="margin-bottom:20px;"></div>
-      <div id="leavePendingList" class="card-grid" style="margin-bottom:20px;"></div>
-      <div id="leaveRecordList" class="card-grid" style="margin-bottom:20px;"></div>
-      <div id="holidayManage" class="card-grid"></div>
+      <div class="toolbar leave-filter-bar" style="margin-top:0;">
+        <select id="leaveRangeFilter" class="input">
+          <option value="month" selected>本月记录</option>
+          <option value="lastMonth">上月记录</option>
+          <option value="7">最近 7 天</option>
+          <option value="30">最近 30 天</option>
+          <option value="90">最近 90 天</option>
+          <option value="year">今年</option>
+          <option value="all">全部记录</option>
+        </select>
+        <select id="leaveStatusFilter" class="input">
+          <option value="">全部状态</option>
+          <option value="pending">待审批</option>
+          <option value="approved">已批准</option>
+          <option value="rejected">已拒绝</option>
+        </select>
+        <select id="leaveTypeFilter" class="input">
+          <option value="">全部类型</option>
+          <option value="personal">事假</option>
+          <option value="sick">病假</option>
+          <option value="annual">年假</option>
+          <option value="comp">调休</option>
+          <option value="rotational">轮休</option>
+          <option value="other">其他</option>
+        </select>
+        <select id="leaveWorkerFilter" class="input">
+          <option value="">全部人员</option>
+        </select>
+        <div class="leave-actions-desktop">
+          <button class="btn primary small btn-add-leave" onclick="openLeaveForm()">+ 添加休假</button>
+          <button class="btn primary small btn-batch-rot" onclick="openBatchRotational()">🌴 批量轮休</button>
+        </div>
+      </div>
+      <div id="leaveStats"></div>
+      <div id="leavePendingList" class="card-grid leave-card-grid" style="margin-bottom:20px;"></div>
+      <div id="leaveHistBar"></div>
+      <div id="leaveRecordList" class="card-grid leave-card-grid" style="margin-bottom:20px;"></div>
     </section>
 
     <!-- 个人日程 -->
@@ -432,7 +449,7 @@
       </div>
       <div class="veh-filter" id="vtFilterBar">
         <div class="veh-filter__row">
-          <select id="vtFilterVehicle" class="input veh-filter__sel" onchange="applyVtFilter()"></select>
+          <select id="vtFilterVehicle" class="input veh-filter__sel veh-filter__sel--vehicle" onchange="applyVtFilter()"></select>
           <select id="vtFilterDriver" class="input veh-filter__sel" onchange="applyVtFilter()"></select>
         </div>
         <div class="veh-filter__dates">

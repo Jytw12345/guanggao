@@ -249,7 +249,7 @@ const CAP_LABEL = {
   leave_apply: "申请请假",
   leave_approve: "批准请假",
   leave_reject: "拒绝请假",
-  leave_view_all: "查看所有请假记录",
+  leave_view_all: "查看所有休假记录",
   review_project: "审核项目",
   unreview_project: "反审核项目",
   accept_project: "验收项目",
@@ -265,7 +265,7 @@ const CAP_LABEL = {
   project_edit_hours_all: "修改所有项目预约工时",
   export_projects: "导出项目数据",
   export_worklogs: "导出工时记录",
-  export_leaves: "导出请假记录",
+  export_leaves: "导出休假记录",
   export_workers: "导出施工人员",
   export_stores: "导出门店数据",
   export_all: "导出全部数据",
@@ -295,7 +295,7 @@ const CAP_GROUPS = [
   { label: "项目预约", caps: ["project_create","project_edit_own","project_edit_all","project_edit_appointment_own","project_edit_appointment_all","project_edit_hours_own","project_edit_hours_all","project_delete_own","project_delete_all","project_view_all"] },
   { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","construction_log_work","construction_log_outsourced","worker_assign","worker_unassign"] },
   { label: "人员管理", caps: ["worker_add","worker_edit","worker_delete","worker_view","manage_outsourced"] },
-  { label: "请假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","manage_holidays"] },
+  { label: "休假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","manage_holidays"] },
   { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_complete"] },
   { label: "数据统计", caps: ["view_stats_global","view_stats_store"] },
   { label: "数据工具", caps: ["export_projects","export_worklogs","export_leaves","export_workers","export_stores","export_all","import_data","view_operation_logs"] },
@@ -3199,7 +3199,9 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
           leaveWidth = totalWidth - leaveLeft;
         }
       }
-      leaveBg += `<div class="tl-bg-leave" style="left:${leaveLeft}px; width:${Math.max(10, leaveWidth)}px; height:100%;"></div>`;
+      // 轮休（周末轮流休息）不是请假，用绿色底纹区分红色请假
+      const bgCls = lr.leaveType === "rotational" ? "tl-bg-rest" : "tl-bg-leave";
+      leaveBg += `<div class="${bgCls}" style="left:${leaveLeft}px; width:${Math.max(10, leaveWidth)}px; height:100%;"></div>`;
     });
     
     let scheduleBg = "";
@@ -3336,7 +3338,10 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     
     const dailyHours = getWorkerDailyHours(dateStr, w.id);
     const overloaded = isWorkerOverloaded(dateStr, w.id);
-    const leaveBadge = workerLeaves.length > 0 ? `<span class="tl-lane-leave-badge">🩹</span>` : "";
+    const hasRestRec = workerLeaves.some((lr) => lr.leaveType === "rotational");
+    const hasLeaveRec = workerLeaves.some((lr) => lr.leaveType !== "rotational");
+    const leaveBadge = (hasRestRec ? `<span class="tl-lane-rest-badge" title="轮休（周末休息）">🌴</span>` : "")
+      + (hasLeaveRec ? `<span class="tl-lane-leave-badge" title="请假">🩹</span>` : "");
     const scheduleBadge = workerSchedules.length > 0 ? `<span class="tl-lane-schedule-badge">${svgCal(12)}</span>` : "";
     const loadBadge = overloaded ? `<span class="tl-lane-overload-badge" title="工时偏多：当天累计 ${fmtHours(dailyHours)}h，满勤容忍至 ${DAILY_WORK_HOURS_WARN}h">${fmtHours(dailyHours)}h</span>` : "";
     if (overloaded) overloadNames.push(`${esc(w.name)}（${fmtHours(dailyHours)}h）`);
@@ -3366,20 +3371,30 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     return dateFilter >= sd && dateFilter <= ed;
   });
   
+  // 轮休 ≠ 请假：拆成两块分别展示（轮休绿色「休息」，请假红色「不在岗」）
+  const dayRestRecords = dayLeaveRecords.filter((lr) => lr.leaveType === "rotational");
+  const dayRealLeaves = dayLeaveRecords.filter((lr) => lr.leaveType !== "rotational");
+  const renderLeaveLine = (lr, rest) => {
+    const w = getWorker(lr.workerId);
+    const extra = rest ? "" : (lr.reason ? ` · ${esc(lr.reason)}` : "");
+    return `<div class="tl-day-off__row">
+      <span>${esc(w ? w.name : lr.workerName || "未知")} · ${formatLeaveTime(lr)}${extra}</span>
+      <button class="btn small danger tl-day-off__del" onclick="deleteLeaveRecord('${lr.id}')">删除</button>
+    </div>`;
+  };
   let leaveSection = "";
-  if (dayLeaveRecords.length > 0) {
-    leaveSection = `
-      <div class="tl-leave-section" style="margin-top:16px; padding:12px; background:#fef2f2; border-radius:8px; border-left:4px solid #ef4444;">
-        <div style="font-weight:600; color:#dc2626; margin-bottom:8px;">🌴 ${dateStr} 请假人员</div>
-        <div style="display:flex; flex-direction:column; gap:6px;">
-          ${dayLeaveRecords.map((lr) => {
-            const w = getWorker(lr.workerId);
-            return `<div style="font-size:13px; display:flex; justify-content:space-between; align-items:center;">
-              <span>${esc(w ? w.name : lr.workerName || "未知")} · ${formatLeaveTime(lr)}${lr.reason ? ` · ${esc(lr.reason)}` : ""}</span>
-              <button class="btn small danger" onclick="deleteLeaveRecord('${lr.id}')" style="padding:2px 6px; font-size:12px;">删除</button>
-            </div>`;
-          }).join("")}
-        </div>
+  if (dayRestRecords.length > 0) {
+    leaveSection += `
+      <div class="tl-rest-section tl-rest-section--day">
+        <div class="tl-rest-header">🌴 ${dateStr} 轮休 ${dayRestRecords.length} 人（周末休息，非请假）</div>
+        <div class="tl-day-off__list">${dayRestRecords.map((lr) => renderLeaveLine(lr, true)).join("")}</div>
+      </div>`;
+  }
+  if (dayRealLeaves.length > 0) {
+    leaveSection += `
+      <div class="tl-leave-section tl-leave-section--day">
+        <div class="tl-leave-header">🏥 ${dateStr} 请假 ${dayRealLeaves.length} 人</div>
+        <div class="tl-day-off__list">${dayRealLeaves.map((lr) => renderLeaveLine(lr, false)).join("")}</div>
       </div>`;
   }
   
@@ -3460,7 +3475,7 @@ function renderWorkerScheduleForWorker(dateStr) {
           <button class="btn small ${isToday ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${todayStr}')">今天</button>
           <button class="btn small ${isTomorrow ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${tomorrowStr}')">明天</button>
           <button class="btn small ${isDayAfter ? 'primary' : ''}" onclick="renderWorkerScheduleForWorker('${dayAfterStr}')">后天</button>
-          ${workerId && perm.applyLeave() ? `<button class="btn small" onclick="openLeaveForm('${workerId}')" style="background:#ef4444;color:#fff">🌴 请假</button>` : ""}
+          ${workerId && perm.applyLeave() ? `<button class="btn small" onclick="openLeaveForm('${workerId}')" style="background:#ef4444;color:#fff">🏥 请假</button>` : ""}
         </div>
       </div>
       ${overdueWarn}
@@ -4075,7 +4090,7 @@ function newWorkerScheduleForWorker(workerId) {
   if (!perm.addSchedule()) { toast("无「添加日程」权限"); return; }
   const w = getWorker(workerId);
   if (!w) return;
-  modal.open(`为 ${w.name} 添加日程`, workerScheduleForm({ workerId, workerName: w.name }));
+  modal.open(`为 ${esc(w.name)} 添加日程`, workerScheduleForm({ workerId, workerName: w.name }));
   toggleAllDaySchedule();
 }
 
@@ -4240,28 +4255,35 @@ const LEAVE_STATUS_LABEL = {
 
 function openLeaveForm(workerId) {
   if (!perm.applyLeave()) { toast("权限不足：无法申请请假"); return; }
-  const w = getWorker(workerId);
-  if (!w) return;
+  const w = workerId ? getWorker(workerId) : null;
+  if (workerId && !w) return;
   const today = dateKey(new Date());
   const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return dateKey(d); })();
+  const workerSelect = w ? "" : `
+    <select class="input" id="leaveWorkerSelect" required>
+      <option value="">请选择施工人员</option>
+      ${cache.workers.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("")}
+    </select>`;
   const form = `
     <div class="repair-form">
-      <div class="form-row">
-        <label>施工人员</label>
-        <div class="input" style="background:#f3f4f6;cursor:not-allowed;">${esc(w.name)}</div>
-        <input type="hidden" id="leaveWorkerId" value="${esc(workerId)}" />
-        <input type="hidden" id="leaveWorkerName" value="${esc(w.name)}" />
-      </div>
-      <div class="form-row">
-        <label>请假类型 *</label>
-        <select class="input" id="leaveType">
-          <option value="personal">事假</option>
-          <option value="sick">病假</option>
-          <option value="annual">年假</option>
-          <option value="comp">调休</option>
-          <option value="rotational">轮休</option>
-          <option value="other">其他</option>
-        </select>
+      <div class="form-row-cols">
+        <div class="form-row">
+          <label>施工人员 *</label>
+          ${w ? `<div class="input" style="background:#f3f4f6;cursor:not-allowed;">${esc(w.name)}</div>` : workerSelect}
+          <input type="hidden" id="leaveWorkerId" value="${esc(w ? w.id : "")}" />
+          <input type="hidden" id="leaveWorkerName" value="${esc(w ? w.name : "")}" />
+        </div>
+        <div class="form-row">
+          <label>请假类型 *</label>
+          <select class="input" id="leaveType">
+            <option value="personal">事假</option>
+            <option value="sick">病假</option>
+            <option value="annual">年假</option>
+            <option value="comp">调休</option>
+            <option value="rotational">轮休</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
       </div>
       <div class="form-row" id="leaveQuotaHint" style="display:none;background:#fef3c7;border-left:3px solid #f59e0b;padding:10px 15px;border-radius:4px;">
         <span style="font-weight:bold;color:#f59e0b">⚠️ 额度提示：</span>
@@ -4280,15 +4302,14 @@ function openLeaveForm(workerId) {
         </div>
       </div>
       
-      <div class="form-row">
+      <div class="form-row leave-datetime-block">
         <label>${svgCal(14)} 开始时间 *</label>
         <div class="leave-datetime-row">
           <input class="input" type="date" id="leaveStartDate" value="${today}" min="${today}" />
           <input class="input" type="time" id="leaveStartTime" value="08:00" />
         </div>
       </div>
-      
-      <div class="form-row">
+      <div class="form-row leave-datetime-block">
         <label>${svgCal(14)} 结束时间 *</label>
         <div class="leave-datetime-row">
           <input class="input" type="date" id="leaveEndDate" value="${tomorrow}" min="${today}" />
@@ -4318,7 +4339,17 @@ function openLeaveForm(workerId) {
         <button class="btn primary" onclick="submitLeaveForm()">提交请假申请</button>
       </div>
     </div>`;
-  modal.open(`${svgCal(18)} 请假申请`, form);
+  modal.open(`${svgCal(18)} ${w ? "请假申请" : "添加休假"}`, form);
+  const workerSelectEl = document.getElementById("leaveWorkerSelect");
+  if (workerSelectEl) {
+    workerSelectEl.addEventListener("change", function() {
+      const selectedWorker = getWorker(this.value);
+      document.getElementById("leaveWorkerId").value = selectedWorker ? selectedWorker.id : "";
+      document.getElementById("leaveWorkerName").value = selectedWorker ? selectedWorker.name : "";
+      checkLeaveQuotaAndConflict();
+      updateLeaveCalendarPreview();
+    });
+  }
   document.getElementById("leaveStartDate").addEventListener("change", function() {
     updateLeaveEndDateMin();
     updateLeaveDuration();
@@ -4650,6 +4681,7 @@ async function submitLeaveForm() {
   if (!perm.applyLeave()) { toast("权限不足：无法提交请假申请"); return; }
   const workerId = document.getElementById("leaveWorkerId").value;
   const workerName = document.getElementById("leaveWorkerName").value;
+  if (!workerId || !workerName) { toast("请选择施工人员"); return; }
   const leaveType = document.getElementById("leaveType").value;
   const startDate = document.getElementById("leaveStartDate").value;
   const startTime = document.getElementById("leaveStartTime").value;
@@ -4695,15 +4727,364 @@ async function submitLeaveForm() {
   }
 }
 
+/* 批量轮休排班：按周手动指定周六/周日各一人，一键生成两条轮休记录（免审批） */
+function getWeekSaturdaySunday(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  const day = d.getDay(); // 0=周日,1=周一…6=周六
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d); monday.setDate(d.getDate() + mondayOffset);
+  const sat = new Date(monday); sat.setDate(monday.getDate() + 5);
+  const sun = new Date(monday); sun.setDate(monday.getDate() + 6);
+  return { sat, sun };
+}
+
+function readRotMemory(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+
+function rotWorkerPicker(group, selectedIds) {
+  if (!cache.workers.length) return `<div class="rot-pick__empty">暂无人员</div>`;
+  return cache.workers.map(w => {
+    const on = selectedIds.includes(w.id) ? " checked" : "";
+    return `<label class="rot-pick__item"><input type="checkbox" data-rot-group="${group}" value="${esc(w.id)}"${on} onchange="updateBatchRotPreview()" /><span>${esc(w.name)}</span></label>`;
+  }).join("");
+}
+
+function getRotSelected(group) {
+  return [...document.querySelectorAll(`input[data-rot-group="${group}"]:checked`)].map(el => el.value);
+}
+
+function clearRotGroup(group) {
+  document.querySelectorAll(`input[data-rot-group="${group}"]`).forEach(el => { el.checked = false; });
+  updateBatchRotPreview();
+}
+
+/* ===== 自定义日期模式（长假 / 不连续调休） ===== */
+let rotMode = "weekend";      // weekend | custom
+let rotPlanBatches = [];      // [{ ids:[], dates:[], note:"" }]
+
+const ROT_WEEK_CN = ["日", "一", "二", "三", "四", "五", "六"];
+
+function switchRotMode(mode) {
+  rotMode = mode;
+  document.querySelectorAll("[data-rot-tab]").forEach(btn => {
+    btn.classList.toggle("is-on", btn.getAttribute("data-rot-tab") === mode);
+  });
+  const pw = document.getElementById("rotPaneWeekend");
+  const pc = document.getElementById("rotPaneCustom");
+  if (pw) pw.hidden = mode !== "weekend";
+  if (pc) pc.hidden = mode !== "custom";
+  updateBatchRotPreview();
+}
+
+/* 按起止日期铺出可点选的日期药丸，保留已勾选项 */
+function buildRotDateChips() {
+  const box = document.getElementById("rotDateChips");
+  const sEl = document.getElementById("rotRangeStart");
+  const eEl = document.getElementById("rotRangeEnd");
+  if (!box || !sEl || !eEl) return;
+  const keep = new Set(getRotDates());
+  const s = sEl.value, e = eEl.value;
+  if (!s || !e) { box.innerHTML = `<div class="rot-pick__empty">请先选择日期范围</div>`; updateRotDateCount(); return; }
+  if (e < s) { box.innerHTML = `<div class="rot-pick__empty">结束日期不能早于开始日期</div>`; updateRotDateCount(); return; }
+  const start = new Date(`${s}T00:00:00`);
+  const end = new Date(`${e}T00:00:00`);
+  const span = Math.round((end - start) / 86400000) + 1;
+  if (span > 62) { box.innerHTML = `<div class="rot-pick__empty">日期范围过大（${span} 天），请控制在 62 天内</div>`; updateRotDateCount(); return; }
+  let html = "";
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const key = dateKey(d);
+    const wd = d.getDay();
+    const isWeekend = wd === 0 || wd === 6;
+    const on = keep.has(key) ? " checked" : "";
+    html += `<label class="rot-date${isWeekend ? " rot-date--we" : ""}"><input type="checkbox" data-rot-date="${key}"${on} onchange="updateRotDateCount()" /><span class="rot-date__d">${d.getMonth() + 1}/${d.getDate()}</span><span class="rot-date__w">周${ROT_WEEK_CN[wd]}</span></label>`;
+  }
+  box.innerHTML = html;
+  updateRotDateCount();
+}
+
+function getRotDates() {
+  return [...document.querySelectorAll('input[data-rot-date]:checked')].map(el => el.getAttribute("data-rot-date")).sort();
+}
+
+function rotDateQuick(kind) {
+  document.querySelectorAll("input[data-rot-date]").forEach(el => {
+    const key = el.getAttribute("data-rot-date");
+    const wd = new Date(`${key}T00:00:00`).getDay();
+    if (kind === "all") el.checked = true;
+    else if (kind === "none") el.checked = false;
+    else if (kind === "weekend") el.checked = (wd === 0 || wd === 6);
+  });
+  updateRotDateCount();
+}
+
+function updateRotDateCount() {
+  const el = document.getElementById("rotDateCount");
+  if (el) el.textContent = `已选 ${getRotDates().length} 天`;
+  updateBatchRotPreview();
+}
+
+/* 把「当前勾选的人员 + 日期」作为一批加入清单，支持不同人休不同天 */
+function addRotBatch() {
+  const ids = getRotSelected("custom");
+  const dates = getRotDates();
+  if (!ids.length) { toast("请先勾选轮休人员"); return; }
+  if (!dates.length) { toast("请先勾选休息日期"); return; }
+  const noteEl = document.getElementById("rotCustomNote");
+  const note = noteEl ? noteEl.value.trim() : "";
+  rotPlanBatches.push({ ids: [...ids], dates: [...dates], note });
+  // 清空当前勾选，方便继续排下一批人
+  document.querySelectorAll('input[data-rot-group="custom"]').forEach(el => { el.checked = false; });
+  document.querySelectorAll("input[data-rot-date]").forEach(el => { el.checked = false; });
+  updateRotDateCount();
+  renderRotPlanList();
+  updateBatchRotPreview();
+  toast(`已加入清单：${rotNames(ids).join("、")} 休 ${dates.length} 天`);
+}
+
+function removeRotBatch(idx) {
+  rotPlanBatches.splice(idx, 1);
+  renderRotPlanList();
+  updateBatchRotPreview();
+}
+
+function fmtRotDates(dates) {
+  return dates.map(d => { const x = new Date(`${d}T00:00:00`); return `${x.getMonth() + 1}/${x.getDate()}`; }).join("、");
+}
+
+function renderRotPlanList() {
+  const box = document.getElementById("rotPlanList");
+  if (!box) return;
+  if (!rotPlanBatches.length) {
+    box.innerHTML = `<div class="rot-plan__empty">清单为空。可直接勾选人员+日期后点「生成」，也可多次「加入清单」后一起生成。</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="rot-plan__head">排班清单（${rotPlanBatches.length} 批）</div>` + rotPlanBatches.map((b, i) => `
+    <div class="rot-plan__row">
+      <div class="rot-plan__txt"><b>${esc(rotNames(b.ids).join("、"))}</b><span class="rot-plan__days">休 ${b.dates.length} 天</span><span class="rot-plan__dates">${esc(fmtRotDates(b.dates))}</span>${b.note ? `<span class="rot-plan__note">${esc(b.note)}</span>` : ""}</div>
+      <button type="button" class="rot-plan__del" onclick="removeRotBatch(${i})">移除</button>
+    </div>`).join("");
+}
+
+/* 汇总自定义模式的最终计划（清单 + 当前未加入清单的勾选），并按 人+日期 去重 */
+function collectRotCustomPlan() {
+  const batches = [...rotPlanBatches];
+  const curIds = getRotSelected("custom");
+  const curDates = getRotDates();
+  if (curIds.length && curDates.length) {
+    const noteEl = document.getElementById("rotCustomNote");
+    batches.push({ ids: curIds, dates: curDates, note: noteEl ? noteEl.value.trim() : "" });
+  }
+  const seen = new Set();
+  const plan = [];
+  batches.forEach(b => {
+    b.ids.forEach(id => b.dates.forEach(date => {
+      const k = `${id}|${date}`;
+      if (seen.has(k)) return;
+      seen.add(k);
+      plan.push({ id, date, note: b.note });
+    }));
+  });
+  return plan;
+}
+
+function openBatchRotational() {
+  if (!perm.applyLeave()) { toast("权限不足：无法设置轮休"); return; }
+  rotMode = "weekend";
+  rotPlanBatches = [];
+  // 默认选「即将到来的周六」所在周
+  const today = new Date();
+  let { sat, sun } = getWeekSaturdaySunday(dateKey(today));
+  if (sat < new Date(dateKey(today) + "T00:00:00")) {
+    sat.setDate(sat.getDate() + 7); sun.setDate(sun.getDate() + 7);
+  }
+  const satStr = dateKey(sat);
+  const lastSat = readRotMemory("lastRotSat");
+  const lastSun = readRotMemory("lastRotSun");
+  const rangeEndD = new Date(today); rangeEndD.setDate(rangeEndD.getDate() + 13);
+  const form = `
+    <div class="repair-form">
+      <div class="rot-tabs">
+        <button type="button" class="rot-tab is-on" data-rot-tab="weekend" onclick="switchRotMode('weekend')">周末轮休</button>
+        <button type="button" class="rot-tab" data-rot-tab="custom" onclick="switchRotMode('custom')">自定义日期（长假/调休）</button>
+      </div>
+
+      <div id="rotPaneWeekend">
+        <div class="form-row">
+          <label>轮休周（选任意一天即可）</label>
+          <input class="input" type="date" id="batchRotWeek" value="${satStr}" onchange="updateBatchRotPreview()" />
+        </div>
+        <div class="form-row" id="batchRotWeekHint" style="background:#f0f9ff;border-left:3px solid var(--primary);padding:10px 15px;border-radius:4px;color:#334155;"></div>
+        <div class="form-row">
+          <label class="rot-pick__label">周六轮休人员（可多选）<span class="rot-pick__tools"><span id="batchRotSatCount">已选 0 人</span><button type="button" class="rot-pick__clear" onclick="clearRotGroup('sat')">清空</button></span></label>
+          <div class="rot-pick" id="batchRotSat">${rotWorkerPicker("sat", lastSat)}</div>
+        </div>
+        <div class="form-row">
+          <label class="rot-pick__label">周日轮休人员（可多选）<span class="rot-pick__tools"><span id="batchRotSunCount">已选 0 人</span><button type="button" class="rot-pick__clear" onclick="clearRotGroup('sun')">清空</button></span></label>
+          <div class="rot-pick" id="batchRotSun">${rotWorkerPicker("sun", lastSun)}</div>
+        </div>
+      </div>
+
+      <div id="rotPaneCustom" hidden>
+        <div class="form-row">
+          <label>日期范围（铺出可选日期）</label>
+          <div class="rot-range">
+            <input class="input" type="date" id="rotRangeStart" value="${dateKey(today)}" onchange="buildRotDateChips()" />
+            <span class="rot-range__sep">至</span>
+            <input class="input" type="date" id="rotRangeEnd" value="${dateKey(rangeEndD)}" onchange="buildRotDateChips()" />
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="rot-pick__label">休息日期（可任意点选，不必连续）<span class="rot-pick__tools"><span id="rotDateCount">已选 0 天</span><button type="button" class="rot-pick__clear" onclick="rotDateQuick('all')">全选</button><button type="button" class="rot-pick__clear" onclick="rotDateQuick('weekend')">仅周末</button><button type="button" class="rot-pick__clear" onclick="rotDateQuick('none')">清空</button></span></label>
+          <div class="rot-dates" id="rotDateChips"></div>
+        </div>
+        <div class="form-row">
+          <label class="rot-pick__label">轮休人员（可多选）<span class="rot-pick__tools"><span id="rotCustomCount">已选 0 人</span><button type="button" class="rot-pick__clear" onclick="clearRotGroup('custom')">清空</button></span></label>
+          <div class="rot-pick" id="batchRotCustom">${rotWorkerPicker("custom", [])}</div>
+        </div>
+        <div class="form-row">
+          <label>备注（可选，写入记录）</label>
+          <input class="input" type="text" id="rotCustomNote" placeholder="如：国庆假期轮休" />
+        </div>
+        <div class="form-row rot-addbar">
+          <button type="button" class="btn" onclick="addRotBatch()">➕ 加入排班清单</button>
+          <span class="rot-addbar__hint">同一批人休相同日期；不同人休不同天，就分批加入清单</span>
+        </div>
+        <div class="form-row rot-plan" id="rotPlanList"></div>
+      </div>
+
+      <div class="form-row" id="batchRotPreview" style="background:#f8fafc;border-radius:6px;padding:10px 12px;font-size:13px;color:#475569;"></div>
+      <div class="form-actions">
+        <button class="btn" onclick="modal.close()">取消</button>
+        <button class="btn primary" onclick="submitBatchRotational()">生成轮休记录</button>
+      </div>
+    </div>`;
+  modal.open("🌴 批量轮休排班", form);
+  buildRotDateChips();
+  renderRotPlanList();
+  updateBatchRotPreview();
+}
+
+function rotNames(ids) {
+  return ids.map(id => { const w = getWorker(id); return w ? w.name : ""; }).filter(Boolean);
+}
+
+function updateBatchRotPreview() {
+  const prev = document.getElementById("batchRotPreview");
+  const weekEl = document.getElementById("batchRotWeek");
+  if (!weekEl) return;
+
+  // 自定义日期模式
+  if (rotMode === "custom") {
+    const cCount = document.getElementById("rotCustomCount");
+    if (cCount) cCount.textContent = `已选 ${getRotSelected("custom").length} 人`;
+    if (!prev) return;
+    const plan = collectRotCustomPlan();
+    if (!plan.length) {
+      prev.innerHTML = `请勾选休息日期与人员（不同人休不同天时，分批「加入排班清单」）`;
+      return;
+    }
+    const byWorker = {};
+    plan.forEach(p => { (byWorker[p.id] = byWorker[p.id] || []).push(p.date); });
+    const lines = Object.keys(byWorker).map(id => {
+      const w = getWorker(id);
+      const ds = byWorker[id].sort();
+      return `· <b>${esc(w ? w.name : "未知")}</b> 休 ${ds.length} 天：${esc(fmtRotDates(ds))}`;
+    });
+    prev.innerHTML = `将生成 <b>${plan.length}</b> 条轮休记录：<br>${lines.join("<br>")}`;
+    return;
+  }
+
+  // 周末轮休模式
+  const hint = document.getElementById("batchRotWeekHint");
+  const { sat, sun } = getWeekSaturdaySunday(weekEl.value);
+  if (hint) hint.textContent = `本周末：${sat.getMonth() + 1}月${sat.getDate()}日（周六） / ${sun.getMonth() + 1}月${sun.getDate()}日（周日）`;
+  const satIds = getRotSelected("sat");
+  const sunIds = getRotSelected("sun");
+  const satCount = document.getElementById("batchRotSatCount");
+  const sunCount = document.getElementById("batchRotSunCount");
+  if (satCount) satCount.textContent = `已选 ${satIds.length} 人`;
+  if (sunCount) sunCount.textContent = `已选 ${sunIds.length} 人`;
+  if (prev) {
+    const satNames = rotNames(satIds);
+    const sunNames = rotNames(sunIds);
+    const total = satNames.length + sunNames.length;
+    if (!total) {
+      prev.innerHTML = `请勾选轮休人员（周六、周日可分别多选，也可只排其中一天）`;
+    } else {
+      prev.innerHTML = `将生成 <b>${total}</b> 条轮休记录：<br>`
+        + `· ${sat.getMonth() + 1}月${sat.getDate()}日（周六）— <b>${satNames.length ? esc(satNames.join("、")) : "无"}</b><br>`
+        + `· ${sun.getMonth() + 1}月${sun.getDate()}日（周日）— <b>${sunNames.length ? esc(sunNames.join("、")) : "无"}</b>`;
+    }
+  }
+}
+
+async function submitBatchRotational() {
+  try {
+    if (!perm.applyLeave()) { toast("权限不足"); return; }
+    let plan = [];
+    let satIds = [], sunIds = [];
+    if (rotMode === "custom") {
+      plan = collectRotCustomPlan();
+      if (!plan.length) { toast("请勾选休息日期与轮休人员"); return; }
+    } else {
+      const weekEl = document.getElementById("batchRotWeek");
+      satIds = getRotSelected("sat");
+      sunIds = getRotSelected("sun");
+      if (!satIds.length && !sunIds.length) { toast("请至少勾选一位轮休人员"); return; }
+      const { sat, sun } = getWeekSaturdaySunday(weekEl.value);
+      const satStr = dateKey(sat), sunStr = dateKey(sun);
+      plan = [
+        ...satIds.map(id => ({ id, date: satStr })),
+        ...sunIds.map(id => ({ id, date: sunStr })),
+      ];
+    }
+    let created = 0;
+    let skipped = [];
+    for (const p of plan) {
+      const w = getWorker(p.id);
+      if (!w) continue;
+      // 幂等：同日同人已有轮休记录则跳过，避免重复生成
+      const dup = cache.leaveRecords.find(r => r.workerId === p.id && r.leaveType === "rotational" && r.startDate === p.date);
+      if (dup) { skipped.push(`${w.name}(${p.date})`); continue; }
+      const [st, et] = inferLeaveType("08:00", "18:00");
+      await repo.saveLeaveRecord({
+        workerId: p.id, workerName: w.name, leaveType: "rotational",
+        startDate: p.date, startTime: "08:00", startType: st,
+        endDate: p.date, endTime: "18:00", endType: et,
+        reason: p.note || "轮休", status: LEAVE_STATUS.APPROVED,
+      });
+      created++;
+    }
+    if (rotMode !== "custom") {
+      localStorage.setItem("lastRotSat", JSON.stringify(satIds));
+      localStorage.setItem("lastRotSun", JSON.stringify(sunIds));
+    }
+    rotPlanBatches = [];
+    await repo.loadAll();
+    modal.close();
+    renderAll();
+    toast(skipped.length ? `已生成 ${created} 条轮休，${skipped.length} 条重复已跳过` : `已生成 ${created} 条轮休记录`);
+  } catch (e) {
+    console.error("批量轮休失败:", e);
+    toast("生成失败：" + (e.message || "请重试"));
+  }
+}
+
 async function deleteLeaveRecord(id) {
   try {
     if (!perm.manageLeaves()) { toast("权限不足"); return; }
-    if (!(await confirmDialog("确定删除该请假记录？", "删除请假记录"))) return;
+    if (!(await confirmDialog("确定删除该休假记录？", "删除休假记录"))) return;
     await repo.deleteLeaveRecord(id);
     renderAll();
-    toast("请假记录已删除");
+    toast("休假记录已删除");
   } catch (e) {
-    console.error("删除请假记录失败:", e);
+    console.error("删除休假记录失败:", e);
     toast("删除失败：" + (e.message || "请重试"));
   }
 }
@@ -4978,7 +5359,7 @@ function renderProjects() {
             ${!workingTooLong && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
             ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
             ${p.timeModified ? `<span class="badge modified">✏️ 已改点</span>` : ""}
-            ${leaveConflicts.length > 0 ? `<span class="badge danger">⚠️ 人员请假</span>` : ""}
+            ${leaveConflicts.length > 0 ? `<span class="badge danger">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
           </div>
         </div>
 
@@ -5051,7 +5432,7 @@ function renderProjects() {
 
         ${leaveConflicts.length > 0 ? `
           <div class="card-row card-row--warn">
-            <span>⚠️ 施工人员请假</span><b>${leaveConflicts.map(r => `${esc(r.workerName)}(${r.startDate}~${r.endDate})`).join("、")}</b>
+            <span>⚠️ 施工人员不在岗</span><b>${leaveConflicts.map(r => `${esc(r.workerName)}(${r.leaveType === "rotational" ? "轮休" : "请假"} ${r.startDate}~${r.endDate})`).join("、")}</b>
           </div>
         ` : ""}
 
@@ -5346,7 +5727,7 @@ function showProjectContent(id) {
       <div class="proj-content-detail__label" style="margin-top:16px;">💬 注意事项</div>
       <div class="proj-content-detail__note">${linkifyPhones(p.note)}</div>
     </div>`;
-  modal.open(`${esc(p.name)} · 施工内容`, html);
+  modal.open(`${esc(p.name)} · 施工内容`, html, { closeOnMask: true });
 }
 
 function switchAssignTab(btn) {
@@ -6211,7 +6592,10 @@ function renderConstruction() {
       const leaveRecord = startDateStr ? getProjectLeaveConflict(w.id, startDateStr, endDateStr || startDateStr) : null;
       const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
       const disabledAttr = hasLeaveConflict ? ` disabled` : "";
-      return `<option value="${w.id}"${disabledAttr}>${esc(w.name)}${hasLeaveConflict ? " 🌴 请假中" : ""}</option>`;
+      const conflictTag = hasLeaveConflict
+        ? (leaveRecord && leaveRecord.leaveType === "rotational" ? " 🌴 轮休中" : " 🏥 请假中")
+        : "";
+      return `<option value="${w.id}"${disabledAttr}>${esc(w.name)}${conflictTag}</option>`;
     }).join("");
   const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).filter(n => n.trim());
   const allChips = [...(assignedChips ? assignedChips : ""), ...outsourcedNames.map(n =>
@@ -7127,7 +7511,8 @@ async function assignWorker(pid) {
     
     if (hasLeaveConflict) {
       const w = getWorker(wid);
-      toast(`${w ? w.name : "该人员"} 在此时间段正在请假，无法分配！\n请假时段：${formatLeaveTime(leaveRecord)}`);
+      const offWord = leaveRecord.leaveType === "rotational" ? "轮休" : "请假";
+      toast(`${w ? w.name : "该人员"} 在此时间段${offWord}，无法分配！\n${offWord}时段：${formatLeaveTime(leaveRecord)}`);
       return;
     }
     
@@ -8800,7 +9185,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
         description += `<div class="sched-rest-inline">🌴 轮休 ${restNames.length}人：${restNames.join("、")} 今日休息</div>`;
       }
       if (leaveNames.length > 0) {
-        description += `<div class="sched-leave-inline">🌴 请假 ${leaveNames.length}人：${leaveNames.join("、")} 今日不在岗</div>`;
+        description += `<div class="sched-leave-inline">🏥 请假 ${leaveNames.length}人：${leaveNames.join("、")} 今日不在岗</div>`;
       }
     }
     
@@ -10360,7 +10745,7 @@ function collectStats() {
       const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
       const key = l.workerId || l.workerName || l.id;
       if (!rows[key]) {
-        rows[key] = { name: l.workerName || "未知", hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced: false };
+        rows[key] = { name: l.workerName || "未知", hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
       }
       if (isOutsourced) rows[key].isOutsourced = true;
       const level = l.level || "中级";
@@ -10383,7 +10768,7 @@ function collectStats() {
     const key = l.workerId || l.workerName || l.id;
     if (!rows[key]) {
       const w = getWorker(l.workerId);
-      rows[key] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced: false };
+      rows[key] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
     }
     const level = l.level || "中级";
     const hours = Number(l.hours) || 0;
@@ -10403,17 +10788,21 @@ function collectStats() {
     if (workerFilter && l.workerId !== workerFilter) return;
     if (!rows[l.workerId]) {
       const w = getWorker(l.workerId);
-      rows[l.workerId] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], isOutsourced: false };
+      rows[l.workerId] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
     }
+    // 轮休属于正常周末休息，与真正的请假分开统计（与请假管理页口径一致）
+    const isRest = l.leaveType === "rotational";
     const start = new Date(l.startDate);
     const end = new Date(l.endDate);
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const dateKey = fmtDate(d);
       if (!isInPeriod(dateKey)) continue;
-      rows[l.workerId].leaveDays.add(dateKey);
+      if (isRest) rows[l.workerId].restDays.add(dateKey);
+      else rows[l.workerId].leaveDays.add(dateKey);
     }
     if (!month || isInPeriod(l.startDate) || isInPeriod(l.endDate)) {
-      rows[l.workerId].leaveRecords.push(l);
+      if (isRest) rows[l.workerId].restRecords.push(l);
+      else rows[l.workerId].leaveRecords.push(l);
     }
   });
   
@@ -10426,6 +10815,8 @@ function collectStats() {
     daily: r.daily,
     leaveDays: r.leaveDays.size,
     leaveRecords: r.leaveRecords,
+    restDays: r.restDays.size,
+    restRecords: r.restRecords,
     isOutsourced: r.isOutsourced,
   })).sort((a, b) => b.hours - a.hours);
 }
@@ -10759,12 +11150,14 @@ function renderStats() {
             const dayLogs = r.daily[dateKey] || [];
             const hours = dayLogs.length > 0 ? dayLogs.reduce((sum, log) => sum + log.hours, 0) : 0;
             const isLeaveDay = r.leaveRecords.some((lr) => dateKey >= lr.startDate && dateKey <= lr.endDate);
+            const isRestDay = !isLeaveDay && (r.restRecords || []).some((lr) => dateKey >= lr.startDate && dateKey <= lr.endDate);
             const hasInternal = dayLogs.some(log => log.isInternal);
-            calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""} ${hasInternal ? "internal-hours" : ""}">
+            calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""} ${isRestDay ? "rest-day" : ""} ${hasInternal ? "internal-hours" : ""}">
               <div class="day-num">${day}</div>
               ${hours ? `<div class="day-hours">${fmtHours(hours)}h</div>` : ""}
               ${hasInternal ? `<div class="day-internal">📋</div>` : ""}
-              ${isLeaveDay ? `<div class="day-leave">🌴</div>` : ""}
+              ${isLeaveDay ? `<div class="day-leave">🏥</div>` : ""}
+              ${isRestDay ? `<div class="day-rest">🌴</div>` : ""}
             </div>`;
           }
           
@@ -10795,7 +11188,7 @@ function renderStats() {
         <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
           <table class="data">
             <thead>
-              <tr><th>施工人员</th><th>工时(小时)</th><th>vs平均</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工天数</th><th>请假天数</th><th>参与项目数</th></tr>
+              <tr><th>施工人员</th><th>工时(小时)</th><th>vs平均</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工天数</th><th>请假天数</th><th>轮休天数</th><th>参与项目数</th></tr>
             </thead>
             <tbody>
               <tr>
@@ -10808,20 +11201,29 @@ function renderStats() {
                 <td style="color:#dc2626">${fmtHours(r.levelHours?.特级 || 0)}</td>
                 <td>${r.days}</td>
                 <td>${r.leaveDays > 0 ? `<span style="color:#ef4444;font-weight:600">${r.leaveDays}天</span>` : "0"}</td>
+                <td>${r.restDays > 0 ? `<span style="color:#10b981;font-weight:600">${r.restDays}天</span>` : "0"}</td>
                 <td>${r.projects}</td>
               </tr>
             </tbody>
           </table>
           ${r.leaveRecords.length > 0 ? `
             <div style="padding:12px;border-top:1px solid var(--border);background:#fef2f2">
-              <div style="font-weight:600;color:#dc2626;margin-bottom:8px">🌴 本月请假记录</div>
+              <div style="font-weight:600;color:#dc2626;margin-bottom:8px">🏥 本月请假记录（${r.leaveRecords.length}条）</div>
               <div style="display:flex;flex-direction:column;gap:4px">
                 ${r.leaveRecords.map((lr) => `
                   <div style="font-size:13px">
                     <span>${formatLeaveTime(lr)}</span>
+                    ${lr.leaveType && LEAVE_TYPE_LABEL[lr.leaveType] ? `<span style="margin-left:8px;color:#dc2626">${esc(LEAVE_TYPE_LABEL[lr.leaveType])}</span>` : ""}
                     ${lr.reason ? `<span style="margin-left:8px;color:var(--muted)">· ${esc(lr.reason)}</span>` : ""}
                   </div>
                 `).join("")}
+              </div>
+            </div>` : ""}
+          ${r.restRecords && r.restRecords.length > 0 ? `
+            <div style="padding:12px;border-top:1px solid var(--border);background:#ecfdf5">
+              <div style="font-weight:600;color:#047857;margin-bottom:8px">🌴 本月轮休记录（${r.restRecords.length}天，周末休息，非请假）</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">
+                ${r.restRecords.map((lr) => `<span style="font-size:12px;background:#fff;border:1px solid #a7f3d0;color:#047857;border-radius:999px;padding:2px 10px">${esc(lr.startDate)}</span>`).join("")}
               </div>
             </div>` : ""}
           ${dailyTable}
@@ -11053,18 +11455,6 @@ function showWageConfig() {
     popup.style.paddingLeft = btnRect.left + "px";
     popup.style.paddingTop = (btnRect.bottom + 8) + "px";
   }
-  let isDragging = false;
-  popup.addEventListener("mousedown", function(e) {
-    isDragging = false;
-  });
-  popup.addEventListener("mousemove", function(e) {
-    isDragging = true;
-  });
-  popup.addEventListener("mouseup", function(e) {
-    if (!isDragging && e.target === popup) {
-      closeWageConfigModal();
-    }
-  });
   popup.innerHTML = `
     <div class="modal" onclick="event.stopPropagation()" style="max-width:${isMobile ? '90%' : '280px'};width:${isMobile ? 'auto' : '280px'};max-height:none;overflow:hidden;">
       <div class="modal-head">
@@ -11506,19 +11896,6 @@ function showNewInternalTaskModal() {
   const popup = document.createElement("div");
   popup.id = "newInternalTaskModal";
   popup.className = "modal-mask";
-  
-  let isDragging = false;
-  popup.addEventListener("mousedown", function(e) {
-    isDragging = false;
-  });
-  popup.addEventListener("mousemove", function(e) {
-    isDragging = true;
-  });
-  popup.addEventListener("mouseup", function(e) {
-    if (!isDragging && e.target === popup) {
-      closeNewInternalTaskModal();
-    }
-  });
   popup.innerHTML = `
     <div class="modal" onclick="event.stopPropagation()" style="max-width:420px;width:95%;max-height:90vh;overflow:hidden;">
       <div class="modal-head">
@@ -11698,20 +12075,7 @@ function showVerifyModal(id) {
   const popup = document.createElement("div");
   popup.id = "verifyInternalTaskModal";
   popup.className = "modal-mask";
-  
-  let isDragging = false;
-  popup.addEventListener("mousedown", function(e) {
-    isDragging = false;
-  });
-  popup.addEventListener("mousemove", function(e) {
-    isDragging = true;
-  });
-  popup.addEventListener("mouseup", function(e) {
-    if (!isDragging && e.target === popup) {
-      closeVerifyModal();
-    }
-  });
-  
+
   const defaultHours = (task.calculatedHours !== undefined && task.calculatedHours !== null) ? task.calculatedHours : (task.actualHours || task.estHours || 0);
   
   popup.innerHTML = `
@@ -12291,7 +12655,7 @@ async function exportStats() {
   });
   summarySheet.columns = [{ key: 'A', width: 15 }, { key: 'B', width: 25 }];
 
-  const workerData = [['施工人员', '类型', '工时(小时)', 'vs平均', '初级工时', '中级工时', '高级工时', '特级工时', '施工天数', '请假天数', '参与项目数']];
+  const workerData = [['施工人员', '类型', '工时(小时)', 'vs平均', '初级工时', '中级工时', '高级工时', '特级工时', '施工天数', '请假天数', '轮休天数', '参与项目数']];
   rows.forEach((r) => {
     const vsAvg = r.isOutsourced ? "" : ((r.hours - avgHours) >= 0 ? "+" : "") + fmtHours(r.hours - avgHours);
     workerData.push([
@@ -12305,10 +12669,11 @@ async function exportStats() {
       fmtHoursNum(r.levelHours?.特级 || 0),
       r.days,
       r.leaveDays || 0,
+      r.restDays || 0,
       r.projects
     ]);
   });
-  workerData.push(['合计', '', fmtHoursNum(totalHours), '', fmtHoursNum(totalLevelHours.初级), fmtHoursNum(totalLevelHours.中级), fmtHoursNum(totalLevelHours.高级), fmtHoursNum(totalLevelHours.特级), '', '', '']);
+  workerData.push(['合计', '', fmtHoursNum(totalHours), '', fmtHoursNum(totalLevelHours.初级), fmtHoursNum(totalLevelHours.中级), fmtHoursNum(totalLevelHours.高级), fmtHoursNum(totalLevelHours.特级), '', '', '', '']);
   const workerSheet = workbook.addWorksheet("人员安装工时");
   workerData.forEach((row, rowIndex) => {
     const excelRow = workerSheet.addRow(row);
@@ -12323,14 +12688,16 @@ async function exportStats() {
       }
     });
   });
-  workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 10 }, { key: 'K', width: 12 }];
+  workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 10 }, { key: 'K', width: 10 }, { key: 'L', width: 12 }];
 
-  const dailyData = [['施工人员', '类型', '日期', '工时(小时)', '作业类型', '工时等级', '项目/工作类型', '是否请假']];
+  const dailyData = [['施工人员', '类型', '日期', '工时(小时)', '作业类型', '工时等级', '项目/工作类型', '当日状态']];
   rows.forEach((r) => {
     Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).forEach(([date, logs]) => {
       const isLeave = r.leaveRecords && r.leaveRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
+      const isRest = r.restRecords && r.restRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
+      const dayState = isLeave ? '请假' : (isRest ? '轮休' : '');
       logs.forEach((log) => {
-        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, fmtHoursNum(log.hours), normWorkType(log.workType) || '', log.level, log.project || '', isLeave ? '是' : '']);
+        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, fmtHoursNum(log.hours), normWorkType(log.workType) || '', log.level, log.project || '', dayState]);
       });
     });
   });
@@ -12350,11 +12717,11 @@ async function exportStats() {
 
   const hasLeaves = rows.some((r) => r.leaveRecords && r.leaveRecords.length > 0);
   if (hasLeaves) {
-    const leaveData = [['施工人员', '类型', '请假时段', '请假原因']];
+    const leaveData = [['施工人员', '类型', '请假类型', '请假时段', '请假原因']];
     rows.forEach((r) => {
       if (!r.leaveRecords || r.leaveRecords.length === 0) return;
       r.leaveRecords.forEach((lr) => {
-        leaveData.push([r.name, r.isOutsourced ? '外协' : '内部', formatLeaveTime(lr), lr.reason || '']);
+        leaveData.push([r.name, r.isOutsourced ? '外协' : '内部', LEAVE_TYPE_LABEL[lr.leaveType] || '请假', formatLeaveTime(lr), lr.reason || '']);
       });
     });
     const leaveSheet = workbook.addWorksheet("请假记录");
@@ -12369,7 +12736,29 @@ async function exportStats() {
         }
       });
     });
-    leaveSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 20 }, { key: 'D', width: 25 }];
+    leaveSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 10 }, { key: 'D', width: 20 }, { key: 'E', width: 25 }];
+  }
+
+  const hasRests = rows.some((r) => r.restRecords && r.restRecords.length > 0);
+  if (hasRests) {
+    const restData = [['施工人员', '类型', '轮休日期', '星期']];
+    const weekNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    rows.forEach((r) => {
+      if (!r.restRecords || r.restRecords.length === 0) return;
+      r.restRecords.forEach((lr) => {
+        const d = new Date(lr.startDate + "T00:00:00");
+        restData.push([r.name, r.isOutsourced ? '外协' : '内部', lr.startDate, isNaN(d) ? '' : weekNames[d.getDay()]]);
+      });
+    });
+    const restSheet = workbook.addWorksheet("轮休记录");
+    restData.forEach((row, rowIndex) => {
+      const excelRow = restSheet.addRow(row);
+      row.forEach((cell, colIndex) => {
+        const excelCell = excelRow.getCell(colIndex + 1);
+        excelCell.style = rowIndex === 0 ? { ...headerStyle } : { ...dataStyle };
+      });
+    });
+    restSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 14 }, { key: 'D', width: 8 }];
   }
 
   const projectData = [['日期', '预约开工时间', '实际开工时间', '店面', '项目', '状态', '预计工时', '实际工时', '差异', '初级', '中级', '高级', '特级', '施工人员工时', '外协人数', '系统自动工时', '工时备注']];
@@ -12452,6 +12841,12 @@ async function exportStats() {
     });
     rowNum++;
     
+    sheet.addRow(['轮休天数', (r.restDays || 0), '天', '（周末轮流休息，不计入请假）', '', '', '', '', '']);
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      cell.style = ci === 1 ? { ...numStyle } : { ...infoStyle };
+    });
+    rowNum++;
+    
     rowNum++;
     
     sheet.addRow(['工时等级统计']);
@@ -12500,13 +12895,14 @@ async function exportStats() {
     sheet.mergeCells(`A${rowNum}:I${rowNum}`);
     rowNum++;
     
-    sheet.addRow(['日期', '星期', '初级工时', '中级工时', '高级工时', '特级工时', '合计工时', '项目', '请假']);
+    sheet.addRow(['日期', '星期', '初级工时', '中级工时', '高级工时', '特级工时', '合计工时', '项目', '请假/轮休']);
     sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
     rowNum++;
     
     const dates = [];
     const hoursMap = {};
     const leaveMap = {};
+    const restMap = {};
     const projectMap = {};
     const levelHoursMap = {初级: {}, 中级: {}, 高级: {}, 特级: {}};
     
@@ -12552,6 +12948,16 @@ async function exportStats() {
       });
     }
     
+    if (r.restRecords) {
+      r.restRecords.forEach(lr => {
+        const start = new Date(lr.startDate);
+        const end = new Date(lr.endDate);
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+          restMap[fmtDate(d)] = '轮休';
+        }
+      });
+    }
+    
     let calTotalHours = 0;
     const calLevelTotals = {初级: 0, 中级: 0, 高级: 0, 特级: 0};
     dates.forEach(date => {
@@ -12562,7 +12968,8 @@ async function exportStats() {
       calTotalHours += hours;
       levels.forEach(l => calLevelTotals[l] += levelHoursMap[l][date] || 0);
       const isLeaveDay = !!leaveMap[date];
-      sheet.addRow([date, weekDay, levelHoursMap.初级[date] || 0, levelHoursMap.中级[date] || 0, levelHoursMap.高级[date] || 0, levelHoursMap.特级[date] || 0, hours, projectMap[date] || '', isLeaveDay ? leaveMap[date] : '']);
+      const isRestDay = !isLeaveDay && !!restMap[date];
+      sheet.addRow([date, weekDay, levelHoursMap.初级[date] || 0, levelHoursMap.中级[date] || 0, levelHoursMap.高级[date] || 0, levelHoursMap.特级[date] || 0, hours, projectMap[date] || '', isLeaveDay ? leaveMap[date] : (isRestDay ? '轮休' : '')]);
       sheet.getRow(rowNum).eachCell((cell, ci) => {
         if (isLeaveDay && ci === 8) {
           cell.style = { ...leaveStyle };
@@ -12589,7 +12996,7 @@ async function exportStats() {
       sheet.mergeCells(`A${rowNum}:I${rowNum}`);
       rowNum++;
       
-      sheet.addRow(['序号', '开始日期', '结束日期', '请假天数', '请假原因', '', '', '', '']);
+      sheet.addRow(['序号', '开始日期', '结束日期', '请假天数', '请假类型', '请假原因', '', '', '']);
       sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
       rowNum++;
       
@@ -12597,10 +13004,31 @@ async function exportStats() {
         const start = new Date(lr.startDate);
         const end = new Date(lr.endDate);
         const days = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-        sheet.addRow([idx + 1, lr.startDate, lr.endDate, days, lr.reason || '', '', '', '', '']);
+        sheet.addRow([idx + 1, lr.startDate, lr.endDate, days, LEAVE_TYPE_LABEL[lr.leaveType] || '请假', lr.reason || '', '', '', '']);
         sheet.getRow(rowNum).eachCell((cell, ci) => {
           cell.style = ci === 3 ? { ...numStyle } : { ...dataStyle };
         });
+        rowNum++;
+      });
+      
+      rowNum++;
+    }
+    
+    if (r.restRecords && r.restRecords.length > 0) {
+      sheet.addRow(['轮休记录（周末休息，非请假）']);
+      sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
+      sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+      rowNum++;
+      
+      sheet.addRow(['序号', '轮休日期', '星期', '', '', '', '', '', '']);
+      sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+      rowNum++;
+      
+      const weekNames2 = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+      r.restRecords.forEach((lr, idx) => {
+        const d = new Date(lr.startDate + "T00:00:00");
+        sheet.addRow([idx + 1, lr.startDate, isNaN(d) ? '' : weekNames2[d.getDay()], '', '', '', '', '', '']);
+        sheet.getRow(rowNum).eachCell(cell => cell.style = { ...dataStyle });
         rowNum++;
       });
       
@@ -13065,6 +13493,7 @@ async function toggleRolePerm(role, cap, checked) {
  * ============================================================ */
 let modalOnConfirm = null;
 let modalOnClose = null;
+let modalCloseOnMask = false;
 
 function confirmDialog(message, title = "确认操作") {
   return new Promise((resolve) => {
@@ -13278,7 +13707,7 @@ async function requireAdminPassword(actionName) {
 
 const modal = {
   open(title, bodyHtml, options = {}) {
-    document.getElementById("modalTitle").textContent = title;
+    document.getElementById("modalTitle").innerHTML = title;
     document.getElementById("modalBody").innerHTML = bodyHtml;
     
     const confirmBtn = document.getElementById("modalConfirm");
@@ -13286,7 +13715,8 @@ const modal = {
     const modalFooter = document.getElementById("modalFooter");
     
     modalOnClose = options.onClose || null;
-    
+    modalCloseOnMask = options.closeOnMask === true;
+
     if (options.hideFooter) {
       modalFooter.classList.add("hidden");
     } else {
@@ -13566,7 +13996,7 @@ function showOperationLogs() {
     </div>
   `;
   
-  modal.open("操作日志", modalContent);
+  modal.open("操作日志", modalContent, { closeOnMask: true });
   
   setTimeout(() => {
     const searchInput = document.getElementById("logSearchInput");
@@ -13757,7 +14187,7 @@ function exportWorkLogs() {
 
 function exportLeaveRecords() {
   if (!perm.exportLeaves() && !perm.exportAll()) { toast("权限不足"); hideExportMenu(); return; }
-  const headers = ["请假ID", "员工", "请假类型", "开始日期", "开始时段", "结束日期", "结束时段", "原因", "状态", "审批人", "审批意见", "创建时间"];
+  const headers = ["记录ID", "员工", "休假类型", "开始日期", "开始时段", "结束日期", "结束时段", "原因", "状态", "审批人", "审批意见", "创建时间"];
   const rows = cache.leaveRecords.map(l => [
     l.id,
     l.workerName || "",
@@ -13773,7 +14203,7 @@ function exportLeaveRecords() {
     l.createdAt || ""
   ]);
   const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
-  downloadCSV(`请假记录_${todayStr()}.csv`, csv);
+  downloadCSV(`休假记录_${todayStr()}.csv`, csv);
   hideExportMenu();
 }
 
@@ -13876,7 +14306,7 @@ function showImportModal() {
             <button class="btn" onclick="triggerImportFile('work_logs')">工时记录</button>
             <button class="btn" onclick="triggerImportFile('workers')">施工人员</button>
             <button class="btn" onclick="triggerImportFile('stores')">门店数据</button>
-            <button class="btn" onclick="triggerImportFile('leave_records')">请假记录</button>
+            <button class="btn" onclick="triggerImportFile('leave_records')">休假记录</button>
             <button class="btn" onclick="triggerImportFile('outsourced_workers')">外协人员</button>
           </div>
         </div>
@@ -13926,7 +14356,7 @@ function guessTypeAndImport(file) {
   if (name.includes("工时")) type = "work_logs";
   else if (name.includes("人员")) type = "workers";
   else if (name.includes("门店")) type = "stores";
-  else if (name.includes("请假")) type = "leave_records";
+  else if (name.includes("休假") || name.includes("请假")) type = "leave_records";
   else if (name.includes("外协")) type = "outsourced_workers";
   importFile(file, type);
 }
@@ -14071,10 +14501,10 @@ async function importStore(row) {
 
 async function importLeaveRecord(row) {
   const lr = {
-    id: row["请假ID"] || row["id"] || uid(),
+    id: row["记录ID"] || row["请假ID"] || row["id"] || uid(),
     workerId: row["员工ID"] || row["workerId"] || "",
-    workerName: row["员工姓名"] || row["workerName"] || "",
-    leaveType: row["请假类型"] || row["leaveType"] || "",
+    workerName: row["员工姓名"] || row["员工"] || row["workerName"] || "",
+    leaveType: row["休假类型"] || row["请假类型"] || row["leaveType"] || "",
     startDate: row["开始日期"] || row["startDate"] || "",
     startType: row["开始时段"] || row["startType"] || "",
     endDate: row["结束日期"] || row["endDate"] || "",
@@ -14120,7 +14550,7 @@ function renderMine() {
   const featureItems = [
     { tab: "workers", icon: "👷", label: "施工人员", color: "#eff6ff", show: perm.viewWorker() },
     { tab: "outsourced", icon: "🤝", label: "外协人员", color: "#f5f3ff", show: perm.manageOutsourced() },
-    { tab: "leaves", icon: "🏥", label: "请假管理", color: "#fff7ed", badge: pendingLeaveCount, show: !isStoreManager() || !myStore() },
+    { tab: "leaves", icon: "🏥", label: "休假管理", color: "#fff7ed", badge: pendingLeaveCount, show: !isStoreManager() || !myStore() },
     { tab: "schedules", icon: svgCal(18), label: "个人日程", color: "#fef3c7", show: perm.viewSchedule() },
     { tab: "stores", icon: "🏪", label: "门店管理", color: "#f0fdf4", show: perm.manageStores() },
     { tab: "storeStats", icon: "📊", label: "店面统计", color: "#eff6ff", show: perm.viewStoreStats() },
@@ -14167,7 +14597,7 @@ function renderMine() {
       ${perm.exportLeaves() ? `
       <div class="mine-list-item" onclick="exportLeaveRecords()">
         <div class="mine-list-icon" style="background:#fff7ed;color:#ea580c">🏥</div>
-        <span class="mine-list-text">导出请假记录</span>
+        <span class="mine-list-text">导出休假记录</span>
         <span class="mine-list-arrow">›</span>
       </div>` : ""}
       ${perm.exportWorkers() ? `
@@ -14621,14 +15051,80 @@ function renderActiveTabOnly() {
 }
 
 /* ============================================================
- * 请假管理
+ * 休假管理
  * ============================================================ */
+const LEAVE_RANGE_LABEL = {
+  "7": "最近 7 天",
+  "30": "最近 30 天",
+  "90": "最近 90 天",
+  "month": "本月记录",
+  "lastMonth": "上月记录",
+  "year": "今年",
+  "all": "全部记录",
+};
+const LEAVE_HISTORY_PAGE = 60;
+let leaveHistoryLimit = LEAVE_HISTORY_PAGE;
+
+/* 读取当前时间范围选择（带 localStorage 记忆，默认最近 30 天） */
+function getLeaveRangeValue() {
+  const el = document.getElementById("leaveRangeFilter");
+  if (el && el.value) return el.value;
+  const saved = localStorage.getItem("leaveRange");
+  return LEAVE_RANGE_LABEL[saved] ? saved : "month";
+}
+
+/* 把范围值换算成日期窗口 {start,end}（返回 null 表示不限） */
+function leaveRangeWindow(val) {
+  if (val === "all") return null;
+  if (val === "year") {
+    const y = new Date().getFullYear();
+    return { start: `${y}-01-01`, end: `${y}-12-31` };
+  }
+  if (val === "month") {
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth() + 1;
+    const lastDay = new Date(y, m, 0).getDate();
+    return { start: `${y}-${String(m).padStart(2, "0")}-01`, end: `${y}-${String(m).padStart(2, "0")}-${lastDay}` };
+  }
+  if (val === "lastMonth") {
+    const now = new Date();
+    const y = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+    const m = now.getMonth() === 0 ? 12 : now.getMonth();
+    const lastDay = new Date(y, m, 0).getDate();
+    return { start: `${y}-${String(m).padStart(2, "0")}-01`, end: `${y}-${String(m).padStart(2, "0")}-${lastDay}` };
+  }
+  const days = parseInt(val, 10);
+  if (!days || isNaN(days)) return null;
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return { start: dateKey(d), end: null };
+}
+
+/* 切换时间范围（供空态/提示条按钮调用） */
+function setLeaveRange(val) {
+  const el = document.getElementById("leaveRangeFilter");
+  if (el) el.value = val;
+  localStorage.setItem("leaveRange", val);
+  leaveHistoryLimit = LEAVE_HISTORY_PAGE;
+  renderLeaves();
+}
+
+/* 加载更多历史记录 */
+function loadMoreLeaveHistory() {
+  leaveHistoryLimit += LEAVE_HISTORY_PAGE;
+  renderLeaves();
+}
+
 function renderLeaves() {
   refreshLeaveWorkerFilter();
+  
+  document.querySelectorAll(".btn-add-leave").forEach(btn => btn.style.display = perm.applyLeave() ? "" : "none");
+  document.querySelectorAll(".btn-batch-rot").forEach(btn => btn.style.display = perm.applyLeave() ? "" : "none");
   
   const statsEl = document.getElementById("leaveStats");
   const pendingList = document.getElementById("leavePendingList");
   const recordList = document.getElementById("leaveRecordList");
+  const histBar = document.getElementById("leaveHistBar");
   const statusFilter = document.getElementById("leaveStatusFilter");
   const typeFilter = document.getElementById("leaveTypeFilter");
   const workerFilter = document.getElementById("leaveWorkerFilter");
@@ -14647,49 +15143,92 @@ function renderLeaves() {
   records.sort((a, b) => new Date(b.createdAt || b.startDate) - new Date(a.createdAt || a.startDate));
   
   const pendingRecords = records.filter(r => r.status === LEAVE_STATUS.PENDING);
-  /* 历史记录仅显示最近 3 天：结束日期在（今天-3天）之后（含进行中/未来请假）；待审批始终显示 */
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 3);
-  const cutoffKey = dateKey(cutoff);
-  let historyRecords = records.filter(r => r.status !== LEAVE_STATUS.PENDING && (r.endDate || "") >= cutoffKey);
-  // 非经理且无“查看所有请假记录”权限时，历史记录只显示自己的
+  /* 历史记录按所选时间范围过滤（以结束日期为准，天然包含进行中/未来的排班）；待审批始终显示 */
+  const rangeVal = getLeaveRangeValue();
+  const rangeWindow = leaveRangeWindow(rangeVal);
+  let historyRecords = records.filter(r => {
+    if (r.status === LEAVE_STATUS.PENDING) return false;
+    if (!rangeWindow) return true;
+    const start = r.startDate || "";
+    const end = r.endDate || "";
+    if (rangeWindow.end) {
+      return start <= rangeWindow.end && end >= rangeWindow.start;
+    }
+    return end >= rangeWindow.start;
+  });
+  // 非经理且无“查看所有休假记录”权限时，历史记录只显示自己的
   if (!isManager() && !perm.viewAllLeaves() && currentProfile && currentProfile.id) {
     historyRecords = historyRecords.filter(r => r.workerId === currentProfile.id);
   }
   
-  renderLeaveStats(statsEl);
-  
+  renderLeaveStats(statsEl, historyRecords, pendingRecords);
+
   if (pendingRecords.length > 0) {
+    pendingList.style.display = "";
     pendingList.innerHTML = `
       <h3 style="margin-bottom:12px;color:#f59e0b;">⏳ 待审批申请（${pendingRecords.length}）</h3>
       ${pendingRecords.map(r => renderLeaveCard(r, true)).join("")}
     `;
   } else {
     pendingList.innerHTML = "";
+    pendingList.style.display = "none";
   }
   
-  recordList.innerHTML = `
-    ${historyRecords.length > 0 ? historyRecords.map(r => renderLeaveCard(r, perm.manageLeaves())).join("") : 
-      '<div style="text-align:center;color:var(--muted);padding:40px;">最近 3 天内暂无请假记录</div>'}
-  `;
+  const total = historyRecords.length;
+  const shown = Math.min(leaveHistoryLimit, total);
+  const pageRecords = historyRecords.slice(0, shown);
+  const rangeLabel = LEAVE_RANGE_LABEL[rangeVal] || "所选范围";
+  if (total > 0) {
+    if (histBar) {
+      histBar.innerHTML = `
+        <div class="leave-hist-bar">
+          <span class="leave-hist-bar__txt">${rangeLabel}共 <b>${total}</b> 条${shown < total ? `，已显示 ${shown} 条` : ""}</span>
+          ${rangeVal !== "all" ? `<button type="button" class="leave-hist-bar__all" onclick="setLeaveRange('all')">查看全部记录</button>` : ""}
+        </div>
+      `;
+    }
+    recordList.innerHTML = `
+      ${pageRecords.map(r => renderLeaveCard(r, perm.manageLeaves())).join("")}
+      ${shown < total ? `<div class="leave-hist-more"><button type="button" class="btn" onclick="loadMoreLeaveHistory()">加载更多（剩余 ${total - shown} 条）</button></div>` : ""}
+    `;
+  } else {
+    if (histBar) histBar.innerHTML = "";
+    recordList.innerHTML = `
+      <div style="text-align:center;color:var(--muted);padding:40px;">
+        ${rangeLabel}暂无休假记录${rangeVal !== "all" ? `<br><button type="button" class="btn small" style="margin-top:10px;" onclick="setLeaveRange('all')">查看全部记录</button>` : ""}
+      </div>
+    `;
+  }
   
-  const holidayEl = document.getElementById("holidayManage");
-  if (holidayEl) renderHolidayManage(holidayEl);
   initCustomSelects(document.getElementById("leaves"));
 }
 
-function renderLeaveStats(container) {
+function renderLeaveStats(container, historyRecords, pendingRecords) {
   if (!container) return;
-  
-  const year = new Date().getFullYear();
-  const approvedRecords = cache.leaveRecords.filter(r => r.status === LEAVE_STATUS.APPROVED);
-  
+
+  const rangeVal = getLeaveRangeValue();
+  const rangeLabel = LEAVE_RANGE_LABEL[rangeVal] || "全部";
+  let title = "";
+  if (rangeVal === "month" || rangeVal === "lastMonth") {
+    title = `${rangeLabel.replace("记录", "")} 休假统计`;
+  } else if (rangeVal === "year") {
+    title = `${new Date().getFullYear()}年 休假统计`;
+  } else if (["7", "30", "90"].includes(rangeVal)) {
+    title = `${rangeLabel} 休假统计`;
+  } else if (rangeVal === "all") {
+    title = "全部记录 休假统计";
+  } else {
+    title = `${new Date().getFullYear()}年 休假统计`;
+  }
+
+  const approvedRecords = (historyRecords || []).filter(r => r.status === LEAVE_STATUS.APPROVED);
+
   const typeStats = {};
   let totalDays = 0;
   Object.keys(LEAVE_TYPE_LABEL).forEach(type => {
     typeStats[type] = { days: 0, count: 0 };
   });
-  
+
   approvedRecords.forEach(r => {
     const days = calculateLeaveDays(r.startDate, r.endDate, r.startType, r.endType);
     if (r.leaveType === "rotational") {
@@ -14706,77 +15245,103 @@ function renderLeaveStats(container) {
       }
     }
   });
-  
-  const pendingCount = cache.leaveRecords.filter(r => r.status === LEAVE_STATUS.PENDING).length;
-  const rejectedCount = cache.leaveRecords.filter(r => r.status === LEAVE_STATUS.REJECTED).length;
-  
+
+  const pendingCount = (pendingRecords || []).length;
+  const rejectedCount = (historyRecords || []).filter(r => r.status === LEAVE_STATUS.REJECTED).length;
+
   const workerStats = cache.workers.map(w => {
     // 轮休属于正常休息日，不计入个人「请假天数 / 请假次数」排行，与总请假天数口径一致
     const workerLeaves = approvedRecords.filter(r => r.workerId === w.id && r.leaveType !== "rotational");
     const workerDays = workerLeaves.reduce((sum, r) => sum + calculateLeaveDays(r.startDate, r.endDate, r.startType, r.endType), 0);
     return { name: w.name, days: workerDays, count: workerLeaves.length };
   }).sort((a, b) => b.days - a.days);
-  
-  container.innerHTML = `
-    <div class="card" style="grid-column:1/-1;">
-      <h3 style="margin-bottom:12px;">📊 ${year}年 请假统计概览</h3>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;">
-        <div style="text-align:center;padding:12px;background:#f0fdf4;border-radius:8px;">
-          <div style="font-size:24px;font-weight:bold;color:#10b981;">${totalDays.toFixed(1)}</div>
-          <div style="font-size:12px;color:var(--muted);">总请假天数</div>
-        </div>
-        <div style="text-align:center;padding:12px;background:#fef3c7;border-radius:8px;">
-          <div style="font-size:24px;font-weight:bold;color:#f59e0b;">${pendingCount}</div>
-          <div style="font-size:12px;color:var(--muted);">待审批</div>
-        </div>
-        <div style="text-align:center;padding:12px;background:#fee2e2;border-radius:8px;">
-          <div style="font-size:24px;font-weight:bold;color:#dc2626;">${rejectedCount}</div>
-          <div style="font-size:12px;color:var(--muted);">已拒绝</div>
-        </div>
-        <div style="text-align:center;padding:12px;background:#e0e7ff;border-radius:8px;">
-          <div style="font-size:24px;font-weight:bold;color:#4338ca;">${approvedRecords.length}</div>
-          <div style="font-size:12px;color:var(--muted);">已批准</div>
-        </div>
+  const rankedWorkers = workerStats.filter(w => w.days > 0);
+  const hasZeroWorkers = workerStats.length > rankedWorkers.length;
+  const rankShowAll = localStorage.getItem("leaveRankShowAll") === "1";
+  const displayWorkers = rankShowAll ? workerStats : rankedWorkers;
+
+  const maxTypeDays = Math.max(...Object.values(typeStats).map(s => s.days), 0.001);
+  const maxWorkerDays = Math.max(...workerStats.map(w => w.days), 0.001);
+  const typeColors = {
+    personal: "#f59e0b", sick: "#ef4444", annual: "#3b82f6", comp: "#8b5cf6",
+    rotational: "#9ca3af", other: "#10b981"
+  };
+
+  const collapsed = localStorage.getItem("leaveStatsCollapsed") === "1";
+  const kpiBar = `
+    <div class="leave-stats-bar">
+      <div class="leave-stats-bar__title">📊 ${title}</div>
+      <div class="leave-stats-bar__kpis">
+        <span class="leave-stats-bar__kpi leave-stats-bar__kpi--days" title="总请假天数（不含轮休）"><b>${totalDays.toFixed(1)}</b>天</span>
+        <span class="leave-stats-bar__kpi leave-stats-bar__kpi--pending"><b>${pendingCount}</b>待审</span>
+        <span class="leave-stats-bar__kpi leave-stats-bar__kpi--rejected"><b>${rejectedCount}</b>被拒</span>
+        <span class="leave-stats-bar__kpi leave-stats-bar__kpi--approved"><b>${approvedRecords.length}</b>已批</span>
       </div>
-      
-      <div style="margin-top:16px;">
-        <h4 style="font-size:13px;margin-bottom:8px;color:var(--muted);">类型分布</h4>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+      <button class="leave-stats-bar__toggle" onclick="toggleLeaveStatsCollapse()">${collapsed ? "展开 ▼" : "收起 ▲"}</button>
+    </div>
+  `;
+
+  if (collapsed) {
+    container.innerHTML = kpiBar;
+    updateLeavesTabBadge();
+    return;
+  }
+
+  container.innerHTML = `
+    ${kpiBar}
+    <div class="leave-stats-grid">
+      <div class="leave-stats-card leave-stats-card--compact">
+        <h4 class="leave-stats-card__title" style="font-size:13px;">📈 类型分布</h4>
+        <div class="leave-type-list">
           ${Object.entries(typeStats).map(([type, stats]) => `
-            <div style="display:flex;align-items:center;gap:4px;padding:6px 12px;background:${type === 'rotational' ? '#f3f4f6' : '#f9fafb'};border-radius:6px;">
-              <span style="color:${type === 'rotational' ? '#6b7280' : '#4338ca'};font-weight:bold;">${LEAVE_TYPE_LABEL[type]}${type === 'rotational' ? '（休息）' : ''}</span>
-              <span style="color:var(--muted);font-size:12px;">${stats.count}次 / ${stats.days.toFixed(1)}天</span>
+            <div class="leave-type-item ${type === 'rotational' ? 'leave-type-item--rotational' : ''}">
+              <span class="leave-type-item__name">${LEAVE_TYPE_LABEL[type]}</span>
+              <div class="leave-type-item__bar-wrap">
+                <div class="leave-type-item__bar" style="width:${Math.min((stats.days / maxTypeDays) * 100, 100)}%;background:${typeColors[type] || '#94a3b8'};"></div>
+              </div>
+              <span class="leave-type-item__count">${stats.count}次 · ${stats.days.toFixed(1)}天</span>
             </div>
           `).join("")}
         </div>
       </div>
-      
-      <div style="margin-top:16px;">
-        <h4 style="font-size:13px;margin-bottom:8px;color:var(--muted);">人员排行</h4>
-        <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;">
-            <thead>
-              <tr style="border-bottom:1px solid #e5e7eb;">
-                <th style="text-align:left;padding:6px 8px;font-size:12px;color:var(--muted);">姓名</th>
-                <th style="text-align:right;padding:6px 8px;font-size:12px;color:var(--muted);">请假天数</th>
-                <th style="text-align:right;padding:6px 8px;font-size:12px;color:var(--muted);">请假次数</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${workerStats.map(w => `
-                <tr style="border-bottom:1px solid #f3f4f6;">
-                  <td style="padding:6px 8px;font-size:13px;">${esc(w.name)}</td>
-                  <td style="text-align:right;padding:6px 8px;font-size:13px;">${w.days.toFixed(1)}</td>
-                  <td style="text-align:right;padding:6px 8px;font-size:13px;color:var(--muted);">${w.count}</td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
+
+      <div class="leave-stats-card leave-stats-card--compact">
+        <h3 class="leave-stats-card__title" style="font-size:13px;">🏆 人员排行</h3>
+        <div class="leave-rank-list">
+          ${displayWorkers.map(w => `
+            <div class="leave-rank-item ${w.days === 0 ? 'leave-rank-item--zero' : ''}">
+              <div class="leave-rank-item__avatar">${esc(w.name.slice(0, 1))}</div>
+              <div class="leave-rank-item__info">
+                <div class="leave-rank-item__name">${esc(w.name)}</div>
+                <div class="leave-rank-item__bar-wrap">
+                  <div class="leave-rank-item__bar" style="width:${Math.min((w.days / maxWorkerDays) * 100, 100)}%;"></div>
+                </div>
+              </div>
+              <div class="leave-rank-item__count">${w.days.toFixed(1)}天<br><small>${w.count}次</small></div>
+            </div>
+          `).join("")}
         </div>
+        ${hasZeroWorkers ? `
+          <button class="leave-rank-toggle" onclick="toggleLeaveRankShowAll()">
+            ${rankShowAll ? "▲ 收起" : `▼ 显示全部 ${workerStats.length} 人（隐藏 ${workerStats.length - rankedWorkers.length} 个 0 天）`}
+          </button>
+        ` : ""}
       </div>
     </div>
   `;
   updateLeavesTabBadge();
+}
+
+function toggleLeaveStatsCollapse() {
+  const was = localStorage.getItem("leaveStatsCollapsed") === "1";
+  localStorage.setItem("leaveStatsCollapsed", was ? "0" : "1");
+  renderLeaves();
+}
+
+function toggleLeaveRankShowAll() {
+  const was = localStorage.getItem("leaveRankShowAll") === "1";
+  localStorage.setItem("leaveRankShowAll", was ? "0" : "1");
+  renderLeaves();
 }
 
 function renderHolidayManage(container) {
@@ -14906,66 +15471,142 @@ function refreshLeaveWorkerFilter() {
     ).join("");
 }
 
+function leaveWeekdayLabel(dateStr) {
+  const days = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  return days[new Date(dateStr).getDay()] || "";
+}
+
+function formatLeaveDurationShort(record) {
+  const days = calculateLeaveDays(record.startDate, record.endDate, record.startType, record.endType);
+
+  if ((record.startType === "custom" || record.endType === "custom") &&
+      record.startDate === record.endDate && record.startTime && record.endTime) {
+    const [sh, sm] = record.startTime.split(":").map(Number);
+    const [eh, em] = record.endTime.split(":").map(Number);
+    const hours = (eh * 60 + em - sh * 60 - sm) / 60;
+    if (hours > 0 && hours < 8) {
+      const h = Math.round(hours * 10) / 10;
+      return h === Math.floor(h) ? `${Math.floor(h)}小时` : `${h}小时`;
+    }
+  }
+
+  if (days === 0) return "0天";
+  if (days === 0.5) return "半天";
+  if (days === 1) return "1天";
+  if (days % 1 === 0) return `${days}天`;
+  const whole = Math.floor(days);
+  const frac = days - whole;
+  if (frac === 0.5) return whole > 0 ? `${whole}天半` : "半天";
+  return `${days.toFixed(1)}天`;
+}
+
+function formatLeaveDateRange(record) {
+  const sd = record.startDate;
+  const ed = record.endDate;
+  const isSameDay = sd === ed;
+  const fmt = (d) => {
+    const [, m, day] = d.split("-").map(Number);
+    return `${m}月${day}日`;
+  };
+
+  if (isSameDay) {
+    const parts = [];
+    if (record.startType === "morning") parts.push("上午");
+    else if (record.startType === "afternoon") parts.push("下午");
+    else if (record.startTime && record.endTime && !(record.startTime === "08:00" && record.endTime === "18:00")) {
+      parts.push(`${record.startTime}-${record.endTime}`);
+    }
+    return `${fmt(sd)} ${leaveWeekdayLabel(sd)}${parts.length ? " · " + parts.join(" ") : ""}`;
+  }
+
+  return `${fmt(sd)} ${leaveWeekdayLabel(sd)} → ${fmt(ed)} ${leaveWeekdayLabel(ed)}`;
+}
+
 function renderLeaveCard(record, showActions) {
   const typeLabel = LEAVE_TYPE_LABEL[record.leaveType] || record.leaveType;
   const statusLabel = LEAVE_STATUS_LABEL[record.status] || record.status;
-  
-  let statusClass = "";
-  if (record.status === LEAVE_STATUS.PENDING) statusClass = "background:#fef3c7;color:#92400e;border-color:#f59e0b";
-  else if (record.status === LEAVE_STATUS.APPROVED) statusClass = "background:#d1fae5;color:#065f46;border-color:#10b981";
-  else if (record.status === LEAVE_STATUS.REJECTED) statusClass = "background:#fee2e2;color:#991b1b;border-color:#dc2626";
-  
+  const duration = formatLeaveDurationShort(record);
+
+  const typeColorMap = {
+    personal: { bg: "#eff6ff", text: "#1d4ed8", border: "#bfdbfe" },
+    sick:     { bg: "#fef2f2", text: "#b91c1c", border: "#fecaca" },
+    annual:   { bg: "#ecfdf5", text: "#047857", border: "#86efac" },
+    comp:     { bg: "#f5f3ff", text: "#6d28d9", border: "#d8b4fe" },
+    rotational:{ bg: "#f0fdf4", text: "#15803d", border: "#86efac" },
+    other:    { bg: "#f9fafb", text: "#4b5563", border: "#e5e7eb" }
+  };
+  const typeStyle = typeColorMap[record.leaveType] || typeColorMap.other;
+
+  const statusColorMap = {
+    [LEAVE_STATUS.PENDING]: { bg: "#fef3c7", text: "#92400e", border: "#fcd34d" },
+    [LEAVE_STATUS.APPROVED]: { bg: "#d1fae5", text: "#065f46", border: "#6ee7b7" },
+    [LEAVE_STATUS.REJECTED]: { bg: "#fee2e2", text: "#991b1b", border: "#fca5a5" }
+  };
+  const statusStyle = statusColorMap[record.status] || statusColorMap[LEAVE_STATUS.PENDING];
+
+  const sideColor = record.leaveType === "rotational" ? "#22c55e" :
+    record.leaveType === "sick" ? "#ef4444" :
+    record.leaveType === "annual" ? "#10b981" :
+    record.leaveType === "comp" ? "#8b5cf6" :
+    record.leaveType === "personal" ? "#3b82f6" : "#6b7280";
+
   const conflicts = checkLeaveProjectConflict(record.workerId, record.startDate, record.endDate, record.startTime, record.endTime);
-  
+
   let conflictInfo = "";
   if (conflicts.length > 0) {
     const conflictList = conflicts.map(p => {
       const store = getStore(p.storeId);
       const storeName = store ? store.name : "未知门店";
-      return `<li style="margin-bottom:3px;">📋 ${esc(p.name)}（${esc(storeName)}）</li>`;
+      return `<li style="margin-bottom:3px;">${esc(p.name)}（${esc(storeName)}）</li>`;
     }).join("");
     conflictInfo = `
-      <div class="card-row" style="background:#fef2f2;padding:8px 10px;border-radius:4px;margin-top:4px;">
-        <div style="font-weight:bold;color:#dc2626;font-size:12px;margin-bottom:4px;">⚠️ 项目排期冲突（${conflicts.length}个）</div>
-        <ul style="margin:0;padding-left:16px;font-size:12px;color:#991b1b;">${conflictList}</ul>
+      <div class="leave-card__conflict">
+        <div class="leave-card__conflict-title">⚠️ 项目排期冲突（${conflicts.length}个）</div>
+        <ul class="leave-card__conflict-list">${conflictList}</ul>
       </div>
     `;
   }
-  
+
+  const avatarChar = esc((record.workerName || "?").charAt(0));
+
   return `
-    <div class="card" style="position:relative;">
-      <div class="card-row">
-        <span style="font-weight:bold;font-size:15px;">${esc(record.workerName)}</span>
-        <span style="${statusClass};padding:3px 8px;border-radius:4px;font-size:12px;font-weight:bold;">${statusLabel}</span>
-        <span style="background:#e0e7ff;color:#4338ca;padding:3px 8px;border-radius:4px;font-size:12px;">${typeLabel}</span>
-        ${conflicts.length > 0 ? `<span style="background:#fef2f2;color:#dc2626;padding:2px 6px;border-radius:4px;font-size:12px;margin-left:8px;">⚠ ${conflicts.length}冲突</span>` : ""}
-      </div>
-      <div class="card-row">
-        <span>${svgCal(13)} ${esc(record.startDate)} ${record.startTime ? `${record.startTime} ` : ''}→ ${esc(record.endDate)} ${record.endTime ? `${record.endTime}` : ''}</span>
-      </div>
-      ${record.reason ? `<div class="card-row" style="color:var(--muted);font-size:13px;">📝 ${esc(record.reason)}</div>` : ""}
-      ${conflictInfo}
-      ${record.reviewNote ? `<div class="card-row" style="color:#f59e0b;font-size:13px;">💬 ${esc(record.reviewNote)}</div>` : ""}
-      ${record.reviewerName ? `<div class="card-row" style="color:var(--muted);font-size:12px;">审批人：${esc(record.reviewerName)}</div>` : ""}
-      <div class="card-actions">
-        ${showActions ? `
-          ${record.status === LEAVE_STATUS.PENDING && perm.approveLeave() ? `
-            <button class="btn small" onclick="approveLeave('${record.id}')">批准</button>
+    <div class="card leave-card" style="--leave-side-color:${sideColor};">
+      <div class="leave-card__side"></div>
+      <div class="leave-card__main">
+        <div class="leave-card__header">
+          <div class="leave-card__avatar" style="background:linear-gradient(135deg, ${sideColor}, ${sideColor}dd);">${avatarChar}</div>
+          <div class="leave-card__person">
+            <div class="leave-card__name">${esc(record.workerName)}</div>
+            <div class="leave-card__date">${svgCal(13)} ${formatLeaveDateRange(record)}</div>
+          </div>
+          <button class="leave-card__detail" type="button" onclick="showLeaveDetail('${record.id}')" title="详情">详情</button>
+        </div>
+        <div class="leave-card__tags">
+          <span class="leave-card__tag" style="background:${statusStyle.bg};color:${statusStyle.text};border-color:${statusStyle.border};">${statusLabel}</span>
+          <span class="leave-card__tag" style="background:${typeStyle.bg};color:${typeStyle.text};border-color:${typeStyle.border};">${typeLabel}</span>
+          <span class="leave-card__tag leave-card__tag--duration">${duration}</span>
+          ${conflicts.length > 0 ? `<span class="leave-card__tag leave-card__tag--warn">⚠ ${conflicts.length}冲突</span>` : ""}
+        </div>
+        ${conflictInfo}
+        <div class="card-actions leave-card__actions">
+          ${showActions ? `
+            ${record.status === LEAVE_STATUS.PENDING && perm.approveLeave() ? `
+              <button class="btn small" onclick="approveLeave('${record.id}')">批准</button>
+            ` : ""}
+            ${record.status === LEAVE_STATUS.PENDING && perm.rejectLeave() ? `
+              <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
+            ` : ""}
+            ${record.status === LEAVE_STATUS.APPROVED && perm.approveLeave() && record.endDate >= todayStr() ? `
+              <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回批准</button>
+            ` : ""}
+            ${record.status === LEAVE_STATUS.REJECTED && perm.rejectLeave() ? `
+              <button class="btn small danger" onclick="deleteLeaveRecord('${record.id}')">删除</button>
+            ` : ""}
           ` : ""}
-          ${record.status === LEAVE_STATUS.PENDING && perm.rejectLeave() ? `
-            <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
+          ${record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id ? `
+            <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回</button>
           ` : ""}
-          ${record.status === LEAVE_STATUS.APPROVED && perm.approveLeave() ? `
-            <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回批准</button>
-          ` : ""}
-          ${record.status === LEAVE_STATUS.REJECTED && perm.rejectLeave() ? `
-            <button class="btn small danger" onclick="deleteLeaveRecord('${record.id}')">删除</button>
-          ` : ""}
-        ` : ""}
-        ${record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id ? `
-          <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回</button>
-        ` : ""}
-        <button class="btn small" onclick="showLeaveDetail('${record.id}')">详情</button>
+        </div>
       </div>
     </div>
   `;
@@ -15004,7 +15645,7 @@ async function approveLeave(id) {
     ...record,
     status: LEAVE_STATUS.APPROVED,
     reviewerId: currentUser?.id || null,
-    reviewerName: currentUser?.email || "系统",
+    reviewerName: currentProfile.name || currentUser?.email || "系统",
     reviewedAt: new Date().toISOString(),
   }, id);
   await repo.loadAll();
@@ -15032,7 +15673,7 @@ async function rejectLeave(id) {
     status: LEAVE_STATUS.REJECTED,
     reviewNote: note,
     reviewerId: currentUser?.id || null,
-    reviewerName: currentUser?.email || "系统",
+    reviewerName: currentProfile.name || currentUser?.email || "系统",
     reviewedAt: new Date().toISOString(),
   }, id);
   await repo.loadAll();
@@ -15048,6 +15689,11 @@ async function withdrawLeave(id) {
   if (!record) return;
   
   if (record.status === LEAVE_STATUS.APPROVED) {
+    // 已结束的休假（结束日期早于今天）不允许再撤回批准
+    if (record.endDate && record.endDate < todayStr()) {
+      toast("该休假已结束，不能撤回批准", "warn");
+      return;
+    }
     if (!(await confirmDialog(`确定要撤回 ${record.workerName} 的 ${LEAVE_TYPE_LABEL[record.leaveType]} 批准吗？`, "撤回批准"))) return;
     record.status = LEAVE_STATUS.PENDING;
     record.reviewNote = "";
@@ -15067,12 +15713,25 @@ async function withdrawLeave(id) {
   }
 }
 
+function getReviewerDisplayName(record) {
+  if (!record || !record.reviewerName) return "未记录";
+  const name = record.reviewerName;
+  const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(name);
+  if (!isEmail) return name;
+  if (record.reviewerId) {
+    const worker = getWorker(record.reviewerId);
+    if (worker && worker.name) return worker.name;
+  }
+  return name;
+}
+
 function showLeaveDetail(id) {
   const record = getLeaveRecord(id);
   if (!record) return;
-  
+
   const typeLabel = LEAVE_TYPE_LABEL[record.leaveType] || record.leaveType;
   const statusLabel = LEAVE_STATUS_LABEL[record.status] || record.status;
+  const reviewerDisplayName = getReviewerDisplayName(record);
   
   const conflicts = checkLeaveProjectConflict(record.workerId, record.startDate, record.endDate);
   
@@ -15121,7 +15780,7 @@ function showLeaveDetail(id) {
       ${record.reviewerName ? `
       <div class="form-row">
         <label>审批人</label>
-        <div class="input" style="background:#f3f4f6;">${esc(record.reviewerName)}</div>
+        <div class="input" style="background:#f3f4f6;">${esc(reviewerDisplayName)}</div>
       </div>` : ""}
       <div class="form-actions">
         <button class="btn" onclick="modal.close()">关闭</button>
@@ -15129,17 +15788,31 @@ function showLeaveDetail(id) {
     </div>
   `;
   
-  modal.open(`${svgCal(18)} ${record.workerName} 的请假详情`, modalContent);
+  modal.open(`${svgCal(18)} ${esc(record.workerName)} 的请假详情`, modalContent, { closeOnMask: true });
 }
 
 document.addEventListener("DOMContentLoaded", function() {
   const statusFilter = document.getElementById("leaveStatusFilter");
   const typeFilter = document.getElementById("leaveTypeFilter");
   const workerFilter = document.getElementById("leaveWorkerFilter");
+  const rangeFilter = document.getElementById("leaveRangeFilter");
   
-  if (statusFilter) statusFilter.addEventListener("change", renderLeaves);
-  if (typeFilter) typeFilter.addEventListener("change", renderLeaves);
-  if (workerFilter) workerFilter.addEventListener("change", renderLeaves);
+  // 恢复上次选择的时间范围
+  if (rangeFilter) {
+    const saved = localStorage.getItem("leaveRange");
+    if (saved && LEAVE_RANGE_LABEL[saved]) rangeFilter.value = saved;
+    rangeFilter.addEventListener("change", function() {
+      localStorage.setItem("leaveRange", rangeFilter.value);
+      leaveHistoryLimit = LEAVE_HISTORY_PAGE;
+      renderLeaves();
+    });
+  }
+  
+  // 任一筛选变化都回到第一页，避免停留在“已加载 300 条”的状态
+  const onFilterChange = function() { leaveHistoryLimit = LEAVE_HISTORY_PAGE; renderLeaves(); };
+  if (statusFilter) statusFilter.addEventListener("change", onFilterChange);
+  if (typeFilter) typeFilter.addEventListener("change", onFilterChange);
+  if (workerFilter) workerFilter.addEventListener("change", onFilterChange);
 });
 
 /* ============================================================
@@ -15679,11 +16352,13 @@ function renderTimelineInDetail() {
         ${(() => {
           const today = new Date();
           today.setHours(0, 0, 0, 0);
+          // 轮休（周末轮流休息）与请假分开展示，避免把休息的人标成"请假"
+          const restInfo = [];
           const leaveInfo = [];
           for (let i = 0; i < 3; i++) {
             const d = new Date(today.getTime() + i * 24 * 60 * 60 * 1000);
             const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-            const leaves = cache.leaveRecords.filter((lr) => {
+            const dayRecs = cache.leaveRecords.filter((lr) => {
               if (lr.status === LEAVE_STATUS.REJECTED) return false;
               const sd = new Date(lr.startDate);
               sd.setHours(0, 0, 0, 0);
@@ -15691,12 +16366,23 @@ function renderTimelineInDetail() {
               ed.setHours(0, 0, 0, 0);
               return d >= sd && d <= ed;
             });
+            const rests = dayRecs.filter((lr) => lr.leaveType === "rotational");
+            const leaves = dayRecs.filter((lr) => lr.leaveType !== "rotational");
+            if (rests.length > 0) {
+              restInfo.push(`<div class="tl-leave-item"><span class="tl-rest-date">${dateStr}</span><span class="tl-leave-workers">${rests.map(l => esc(l.workerName)).join("、")}</span></div>`);
+            }
             if (leaves.length > 0) {
               leaveInfo.push(`<div class="tl-leave-item"><span class="tl-leave-date">${dateStr}</span><span class="tl-leave-workers">${leaves.map(l => `${esc(l.workerName)} ${formatLeaveTime(l)}`).join("、")}</span></div>`);
             }
           }
-          if (leaveInfo.length === 0) return "";
-          return `<div class="tl-leave-section"><div class="tl-leave-header">🌴 近期请假人员</div><div class="tl-leave-list">${leaveInfo.join("")}</div></div>`;
+          let html = "";
+          if (restInfo.length > 0) {
+            html += `<div class="tl-rest-section"><div class="tl-rest-header">🌴 近期轮休（休息）</div><div class="tl-leave-list">${restInfo.join("")}</div></div>`;
+          }
+          if (leaveInfo.length > 0) {
+            html += `<div class="tl-leave-section"><div class="tl-leave-header">🏥 近期请假人员</div><div class="tl-leave-list">${leaveInfo.join("")}</div></div>`;
+          }
+          return html;
         })()}
       </div>`;
   }
@@ -15816,7 +16502,7 @@ function openTimelineActionMenu(taskEl, projectId) {
     const hasLeaveConflict = leaveRecord ? isLeaveConflict(leaveRecord, projStartTime, projEndTime) : false;
     const disabledAttr = hasLeaveConflict ? ' disabled' : '';
     let label = esc(w.name);
-    if (hasLeaveConflict) label += ' 🌴请假';
+    if (hasLeaveConflict) label += (leaveRecord && leaveRecord.leaveType === "rotational" ? ' 🌴轮休' : ' 🏥请假');
     else if (conflicts.length) label += ' ⚠冲突';
     return `<option value="${w.id}"${disabledAttr}>${label}</option>`;
   }).join("");
@@ -16980,7 +17666,7 @@ function bindEvents() {
     maskMouseDown = e.target.id === "modal";
   });
   modalMask.addEventListener("mouseup", (e) => {
-    if (maskMouseDown && e.target.id === "modal") modal.close();
+    if (modalCloseOnMask && maskMouseDown && e.target.id === "modal") modal.close();
     maskMouseDown = false;
   });
 
@@ -17063,6 +17749,67 @@ function bindEvents() {
 
   document.addEventListener("mousemove", timelineMouseMove);
   document.addEventListener("mouseup", timelineMouseUp);
+}
+
+/* ===== 项目工时差异表：鼠标按住拖拽横向滚动（电脑端优化） ===== */
+function setupHourDiffDrag() {
+  let isDown = false;
+  let activeWrap = null;
+  let startX = 0;
+  let startScroll = 0;
+  let moved = false;
+  document.addEventListener("mousedown", (e) => {
+    const wrap = e.target.closest(".hours-diff-wrap");
+    if (!wrap) return;
+    // 不拦截表单控件/可点击元素，避免影响排序、链接等交互
+    if (e.target.closest("a, button, input, select, textarea, .worker-chip, .modal-mask")) return;
+    // 只响应主鼠标键
+    if (e.button !== 0) return;
+    isDown = true;
+    activeWrap = wrap;
+    moved = false;
+    startX = e.pageX;
+    startScroll = wrap.scrollLeft;
+    wrap.classList.add("is-dragging");
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!isDown || !activeWrap) return;
+    const dx = e.pageX - startX;
+    if (Math.abs(dx) > 4) {
+      moved = true;
+      activeWrap.scrollLeft = startScroll - dx;
+    }
+  });
+  const endDrag = () => {
+    if (!isDown) return;
+    isDown = false;
+    const wrap = activeWrap;
+    activeWrap = null;
+    if (wrap) {
+      wrap.classList.remove("is-dragging");
+      // 拖拽过则吞掉随后一次 click，避免误选/误触链接
+      if (moved) {
+        const stop = (ce) => { ce.preventDefault(); ce.stopPropagation(); };
+        document.addEventListener("click", stop, { capture: true, once: true });
+      }
+    }
+  };
+  document.addEventListener("mouseup", endDrag);
+  document.addEventListener("mouseleave", endDrag);
+  // Shift + 滚轮横向滚动（多数浏览器原生支持；这里确保容器可横向滚动时生效）
+  document.addEventListener("wheel", (e) => {
+    const wrap = e.target.closest(".hours-diff-wrap");
+    if (!wrap) return;
+    if (e.shiftKey) return; // 交给浏览器原生横向滚动
+    // 容器内容超高、可纵向滚动时，竖向滚轮优先纵向滚动（让表头悬浮体验正常）
+    const canScrollY = wrap.scrollHeight > wrap.clientHeight + 1;
+    if (canScrollY) return; // 不拦截，浏览器原生纵向滚动表格行
+    // 容器只能横向滚动（无纵向溢出）时，竖向滚轮转为横向滚动，方便看列
+    if (e.deltaY !== 0 && wrap.scrollWidth > wrap.clientWidth) {
+      wrap.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }
+  }, { passive: false });
 }
 
 async function init() {
@@ -17151,6 +17898,7 @@ async function init() {
   initRealtimeRecovery(); // 回前台 / 网络恢复时补偿同步（Realtime 断开期间的事件不会补发）
   window.__APP_BOOTED__ = true; // 标记初始化完成，供后台恢复白屏自愈使用
   initVisibilityRecovery();     // 后台冻结/回收恢复失败时自动硬刷新自愈
+  setupHourDiffDrag();          // 项目工时差异表：鼠标拖拽横向滚动
 }
 
 // 防重复提交：为「自带保存按钮」的表单提交函数统一加锁
@@ -17292,7 +18040,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v1219b115";
+  const APP_VERSION = "v62451a85";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18122,6 +18870,7 @@ function vehicleHistoryCardHtml(trips) {
           <div class="veh-trip__veh-text">
             <span class="veh-trip__title">${vName}</span>
             ${t.vehiclePlate ? `<span class="veh-trip__plate">${esc(t.vehiclePlate)}</span>` : ""}
+            ${t.fuelLevel != null ? `<span class="veh-trip__fuel-badge" title="还车时剩余油量">⛽ ${Number(t.fuelLevel)}%</span>` : ""}
           </div>
         </div>
         <div class="veh-trip__top-right">
@@ -18180,13 +18929,12 @@ function vehicleHistoryCardHtml(trips) {
           </div>
         </div>
       </div>
-      ${t.fuelLevel != null ? `<div class="veh-trip__fuel">⛽ 还车油量 <b>${Number(t.fuelLevel)}%</b></div>` : ""}
 
       ${projName || (proj && proj.address) || t.note ? `
-      <div class="veh-trip__bottom">
-        ${projName ? `<div class="veh-trip__project-name"><span class="veh-trip__label-tag">项目</span>${esc(projName)}</div>` : ""}
-        ${proj && proj.address ? `<div class="veh-trip__proj-addr"><span class="veh-trip__label-tag">地址</span>${esc(proj.address)}</div>` : ""}
-        ${t.note ? `<div class="veh-trip__trip-note"><span class="veh-trip__label-tag">备注</span>${esc(t.note)}</div>` : ""}
+      <div class="veh-trip__meta">
+        ${projName ? `<span class="veh-trip__meta-chip veh-trip__meta-chip--project" title="${esc(projName)}"><span class="veh-trip__meta-icon">📁</span>${esc(projName)}</span>` : ""}
+        ${proj && proj.address ? `<span class="veh-trip__meta-chip veh-trip__meta-chip--addr" title="${esc(proj.address)}"><span class="veh-trip__meta-icon">📍</span>${esc(proj.address)}</span>` : ""}
+        ${t.note ? `<span class="veh-trip__meta-chip veh-trip__meta-chip--note" title="${esc(t.note)}"><span class="veh-trip__meta-icon">📝</span>${esc(t.note)}</span>` : ""}
       </div>` : ""}
 
       <div class="veh-trip__actions">
@@ -18226,7 +18974,10 @@ function vehicleHistoryListHtml(trips) {
     const backText = t.backTime ? `${fmtDateShort(t.backTime)} ${fmtTime(t.backTime)}` : (open ? "未还车" : "—");
     const kmHtml = open
       ? `<span class="veh-list__status">未还车</span>`
-      : `<span class="veh-list__km">${Number(mileage || 0).toFixed(1)}<i>km</i></span>${t.fuelLevel != null ? `<span class="veh-list__fuel" title="还车时剩余油量">油 ${Number(t.fuelLevel)}%</span>` : ""}`;
+      : `<span class="veh-list__km-line"><span class="veh-list__label">里程：</span><span class="veh-list__km">${Number(mileage || 0).toFixed(1)}<i>km</i></span></span>`;
+    const fuelHtml = open || t.fuelLevel == null
+      ? ""
+      : `<span class="veh-list__fuel veh-list__fuel--header" title="还车时剩余油量">⛽ ${Number(t.fuelLevel)}%</span>`;
     const extra = t.projectName || t.note
       ? `<div class="veh-list__extra">
           ${t.projectName ? `<span class="veh-list__extra-item" title="${esc(t.projectName)}">🔗 ${esc(t.projectName)}</span>` : ""}
@@ -18235,10 +18986,11 @@ function vehicleHistoryListHtml(trips) {
       : "";
     return `
       <div class="veh-list__row${open ? " veh-list__row--open" : ""}">
-        <div class="veh-list__cell veh-list__cell--veh" title="${esc(vName)}${t.vehiclePlate ? " · " + esc(t.vehiclePlate) : ""}">
+        <div class="veh-list__cell veh-list__cell--veh" title="${esc(vName)}${t.vehiclePlate ? " · " + esc(t.vehiclePlate) : ""}${t.fuelLevel != null ? " · 剩余油量 " + Number(t.fuelLevel) + "%" : ""}">
           <span class="veh-list__icon">${icon}</span>
           <span class="veh-list__veh">${vName}</span>
           ${t.vehiclePlate ? `<span class="veh-list__plate">${esc(t.vehiclePlate)}</span>` : ""}
+          ${fuelHtml}
           <span class="veh-list__type veh-list__type--mobile">${esc(t.type || "送货")}</span>
         </div>
         <div class="veh-list__cell veh-list__cell--type">
@@ -18291,34 +19043,35 @@ function renderVehicleSummary() {
   const days = new Set(list.map((t) =>
     t.date || (t.createdAt ? String(t.createdAt).slice(0, 10) : "")).filter(Boolean)).size;
 
+  const vehicleCards = perVeh.map((x) => {
+    const pct = total > 0 ? ((x.sum / total) * 100).toFixed(1) : "0.0";
+    return `<div class="veh-sum-card">
+      <div class="veh-sum-card__head">
+        <span class="veh-sum-card__icon">🚚</span>
+        <div class="veh-sum-card__title">
+          <span class="veh-sum-card__name">${esc(x.name)}</span>
+          <span class="veh-sum-card__plate">${esc(x.plate)}</span>
+        </div>
+      </div>
+      <div class="veh-sum-card__body">
+        <div class="veh-sum-card__km">${x.sum.toFixed(1)}<i>km</i></div>
+        <div class="veh-sum-card__bar"><div class="veh-sum-card__bar-fill" style="width:${Math.min(Number(pct), 100)}%"></div></div>
+        <div class="veh-sum-card__pct">${Number(pct).toFixed(1)}%</div>
+      </div>
+    </div>`;
+  }).join("");
+
   wrap.innerHTML = `
     <div class="veh-sum-head">
       <div class="veh-sum-title">📊 ${label} 里程汇总</div>
       <input type="month" class="input veh-month" id="vtMonthPicker" value="${mk}" onchange="onVtMonthChange()" />
     </div>
-    <table class="veh-sum-table">
-      <thead><tr>
-        <th>车辆</th>
-        <th class="veh-sum-th-km">本月里程</th>
-        <th class="veh-sum-th-pct">占比</th>
-      </tr></thead>
-      <tbody>
-        ${perVeh.map((x) => {
-          const pct = total > 0 ? ((x.sum / total) * 100).toFixed(1) : "0.0";
-          return `<tr>
-            <td class="veh-sum-td-name">${esc(x.name)}<span class="veh-sum-plate-sm">${esc(x.plate)}</span></td>
-            <td class="veh-sum-td-km">${x.sum.toFixed(1)}</td>
-            <td class="veh-sum-td-pct"><div class="veh-sum-bar-wrap"><div class="veh-sum-bar-fill" style="width:${Math.min(Number(pct), 100)}%"></div></div><span class="veh-sum-pct-text">${Number(pct).toFixed(1)}%</span></td>
-          </tr>`;
-        }).join("")}
-      </tbody>
-      <tfoot><tr class="veh-sum-total-row">
-        <td>合计</td>
-        <td class="veh-sum-td-km veh-sum-td-total">${total.toFixed(1)}</td>
-        <td>—</td>
-      </tr></tfoot>
-    </table>
-    <div class="veh-sum-foot">共 ${list.length} 条记录 · 出勤 ${days} 天</div>
+    <div class="veh-sum-grid">${vehicleCards}</div>
+    <div class="veh-sum-total">
+      <span>合计</span>
+      <b>${total.toFixed(1)} km</b>
+      <span>共 ${list.length} 条记录 · 出勤 ${days} 天</span>
+    </div>
   `;
 }
 
@@ -18353,35 +19106,36 @@ function renderDriverSummary() {
   const total = Math.round(perDriver.reduce((s, x) => s + x.sum, 0) * 10) / 10;
   const allEmpty = perDriver.length === 0;
 
+  const driverCards = perDriver.map((x) => {
+    const pct = total > 0 ? ((x.sum / total) * 100).toFixed(1) : "0.0";
+    const firstChar = esc(x.name.slice(0, 1));
+    return `<div class="veh-sum-card veh-sum-card--driver">
+      <div class="veh-sum-card__head">
+        <span class="veh-sum-card__avatar">${firstChar}</span>
+        <div class="veh-sum-card__title">
+          <span class="veh-sum-card__name">${esc(x.name)}</span>
+        </div>
+      </div>
+      <div class="veh-sum-card__body">
+        <div class="veh-sum-card__km">${x.sum.toFixed(1)}<i>km</i></div>
+        <div class="veh-sum-card__bar"><div class="veh-sum-card__bar-fill" style="width:${Math.min(Number(pct), 100)}%"></div></div>
+        <div class="veh-sum-card__pct">${Number(pct).toFixed(1)}%</div>
+      </div>
+    </div>`;
+  }).join("");
+
   wrap.innerHTML = `
     <div class="veh-sum-head">
       <div class="veh-sum-title">👤 ${label} 人员里程汇总</div>
     </div>
     ${allEmpty
       ? `<div class="empty" style="padding:10px 12px;">该月暂无用车记录。</div>`
-      : `<table class="veh-sum-table">
-        <thead><tr>
-          <th>人员</th>
-          <th class="veh-sum-th-km">本月里程</th>
-          <th class="veh-sum-th-pct">占比</th>
-        </tr></thead>
-        <tbody>
-          ${perDriver.map((x) => {
-            const pct = total > 0 ? ((x.sum / total) * 100).toFixed(1) : "0.0";
-            return `<tr>
-              <td class="veh-sum-td-name">${esc(x.name)}</td>
-              <td class="veh-sum-td-km">${x.sum.toFixed(1)}</td>
-              <td class="veh-sum-td-pct"><div class="veh-sum-bar-wrap"><div class="veh-sum-bar-fill" style="width:${Math.min(Number(pct), 100)}%"></div></div><span class="veh-sum-pct-text">${Number(pct).toFixed(1)}%</span></td>
-            </tr>`;
-          }).join("")}
-        </tbody>
-        <tfoot><tr class="veh-sum-total-row">
-          <td>合计</td>
-          <td class="veh-sum-td-km veh-sum-td-total">${total.toFixed(1)}</td>
-          <td>—</td>
-        </tr></tfoot>
-      </table>`}
-    <div class="veh-sum-foot">共 ${perDriver.length} 名人员有里程记录</div>
+      : `<div class="veh-sum-grid">${driverCards}</div>
+         <div class="veh-sum-total">
+           <span>合计</span>
+           <b>${total.toFixed(1)} km</b>
+           <span>共 ${perDriver.length} 名人员有里程记录</span>
+         </div>`}
   `;
 }
 
