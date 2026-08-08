@@ -1169,6 +1169,10 @@ select.input {
   grid-auto-rows: 1fr;
   gap: 18px;
 }
+/* 移动端：取消强制等高，卡片按自身内容高度、顶部对齐，信息多寡互不拉高 */
+@media (max-width: 768px) {
+  .card-grid { grid-auto-rows: auto; align-items: start; }
+}
 
 /* ===== 项目卡片：整体升级 ===== */
 .card {
