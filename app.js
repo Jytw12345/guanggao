@@ -18303,7 +18303,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v406defa4";
+  const APP_VERSION = "vc94c8d99";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18918,10 +18918,12 @@ function returnPanelHtml(v, trip) {
       <div class="veh-panel-rule">—— 还车结算 · ${esc(v.name)} ——</div>
       <div class="veh-quick-body">
         <div class="veh-quick-km">
-          <label>起始公里数 <span class="veh-lock">🔒 不可修改</span></label>
-          <input type="text" inputmode="numeric" class="input veh-km-edit" id="vtqStart"
-                 value="${Number(trip.startKm).toLocaleString()}" readonly />
-          <label style="margin-top:10px;">回来公里数</label>
+          <div class="veh-start-km">
+            <span class="veh-start-km__label">起始公里</span>
+            <span class="veh-start-km__val">${Number(trip.startKm).toLocaleString()} km</span>
+            <input type="hidden" id="vtqStart" value="${Number(trip.startKm)}" />
+          </div>
+          <label>回来公里数</label>
           <input type="text" inputmode="numeric" class="input veh-km-big" id="vtqEnd"
                  placeholder="填当前仪表读数（整数）" oninput="this.value = this.value.replace(/[^0-9]/g, ''); calcQuickMileage()" />
           <div id="vtqMileage" class="vtq-mileage">本次里程：0 km</div>

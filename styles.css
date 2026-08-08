@@ -8329,6 +8329,26 @@ table.data.project-hours-diff thead th {
   padding: 8px 10px;
   line-height: 1.5;
 }
+.veh-start-km {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+.veh-start-km__label {
+  font-size: 12px;
+  color: #9ca3af;
+}
+.veh-start-km__val {
+  font-size: 14px;
+  font-weight: 600;
+  color: #6b7280;
+}
 
 /* 司机自定义下拉（替代原生 datalist 系统选择框） */
 .veh-combo {
