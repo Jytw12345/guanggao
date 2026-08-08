@@ -14757,7 +14757,7 @@ function initPullToRefresh() {
   const THRESHOLD = 64;   // 触发刷新的下拉距离阈值(px)
   const MAX_PULL = 96;    // 最大下拉位移(px)
   const DAMP = 0.5;       // 阻尼系数，手指位移折半跟随
-  let startY = 0, startX = 0, startScroll = 0, pulling = false, lastPull = 0;
+  let startY = 0, startX = 0, startScroll = 0, pulling = false, lastPull = 0, scrollEl = null;
 
   const setPull = (px) => {
     lastPull = px;
@@ -14780,12 +14780,40 @@ function initPullToRefresh() {
     if (textEl) textEl.textContent = "下拉刷新";
   };
 
+  /* 查找触摸起点所在的「可独立滚动的内部容器」（下拉列表、项目选择面板、
+     搜索结果、弹窗正文、轮休人员选择等）。命中则本次手势不触发页面级下拉刷新，
+     改由该容器原生滚动，避免下拉刷新抢占滚动导致“滑动异常”。 */
+  function findScrollableEl(target) {
+    let node = target;
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (node.nodeType === 1 && node.classList) {
+        if (node.classList.contains("cs-dropdown") ||
+            node.classList.contains("project-picker") ||
+            node.classList.contains("search-results") ||
+            node.classList.contains("modal") ||
+            node.classList.contains("modal-body") ||
+            node.classList.contains("rot-pick") ||
+            node.classList.contains("hours-diff-wrap")) {
+          return node;
+        }
+        const ov = getComputedStyle(node).overflowY;
+        if ((ov === "auto" || ov === "scroll" || ov === "overlay") && node.scrollHeight > node.clientHeight + 1) {
+          if (node.clientHeight >= window.innerHeight - 8) return null; // 视口级全高滚动 = 页面主体
+          return node;
+        }
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
   document.addEventListener("touchstart", (e) => {
     if (ptrRefreshing) return;
     if (e.touches.length !== 1) { pulling = false; return; }
     startY = e.touches[0].clientY;
     startX = e.touches[0].clientX;
     startScroll = window.scrollY || window.pageYOffset || 0;
+    scrollEl = findScrollableEl(e.target);
     pulling = false;
   }, { passive: true });
 
@@ -14797,6 +14825,9 @@ function initPullToRefresh() {
     if (!pulling) {
       // 仅在页面处于顶部、且为明显的向下纵向手势时才进入下拉刷新
       if (startScroll <= 0 && dy > 8 && Math.abs(dy) > Math.abs(dx)) {
+        // 手势起始于可独立滚动的内部容器时，不接管——让容器原生滚动，
+        // 否则下拉刷新会抢占其滚动导致“滑动异常”（如项目选择列表滑动）
+        if (scrollEl) return;
         pulling = true;
       } else {
         return;
@@ -14959,7 +14990,7 @@ function applyPermissions() {
     if (el) el.classList.toggle("hidden", hidden);
   };
   setHidden("btnNewProject", !perm.createProject());
-  setHidden("btnNewWorker", !perm.manageWorkers());
+  setHidden("btnNewWorker", !perm.addWorker());
   setHidden("btnNewOutsourced", !perm.manageOutsourced());
   setHidden("btnNewStore", !perm.manageStores());
   setHidden("btnWageConfig", !perm.manageWageConfig());
@@ -17932,7 +17963,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va1d21edc";
+  const APP_VERSION = "v78bb7095";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
