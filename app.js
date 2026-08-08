@@ -18303,7 +18303,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc94c8d99";
+  const APP_VERSION = "v5971011f";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18819,7 +18819,7 @@ function renderVehicleDashboards() {
       ? (inUse ? returnPanelHtml(v, open) : usePanelHtml(v))
       : "";
     return `
-    <div class="veh-card${active}${inUse ? " busy" : ""}" onclick="onVehicleCardClick('${v.id}')">
+    <div class="veh-card${active}${inUse ? " busy" : ""}" onclick="onVehicleCardClick(event, '${v.id}')">
       <div class="veh-card-top">
         <div class="veh-card-id">
           <span class="veh-dash-name">${esc(v.name)}</span>
@@ -19615,7 +19615,11 @@ function vehicleProjectOptions(selectedId) {
 
 /* 点卡片：用车中 -> 还车；空闲 -> 用车 */
 /* 点卡片：再次点同一辆 -> 收起；否则展开内联菜单（用车/还车） */
-function onVehicleCardClick(vid) {
+function onVehicleCardClick(e, vid) {
+  /* 点击发生在已展开的内联面板内部时，不触发卡片的开关逻辑。
+     部分手机上内联 stopPropagation 不稳定，这里用事件目标兜底，
+     避免面板内点按被误判成「再点一次卡片」而折叠/整页重渲染（窗口消失、闪一下、输入被清空）。 */
+  if (e && e.target && typeof e.target.closest === "function" && e.target.closest(".veh-dash-panel")) return;
   if (window._vtqVehicleId === vid) {
     closeVehicleQuick();
     return;
@@ -19623,10 +19627,6 @@ function onVehicleCardClick(vid) {
   window._vtqVehicleId = vid;
   window._vtqType = window._vtqType || "送货";
   renderVehicleDashboards();
-  if (isVehicleInUse(vid)) {
-    setTimeout(() => { const e = document.getElementById("vtqEnd"); if (e) e.focus(); }, 30);
-  }
-  // 用车（空闲车）时默认不聚焦「起始公里数」输入框，避免移动端自动弹出键盘干扰用户核对仪表读数
 }
 
 /* 历史卡片「还车」按钮入口，行为同点卡片 */
