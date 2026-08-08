@@ -970,22 +970,9 @@ function getProjectProgress(p, est, act, hasActual, done) {
   }
   
   if (p.startedAt) {
-    const started = new Date(p.startedAt);
-    const now = new Date();
-    
-    const accumulatedWorkHours = p.accumulatedWorkHours || 0;
-    
-    let currentWorkDuration = 0;
-    let endTime = now;
-    if (p.status === STATUS.PAUSED && (p.pausedAt)) {
-      endTime = new Date(p.pausedAt);
-    }
-    currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
-    
     const workerCount = (p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1;
-    
-    const totalPersonHours = Math.max(0, (accumulatedWorkHours + currentWorkDuration) * workerCount);
-    const timeProgress = (totalPersonHours / est) * 100;
+    const totalPersonHours = calcProjectActualPersonHours(p);
+    const timeProgress = (totalPersonHours / workerCount / est) * 100;
     return Math.min(100, Math.max(0, timeProgress));
   }
   
@@ -1020,6 +1007,46 @@ function fmtHoursNum(n) {
   const v = Number(n);
   if (!isFinite(v)) return 0;
   return Number(v.toFixed(2));
+}
+
+/* 计算项目实际人工工时（人·小时）。
+   - 未开工/预约中/取消：0
+   - 已暂停/已延期/已完工/已验收/已审核：以 accumulatedWorkHours 为准（状态变更时已结算）
+   - 施工中：accumulatedWorkHours + 本次恢复后持续到现在的时长
+   历史数据若缺少 accumulatedWorkHours，则退化为按起止锚点与暂停历史推算。 */
+function calcProjectActualPersonHours(p) {
+  if (!p || !p.startedAt) return 0;
+  const workerCount = Math.max(1, (p.assignedWorkerIds || []).length);
+
+  // 已结束/暂停/延期/取消：accumulatedWorkHours 已在状态变更时结算
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.PAUSED, STATUS.DELAYED, STATUS.CANCELLED].includes(p.status)) {
+    const acc = Number(p.accumulatedWorkHours) || 0;
+    if (acc > 0) return acc * workerCount;
+  }
+
+  // 施工中：累计 + 当前会话
+  if (p.status === STATUS.WORKING) {
+    const acc = Number(p.accumulatedWorkHours) || 0;
+    const sessionStart = p.resumedAt || p.startedAt;
+    const now = new Date();
+    let currentHours = 0;
+    if (sessionStart) {
+      currentHours = Math.max(0, (now - new Date(sessionStart)) / (1000 * 60 * 60));
+    }
+    return (acc + currentHours) * workerCount;
+  }
+
+  // 兜底：按起止锚点计算（兼容无 accumulatedWorkHours 的历史数据）
+  const end = getProjectEffectiveEndTime(p);
+  if (!end || isNaN(end)) return 0;
+  const start = new Date(p.startedAt);
+  let elapsedMs = end.getTime() - start.getTime();
+  (p.pauseHistory || []).forEach(ph => {
+    if (ph.pauseAt && ph.resumedAt) {
+      elapsedMs -= new Date(ph.resumedAt).getTime() - new Date(ph.pauseAt).getTime();
+    }
+  });
+  return Math.max(0, elapsedMs / (1000 * 60 * 60)) * workerCount;
 }
 
 function calcDuration(start, end) {
@@ -1075,15 +1102,16 @@ function getProjectEffectiveEndTime(p) {
   if (p.status === STATUS.CANCELLED && p.cancelledAt) {
     return new Date(p.cancelledAt);
   }
-  /* 已暂停：优先用 pausedAt；若无（历史数据缺失），从 pauseHistory 最后一条回填 */
-  if (p.status === STATUS.PAUSED) {
+  /* 已暂停/已延期：优先用 pausedAt；若无（历史数据缺失），从 pauseHistory 最后一条回填。
+     这两种状态都应停止继续计时，不能返回 now。 */
+  if (p.status === STATUS.PAUSED || p.status === STATUS.DELAYED) {
     if (p.pausedAt) return new Date(p.pausedAt);
     const history = p.pauseHistory || [];
     if (history.length > 0) {
       const last = history[history.length - 1];
       if (last.pauseAt && !last.resumedAt) return new Date(last.pauseAt);
     }
-    /* 兜底：状态是 PAUSED 就不应该再用 now，用 startedAt 或 now 中较晚者 */
+    /* 兜底：不应再用 now，用 startedAt 或 now 中较晚者 */
     return p.startedAt ? new Date(Math.max(new Date(p.startedAt).getTime(), now.getTime() - 1)) : now;
   }
   return now;
@@ -9651,37 +9679,14 @@ function generateWorkerScheduleDescription(dateStr = null) {
     const totalEstimatedHours = allTodayProjects.reduce((sum, p) => {
       return sum + (p.estimatedHours || 0);
     }, 0);
-    // 实际人·小时：完工项目按真实登记工时（startedAt→finishedAt 扣除暂停），未完工按已用时间
+    // 实际人·小时：统一用 calcProjectActualPersonHours，已暂停/延期的项目会停在暂停点，不再继续计时
     const totalActualPersonHours = allTodayProjects.reduce((sum, p) => {
-      if (!p.startedAt) return sum;
-      const end = p.finishedAt ? new Date(p.finishedAt) : new Date();
-      const start = new Date(p.startedAt);
-      let elapsedMs = end - start;
-      (p.pauseHistory || []).forEach(ph => {
-        if (ph.startTime && ph.endTime) {
-          const pauseStart = new Date(ph.startTime);
-          const pauseEnd = new Date(ph.endTime);
-          elapsedMs -= pauseEnd - pauseStart;
-        }
-      });
-      const workerCount = Math.max(1, (p.assignedWorkerIds || []).length);
-      return sum + (elapsedMs / (1000 * 60 * 60)) * workerCount;
+      return sum + calcProjectActualPersonHours(p);
     }, 0);
     // 节省工时：仅已完工项目中「实际 < 计划」的部分累计
     const savedHours = allTodayProjects.reduce((sum, p) => {
       if (![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) || !p.startedAt) return sum;
-      const end = p.finishedAt ? new Date(p.finishedAt) : new Date();
-      const start = new Date(p.startedAt);
-      let elapsedMs = end - start;
-      (p.pauseHistory || []).forEach(ph => {
-        if (ph.startTime && ph.endTime) {
-          const pauseStart = new Date(ph.startTime);
-          const pauseEnd = new Date(ph.endTime);
-          elapsedMs -= pauseEnd - pauseStart;
-        }
-      });
-      const workerCount = Math.max(1, (p.assignedWorkerIds || []).length);
-      const actual = (elapsedMs / (1000 * 60 * 60)) * workerCount;
+      const actual = calcProjectActualPersonHours(p);
       const planned = p.estimatedHours || 0;
       return sum + Math.max(0, planned - actual);
     }, 0);
@@ -18303,7 +18308,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vec5e3dcf";
+  const APP_VERSION = "v0c6fd9c7";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
