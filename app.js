@@ -14745,7 +14745,9 @@ let ptrRefreshing = false;
 /* ============================================================
  * 自定义下拉刷新（移动端）：只刷新数据、不重载软件、不跳界面、不丢滚动
  * 替代浏览器原生下拉刷新（原生=整页reload，会回到第一屏）。
- * 手势仅在「页面已滚到顶部」+「向下纵向拖拽」时触发，避免与页面内滚动/时间轴横滑冲突。
+ * 仅在「云端模式 + 数据类界面」启用；本地模式无云端可同步、设置/帮助等
+ * 静态界面无意义，均不触发。手势还需在「页面已滚到顶部」+「向下纵向拖拽」
+ * 且「起始于页面主体（非内部滚动容器）」时才触发，避免与滚动/时间轴横滑冲突。
  * ============================================================ */
 function initPullToRefresh() {
   const el = document.getElementById("ptr-indicator");
@@ -14757,7 +14759,24 @@ function initPullToRefresh() {
   const THRESHOLD = 64;   // 触发刷新的下拉距离阈值(px)
   const MAX_PULL = 96;    // 最大下拉位移(px)
   const DAMP = 0.5;       // 阻尼系数，手指位移折半跟随
-  let startY = 0, startX = 0, startScroll = 0, pulling = false, lastPull = 0, scrollEl = null;
+  let startY = 0, startX = 0, startScroll = 0, pulling = false, lastPull = 0, scrollEl = null, ptrActive = false;
+
+  /* 仅在「云端模式 + 数据类界面」启用下拉刷新；本地模式无云端可同步、设置/帮助
+     等静态界面无刷新意义，均不触发，避免无意义刷新。 */
+  const PTR_DATA_TABS = new Set([
+    "projects", "calendar", "construction", "vehicleTrips", "internalTasks",
+    "workers", "schedules", "leaves", "stats", "storeStats", "outsourced"
+  ]);
+  function ptrEnabledForCurrentTab() {
+    if (MODE !== "cloud") return false;
+    let tab = null;
+    try { tab = sessionStorage.getItem("activeTab"); } catch (_) {}
+    if (!tab) {
+      const p = document.querySelector(".tab-panel.active");
+      tab = p ? p.id : null;
+    }
+    return !!(tab && PTR_DATA_TABS.has(tab));
+  }
 
   const setPull = (px) => {
     lastPull = px;
@@ -14809,6 +14828,8 @@ function initPullToRefresh() {
 
   document.addEventListener("touchstart", (e) => {
     if (ptrRefreshing) return;
+    ptrActive = ptrEnabledForCurrentTab();
+    if (!ptrActive) { pulling = false; return; }
     if (e.touches.length !== 1) { pulling = false; return; }
     startY = e.touches[0].clientY;
     startX = e.touches[0].clientX;
@@ -14818,7 +14839,7 @@ function initPullToRefresh() {
   }, { passive: true });
 
   document.addEventListener("touchmove", (e) => {
-    if (ptrRefreshing) return;
+    if (ptrRefreshing || !ptrActive) return;
     if (e.touches.length !== 1) return;
     const dy = e.touches[0].clientY - startY;
     const dx = e.touches[0].clientX - startX;
@@ -17963,7 +17984,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v78bb7095";
+  const APP_VERSION = "v113e3417";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
