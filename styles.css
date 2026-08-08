@@ -8290,6 +8290,7 @@ table.data.project-hours-diff thead th {
   color: #1f2937;
   text-align: left;
   box-shadow: 0 4px 14px rgba(0,0,0,.28);
+  overscroll-behavior: contain;
 }
 .veh-panel-rule {
   text-align: center;

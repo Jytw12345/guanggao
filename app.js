@@ -18303,7 +18303,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v34eb740a";
+  const APP_VERSION = "v406defa4";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18976,15 +18976,25 @@ function initFuelGauge() {
     lcd.textContent = snapped + "%";
     hidden.value = String(snapped);
   }
-  function fromEvent(e) {
+  function fromX(clientX) {
     const r = segs.getBoundingClientRect();
-    setVal((e.clientX - r.left) / r.width * 100);
+    setVal((clientX - r.left) / r.width * 100);
   }
+  function xOf(e) { return (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX; }
   let dragging = false;
-  segs.addEventListener("pointerdown", (e) => { dragging = true; try { segs.setPointerCapture(e.pointerId); } catch (_) {} fromEvent(e); });
-  segs.addEventListener("pointermove", (e) => { if (dragging) { e.preventDefault(); fromEvent(e); } });
-  segs.addEventListener("pointerup", () => { dragging = false; });
-  segs.addEventListener("pointercancel", () => { dragging = false; });
+  // 触摸：passive:false 才能 preventDefault，彻底拦截页面滚动与下拉刷新/橡皮筋
+  segs.addEventListener("touchstart", (e) => { dragging = true; if (e.cancelable) e.preventDefault(); fromX(xOf(e)); }, { passive: false });
+  segs.addEventListener("touchmove", (e) => { if (!dragging) return; if (e.cancelable) e.preventDefault(); fromX(xOf(e)); }, { passive: false });
+  segs.addEventListener("touchend", () => { dragging = false; });
+  segs.addEventListener("touchcancel", () => { dragging = false; });
+  // 鼠标：mousedown 后把 move/up 绑到 window，结束即解绑（无泄漏）
+  segs.addEventListener("mousedown", (e) => {
+    dragging = true; fromX(e.clientX);
+    const move = (ev) => { if (dragging) { ev.preventDefault(); fromX(ev.clientX); } };
+    const up = () => { dragging = false; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  });
   setVal(Number(hidden.value) || 0);
 }
 
