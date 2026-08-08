@@ -8240,10 +8240,10 @@ table.data.project-hours-diff thead th {
 .veh-fuel-badge--none { background:#f1f5f9; color:#94a3b8; border-color:#e2e8f0; }
 
 /* 还车 · 横向液位指示器 */
-.veh-fuel-gauge { display: flex; align-items: center; gap: 10px; }
+.veh-fuel-gauge { display: flex; align-items: center; gap: 12px; }
 .veh-fuel-ico { flex-shrink: 0; }
 .veh-fuel-segs {
-  flex: 1; display: flex; gap: 3px; height: 16px;
+  flex: 1; display: flex; gap: 3px; height: 18px;
   cursor: pointer; touch-action: none;
 }
 .veh-fuel-seg {
@@ -8253,11 +8253,14 @@ table.data.project-hours-diff thead th {
 }
 .veh-fuel-seg.on { /* 颜色由 JS 按阈值写入 */ }
 .veh-fuel-lcd {
-  min-width: 46px; text-align: center;
-  background: #0b1220; border-radius: 6px; padding: 4px 0;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  font-size: 15px; font-weight: 500; color: #16a34a;
+  min-width: 52px; text-align: right;
+  font-size: 20px; font-weight: 700; line-height: 1;
+  color: #16a34a; padding: 0 2px;
+  transition: color .12s ease;
 }
+.veh-fuel-lcd.it-low  { color: #dc2626; }
+.veh-fuel-lcd.it-mid  { color: #d97706; }
+.veh-fuel-lcd.it-high { color: #16a34a; }
 .veh-fuel-ticks {
   display: flex; justify-content: space-between;
   font-size: 11px; color: #94a3b8; margin-top: 6px; padding: 0 26px;

@@ -18303,7 +18303,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v50984eb4";
+  const APP_VERSION = "v34eb740a";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18966,12 +18966,14 @@ function initFuelGauge() {
     v = Math.max(0, Math.min(100, Math.round(v)));
     const snapped = Math.round(v / 10) * 10;
     const c = colorOf(snapped);
+    const levelCls = snapped <= 20 ? "it-low" : (snapped <= 40 ? "it-mid" : "it-high");
     segEls.forEach((el, idx) => {
       el.classList.toggle("on", (idx + 1) * 10 <= snapped);
       el.style.background = (idx + 1) * 10 <= snapped ? c : "";
     });
+    lcd.classList.remove("it-low", "it-mid", "it-high");
+    lcd.classList.add(levelCls);
     lcd.textContent = snapped + "%";
-    lcd.style.color = c;
     hidden.value = String(snapped);
   }
   function fromEvent(e) {
