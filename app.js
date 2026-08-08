@@ -1487,30 +1487,41 @@ const mapInternalTask = (r) => ({
   calculatedHours: r.calculated_hours != null ? Number(r.calculated_hours) : null,
   verifiedAt: r.verified_at || "",
   verifyNote: r.verify_note || "",
+  customerName: r.customer_name || "",
+  contactName: r.contact_name || "",
+  contactPhone: r.contact_phone || "",
+  address: r.address || "",
   createdAt: r.created_at || r.createdAt || "",
 });
 
+/* 注意：内部任务表所有文本列均为 NOT NULL DEFAULT ''，数值列为 NOT NULL DEFAULT 0。
+   这里必须显式给空串/0，不能用 || null —— 显式传 null 会绕过 DEFAULT 并触发 NOT NULL 约束报错
+   （例如 note 为空串时 "note || null" 会变成 null，导致 23502 报错）。 */
 const internalTaskToRow = (t) => ({
   id: t.id,
   name: t.name || "",
-  work_type: t.workType || null,
-  level: t.level || null,
-  worker_id: t.workerId || null,
-  worker_name: t.workerName || null,
-  date: t.date || null,
-  scheduled_start_time: t.scheduledStartTime || null,
-  scheduled_end_time: t.scheduledEndTime || null,
+  work_type: t.workType || "",
+  level: t.level || "",
+  worker_id: t.workerId || "",
+  worker_name: t.workerName || "",
+  date: t.date || "",
+  scheduled_start_time: t.scheduledStartTime || "",
+  scheduled_end_time: t.scheduledEndTime || "",
   est_hours: Number(t.estHours) || 0,
-  note: t.note || null,
+  note: t.note || "",
   status: t.status || TASK_STATUS.PENDING,
-  actual_start_time: t.actualStartTime || null,
+  actual_start_time: t.actualStartTime || "",
   start_timestamp: t.startTimestamp || 0,
-  actual_end_time: t.actualEndTime || null,
+  actual_end_time: t.actualEndTime || "",
   end_timestamp: t.endTimestamp || 0,
-  actual_hours: t.actualHours != null ? Number(t.actualHours) : null,
-  calculated_hours: t.calculatedHours != null ? Number(t.calculatedHours) : null,
-  verified_at: t.verifiedAt || null,
-  verify_note: t.verifyNote || null,
+  actual_hours: t.actualHours != null ? Number(t.actualHours) : 0,
+  calculated_hours: t.calculatedHours != null ? Number(t.calculatedHours) : 0,
+  verified_at: t.verifiedAt || "",
+  verify_note: t.verifyNote || "",
+  customer_name: t.customerName || "",
+  contact_name: t.contactName || "",
+  contact_phone: t.contactPhone || "",
+  address: t.address || "",
   created_at: t.createdAt || new Date().toISOString(),
   updated_at: new Date().toISOString(),
 });
@@ -12047,19 +12058,15 @@ function refreshTaskTimeOptions() {
   refreshTaskEndTimeMin();
 }
 
-/** 根据开始时间刷新结束时间最小值 */
+/** 开始时间变化后刷新结束时间选项（不再强制 ≥ 开始，允许跨天选择；结束<开始=次日） */
 function refreshTaskEndTimeMin() {
   const startEl = document.getElementById("newTaskStartTime");
   const endEl = document.getElementById("newTaskEndTime");
   if (!startEl || !endEl) return;
-  const startVal = startEl.value || "08:00";
-  const curEnd = endEl.value;
-  /* 结束时间至少比开始时间晚10分钟 */
-  let [sh, sm] = startVal.split(":").map(Number);
-  let em = sm + 10; let eh = sh;
-  if (em >= 60) { em -= 60; eh++; }
-  const minEnd = `${String(eh).padStart(2,"0")}:${String(em).padStart(2,"0")}`;
-  endEl.innerHTML = generateTimeOptions(curEnd > minEnd ? curEnd : minEnd, minEnd);
+  const curEnd = endEl.value || "10:00";
+  /* 不限制最小结束时间，允许选到比开始早的时间（按次日计算） */
+  endEl.innerHTML = generateTimeOptions(curEnd, null);
+  onTaskTimeChange();
 }
 
 function closeNewInternalTaskModal() {
@@ -12084,8 +12091,35 @@ function showNewInternalTaskModal() {
       </div>
       <div class="modal-body" style="padding:12px;overflow-y:auto;max-height:calc(90vh - 60px);">
         <div style="margin-bottom:10px;">
-          <label style="font-size:12px;font-weight:600;color:#333;">任务名称</label>
+          <label style="font-size:12px;font-weight:600;color:#333;">任务名称 <span style="color:#e53e3e;">*</span></label>
           <input class="input" id="newTaskName" placeholder="如：仓库焊架子" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+        </div>
+
+        <div style="margin-bottom:10px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+          <div style="font-size:12px;font-weight:600;color:#0891b2;margin-bottom:8px;cursor:pointer;user-select:none;" onclick="toggleNewTaskCustomer()">📇 客户信息（选填，便于现场对照）<span id="taskCustomerToggle" style="float:right;font-size:11px;color:#64748b;">▸ 展开</span></div>
+          <div id="newTaskCustomerBody" style="display:none;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#333;">客户名称</label>
+                <input class="input" id="newTaskCustomer" list="taskCustomerDatalist" placeholder="客户 / 单位" oninput="onTaskCustomerPick()" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#333;">联系人</label>
+                <input class="input" id="newTaskContact" placeholder="联系人姓名" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#333;">联系电话</label>
+                <input class="input" id="newTaskPhone" placeholder="联系电话" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#333;">安装地址</label>
+                <input class="input" id="newTaskAddress" placeholder="施工现场地址" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+              </div>
+            </div>
+            <datalist id="taskCustomerDatalist">${getCustomerHistory().map(c => `<option value="${esc(c.customer)}" data-phone="${esc(c.phone || "")}" data-address="${esc(c.address || "")}">`).join("")}</datalist>
+          </div>
         </div>
         
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
@@ -12110,7 +12144,7 @@ function showNewInternalTaskModal() {
         </div>
         
         <div style="margin-bottom:10px;">
-          <label style="font-size:12px;font-weight:600;color:#333;">分配人员</label>
+          <label style="font-size:12px;font-weight:600;color:#333;">分配人员 <span style="color:#e53e3e;">*</span></label>
           <select class="input" id="newTaskWorker" onchange="updateNewTaskWorkerName()" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
             <option value="">请选择人员</option>
             ${workerOptions}
@@ -12119,26 +12153,26 @@ function showNewInternalTaskModal() {
         
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
           <div>
-            <label style="font-size:12px;font-weight:600;color:#333;">任务日期</label>
+            <label style="font-size:12px;font-weight:600;color:#333;">任务日期 <span style="color:#e53e3e;">*</span></label>
             <input class="input" type="date" id="newTaskDate" value="${todayStr()}" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="refreshTaskTimeOptions()" />
           </div>
           <div>
-            <label style="font-size:12px;font-weight:600;color:#333;">开始时间</label>
+            <label style="font-size:12px;font-weight:600;color:#333;">开始时间 <span style="color:#e53e3e;">*</span></label>
             <select class="input" id="newTaskStartTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="refreshTaskEndTimeMin()">
               ${generateTimeOptions(getDefaultStartTime(), getTodayMinTime())}
             </select>
           </div>
           <div>
-            <label style="font-size:12px;font-weight:600;color:#333;">结束时间</label>
-            <select class="input" id="newTaskEndTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;">
+            <label style="font-size:12px;font-weight:600;color:#333;">结束时间 <span style="color:#e53e3e;">*</span> <span id="taskEndNextDayHint" style="display:none;font-size:10px;color:#0891b2;">(次日)</span></label>
+            <select class="input" id="newTaskEndTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="onTaskTimeChange()">
               ${generateTimeOptions("10:00")}
             </select>
           </div>
         </div>
         
         <div style="margin-bottom:10px;">
-          <label style="font-size:12px;font-weight:600;color:#333;">预计工时(小时)</label>
-          <input class="input" type="number" min="0" step="0.1" id="newTaskEstHours" placeholder="0" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+          <label style="font-size:12px;font-weight:600;color:#333;">预计工时(小时) <span style="color:#e53e3e;">*</span></label>
+          <input class="input" type="number" min="0" step="0.1" id="newTaskEstHours" placeholder="自动按起止时间计算" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
         </div>
         
         <div style="margin-bottom:12px;">
@@ -12151,6 +12185,7 @@ function showNewInternalTaskModal() {
     </div>`;
   document.body.appendChild(popup);
   initCustomSelects(popup);
+  onTaskTimeChange();
 }
 
 function updateNewTaskWorkerName() {
@@ -12159,6 +12194,52 @@ function updateNewTaskWorkerName() {
   if (option) {
     select.setAttribute("data-name", option.getAttribute("data-name") || option.text);
   }
+}
+
+/* 下达内部任务时，输入客户名称后自动从客户历史补填电话/地址（与预约任务一致） */
+function onTaskCustomerPick() {
+  const input = document.getElementById("newTaskCustomer");
+  if (!input) return;
+  const val = input.value.trim();
+  if (!val) return;
+  const cust = getCustomerHistory().find((c) => c.customer === val);
+  if (!cust) return;
+  const phoneEl = document.getElementById("newTaskPhone");
+  const addrEl = document.getElementById("newTaskAddress");
+  if (phoneEl && !phoneEl.value) phoneEl.value = cust.phone || "";
+  if (addrEl && !addrEl.value) addrEl.value = cust.address || "";
+}
+
+/* 客户信息区折叠/展开 */
+function toggleNewTaskCustomer() {
+  const b = document.getElementById("newTaskCustomerBody");
+  const t = document.getElementById("taskCustomerToggle");
+  if (!b) return;
+  const collapsed = b.style.display === "none";
+  b.style.display = collapsed ? "block" : "none";
+  if (t) t.textContent = collapsed ? "▾ 收起" : "▸ 展开";
+}
+
+/* 按起止时间计算预计工时：结束 ≤ 开始 视为跨天（次日），保留 1 位小数 */
+function computeEstHours(startTime, endTime) {
+  if (!startTime || !endTime) return 0;
+  const [sh, sm] = startTime.split(":").map(Number);
+  const [eh, em] = endTime.split(":").map(Number);
+  let diff = (eh * 60 + em) - (sh * 60 + sm);
+  if (diff <= 0) diff += 24 * 60; // 跨天
+  return Math.round(diff / 6) / 10; // = diff/60 保留 1 位小数
+}
+
+/* 开始/结束时间变化后：自动填预计工时 + 显示「(次日)」提示 */
+function onTaskTimeChange() {
+  const startEl = document.getElementById("newTaskStartTime");
+  const endEl = document.getElementById("newTaskEndTime");
+  const estEl = document.getElementById("newTaskEstHours");
+  const hintEl = document.getElementById("taskEndNextDayHint");
+  if (!startEl || !endEl || !estEl) return;
+  const est = computeEstHours(startEl.value, endEl.value);
+  if (est > 0) estEl.value = est;
+  if (hintEl) hintEl.style.display = (endEl.value && startEl.value && endEl.value < startEl.value) ? "inline" : "none";
 }
 
 function saveNewInternalTask() {
@@ -12174,14 +12255,23 @@ function saveNewInternalTask() {
   const scheduledEndTime = document.getElementById("newTaskEndTime").value;
   const estHours = Number(document.getElementById("newTaskEstHours").value);
   const note = document.getElementById("newTaskNote").value.trim();
-  
+  const customerName = document.getElementById("newTaskCustomer").value.trim();
+  const contactName = document.getElementById("newTaskContact").value.trim();
+  const contactPhone = document.getElementById("newTaskPhone").value.trim();
+  const address = document.getElementById("newTaskAddress").value.trim();
+
   if (!name) { toast("请输入任务名称"); return; }
   if (!workerId) { toast("请选择分配人员"); return; }
   if (!date) { toast("请选择任务日期"); return; }
   if (!scheduledStartTime) { toast("请选择开始时间"); return; }
   if (!scheduledEndTime) { toast("请选择结束时间"); return; }
   if (!estHours || estHours <= 0) { toast("请输入预计工时"); return; }
-  
+
+  // 选填的客户信息也写入客户历史，供预约任务/后续下达自动补全
+  if (customerName) {
+    try { upsertCustomer(customerName, contactPhone, address); } catch (e) { /* 不影响下达 */ }
+  }
+
   addInternalTask({
     name,
     workType,
@@ -12192,7 +12282,11 @@ function saveNewInternalTask() {
     scheduledStartTime,
     scheduledEndTime,
     estHours,
-    note
+    note,
+    customerName,
+    contactName,
+    contactPhone,
+    address
   });
   
   toast("任务已下达");
@@ -12272,6 +12366,9 @@ function showVerifyModal(id) {
             <div>👤 ${esc(task.workerName)}</div>
             <div>${svgCal(13)} ${esc(task.date)}</div>
             <div>🏷️ ${esc(task.workType)} · ${esc(task.level)}</div>
+            ${task.customerName ? `<div>🏢 ${esc(task.customerName)}${task.contactName ? " · " + esc(task.contactName) : ""}</div>` : ""}
+            ${task.contactPhone ? `<div>📞 ${esc(task.contactPhone)}</div>` : ""}
+            ${task.address ? `<div>📍 ${esc(task.address)}</div>` : ""}
           </div>
         </div>
         
@@ -12638,61 +12735,80 @@ function renderInternalTasks() {
   
   container.innerHTML = filtered.map(t => {
     const statusText = { pending: '待开始', in_progress: '进行中', completed: '待审核', verified: '已审核' };
-    const statusColor = { pending: '#6b7280', in_progress: '#3b82f6', completed: '#f59e0b', verified: '#10b981' };
-    
+
+    const calcH = t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours);
+    const shortDate = t.date ? t.date.slice(5) : '';
+    const isOvernight = t.scheduledStartTime && t.scheduledEndTime && t.scheduledEndTime < t.scheduledStartTime;
+    const endLabel = (isOvernight ? '次日 ' : '') + (t.scheduledEndTime || '-');
+
+    const svgClock = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>`;
+    const svgBuilding = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 21v-6h6v6"/></svg>`;
+    const svgUser = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>`;
+    const svgPhone = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`;
+    const svgPin = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`;
+
     let actionButtons = '';
     if (t.status === TASK_STATUS.PENDING) {
-      actionButtons = perm.startTask(t) ? `<button class="btn primary" onclick="startInternalTask('${t.id}')">任务开始</button>` : '';
+      actionButtons = perm.startTask(t) ? `<button class="it-action-btn it-action-btn--primary" onclick="startInternalTask('${t.id}')">任务开始</button>` : '';
     } else if (t.status === TASK_STATUS.IN_PROGRESS) {
-      actionButtons = perm.completeTask(t) ? `<button class="btn success" onclick="completeInternalTask('${t.id}')">任务完成</button>` : '';
+      actionButtons = perm.completeTask(t) ? `<button class="it-action-btn it-action-btn--success" onclick="completeInternalTask('${t.id}')">任务完成</button>` : '';
     } else if (t.status === TASK_STATUS.COMPLETED) {
-      actionButtons = perm.verifyTask() ? `<button class="btn primary" onclick="showVerifyModal('${t.id}')">审核</button>` : '';
+      actionButtons = perm.verifyTask() ? `<button class="it-action-btn it-action-btn--primary" onclick="showVerifyModal('${t.id}')">审核</button>` : '';
     }
-    
-    const calcH = t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours);
+
     const timeInfo = t.status === TASK_STATUS.PENDING && t.scheduledStartTime && t.scheduledEndTime
-      ? `<div class="it-time-box it-time-box--pending">
-           <div class="it-tline">${svgCal(13)} 安排：<b>${t.scheduledStartTime} ~ ${t.scheduledEndTime}</b></div>
+      ? `<div class="it-time-box">
+           <div class="it-tline">${svgCal(12)} 安排：<b>${t.scheduledStartTime} → ${endLabel}</b><span class="it-duration">(${fmtHours(t.estHours)}h)</span></div>
          </div>`
-      : t.status === TASK_STATUS.IN_PROGRESS 
-        ? `<div class="it-time-box it-time-box--in_progress">
-             <div class="it-tline">${svgCal(13)} 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
-             <div class="it-tline">⏰ 实际开始：<b>${t.actualStartTime || '-'}</b></div>
+      : t.status === TASK_STATUS.IN_PROGRESS
+        ? `<div class="it-time-box">
+             <div class="it-tline">${svgCal(12)} 安排：<b>${t.scheduledStartTime || '-'} → ${endLabel}</b></div>
+             <div class="it-tline">${svgClock} 实际开始：<b>${t.actualStartTime || '-'}</b></div>
            </div>`
         : t.status === TASK_STATUS.COMPLETED
-          ? `<div class="it-time-box it-time-box--completed">
-               <div class="it-tline">${svgCal(13)} 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
-               <div class="it-tline">⏰ 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
-               <div class="it-tline">📊 预计：${fmtHours(t.estHours)}h / 记录：<b>${fmtHours(calcH)}h</b></div>
-               <div class="it-tline it-tline--warn">⚠️ 等待审核</div>
+          ? `<div class="it-time-box">
+               <div class="it-tline">${svgCal(12)} 安排：<b>${t.scheduledStartTime || '-'} → ${endLabel}</b></div>
+               <div class="it-tline">${svgClock} 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b><span class="it-duration">(${fmtHours(calcH)}h)</span></div>
+               <div class="it-tline">预计：${fmtHours(t.estHours)}h · <span class="it-status-hint it-status-hint--completed">等待审核</span></div>
              </div>`
           : t.status === TASK_STATUS.VERIFIED
-            ? `<div class="it-time-box it-time-box--verified">
-                 <div class="it-tline">${svgCal(13)} 安排：<b>${t.scheduledStartTime || '-'} ~ ${t.scheduledEndTime || '-'}</b></div>
-                 <div class="it-tline">⏰ 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b></div>
-                 <div class="it-tline">📊 预计：${fmtHours(t.estHours)}h / 记录：<b>${fmtHours(calcH)}h</b></div>
-                 <div class="it-tline it-tline--ok">✅ 已审核</div>
-                 ${t.verifyNote ? `<div class="it-tline">📝 ${esc(t.verifyNote)}</div>` : ''}
+            ? `<div class="it-time-box">
+                 <div class="it-tline">${svgCal(12)} 安排：<b>${t.scheduledStartTime || '-'} → ${endLabel}</b></div>
+                 <div class="it-tline">${svgClock} 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b><span class="it-duration">(${fmtHours(calcH)}h)</span></div>
+                 <div class="it-tline">预计：${fmtHours(t.estHours)}h · <span class="it-status-hint it-status-hint--verified">已审核</span></div>
+                 ${t.verifyNote ? `<div class="it-tline">备注：${esc(t.verifyNote)}</div>` : ''}
                </div>`
             : '';
-    
+
     return `
       <div class="card internal-task-card it-card--${t.status}">
-        <!-- 右上角状态角标 -->
-        <span class="it-status-pill it-status-pill--${t.status}">
-          <i class="it-dot"></i>${statusText[t.status]}
-        </span>
-        
         <div class="it-body">
           <div class="it-head-row">
             <h3 class="it-title">${esc(t.name)}</h3>
+            <span class="it-status-badge it-status-badge--${t.status}">
+              <i class="it-dot"></i>${statusText[t.status]}
+            </span>
           </div>
-          <p class="it-sub">${esc(t.workType)} · ${esc(t.level)} · 预计${esc(t.estHours)}小时</p>
+
+          <div class="it-tags">
+            <span class="it-tag">${esc(t.workType)}</span>
+            <span class="it-tag">${esc(t.level)}</span>
+            <span class="it-tag">预计<b>${esc(t.estHours)}</b>h</span>
+          </div>
 
           <div class="it-meta-row">
-            <span class="it-meta-item"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>${esc(t.workerName)}</span>
-            <span class="it-meta-item"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>${esc(t.date)}</span>
+            <span class="it-meta-item"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>${esc(t.workerName)}</span>
+            <span class="it-meta-item"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>${esc(shortDate)}</span>
           </div>
+
+          ${(t.customerName || t.contactName || t.contactPhone || t.address)
+            ? `<div class="it-customer">
+                 ${t.customerName ? `<span class="it-cline">${svgBuilding} ${esc(t.customerName)}</span>` : ""}
+                 ${t.contactName ? `<span class="it-cline">${svgUser} ${esc(t.contactName)}</span>` : ""}
+                 ${t.contactPhone ? `<span class="it-cline">${svgPhone} ${esc(t.contactPhone)}</span>` : ""}
+                 ${t.address ? `<span class="it-cline">${svgPin} ${esc(t.address)}</span>` : ""}
+               </div>`
+            : ""}
 
           ${t.note ? `<div class="it-note">${esc(t.note)}</div>` : ''}
 
@@ -12703,7 +12819,7 @@ function renderInternalTasks() {
           <div class="it-actions">
             ${actionButtons}
           </div>
-          ${perm.deleteTask() ? `<button class="it-del-link" onclick="deleteInternalTask('${t.id}')">删除任务</button>` : ''}
+          ${perm.deleteTask() ? `<button class="it-del-link" onclick="deleteInternalTask('${t.id}')">删除</button>` : ''}
         </div>
       </div>
     `;
@@ -13944,10 +14060,14 @@ const modal = {
     }
     
     document.getElementById("modal").classList.remove("hidden");
+    document.body.classList.add("modal-open");
+    document.documentElement.classList.add("modal-open");
     initCustomSelects(document.getElementById("modalBody"));
   },
   close() {
     document.getElementById("modal").classList.add("hidden");
+    document.body.classList.remove("modal-open");
+    document.documentElement.classList.remove("modal-open");
     document.getElementById("modalBody").innerHTML = "";
     document.getElementById("modalFooter").classList.remove("hidden");
     if (modalOnClose) {
@@ -18183,7 +18303,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v3c47fe5a";
+  const APP_VERSION = "v50984eb4";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18720,7 +18840,7 @@ function renderVehicleDashboards() {
         </div>
         <div class="veh-card-hero">
           <div class="veh-card-km">${Number(km).toLocaleString()}</div>
-          <div class="veh-card-sub">km 当前 · 本月 <b>${Number(monthKm).toFixed(1)}</b> / ${VEHICLE_MONTH_TARGET}</div>
+          <div class="veh-card-sub">km 当前 · 本月 <b>${Number(monthKm).toLocaleString()}</b> / ${VEHICLE_MONTH_TARGET}</div>
         </div>
         <div class="veh-card-actions">
           ${fuelBadge}
@@ -18730,6 +18850,7 @@ function renderVehicleDashboards() {
       ${panel}
     </div>`;
   }).join("");
+  initFuelGauge();
 }
 
 /* 内联面板：用车（带可校准的起始公里数） */
@@ -18741,11 +18862,12 @@ function usePanelHtml(v) {
       <div class="veh-panel-rule">—— 用车登记 · ${esc(v.name)} ——</div>
       <div class="veh-quick-fields">
         <div class="form-row">
-          <label>起始公里数 <span class="veh-hint">（请核对仪表，不符可修改）</span></label>
-          <input type="text" inputmode="decimal" class="input veh-km-edit" id="vtqStart"
-                 value="${Number(startKm).toFixed(1)}"
+          <label>起始公里数 <span class="veh-hint">（整数，请核对仪表）</span></label>
+          <input type="text" inputmode="numeric" class="input veh-km-edit" id="vtqStart"
+                 value="${Number(startKm)}"
                  onfocus="moveInputCursorToEnd(this)"
-                 oninput="this.value = this.value.replace(/[^0-9.]/g, '')" />
+                 oninput="this.value = this.value.replace(/[^0-9]/g, '')" />
+          <div class="veh-km-ref">上次记录：${Number(startKm).toLocaleString()} km · 与仪表不符请直接修改</div>
         </div>
         <div class="form-row">
           <label>开车目的</label>
@@ -18770,6 +18892,7 @@ function usePanelHtml(v) {
           <label>司机 <span style="color:#dc2626">*</span>（必填，可输入新增）</label>
           <div class="veh-combo">
             <input class="input veh-combo__input" id="vtqDriver" placeholder="选择或输入司机姓名"
+                   value="${esc((currentProfile && currentProfile.name) || '')}"
                    autocomplete="off" onfocus="openDriverCombo()" oninput="onDriverInput()" onkeydown="onDriverKey(event)" />
             <span class="veh-combo__arrow" onclick="toggleDriverCombo(event)" title="选择司机">▾</span>
           </div>
@@ -18788,25 +18911,34 @@ function usePanelHtml(v) {
 
 /* 内联面板：还车（起始/回来均可核对校准，实时算里程） */
 function returnPanelHtml(v, trip) {
+  const lastFuel = getLastFuelForVehicle(v.id);
+  const fuelInit = (lastFuel != null ? lastFuel : 100);
   return `
     <div class="veh-dash-panel" onclick="event.stopPropagation()">
       <div class="veh-panel-rule">—— 还车结算 · ${esc(v.name)} ——</div>
       <div class="veh-quick-body">
         <div class="veh-quick-km">
           <label>起始公里数 <span class="veh-lock">🔒 不可修改</span></label>
-          <input type="number" step="0.1" min="0" class="input veh-km-edit" id="vtqStart"
-                 value="${Number(trip.startKm).toFixed(1)}" inputmode="decimal" readonly />
+          <input type="text" inputmode="numeric" class="input veh-km-edit" id="vtqStart"
+                 value="${Number(trip.startKm).toLocaleString()}" readonly />
           <label style="margin-top:10px;">回来公里数</label>
-          <input type="number" step="0.1" min="0" class="input veh-km-big" id="vtqEnd"
-                 placeholder="填当前仪表读数" inputmode="decimal" oninput="calcQuickMileage()" />
-          <div id="vtqMileage" class="vtq-mileage">本次里程：0.0 km</div>
+          <input type="text" inputmode="numeric" class="input veh-km-big" id="vtqEnd"
+                 placeholder="填当前仪表读数（整数）" oninput="this.value = this.value.replace(/[^0-9]/g, ''); calcQuickMileage()" />
+          <div id="vtqMileage" class="vtq-mileage">本次里程：0 km</div>
         </div>
         <div class="veh-quick-fields">
           <div class="veh-ret-info">使用中：${esc(trip.driverName || "未知")}<br>出发 ${fmtDateTime(trip.outTime)}</div>
           <div class="form-row">
-            <label>剩余油量（0-100%）</label>
-            <input type="number" step="1" min="0" max="100" class="input" id="vtqFuel"
-                   placeholder="如 50 表示半箱" inputmode="numeric" />
+            <label>剩余油量</label>
+            <div class="veh-fuel-gauge">
+              <svg class="veh-fuel-ico" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v18"/><path d="M2 22h10"/><path d="M14 9l4-4 3 3-4 4"/><path d="M18 5V3h2"/></svg>
+              <div class="veh-fuel-segs" id="vtqFuelSegs">
+                ${Array.from({length:10},(_,i)=>`<span class="veh-fuel-seg" data-val="${(i+1)*10}"></span>`).join("")}
+              </div>
+              <div class="veh-fuel-lcd" id="vtqFuelLcd">${fuelInit}%</div>
+              <input type="hidden" id="vtqFuel" value="${fuelInit}" />
+            </div>
+            <div class="veh-fuel-ticks"><span>E</span><span>¼</span><span>½</span><span>¾</span><span>F</span></div>
           </div>
           <div class="form-row">
             <label>还车备注（可选）</label>
@@ -18819,6 +18951,39 @@ function returnPanelHtml(v, trip) {
         <button class="btn" onclick="closeVehicleQuick()">取消</button>
       </div>
     </div>`;
+}
+
+/* 还车面板的段码液位条：10 段（每段 10%），点击/拖动段位设置剩余油量，并随阈值变红/黄/绿 */
+function initFuelGauge() {
+  const segs = document.getElementById("vtqFuelSegs");
+  if (!segs || segs.dataset.bound) return;
+  const lcd = document.getElementById("vtqFuelLcd");
+  const hidden = document.getElementById("vtqFuel");
+  segs.dataset.bound = "1";
+  const colorOf = (v) => (v <= 20 ? "#dc2626" : (v <= 40 ? "#d97706" : "#16a34a"));
+  const segEls = Array.from(segs.querySelectorAll(".veh-fuel-seg"));
+  function setVal(v) {
+    v = Math.max(0, Math.min(100, Math.round(v)));
+    const snapped = Math.round(v / 10) * 10;
+    const c = colorOf(snapped);
+    segEls.forEach((el, idx) => {
+      el.classList.toggle("on", (idx + 1) * 10 <= snapped);
+      el.style.background = (idx + 1) * 10 <= snapped ? c : "";
+    });
+    lcd.textContent = snapped + "%";
+    lcd.style.color = c;
+    hidden.value = String(snapped);
+  }
+  function fromEvent(e) {
+    const r = segs.getBoundingClientRect();
+    setVal((e.clientX - r.left) / r.width * 100);
+  }
+  let dragging = false;
+  segs.addEventListener("pointerdown", (e) => { dragging = true; try { segs.setPointerCapture(e.pointerId); } catch (_) {} fromEvent(e); });
+  segs.addEventListener("pointermove", (e) => { if (dragging) { e.preventDefault(); fromEvent(e); } });
+  segs.addEventListener("pointerup", () => { dragging = false; });
+  segs.addEventListener("pointercancel", () => { dragging = false; });
+  setVal(Number(hidden.value) || 0);
 }
 
 /* 历史记录：卡片 / 列表 两种视图（含筛选） */
@@ -19036,7 +19201,7 @@ function vehicleHistoryCardHtml(trips) {
         <div class="veh-hero__divider"></div>
         <div class="veh-hero__item veh-hero__item--km">
           <span class="veh-hero__label">🛣 行驶里程</span>
-          <span class="veh-hero__km">${open || mileage == null || isNaN(mileage) ? "—" : Number(mileage).toFixed(1) + "<i>km</i>"}</span>
+          <span class="veh-hero__km">${open || mileage == null || isNaN(mileage) ? "—" : Number(mileage).toLocaleString() + "<i>km</i>"}</span>
         </div>
       </div>
 
@@ -19052,7 +19217,7 @@ function vehicleHistoryCardHtml(trips) {
           </div>
           <div class="veh-time-km__value">
             <span>起始公里</span>
-            <b>${Number(t.startKm).toFixed(1)} km</b>
+            <b>${Number(t.startKm).toLocaleString()} km</b>
           </div>
         </div>
         <div class="veh-time-km__item">
@@ -19066,7 +19231,7 @@ function vehicleHistoryCardHtml(trips) {
           </div>
           <div class="veh-time-km__value">
             <span>回来公里</span>
-            <b>${open ? "—" : Number(t.endKm).toFixed(1) + " km"}</b>
+            <b>${open ? "—" : Number(t.endKm).toLocaleString() + " km"}</b>
           </div>
         </div>
       </div>
@@ -19115,7 +19280,7 @@ function vehicleHistoryListHtml(trips) {
     const backText = t.backTime ? `${fmtDateShort(t.backTime)} ${fmtTime(t.backTime)}` : (open ? "未还车" : "—");
     const kmHtml = open
       ? `<span class="veh-list__status">未还车</span>`
-      : `<span class="veh-list__km-line"><span class="veh-list__label">里程：</span><span class="veh-list__km">${Number(mileage || 0).toFixed(1)}<i>km</i></span></span>`;
+      : `<span class="veh-list__km-line"><span class="veh-list__label">里程：</span><span class="veh-list__km">${Number(mileage || 0).toLocaleString()}<i>km</i></span></span>`;
     const fuelHtml = open || t.fuelLevel == null
       ? ""
       : `<span class="veh-list__fuel veh-list__fuel--header" title="还车时剩余油量">⛽ ${Number(t.fuelLevel)}%</span>`;
@@ -19195,7 +19360,7 @@ function renderVehicleSummary() {
         </div>
       </div>
       <div class="veh-sum-card__body">
-        <div class="veh-sum-card__km">${x.sum.toFixed(1)}<i>km</i></div>
+        <div class="veh-sum-card__km">${x.sum.toLocaleString()}<i>km</i></div>
         <div class="veh-sum-card__bar"><div class="veh-sum-card__bar-fill" style="width:${Math.min(Number(pct), 100)}%"></div></div>
         <div class="veh-sum-card__pct">${Number(pct).toFixed(1)}%</div>
       </div>
@@ -19210,7 +19375,7 @@ function renderVehicleSummary() {
     <div class="veh-sum-grid">${vehicleCards}</div>
     <div class="veh-sum-total">
       <span>合计</span>
-      <b>${total.toFixed(1)} km</b>
+      <b>${total.toLocaleString()} km</b>
       <span>共 ${list.length} 条记录 · 出勤 ${days} 天</span>
     </div>
   `;
@@ -19258,7 +19423,7 @@ function renderDriverSummary() {
         </div>
       </div>
       <div class="veh-sum-card__body">
-        <div class="veh-sum-card__km">${x.sum.toFixed(1)}<i>km</i></div>
+        <div class="veh-sum-card__km">${x.sum.toLocaleString()}<i>km</i></div>
         <div class="veh-sum-card__bar"><div class="veh-sum-card__bar-fill" style="width:${Math.min(Number(pct), 100)}%"></div></div>
         <div class="veh-sum-card__pct">${Number(pct).toFixed(1)}%</div>
       </div>
@@ -19274,7 +19439,7 @@ function renderDriverSummary() {
       : `<div class="veh-sum-grid">${driverCards}</div>
          <div class="veh-sum-total">
            <span>合计</span>
-           <b>${total.toFixed(1)} km</b>
+           <b>${total.toLocaleString()} km</b>
            <span>共 ${perDriver.length} 名人员有里程记录</span>
          </div>`}
   `;
@@ -19461,22 +19626,27 @@ function setVtqType(type) {
   });
 }
 
-/* 还车时实时计算里程（起始、回来均可校准） */
+/* 还车时实时计算里程（起始、回来均可校准；公里数为整数） */
 function calcQuickMileage() {
   const startEl = document.getElementById("vtqStart");
   const endEl = document.getElementById("vtqEnd");
   const preview = document.getElementById("vtqMileage");
   if (!endEl || !preview) return;
-  const start = startEl ? (Number(startEl.value) || 0) : 0;
-  const end = Number(endEl.value) || 0;
+  const start = startEl ? (Number((startEl.value || "").replace(/\D/g, "")) || 0) : 0;
+  const end = Number((endEl.value || "").replace(/\D/g, "")) || 0;
   if (end > 0 && end < start) {
-    preview.textContent = `⚠️ 回来读数小于起始（${start.toFixed(1)}）`;
+    preview.textContent = `⚠️ 回来读数小于起始（${start.toLocaleString()}）`;
     preview.classList.add("warn");
     return;
   }
   preview.classList.remove("warn");
-  const m = Math.max(0, Math.round((end - start) * 10) / 10);
-  preview.textContent = `本次里程：${m.toFixed(1)} km`;
+  const m = Math.max(0, Math.round(end - start));
+  if (m > 400) {
+    preview.textContent = `本次里程：${m.toLocaleString()} km ⚠️ 超过 400，请核对仪表读数`;
+    preview.classList.add("warn");
+    return;
+  }
+  preview.textContent = `本次里程：${m.toLocaleString()} km`;
 }
 
 function closeVehicleQuick() {
@@ -19670,7 +19840,16 @@ async function saveUseVehicle() {
     return [store, name, date].filter(Boolean).join(" · ");
   })() : "";
   const note = document.getElementById("vtqNote").value.trim();
-  const startKm = Number(document.getElementById("vtqStart").value) || 0;
+  const startKmRaw = (document.getElementById("vtqStart").value || "").replace(/\D/g, "");
+  const startKm = startKmRaw ? parseInt(startKmRaw, 10) : 0;
+  if (!startKm || startKm <= 0) { toast("请填写正确的起始公里数"); document.getElementById("vtqStart").focus(); return; }
+  const lastKm = getLastKmForVehicle(vid);
+  if (startKm < lastKm) {
+    if (!(await confirmDialog(`起始公里数 ${startKm.toLocaleString()} 小于上次记录 ${lastKm.toLocaleString()}，确认仪表无误？`, "公里数核对"))) {
+      document.getElementById("vtqStart").focus();
+      return;
+    }
+  }
   const now = new Date().toISOString();
 
   const trip = {
@@ -19701,10 +19880,17 @@ async function saveReturnVehicle() {
   if (!vid) return;
   const trip = getOpenTrip(vid);
   if (!trip) { toast("未找到该车的在用记录"); return; }
-  const startKm = Number(document.getElementById("vtqStart").value) || 0;
-  const endKm = Number(document.getElementById("vtqEnd").value) || 0;
+  const startKm = Number((document.getElementById("vtqStart").value || "").replace(/\D/g, "")) || 0;
+  const endKmRaw = (document.getElementById("vtqEnd").value || "").replace(/\D/g, "");
+  const endKm = endKmRaw ? parseInt(endKmRaw, 10) : 0;
   if (!(endKm >= startKm)) { toast("请填写不小于起始的回来公里数"); return; }
-  const mileage = Math.round((endKm - startKm) * 10) / 10;
+  const mileage = Math.max(0, Math.round(endKm - startKm));
+  if (mileage > 400) {
+    if (!(await confirmDialog(`本次里程 ${mileage.toLocaleString()} km 超过 400，确认仪表读数无误？`, "里程核对"))) {
+      document.getElementById("vtqEnd").focus();
+      return;
+    }
+  }
   const retNote = document.getElementById("vtqNote").value.trim();
   const fuelRaw = document.getElementById("vtqFuel").value.trim();
   const fuelLevel = fuelRaw === "" ? null : Math.max(0, Math.min(100, Number(fuelRaw)));
@@ -19722,7 +19908,7 @@ async function saveReturnVehicle() {
     await repo.loadAll();
     closeVehicleQuick();
     renderVehicleTrips();
-    toast(`已还车 · ${trip.vehicleName} 本次 ${mileage.toFixed(1)} km`);
+    toast(`已还车 · ${trip.vehicleName} 本次 ${mileage.toLocaleString()} km`);
   } catch (e) {
     console.error(e);
     toast("保存失败：" + (e.message || "未知错误"));
