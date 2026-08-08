@@ -18303,7 +18303,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v5971011f";
+  const APP_VERSION = "vec5e3dcf";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18923,9 +18923,9 @@ function returnPanelHtml(v, trip) {
             <span class="veh-start-km__val">${Number(trip.startKm).toLocaleString()} km</span>
             <input type="hidden" id="vtqStart" value="${Number(trip.startKm)}" />
           </div>
-          <label>回来公里数</label>
+          <label>还车公里</label>
           <input type="text" inputmode="numeric" class="input veh-km-big" id="vtqEnd"
-                 placeholder="填当前仪表读数（整数）" oninput="this.value = this.value.replace(/[^0-9]/g, ''); calcQuickMileage()" />
+                 placeholder="还车时仪表读数" oninput="this.value = this.value.replace(/[^0-9]/g, ''); calcQuickMileage()" />
           <div id="vtqMileage" class="vtq-mileage">本次里程：0 km</div>
         </div>
         <div class="veh-quick-fields">
@@ -19244,7 +19244,7 @@ function vehicleHistoryCardHtml(trips) {
             </div>
           </div>
           <div class="veh-time-km__value">
-            <span>回来公里</span>
+            <span>还车公里</span>
             <b>${open ? "—" : Number(t.endKm).toLocaleString() + " km"}</b>
           </div>
         </div>
