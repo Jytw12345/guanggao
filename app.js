@@ -108,7 +108,7 @@ function getAllowedStatuses(currentStatus) {
 const TIGHT_GAP_MINUTES = 30;
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [], vehicleTrips: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [], vehicleTrips: [], internalTasks: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -170,12 +170,15 @@ const CAP = {
   PROJECT_DELETE_OWN: "project_delete_own",
   PROJECT_DELETE_ALL: "project_delete_all",
   PROJECT_VIEW_ALL: "project_view_all",
+  PROJECT_DELAY: "project_delay",
+  PROJECT_CANCEL: "project_cancel",
   CONSTRUCTION_START: "construction_start",
   CONSTRUCTION_PAUSE: "construction_pause",
   CONSTRUCTION_RESUME: "construction_resume",
   CONSTRUCTION_COMPLETE: "construction_complete",
   CONSTRUCTION_LOG_WORK: "construction_log_work",
   CONSTRUCTION_LOG_OUTSOURCED: "construction_log_outsourced",
+  WORKLOG_DELETE: "worklog_delete",
   WORKER_ASSIGN: "worker_assign",
   WORKER_UNASSIGN: "worker_unassign",
   WORKER_ADD: "worker_add",
@@ -223,9 +226,12 @@ const CAP = {
   TASK_ADD: "task_add",
   TASK_START: "task_start",
   TASK_COMPLETE: "task_complete",
-  TASK_EDIT: "task_edit",
   TASK_DELETE: "task_delete",
   TASK_VERIFY: "task_verify",
+  INTERNAL_WORK_LOG: "internal_work_log",
+  VEHICLE_VIEW: "vehicle_view",
+  VEHICLE_TRIP_ADD: "vehicle_trip_add",
+  VEHICLE_TRIP_DELETE: "vehicle_trip_delete",
 };
 
 /* 权限项的中文说明（角色权限配置页逐行展示，顺序即展示顺序） */
@@ -236,12 +242,15 @@ const CAP_LABEL = {
   project_delete_own: "删除自己创建的预约",
   project_delete_all: "删除所有预约",
   project_view_all: "查看所有门店项目",
+  project_delay: "延期项目",
+  project_cancel: "取消项目",
   construction_start: "开始施工",
   construction_pause: "暂停施工",
   construction_resume: "恢复施工",
   construction_complete: "完成施工",
   construction_log_work: "填写施工工时",
   construction_log_outsourced: "填写外协工时",
+  worklog_delete: "删除工时记录",
   worker_assign: "分配安装人员",
   worker_unassign: "移除安装人员",
   worker_add: "添加施工人员",
@@ -286,9 +295,12 @@ const CAP_LABEL = {
   task_add: "下达内部任务",
   task_start: "开始内部任务",
   task_complete: "完成内部任务",
-  task_edit: "编辑内部任务",
   task_delete: "删除内部任务",
   task_verify: "审核内部任务",
+  internal_work_log: "填写内部工作日志",
+  vehicle_view: "查看车辆里程",
+  vehicle_trip_add: "用车/还车登记",
+  vehicle_trip_delete: "删除里程记录",
   repair_create: "发起维修单",
   manage_wage_config: "管理工时单价",
   repair_complete: "完成维修",
@@ -296,8 +308,8 @@ const CAP_LABEL = {
 
 /* 权限项分组（角色权限配置页与个性权限弹窗按组展示，方便勾选） */
 const CAP_GROUPS = [
-  { label: "项目预约", caps: ["project_create","project_edit_own","project_edit_all","project_edit_appointment_own","project_edit_appointment_all","project_edit_hours_own","project_edit_hours_all","project_delete_own","project_delete_all","project_view_all"] },
-  { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","construction_log_work","construction_log_outsourced","worker_assign","worker_unassign"] },
+  { label: "项目预约", caps: ["project_create","project_edit_own","project_edit_all","project_edit_appointment_own","project_edit_appointment_all","project_edit_hours_own","project_edit_hours_all","project_delete_own","project_delete_all","project_view_all","project_delay","project_cancel"] },
+  { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","construction_log_work","construction_log_outsourced","worklog_delete","worker_assign","worker_unassign"] },
   { label: "人员管理", caps: ["worker_add","worker_edit","worker_delete","worker_view","manage_outsourced"] },
   { label: "休假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","leave_delete","leave_withdraw","leave_batch_rotational"] },
   { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_complete"] },
@@ -305,7 +317,8 @@ const CAP_GROUPS = [
   { label: "数据工具", caps: ["export_projects","export_worklogs","export_leaves","export_workers","export_stores","export_all","import_data","view_operation_logs"] },
   { label: "系统管理", caps: ["manage_stores","manage_accounts","manage_wage_config"] },
   { label: "个人日程", caps: ["schedule_view","schedule_view_all","schedule_add","schedule_edit_own","schedule_edit_all","schedule_delete_own","schedule_delete_all"] },
-  { label: "内部任务", caps: ["task_view","task_add","task_start","task_complete","task_edit","task_delete","task_verify"] },
+  { label: "内部任务", caps: ["task_view","task_add","task_start","task_complete","task_delete","task_verify","internal_work_log"] },
+  { label: "车辆里程", caps: ["vehicle_view","vehicle_trip_add","vehicle_trip_delete"] },
 ];
 
 /* 默认权限模板（与 SQL seed 一致）；云端会用 role_permissions 表覆盖 */
@@ -313,42 +326,50 @@ const DEFAULT_ROLE_PERMS = {
   store_manager: {
     project_create: true, project_edit_own: true, project_edit_all: true,
     project_delete_own: true, project_delete_all: true, project_view_all: true,
+    project_delay: true, project_cancel: true,
     construction_start: false, construction_pause: false, construction_resume: false,
     construction_complete: false, construction_log_work: false, construction_log_outsourced: false,
+    worklog_delete: false,
     worker_assign: false, worker_unassign: false, worker_add: false,
     worker_edit: false, worker_delete: false, worker_view: true,
     leave_apply: true, leave_approve: true, leave_reject: true, leave_view_all: true,
     leave_delete: true, leave_withdraw: true, leave_batch_rotational: true,
     review_project: true, unreview_project: true, accept_project: false,
     view_stats_global: false, view_stats_store: true,
-    manage_stores: false, manage_accounts: false,
+    manage_stores: false, manage_accounts: false, manage_wage_config: false,
     manage_outsourced: true,
     project_edit_appointment_own: true, project_edit_appointment_all: true, project_edit_hours_own: true, project_edit_hours_all: true,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
     import_data: false, view_operation_logs: false,
     repair_create: true, repair_complete: false,
     schedule_view: true, schedule_view_all: true, schedule_add: true, schedule_edit_own: true, schedule_edit_all: true, schedule_delete_own: true, schedule_delete_all: true,
-    task_view: true, task_add: true, task_start: true, task_complete: true, task_edit: true, task_delete: true, task_verify: true,
+    task_view: true, task_add: true, task_start: true, task_complete: true, task_delete: true, task_verify: true,
+    internal_work_log: false,
+    vehicle_view: true, vehicle_trip_add: true, vehicle_trip_delete: false,
   },
   worker: {
     project_create: true, project_edit_own: false, project_edit_all: false,
     project_delete_own: false, project_delete_all: false, project_view_all: false,
+    project_delay: true, project_cancel: true,
     construction_start: true, construction_pause: true, construction_resume: true,
     construction_complete: true, construction_log_work: true, construction_log_outsourced: true,
+    worklog_delete: true,
     worker_assign: true, worker_unassign: true, worker_add: false,
     worker_edit: false, worker_delete: false, worker_view: true,
     leave_apply: true, leave_approve: false, leave_reject: false, leave_view_all: false,
     leave_delete: false, leave_withdraw: false, leave_batch_rotational: false,
-    review_project: false, accept_project: false,
+    review_project: false, unreview_project: false, accept_project: false,
     view_stats_global: false, view_stats_store: false,
-    manage_stores: false, manage_accounts: false,
+    manage_stores: false, manage_accounts: false, manage_wage_config: false,
     repair_create: false, repair_complete: true,
     manage_outsourced: false,
     project_edit_appointment_own: false, project_edit_appointment_all: false, project_edit_hours_own: false, project_edit_hours_all: false,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
     import_data: false, view_operation_logs: false,
     schedule_view: true, schedule_view_all: false, schedule_add: true, schedule_edit_own: true, schedule_edit_all: false, schedule_delete_own: true, schedule_delete_all: false,
-    task_view: true, task_add: false, task_start: true, task_complete: true, task_edit: false, task_delete: false, task_verify: false,
+    task_view: true, task_add: false, task_start: true, task_complete: true, task_delete: false, task_verify: false,
+    internal_work_log: false,
+    vehicle_view: true, vehicle_trip_add: true, vehicle_trip_delete: false,
   },
 };
 
@@ -394,6 +415,9 @@ const perm = {
   completeConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_COMPLETE),
   logWorkHours: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_LOG_WORK),
   logOutsourcedHours: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_LOG_OUTSOURCED),
+  deleteWorkLog: (p) => !isReviewed(p) && can(CAP.WORKLOG_DELETE),
+  delayProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELAY),
+  cancelProject: (p) => !isReviewed(p) && can(CAP.PROJECT_CANCEL),
   assignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_ASSIGN),
   unassignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_UNASSIGN),
   addWorker: () => can(CAP.WORKER_ADD),
@@ -458,13 +482,15 @@ const perm = {
   addTask: () => can(CAP.TASK_ADD),
   startTask: (t) => can(CAP.TASK_START) && (isManager() || !t || !t.workerId || t.workerId === currentProfile.id),
   completeTask: (t) => can(CAP.TASK_COMPLETE) && (isManager() || !t || !t.workerId || t.workerId === currentProfile.id),
-  editTask: () => can(CAP.TASK_EDIT),
   deleteTask: () => can(CAP.TASK_DELETE),
   verifyTask: () => can(CAP.TASK_VERIFY),
+  internalWorkLog: () => can(CAP.INTERNAL_WORK_LOG),
+  viewVehicle: () => can(CAP.VEHICLE_VIEW),
+  addVehicleTrip: () => can(CAP.VEHICLE_TRIP_ADD),
+  deleteVehicleTrip: () => can(CAP.VEHICLE_TRIP_DELETE),
   doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE) || can(CAP.CONSTRUCTION_LOG_WORK) || can(CAP.CONSTRUCTION_LOG_OUTSOURCED)),
   manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT) || can(CAP.LEAVE_VIEW_ALL),
   viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
-  manageWorkers: () => can(CAP.WORKER_ADD) || can(CAP.WORKER_EDIT) || can(CAP.WORKER_DELETE),
 };
 
 function isReviewed(p) {
@@ -1439,6 +1465,56 @@ const vehicleTripToRow = (t) => ({
   created_at: t.createdAt || new Date().toISOString(),
 });
 
+/* 内部任务：云端行 <-> 内存对象 双向映射（与 vehicle_trips 同范式） */
+const mapInternalTask = (r) => ({
+  id: r.id,
+  name: r.name || "",
+  workType: r.work_type || "",
+  level: r.level || "",
+  workerId: r.worker_id || "",
+  workerName: r.worker_name || "",
+  date: r.date || "",
+  scheduledStartTime: r.scheduled_start_time || "",
+  scheduledEndTime: r.scheduled_end_time || "",
+  estHours: Number(r.est_hours) || 0,
+  note: r.note || "",
+  status: r.status || TASK_STATUS.PENDING,
+  actualStartTime: r.actual_start_time || "",
+  startTimestamp: r.start_timestamp || 0,
+  actualEndTime: r.actual_end_time || "",
+  endTimestamp: r.end_timestamp || 0,
+  actualHours: r.actual_hours != null ? Number(r.actual_hours) : null,
+  calculatedHours: r.calculated_hours != null ? Number(r.calculated_hours) : null,
+  verifiedAt: r.verified_at || "",
+  verifyNote: r.verify_note || "",
+  createdAt: r.created_at || r.createdAt || "",
+});
+
+const internalTaskToRow = (t) => ({
+  id: t.id,
+  name: t.name || "",
+  work_type: t.workType || null,
+  level: t.level || null,
+  worker_id: t.workerId || null,
+  worker_name: t.workerName || null,
+  date: t.date || null,
+  scheduled_start_time: t.scheduledStartTime || null,
+  scheduled_end_time: t.scheduledEndTime || null,
+  est_hours: Number(t.estHours) || 0,
+  note: t.note || null,
+  status: t.status || TASK_STATUS.PENDING,
+  actual_start_time: t.actualStartTime || null,
+  start_timestamp: t.startTimestamp || 0,
+  actual_end_time: t.actualEndTime || null,
+  end_timestamp: t.endTimestamp || 0,
+  actual_hours: t.actualHours != null ? Number(t.actualHours) : null,
+  calculated_hours: t.calculatedHours != null ? Number(t.calculatedHours) : null,
+  verified_at: t.verifiedAt || null,
+  verify_note: t.verifyNote || null,
+  created_at: t.createdAt || new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+});
+
 /* ============================================================
  * 数据仓储层（统一接口，内部按 MODE 分流）
  * 上层业务只调用 repo.xxx，不关心存在哪
@@ -1575,7 +1651,7 @@ const repo = {
         if (hasCache) q.in("project_id", activeIds.length ? activeIds : ["__none__"]);
         return q;
       });
-      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes] = await Promise.all([
+      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes, itRes] = await Promise.all([
         cloudQuery(() => sb.from("workers").select("*")),
         cloudQuery(() => sb.from("stores").select("*")),
         cloudQuery(() => sb.from("role_permissions").select("*")),
@@ -1587,6 +1663,7 @@ const repo = {
         cloudQuery(() => sb.from("worker_schedules").select("*")),
         cloudQuery(() => sb.from("vehicle_trips").select("*")),
         cloudQuery(() => sb.from("user_permissions").select("*")),
+        cloudQuery(() => sb.from("internal_tasks").select("*")),
       ]);
       const allErrors = [
         { name: "workers", res: wRes },
@@ -1719,6 +1796,31 @@ const repo = {
         console.warn("vehicle_trips 表读取失败（可能尚未创建）:", vtRes.error.message);
         cache.vehicleTrips = [];
       }
+      // 内部任务：云端真源；首次（表为空）将本机 localStorage 历史一次性迁移上云
+      if (!itRes.error) {
+        cache.internalTasks = (itRes.data || []).map((r) => mapInternalTask(r));
+        if ((itRes.data || []).length === 0 && !localStorage.getItem("internalTasksCloudMigrated")) {
+          const localRaw = localStorage.getItem("internalTasks");
+          if (localRaw) {
+            try {
+              const localTasks = JSON.parse(localRaw).map(normalizeInternalTask);
+              if (localTasks.length) {
+                for (const t of localTasks) {
+                  const { error } = await sb.from("internal_tasks").upsert(internalTaskToRow(t));
+                  if (error) { console.warn("内部任务上云迁移失败:", error.message); break; }
+                }
+                cache.internalTasks = localTasks;
+              }
+            } catch (e) { console.warn("内部任务本地数据解析失败:", e); }
+            localStorage.setItem("internalTasksCloudMigrated", "true");
+          } else {
+            localStorage.setItem("internalTasksCloudMigrated", "true");
+          }
+        }
+      } else {
+        console.warn("internal_tasks 表读取失败（可能尚未创建）:", itRes.error.message);
+        cache.internalTasks = [];
+      }
       // 本次全量成功：清掉失败退避状态，下次抖动重新从最短间隔开始重试
       resyncRetryCount = 0;
       if (resyncRetryTimer) { clearTimeout(resyncRetryTimer); resyncRetryTimer = null; }
@@ -1830,6 +1932,29 @@ const repo = {
       if (error) return fail(error);
     } else {
       cache.vehicleTrips = cache.vehicleTrips.filter((t) => t.id !== id);
+      saveLocal();
+    }
+  },
+
+  /* ---- 内部任务（云端真源 + 本地缓存兜底） ---- */
+  async saveInternalTask(task) {
+    const row = internalTaskToRow(task);
+    if (MODE === "cloud") {
+      const { error } = await sb.from("internal_tasks").upsert(row);
+      if (error) return fail(error);
+    } else {
+      const idx = cache.internalTasks.findIndex((t) => t.id === row.id);
+      if (idx >= 0) cache.internalTasks[idx] = { ...cache.internalTasks[idx], ...task };
+      else cache.internalTasks.push(task);
+      saveLocal();
+    }
+  },
+  async deleteInternalTask(id) {
+    if (MODE === "cloud") {
+      const { error } = await sb.from("internal_tasks").delete().eq("id", id);
+      if (error) return fail(error);
+    } else {
+      cache.internalTasks = cache.internalTasks.filter((t) => t.id !== id);
       saveLocal();
     }
   },
@@ -2232,6 +2357,19 @@ function loadLocal() {
       cache.operationLogs = data.operationLogs || [];
       cache.accounts = data.accounts || [];
       cache.vehicleTrips = data.vehicleTrips || [];
+      cache.internalTasks = (data.internalTasks || []).map(normalizeInternalTask);
+      // 本地模式历史兼容：旧版内部任务存在独立的 "internalTasks" key，
+      // 若 STORE_KEY 中尚未收录，则从旧 key 迁移进来（仅首次，避免重复）。
+      if (!cache.internalTasks.length) {
+        const legacy = localStorage.getItem("internalTasks");
+        if (legacy) {
+          try {
+            cache.internalTasks = JSON.parse(legacy).map(normalizeInternalTask);
+            saveLocal();
+            localStorage.removeItem("internalTasks");
+          } catch (e) { console.warn("旧内部任务数据迁移失败:", e); }
+        }
+      }
     }
   } catch (e) {
     console.error("读取本地数据失败", e);
@@ -2275,7 +2413,8 @@ function saveLocal() {
       workerSchedules: cache.workerSchedules,
       operationLogs: cache.operationLogs,
       accounts: cache.accounts,
-      vehicleTrips: cache.vehicleTrips
+      vehicleTrips: cache.vehicleTrips,
+      internalTasks: cache.internalTasks
     }));
   } catch (e) {
     console.error("[app] localStorage 保存失败（可能已满）:", e);
@@ -2363,6 +2502,7 @@ function serializeCloudSnapshot() {
       workerSchedules: cache.workerSchedules,
       accounts: cache.accounts,
       vehicleTrips: cache.vehicleTrips,
+      internalTasks: cache.internalTasks,
     },
     rolePerms,
     userPerms,
@@ -2498,6 +2638,11 @@ async function applyIncrementalUpdate(tableName) {
       if (!vtRes.error) cache.vehicleTrips = (vtRes.data || []).map((r) => mapVehicleTrip(r));
       break;
     }
+    case "internalTasks": {
+      const itRes = await sb.from("internal_tasks").select("*");
+      if (!itRes.error) cache.internalTasks = (itRes.data || []).map((r) => mapInternalTask(r));
+      break;
+    }
     case "accounts": {
       const { data, error } = await sb.from("profiles").select("*").order("email");
       if (!error) cache.accounts = (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "" }));
@@ -2591,6 +2736,7 @@ const REALTIME_TABLES = {
   holidays: "holidays",
   worker_schedules: "worker_schedules",
   vehicle_trips: "vehicleTrips",
+  internal_tasks: "internalTasks",
   profiles: "accounts",
   user_permissions: "user_permissions",
   operation_logs: "operationLogs",
@@ -6182,6 +6328,7 @@ function openRepairOrderForm(projectId) {
 }
 
 async function submitRepairOrder(projectId) {
+  if (!perm.createRepair()) { toast("无权限发起维修单"); return; }
   const items = document.getElementById("repairItems").value.trim();
   const reason = document.getElementById("repairReason").value.trim();
   const date = document.getElementById("repairDate").value;
@@ -6226,6 +6373,7 @@ async function submitRepairOrder(projectId) {
 }
 
 async function completeRepair(projectId) {
+  if (!perm.completeRepair()) { toast("无权限完成维修"); return; }
   const lockKey = `completeRepair:${projectId}`;
   if (!lockAction(lockKey)) { toast("操作处理中，请勿重复点击"); return; }
   try {
@@ -6259,6 +6407,7 @@ async function deleteProject(id) {
     toast("项目不存在");
     return;
   }
+  if (!perm.deleteProject(p)) { toast("无权限删除项目"); return; }
   if (!(await confirmDialog("确定删除该项目及其施工记录？", "删除项目"))) return;
   try {
     await repo.deleteProject(id);
@@ -6280,6 +6429,7 @@ async function cancelProject(id) {
     toast("项目不存在");
     return;
   }
+  if (!perm.cancelProject(p)) { toast("无权限取消项目"); return; }
   if (p.status === STATUS.CANCELLED) {
     toast("项目已取消");
     return;
@@ -6694,23 +6844,29 @@ function renderConstruction() {
         <div class="action-group">
           ${canEdit && p.status === STATUS.BOOKED ? `
           <button class="btn small primary" onclick="updateProjectStatus('${p.id}', '${STATUS.WORKING}')">🚀 开始施工</button>
+          ` : ""}
+          ${perm.delayProject(p) && p.status === STATUS.BOOKED ? `
           <button class="btn small warning" onclick="delayProject('${p.id}')">${svgCal(13)} 延期</button>
           ` : ""}
           ${canEdit && p.status === STATUS.WORKING ? `
           <button class="btn small warning" onclick="pauseProject('${p.id}')">⏸️ 暂停施工</button>
           <button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.DONE}')">✅ 完成安装</button>
+          ` : ""}
+          ${perm.delayProject(p) && p.status === STATUS.WORKING ? `
           <button class="btn small warning" onclick="delayProject('${p.id}')">${svgCal(13)} 延期</button>
           ` : ""}
           ${canEdit && p.status === STATUS.PAUSED ? `
           <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
           <button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.DONE}')">✅ 完成安装</button>
+          ` : ""}
+          ${perm.delayProject(p) && p.status === STATUS.PAUSED ? `
           <button class="btn small warning" onclick="delayProject('${p.id}')">${svgCal(13)} 延期</button>
           ` : ""}
           ${canEdit && p.status === STATUS.DELAYED ? `
           <button class="btn small primary" onclick="resumeProject('${p.id}')">▶️ 恢复施工</button>
           <button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.DONE}')">✅ 完成安装</button>
           ` : ""}
-          ${canEdit && [STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED].includes(p.status) ? `
+          ${perm.cancelProject(p) && [STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED].includes(p.status) ? `
           <button class="btn small danger" onclick="cancelProject('${p.id}')">✕ 取消</button>
           ` : ""}
         </div>
@@ -7851,6 +8007,20 @@ async function settleWorkerHoursBeforePause(p, untilTime) {
   return { workerChangeHistory, actionLogs, settled };
 }
 
+/* 状态流转权限守卫：按目标状态映射到对应权限点（深度防御，UI 仍为主门控）。
+   任一目标状态只有持有相应权限才能变更，避免绕过按钮直接调用。 */
+function statusTransitionPermOk(p, newStatus) {
+  switch (newStatus) {
+    case STATUS.WORKING: return perm.startConstruction(p) || perm.resumeConstruction(p);
+    case STATUS.DONE: return perm.completeConstruction(p);
+    case STATUS.PAUSED: return perm.pauseConstruction(p);
+    case STATUS.ACCEPTED: return perm.acceptProject(p);
+    case STATUS.CANCELLED: return perm.cancelProject(p);
+    case STATUS.REVIEWED: return perm.reviewProject(p);
+    default: return true;
+  }
+}
+
 async function updateProjectStatus(id, newStatus) {
   const lockKey = `updateProjectStatus:${id}`;
   if (!lockAction(lockKey)) { toast("操作处理中，请勿重复点击"); return; }
@@ -7858,6 +8028,10 @@ async function updateProjectStatus(id, newStatus) {
   const p = getProject(id);
   if (!p) {
     toast("项目不存在");
+    return;
+  }
+  if (!statusTransitionPermOk(p, newStatus)) {
+    toast("无权限执行该状态变更");
     return;
   }
   
@@ -8052,6 +8226,7 @@ async function pauseProject(id) {
     toast("项目不存在");
     return;
   }
+  if (!perm.pauseConstruction(p)) { toast("无权限暂停施工"); return; }
   if (p.status !== STATUS.WORKING) {
     toast("只有施工中的项目才能暂停");
     return;
@@ -8162,6 +8337,7 @@ async function resumeProject(id) {
     toast("项目不存在");
     return;
   }
+  if (!perm.resumeConstruction(p)) { toast("无权限恢复施工"); return; }
   if (![STATUS.PAUSED, STATUS.DELAYED].includes(p.status)) {
     toast("只有已暂停或已延期的项目才能恢复施工");
     return;
@@ -8215,6 +8391,7 @@ function delayProject(id) {
     toast("项目不存在");
     return;
   }
+  if (!perm.delayProject(p)) { toast("无权限延期项目"); return; }
   
   const validStatuses = [STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED];
   if (!validStatuses.includes(p.status)) {
@@ -8523,6 +8700,8 @@ async function recomputeActualHours(pid) {
 async function addWorkLog(id) {
   const p = getProject(id);
   const type = document.getElementById("logType").value;
+  if (type === "internal" && !perm.logWorkHours(p)) { toast("无权限填写施工工时"); return; }
+  if (type === "outsourced" && !perm.logOutsourcedHours(p)) { toast("无权限填写外协工时"); return; }
   const hoursInput = document.getElementById("logHours").value;
   const date = document.getElementById("logDate").value;
   const note = document.getElementById("logNote").value.trim();
@@ -8928,6 +9107,7 @@ function editWorkLog(pid, lid) {
 async function deleteWorkLog(pid, lid) {
   if (!(await confirmDialog("确定删除该工时记录？此操作不可撤销。", "删除工时"))) return;
   const p = getProject(pid);
+  if (p && !perm.deleteWorkLog(p)) { toast("无权限删除工时记录"); return; }
   const log = (p.workLogs || []).find(l => l.id === lid);
   await repo.deleteWorkLog(pid, lid);
   await repo.loadAll();
@@ -9631,18 +9811,17 @@ function generateWorkerScheduleDescription(dateStr = null) {
       // 施工操作一律以「分人个性权限」(can) 为准：总经理恒可，其余按角色默认或管理员单独设置。
       // 这样在「账号管理-权限」里关闭某能力后，对应用户立即看不到对应按钮。
       const canAdjust = perm.assignWorker(p) || perm.unassignWorker(p) || perm.logWorkHours(p) || perm.logOutsourcedHours(p);
-      const roleBase = (isManager() || isWorker() || isStoreManager());
       if (perm.startConstruction(p) && p.status === STATUS.BOOKED) {
         statusActions.push('<button class="btn tiny ' + (isOverdue ? 'danger' : 'primary') + '" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">🚀 开始施工</button>');
         if (canAdjust) statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">👷 人员调整</button>');
-        if (roleBase) statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 延期</button>');
-        if (roleBase) statusActions.push('<button class="btn tiny danger" onclick="if(confirm(\'确定取消该预约项目？\')){updateProjectStatus(\'' + p.id + '\', \'' + STATUS.CANCELLED + '\')}">✕ 取消</button>');
+        if (perm.delayProject(p)) statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 延期</button>');
+        if (perm.cancelProject(p)) statusActions.push('<button class="btn tiny danger" onclick="if(confirm(\'确定取消该预约项目？\')){updateProjectStatus(\'' + p.id + '\', \'' + STATUS.CANCELLED + '\')}">✕ 取消</button>');
       }
       if (perm.completeConstruction(p) && p.status === STATUS.WORKING) {
         statusActions.push('<button class="btn tiny success" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.DONE + '\')">✅ 完成安装</button>');
         if (canAdjust) statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">👷 人员调整</button>');
         if (perm.pauseConstruction(p)) statusActions.push('<button class="btn tiny warning" onclick="pauseProject(\'' + p.id + '\')">⏸ 暂停施工</button>');
-        if (roleBase) statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 延期</button>');
+        if (perm.delayProject(p)) statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 延期</button>');
       }
       if (perm.acceptProject(p) && p.status === STATUS.DONE) {
         statusActions.push('<button class="btn tiny success" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.ACCEPTED + '\')">📋 确认验收</button>');
@@ -9650,13 +9829,13 @@ function generateWorkerScheduleDescription(dateStr = null) {
       if (perm.resumeConstruction(p) && p.status === STATUS.PAUSED) {
         statusActions.push('<button class="btn tiny primary" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">▶️ 恢复施工</button>');
         if (canAdjust) statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">👷 人员调整</button>');
-        if (roleBase) statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 延期</button>');
+        if (perm.delayProject(p)) statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 延期</button>');
       }
       if (perm.startConstruction(p) && p.status === STATUS.DELAYED) {
         statusActions.push('<button class="btn tiny primary" onclick="updateProjectStatus(\'' + p.id + '\', \'' + STATUS.WORKING + '\')">🚀 开始施工</button>');
         if (canAdjust) statusActions.push('<button class="btn tiny" onclick="gotoConstruction(\'' + p.id + '\')">👷 人员调整</button>');
-        if (roleBase) statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 再次延期</button>');
-        if (roleBase) statusActions.push('<button class="btn tiny danger" onclick="if(confirm(\'确定取消该延期项目？\')){updateProjectStatus(\'' + p.id + '\', \'' + STATUS.CANCELLED + '\')}">✕ 取消</button>');
+        if (perm.delayProject(p)) statusActions.push('<button class="btn tiny warning" onclick="delayProject(\'' + p.id + '\')">⏰ 再次延期</button>');
+        if (perm.cancelProject(p)) statusActions.push('<button class="btn tiny danger" onclick="if(confirm(\'确定取消该延期项目？\')){updateProjectStatus(\'' + p.id + '\', \'' + STATUS.CANCELLED + '\')}">✕ 取消</button>');
       }
       
       const workers = (p.assignedWorkerIds || []).map(wid => {
@@ -10611,6 +10790,7 @@ async function saveAcceptance(id) {
   const lockKey = `saveAcceptance:${id}`;
   if (!lockAction(lockKey)) { toast("操作处理中，请勿重复点击"); return; }
   try {
+    if (!perm.acceptProject(getProject(id))) { toast("无权限验收项目"); return; }
     const by = document.getElementById("acBy").value.trim();
     if (!by) { toast("请填写验收人"); return; }
     
@@ -11476,6 +11656,7 @@ function showWageConfig() {
 }
 
 function saveWageConfigFromDialog() {
+  if (!perm.manageWageConfig()) { toast("无权限管理工时单价"); return; }
   const config = {
     初级: Number(document.getElementById("wageLevel1").value) || 10,
     中级: Number(document.getElementById("wageLevel2").value) || 15,
@@ -11674,6 +11855,7 @@ function calculateIwlHours() {
 }
 
 function saveInternalWorkLog() {
+  if (!perm.internalWorkLog()) { toast("无权限填写内部工作日志"); return; }
   const workerId = document.getElementById("iwlWorker").value;
   const workerName = document.getElementById("iwlWorker").getAttribute("data-name") || 
                      document.getElementById("iwlWorker").options[document.getElementById("iwlWorker").selectedIndex]?.text || "";
@@ -11707,38 +11889,28 @@ function saveInternalWorkLog() {
 }
 
 function getInternalTasks() {
-  const stored = localStorage.getItem("internalTasks");
-  if (stored) {
-    try {
-      let tasks = JSON.parse(stored);
-      const migrated = localStorage.getItem("internalTasksMigrated_v2") === "true";
-      tasks = tasks.map(t => {
-        if (!t.scheduledStartTime && t.startTime && t.status === TASK_STATUS.PENDING) {
-          t.scheduledStartTime = t.startTime;
-          t.scheduledEndTime = t.endTime;
-        }
-        if (!t.actualStartTime && t.startTime && (t.status === TASK_STATUS.IN_PROGRESS || t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED)) {
-          t.actualStartTime = t.startTime;
-        }
-        if (!t.actualEndTime && t.endTime && (t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED)) {
-          t.actualEndTime = t.endTime;
-        }
-        if (!migrated && !t.verifiedAt && t.status === TASK_STATUS.COMPLETED && t.actualHours) {
-          t.status = TASK_STATUS.VERIFIED;
-          t.verifiedAt = new Date().toLocaleString('zh-CN');
-        }
-        return t;
-      });
-      if (!migrated) {
-        lsSet("internalTasks", tasks);
-        lsSet("internalTasksMigrated_v2", "true");
-      }
-      return tasks;
-    } catch (e) {
-      console.error("Failed to parse internal tasks:", e);
-    }
+  return cache.internalTasks || [];
+}
+
+/* 旧版内部任务字段迁移（startTime/endTime → scheduledStartTime/actualStartTime 等）；
+   仅用于兼容本地旧数据，云端数据已是新结构。云端一次性上云迁移也调用本函数。 */
+function normalizeInternalTask(t) {
+  t = t || {};
+  if (!t.scheduledStartTime && t.startTime && t.status === TASK_STATUS.PENDING) {
+    t.scheduledStartTime = t.startTime;
+    t.scheduledEndTime = t.endTime;
   }
-  return [];
+  if (!t.actualStartTime && t.startTime && (t.status === TASK_STATUS.IN_PROGRESS || t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED)) {
+    t.actualStartTime = t.startTime;
+  }
+  if (!t.actualEndTime && t.endTime && (t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED)) {
+    t.actualEndTime = t.endTime;
+  }
+  if (!t.verifiedAt && t.status === TASK_STATUS.COMPLETED && t.actualHours) {
+    t.status = TASK_STATUS.VERIFIED;
+    t.verifiedAt = new Date().toLocaleString('zh-CN');
+  }
+  return t;
 }
 
 function updateLeavesTabBadge() {
@@ -11782,28 +11954,48 @@ function updateInternalTaskBadge() {
   updateLeavesTabBadge();
 }
 
+/* 内存缓存 + 云端同步（云端模式逐条 upsert 到 Supabase；本地模式写 localStorage 兜底）。
+   删除：本地移除但云端仍存在的记录，补删云端，保证多端一致。fire-and-forget，不阻塞 UI。 */
 function saveInternalTasks(tasks) {
-  lsSet("internalTasks", tasks);
+  const prev = cache.internalTasks || [];
+  const nextIds = new Set(tasks.map((t) => t.id));
+  cache.internalTasks = tasks;
+  if (MODE === "cloud") {
+    tasks.forEach((t) => { repo.saveInternalTask(t).catch((e) => console.warn("内部任务同步失败:", e && e.message)); });
+    prev.forEach((t) => { if (!nextIds.has(t.id)) repo.deleteInternalTask(t.id).catch((e) => console.warn("内部任务删除同步失败:", e && e.message)); });
+  } else {
+    lsSet("internalTasks", tasks);
+  }
 }
 
-function addInternalTask(task) {
+async function addInternalTask(task) {
   if (!perm.addTask()) { toast("无「下达内部任务」权限"); return; }
-  const tasks = getInternalTasks();
-  tasks.push({
+  const full = {
     id: 'task_' + Date.now(),
     ...task,
     status: TASK_STATUS.PENDING,
     createdAt: new Date().toISOString()
-  });
+  };
+  const tasks = getInternalTasks();
+  tasks.push(full);
   saveInternalTasks(tasks);
+  if (MODE === "cloud") {
+    try { await repo.saveInternalTask(full); }
+    catch (e) { console.error("同步内部任务失败:", e); toast("云端同步失败，请稍后刷新"); }
+  }
+  return full;
 }
 
-function updateInternalTask(id, updates) {
+async function updateInternalTask(id, updates) {
   const tasks = getInternalTasks();
   const idx = tasks.findIndex(t => t.id === id);
   if (idx !== -1) {
     tasks[idx] = { ...tasks[idx], ...updates };
     saveInternalTasks(tasks);
+    if (MODE === "cloud") {
+      try { await repo.saveInternalTask(tasks[idx]); }
+      catch (e) { console.error("同步内部任务失败:", e); toast("云端同步失败，请稍后刷新"); }
+    }
   }
 }
 
@@ -11815,6 +12007,10 @@ async function deleteInternalTask(id) {
   if (!(await confirmDialog("确定删除这条内部任务记录？", "删除记录"))) return;
   const tasks = getInternalTasks().filter(t => t.id !== id);
   saveInternalTasks(tasks);
+  if (MODE === "cloud") {
+    try { await repo.deleteInternalTask(id); }
+    catch (e) { console.error("删除内部任务同步失败:", e); toast("云端同步失败，请稍后刷新"); }
+  }
   toast("已删除");
   renderInternalTasks();
 }
@@ -11966,6 +12162,7 @@ function updateNewTaskWorkerName() {
 }
 
 function saveNewInternalTask() {
+  if (!perm.addTask()) { toast("无权限下达内部任务"); return; }
   const name = document.getElementById("newTaskName").value.trim();
   const workType = document.getElementById("newTaskType").value;
   const level = document.getElementById("newTaskLevel").value;
@@ -13245,10 +13442,11 @@ function storeForm(s = {}) {
     </div>`;
 }
 
-function newStore() { modal.open("添加门店", storeForm()); }
-function editStore(id) { modal.open("编辑门店", storeForm(getStore(id))); }
+function newStore() { if (!perm.manageStores()) { toast("无权限管理门店"); return; } modal.open("添加门店", storeForm()); }
+function editStore(id) { if (!perm.manageStores()) { toast("无权限管理门店"); return; } modal.open("编辑门店", storeForm(getStore(id))); }
 
 async function saveStoreForm(id) {
+  if (!perm.manageStores()) { toast("无权限管理门店"); return; }
   const name = document.getElementById("sName").value.trim();
   const phone = document.getElementById("sPhone").value.trim();
   if (!name) { toast("请填写门店名称"); return; }
@@ -13260,6 +13458,7 @@ async function saveStoreForm(id) {
 }
 
 async function removeStore(id) {
+  if (!perm.manageStores()) { toast("无权限管理门店"); return; }
   const used = cache.projects.some((p) => p.storeId === id);
   const msg = used
     ? "该门店下已有预约，删除后这些预约将变为「未指定门店」。确定删除？"
@@ -14983,7 +15182,7 @@ function applyPermissions() {
     accounts: perm.manageAccounts() && MODE === "cloud",
     rolePerms: perm.manageAccounts() && MODE === "cloud",
     internalTasks: perm.viewTask(),
-    vehicleTrips: role != null,
+    vehicleTrips: perm.viewVehicle(),
   };
   document.querySelectorAll(".tab-btn, .tab-sub").forEach((b) => {
     // 下拉父按钮（带 data-dropdown）不在此处理，下面单独根据子项可见性决定
@@ -15018,7 +15217,7 @@ function applyPermissions() {
   setHidden("btnNewSchedule", !perm.addSchedule());
   setHidden("btnNewInternalTask", !perm.addTask());
   setHidden("btnExportStats", !perm.viewGlobalStats());
-  setHidden("btnInternalWorkLog", !perm.viewGlobalStats());
+  setHidden("btnInternalWorkLog", !perm.internalWorkLog());
   setHidden("statsPeriod", !perm.viewGlobalStats() && myStore());
   setHidden("statsWorker", !perm.viewGlobalStats() && myStore());
   setHidden("statsStatus", !perm.viewGlobalStats() && myStore());
@@ -15027,7 +15226,7 @@ function applyPermissions() {
     projects: role != null,
     calendar: role != null,
     construction: role != null,
-    vehicleTrips: role != null,
+    vehicleTrips: perm.viewVehicle(),
     internalTasks: perm.viewTask(),
     workers: perm.viewWorker() && role != null,
     mine: role != null,
@@ -17984,7 +18183,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v113e3417";
+  const APP_VERSION = "v3c47fe5a";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18486,7 +18685,7 @@ function renderVehicleDashboards() {
     const pct = Math.round(ratio * 100);
     const active = (window._vtqVehicleId === v.id) ? " active" : "";
     const stateTxt = inUse ? "使用中" : "空闲";
-    const cta = inUse ? "还车 ▾" : "用车 ▸";
+    const cta = perm.addVehicleTrip() ? (inUse ? "还车 ▾" : "用车 ▸") : "";
     /* 使用中时单独标出当前用车人（司机），一眼看出「谁在用车」；空闲车不显示 */
     const driverTag = inUse
       ? `<span class="veh-card-driver">👤 ${esc(open.driverName || "未知")}</span>`
@@ -18496,7 +18695,7 @@ function renderVehicleDashboards() {
           ? `<span class="veh-fuel-badge" style="background:${lastFuel <= 20 ? 'linear-gradient(135deg,#fef2f2,#fee2e2);color:#dc2626;border-color:#fecaca' : lastFuel <= 40 ? 'linear-gradient(135deg,#fffbeb,#fef3c7);color:#d97706;border-color:#fde68a' : 'linear-gradient(135deg,#f0fdf4,#dcfce7);color:#16a34a;border-color:#bbf7d0'}">⛽ ${lastFuel}%</span>`
           : `<span class="veh-fuel-badge veh-fuel-badge--none">⛽ 未记录</span>`)
       : "";
-    const panel = (window._vtqVehicleId === v.id)
+    const panel = (window._vtqVehicleId === v.id && perm.addVehicleTrip())
       ? (inUse ? returnPanelHtml(v, open) : usePanelHtml(v))
       : "";
     return `
@@ -18880,10 +19079,10 @@ function vehicleHistoryCardHtml(trips) {
       </div>` : ""}
 
       <div class="veh-trip__actions">
-        ${open ? `<button class="btn small primary" onclick="openReturnVehicle('${t.vehicleId}')">还车</button>` : ""}
-        ${isManager()
+        ${open && perm.addVehicleTrip() ? `<button class="btn small primary" onclick="openReturnVehicle('${t.vehicleId}')">还车</button>` : ""}
+        ${perm.deleteVehicleTrip()
           ? `<button class="btn small danger" onclick="deleteVehicleTripHandler('${t.id}')">删除</button>`
-          : (open ? "" : `<span class="veh-readonly">🔒 只读</span>`)}
+          : (open || perm.addVehicleTrip() ? "" : `<span class="veh-readonly">🔒 只读</span>`)}
       </div>
     </div>`;
   }).join("");
@@ -18908,8 +19107,8 @@ function vehicleHistoryListHtml(trips) {
     const vName = t.vehicleName ? `${esc(t.vehicleName)}` : "未知车辆";
     const icon = t.type === "接货" ? "📦" : (t.type === "安装" ? "🖼️" : (t.type === "业务" ? "💼" : "🚚"));
     const actions = open
-      ? `<button class="btn small primary" onclick="openReturnVehicle('${t.vehicleId}')">还车</button>`
-      : (isManager()
+      ? (perm.addVehicleTrip() ? `<button class="btn small primary" onclick="openReturnVehicle('${t.vehicleId}')">还车</button>` : "")
+      : (perm.deleteVehicleTrip()
           ? `<button class="btn small danger" onclick="deleteVehicleTripHandler('${t.id}')">删除</button>`
           : `<span class="veh-readonly">只读</span>`);
     const outText = t.outTime ? `${fmtDateShort(t.outTime)} ${fmtTime(t.outTime)}` : "—";
@@ -19437,6 +19636,7 @@ function updateVehicleProjectButtonLabel() {
 
 /* 确认用车：创建一条未还车记录 */
 async function saveUseVehicle() {
+  if (!perm.addVehicleTrip()) { toast("无权限登记用车/还车"); return; }
   const vid = window._vtqVehicleId;
   if (!vid) return;
   if (isVehicleInUse(vid)) { toast("该车尚未还车，无法再次用车"); return; }
@@ -19496,6 +19696,7 @@ async function saveUseVehicle() {
 
 /* 确认还车：结算该次里程 */
 async function saveReturnVehicle() {
+  if (!perm.addVehicleTrip()) { toast("无权限登记用车/还车"); return; }
   const vid = window._vtqVehicleId;
   if (!vid) return;
   const trip = getOpenTrip(vid);
@@ -19529,6 +19730,7 @@ async function saveReturnVehicle() {
 }
 
 async function deleteVehicleTripHandler(id) {
+  if (!perm.deleteVehicleTrip()) { toast("无权限删除里程记录"); return; }
   if (!(await confirmDialog("确定删除这条里程记录？", "删除里程"))) return;
   try {
     await repo.deleteVehicleTrip(id);
