@@ -3194,7 +3194,7 @@ function renderWorkerAssignmentsText(dateStr, workerId = null) {
       const workType = (p.workContent && p.workContent.length) ? p.workContent.join("、") : "";
       const overdueTag = isOverdueNotStarted(p) ? `<span class="badge overdue">🚨 超时未开工</span> ` : "";
       html += `<div class="worker-assign-task${isOverdueNotStarted(p) ? ' overdue-task' : ''}">`;
-      html += `<div>${overdueTag}🕐 ${timeStr} · 📍 ${esc(place)} · 做 <b>${esc(p.name)}</b></div>`;
+      html += `<div>${overdueTag}🕐 ${timeStr} · 📍 ${esc(place)} · 做 <b>${esc(p.name)}</b>${p.customer ? ` · 👤 ${esc(p.customer)}` : ""}${p.phone ? ` · 📞 <a href="javascript:void(0)" data-tel="${esc(p.phone)}" class="tel-link" onclick="event.stopPropagation(); callPhone(event)">${esc(p.phone)}</a>` : ""}</div>`;
       if (workType) html += `<div class="worker-assign-meta">工作类型：${esc(workType)}</div>`;
       if (p.note) html += `<div class="worker-assign-meta worker-assign-note">⚠️ 注意事项：${esc(p.note)}</div>`;
       html += `</div>`;
@@ -5667,7 +5667,7 @@ function renderProjects() {
           <h3>${esc(p.name)}</h3>
           <div style="display: flex; gap: 4px;">
             <span class="badge ${p.status}">${p.status}</span>
-            ${workingTooLong ? `<span class="badge pending">⚠️ 连续施工中${workElapsedText}</span>` : ""}
+            ${workingTooLong ? `<span class="badge pending badge--multiline"><span>⚠️ 连续施工中</span><span class="badge__line">${workElapsedText}</span></span>` : ""}
             ${!workingTooLong && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
             ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
             ${p.timeModified ? `<span class="badge modified">✏️ 已改点</span>` : ""}
@@ -9766,7 +9766,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
         }
       
         if (p.phone) {
-          taskDesc += `电话 <strong>${esc(p.phone)}</strong>，`;
+          taskDesc += `电话 <a href="javascript:void(0)" data-tel="${esc(p.phone)}" class="tel-link" onclick="event.stopPropagation(); callPhone(event)">${esc(p.phone)}</a>，`;
         }
       
         taskDesc += `做 <strong>${esc(p.name)}</strong>`;
@@ -18696,7 +18696,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2fc625c7";
+  const APP_VERSION = "v5c4b8bcf";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
