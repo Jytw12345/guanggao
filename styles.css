@@ -993,9 +993,13 @@ body.narrow-view .container {
   max-width: 350px;
 }
 .project-filter-row #projectStatusFilter,
-.project-filter-row #projectStoreFilter {
+.project-filter-row #projectStoreFilter,
+.project-filter-row #projectTimeFilterDesktop {
   width: 140px;
   flex-shrink: 0;
+}
+.project-filter-row #projectTimeFilterDesktop {
+  width: 110px;
 }
 /* 施工管理筛选 */
 #assignSelect { max-width: 200px; }
@@ -1137,6 +1141,14 @@ body.narrow-view .container {
 #projectTimeFilterMobile,
 .project-filter-row > .custom-select:has(#projectTimeFilterMobile) {
   display: none !important;
+}
+
+/* 桌面端：时间筛选下拉（及其自定义下拉 wrapper）默认显示 */
+#projectTimeFilterDesktop,
+.project-filter-row > .custom-select:has(#projectTimeFilterDesktop) {
+  display: inline-block;
+  width: 110px;
+  flex-shrink: 0;
 }
 
 .input {
@@ -8107,6 +8119,10 @@ table.data.project-hours-diff thead th {
   .project-filter-row > .custom-select:has(#projectTimeFilterMobile) {
     display: block !important;
   }
+  #projectTimeFilterDesktop,
+  .project-filter-row > .custom-select:has(#projectTimeFilterDesktop) {
+    display: none !important;
+  }
 
   /* 手机端：状态指示器去掉「状态」标签，四个 pill 一行排开 */
   .project-status-indicator {
@@ -9977,11 +9993,12 @@ table.data.project-hours-diff thead th {
   .app-update {
     left: 50%;
     right: auto;
-    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    top: calc(60px + env(safe-area-inset-top, 0px));
+    bottom: auto;
     width: auto;
     min-width: 280px;
     max-width: calc(100vw - 24px);
-    transform: translate(-50%, 140%);
+    transform: translate(-50%, -140%);
   }
   .app-update.show { transform: translate(-50%, 0); }
 }

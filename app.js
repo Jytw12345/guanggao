@@ -5843,6 +5843,9 @@ function setProjectTimeFilter(days) {
   const mobileSel = document.getElementById("projectTimeFilterMobile");
   if (mobileSel) mobileSel.value = String(days);
 
+  const desktopSel = document.getElementById("projectTimeFilterDesktop");
+  if (desktopSel) desktopSel.value = String(days);
+
   renderProjects();
 }
 
@@ -18624,7 +18627,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v0dd6d838";
+  const APP_VERSION = "v024b4708";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
