@@ -10058,6 +10058,9 @@ table.data.project-hours-diff thead th {
 }
 .tl-leave-section--day { border-left: 4px solid #ef4444; }
 .tl-rest-section--day { border-left: 4px solid #10b981; }
+.tl-makeup-section--day { border-left: 4px solid #3b82f6; }
+.tl-makeup-section { padding: 12px 16px; border-top: 1px solid var(--border); background: #eff6ff; }
+.tl-makeup-header { font-weight: 600; color: #1d4ed8; margin-bottom: 8px; }
 .tl-day-off__list {
   display: flex;
   flex-direction: column;
@@ -10368,6 +10371,17 @@ table.data.project-hours-diff thead th {
   background: #fef2f2;
   color: #dc2626;
   border-color: #fecaca;
+}
+.leave-card__tag--makeup {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+.leave-card__tag--offset {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #86efac;
+}
 }
 .leave-card__conflict {
   margin-top: 8px;

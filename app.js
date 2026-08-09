@@ -150,6 +150,10 @@ const getWorker = (id) => cache.workers.find((w) => w.id === id);
 const getProject = (id) => cache.projects.find((p) => p.id === id);
 const getStore = (id) => cache.stores.find((s) => s.id === id);
 const getLeaveRecord = (id) => cache.leaveRecords.find((l) => l.id === id);
+/* 找到「补班抵消」了某条请假记录的轮休记录（轮休 actually worked，且关联了这条请假） */
+const getMakeupForLeave = (leaveId) => cache.leaveRecords.find(
+  (l) => l.leaveType === "rotational" && l.workedMakeup && l.makeupLeaveId === leaveId
+);
 const getOutsourcedWorker = (id) => cache.outsourcedWorkers.find((w) => w.id === id);
 const getWorkerSchedule = (id) => cache.workerSchedules.find((s) => s.id === id);
 const storeName = (id) => (getStore(id) || {}).name || "—";
@@ -1781,6 +1785,7 @@ const repo = {
         reviewerId: r.reviewer_id, reviewerName: r.reviewer_name,
         reviewNote: r.review_note, reviewedAt: r.reviewed_at,
         createdAt: r.created_at,
+        workedMakeup: !!r.worked_makeup, makeupLeaveId: r.makeup_leave_id || null,
       }));
       cache.leaveQuota = (lqRes.data || []).map((r) => ({
         id: r.id, workerId: r.worker_id,
@@ -2278,6 +2283,7 @@ const repo = {
         reason: leave.reason || null, status: leave.status || LEAVE_STATUS.PENDING,
         reviewer_id: leave.reviewerId || null, reviewer_name: leave.reviewerName || null,
         review_note: leave.reviewNote || null, reviewed_at: leave.reviewedAt || null,
+        worked_makeup: !!leave.workedMakeup, makeup_leave_id: leave.makeupLeaveId || null,
       };
       const { error } = await sb.from("leave_records").upsert(row);
       if (error) return fail(error);
@@ -2642,6 +2648,7 @@ async function applyIncrementalUpdate(tableName) {
         reviewerId: r.reviewer_id, reviewerName: r.reviewer_name,
         reviewNote: r.review_note, reviewedAt: r.reviewed_at,
         createdAt: r.created_at,
+        workedMakeup: !!r.worked_makeup, makeupLeaveId: r.makeup_leave_id || null,
       }));
       break;
     }
@@ -3348,6 +3355,8 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     
     let leaveBg = "";
     workerLeaves.forEach((lr) => {
+      // 轮休日若已标记为「补班（实际上班）」，则不当作休息，按正常出勤显示
+      if (lr.leaveType === "rotational" && lr.workedMakeup) return;
       let leaveLeft = 0, leaveWidth = 0;
       if (lr.startType === "all") {
         leaveLeft = 0;
@@ -3507,7 +3516,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     
     const dailyHours = getWorkerDailyHours(dateStr, w.id);
     const overloaded = isWorkerOverloaded(dateStr, w.id);
-    const hasRestRec = workerLeaves.some((lr) => lr.leaveType === "rotational");
+    const hasRestRec = workerLeaves.some((lr) => lr.leaveType === "rotational" && !lr.workedMakeup);
     const hasLeaveRec = workerLeaves.some((lr) => lr.leaveType !== "rotational");
     const leaveBadge = (hasRestRec ? `<span class="tl-lane-rest-badge" title="轮休（周末休息）">🌴</span>` : "")
       + (hasLeaveRec ? `<span class="tl-lane-leave-badge" title="请假">🩹</span>` : "");
@@ -3541,7 +3550,8 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   });
   
   // 轮休 ≠ 请假：拆成两块分别展示（轮休绿色「休息」，请假红色「不在岗」）
-  const dayRestRecords = dayLeaveRecords.filter((lr) => lr.leaveType === "rotational");
+  const dayRestRecords = dayLeaveRecords.filter((lr) => lr.leaveType === "rotational" && !lr.workedMakeup);
+  const dayMakeupRecords = dayLeaveRecords.filter((lr) => lr.leaveType === "rotational" && lr.workedMakeup);
   const dayRealLeaves = dayLeaveRecords.filter((lr) => lr.leaveType !== "rotational");
   const renderLeaveLine = (lr, rest) => {
     const w = getWorker(lr.workerId);
@@ -3557,6 +3567,13 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       <div class="tl-rest-section tl-rest-section--day">
         <div class="tl-rest-header">🌴 ${dateStr} 轮休 ${dayRestRecords.length} 人（周末休息，非请假）</div>
         <div class="tl-day-off__list">${dayRestRecords.map((lr) => renderLeaveLine(lr, true)).join("")}</div>
+      </div>`;
+  }
+  if (dayMakeupRecords.length > 0) {
+    leaveSection += `
+      <div class="tl-makeup-section tl-makeup-section--day">
+        <div class="tl-makeup-header">🛠 ${dateStr} 轮休补班 ${dayMakeupRecords.length} 人（轮休日实际上班）</div>
+        <div class="tl-day-off__list">${dayMakeupRecords.map((lr) => renderLeaveLine(lr, false)).join("")}</div>
       </div>`;
   }
   if (dayRealLeaves.length > 0) {
@@ -4729,6 +4746,24 @@ function calculateLeaveDays(startDate, endDate, startType, endType) {
   return workDays;
 }
 
+/* 按自然日（含起止）计算休假天数；轮休显示用，不扣周末/节假日 */
+function calculateCalendarDays(startDate, endDate, startType, endType) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const msPerDay = 24 * 60 * 60 * 1000;
+  let days = Math.round((end.getTime() - start.getTime()) / msPerDay) + 1;
+
+  if (startDate === endDate) {
+    const isHalf = t => t === "morning" || t === "afternoon";
+    if (isHalf(startType) && isHalf(endType)) return 1;
+    if (isHalf(startType) || isHalf(endType)) return 0.5;
+  }
+
+  if (startType === "morning" || startType === "afternoon") days -= 0.5;
+  if (endType === "morning" || endType === "afternoon") days -= 0.5;
+  return Math.max(0.5, days);
+}
+
 function calculateUsedLeaveDays(workerId, leaveType) {
   const year = new Date().getFullYear().toString();
   return cache.leaveRecords
@@ -5255,6 +5290,108 @@ async function deleteLeaveRecord(id) {
   } catch (e) {
     console.error("删除休假记录失败:", e);
     toast("删除失败：" + (e.message || "请重试"));
+  }
+}
+
+/* ============ 轮休「补班」：轮休日实际上班，可抵消一条已批请假 ============ */
+
+/* 标记/取消「轮休日实际上班（补班）」。标记后会从「休息」变为「正常出勤」。 */
+async function toggleLeaveMakeup(id) {
+  try {
+    if (!perm.manageLeaves()) { toast("权限不足：无法操作补班"); return; }
+    const record = getLeaveRecord(id);
+    if (!record) return;
+    if (record.leaveType !== "rotational") { toast("只有轮休记录可以标记补班"); return; }
+    const next = { ...record, workedMakeup: !record.workedMakeup };
+    if (!next.workedMakeup) next.makeupLeaveId = null; // 取消补班时一并解除关联
+    await repo.saveLeaveRecord(next, id);
+    await repo.loadAll();
+    logOperation("LEAVE_MAKEUP", `${record.workerName}的轮休(${record.startDate})`, next.workedMakeup ? "标记为补班（实际上班）" : "取消补班标记");
+    renderAll();
+    toast(next.workedMakeup ? "已标记为补班（该轮休日视为实际上班）" : "已取消补班标记");
+  } catch (e) {
+    console.error("标记补班失败:", e);
+    toast("操作失败：" + (e.message || "请重试"));
+  }
+}
+
+/* 选择「被抵消的请假」：列出该员工已批、非轮休、且未被其他补班关联的请假 */
+async function openMakeupLink(id) {
+  try {
+    if (!perm.manageLeaves()) { toast("权限不足"); return; }
+    const record = getLeaveRecord(id);
+    if (!record) return;
+    const candidates = cache.leaveRecords.filter((l) =>
+      l.workerId === record.workerId &&
+      l.leaveType !== "rotational" &&
+      l.status === LEAVE_STATUS.APPROVED &&
+      !getMakeupForLeave(l.id) // 未被其他补班关联
+    );
+    if (candidates.length === 0) {
+      toast("该员工暂无可抵消的已批请假");
+      return;
+    }
+    const options = candidates.map((l) => {
+      const t = LEAVE_TYPE_LABEL[l.leaveType] || l.leaveType;
+      const d = formatLeaveDateRange(l);
+      return `<option value="${l.id}">${esc(t)} · ${esc(l.workerName)} · ${esc(d)}</option>`;
+    }).join("");
+    const content = `
+      <div class="repair-form">
+        <div class="form-row">
+          <label>补班日期</label>
+          <div class="input" style="background:#f3f4f6;">${esc(record.startDate)}（${esc(record.workerName)} 轮休日实际上班）</div>
+        </div>
+        <div class="form-row">
+          <label>选择要抵消的请假</label>
+          <select id="makeupLeaveSelect" class="input">${options}</select>
+        </div>
+        <div class="form-actions">
+          <button class="btn" onclick="modal.close()">取消</button>
+          <button class="btn primary" onclick="confirmMakeupLink('${id}')">确定抵消</button>
+        </div>
+      </div>`;
+    modal.open("选择抵消的请假", content, { closeOnMask: true });
+  } catch (e) {
+    console.error("打开补班关联失败:", e);
+    toast("打开失败：" + (e.message || "请重试"));
+  }
+}
+
+async function confirmMakeupLink(id) {
+  try {
+    const sel = document.getElementById("makeupLeaveSelect");
+    if (!sel) return;
+    const targetId = sel.value;
+    if (!targetId) { toast("请选择一条请假"); return; }
+    const record = getLeaveRecord(id);
+    if (!record) return;
+    const target = getLeaveRecord(targetId);
+    if (!target) { toast("选择的请假不存在"); return; }
+    await repo.saveLeaveRecord({ ...record, workedMakeup: true, makeupLeaveId: targetId }, id);
+    await repo.loadAll();
+    logOperation("LEAVE_MAKEUP", `${record.workerName}的轮休(${record.startDate})`, `抵消 ${LEAVE_TYPE_LABEL[target.leaveType] || target.leaveType}(${target.startDate})`);
+    modal.close();
+    renderAll();
+    toast("已关联：该轮休上班抵消对应请假");
+  } catch (e) {
+    console.error("确认补班关联失败:", e);
+    toast("操作失败：" + (e.message || "请重试"));
+  }
+}
+
+async function clearMakeupLink(id) {
+  try {
+    if (!perm.manageLeaves()) { toast("权限不足"); return; }
+    const record = getLeaveRecord(id);
+    if (!record) return;
+    await repo.saveLeaveRecord({ ...record, makeupLeaveId: null }, id);
+    await repo.loadAll();
+    renderAll();
+    toast("已取消关联（仍保留补班标记）");
+  } catch (e) {
+    console.error("取消补班关联失败:", e);
+    toast("操作失败：" + (e.message || "请重试"));
   }
 }
 
@@ -15612,19 +15749,25 @@ function renderLeaveStats(container, historyRecords, pendingRecords) {
   });
 
   approvedRecords.forEach(r => {
-    const days = calculateLeaveDays(r.startDate, r.endDate, r.startType, r.endType);
+    // 轮休按自然日统计（周末/节假日也计），其他按工作日统计
+    const days = r.leaveType === "rotational"
+      ? calculateCalendarDays(r.startDate, r.endDate, r.startType, r.endType)
+      : calculateLeaveDays(r.startDate, r.endDate, r.startType, r.endType);
     if (r.leaveType === "rotational") {
+      if (r.workedMakeup) return; // 补班：该轮休日视为上班，不计入休息天数
       // 轮休属于正常休息日，不计入请假总天数
       if (typeStats[r.leaveType]) {
         typeStats[r.leaveType].days += days;
         typeStats[r.leaveType].count++;
       }
-    } else {
-      totalDays += days;
-      if (typeStats[r.leaveType]) {
-        typeStats[r.leaveType].days += days;
-        typeStats[r.leaveType].count++;
-      }
+      return;
+    }
+    // 非轮休：若被某条「补班」关联抵消，则不计入总请假天数与类型分布
+    if (getMakeupForLeave(r.id)) return;
+    totalDays += days;
+    if (typeStats[r.leaveType]) {
+      typeStats[r.leaveType].days += days;
+      typeStats[r.leaveType].count++;
     }
   });
 
@@ -15743,7 +15886,9 @@ function leaveWeekdayLabel(dateStr) {
 }
 
 function formatLeaveDurationShort(record) {
-  const days = calculateLeaveDays(record.startDate, record.endDate, record.startType, record.endType);
+  const days = record.leaveType === "rotational"
+    ? calculateCalendarDays(record.startDate, record.endDate, record.startType, record.endType)
+    : calculateLeaveDays(record.startDate, record.endDate, record.startType, record.endType);
 
   if ((record.startType === "custom" || record.endType === "custom") &&
       record.startDate === record.endDate && record.startTime && record.endTime) {
@@ -15792,6 +15937,15 @@ function renderLeaveCard(record, showActions) {
   const typeLabel = LEAVE_TYPE_LABEL[record.leaveType] || record.leaveType;
   const statusLabel = LEAVE_STATUS_LABEL[record.status] || record.status;
   const duration = formatLeaveDurationShort(record);
+
+  /* 补班（轮休日实际上班）相关状态 */
+  const isRotMakeup = record.leaveType === "rotational" && !!record.workedMakeup;
+  const makeupOffset = record.leaveType !== "rotational" ? getMakeupForLeave(record.id) : null;
+  let makeupOffsetLabel = "";
+  if (makeupOffset) {
+    const t = LEAVE_TYPE_LABEL[makeupOffset.leaveType] || makeupOffset.leaveType;
+    makeupOffsetLabel = `${esc(makeupOffset.workerName)} 的${t}`;
+  }
 
   const typeColorMap = {
     personal: { bg: "#eff6ff", text: "#1d4ed8", border: "#bfdbfe" },
@@ -15851,6 +16005,8 @@ function renderLeaveCard(record, showActions) {
           <span class="leave-card__tag" style="background:${statusStyle.bg};color:${statusStyle.text};border-color:${statusStyle.border};">${statusLabel}</span>
           <span class="leave-card__tag" style="background:${typeStyle.bg};color:${typeStyle.text};border-color:${typeStyle.border};">${typeLabel}</span>
           <span class="leave-card__tag leave-card__tag--duration">${duration}</span>
+          ${isRotMakeup ? `<span class="leave-card__tag leave-card__tag--makeup">🛠 已补班${record.makeupLeaveId ? "·已抵扣" : ""}</span>` : ""}
+          ${makeupOffset ? `<span class="leave-card__tag leave-card__tag--offset">✅ 已补班抵扣</span>` : ""}
           ${conflicts.length > 0 ? `<span class="leave-card__tag leave-card__tag--warn">⚠ ${conflicts.length}冲突</span>` : ""}
         </div>
         ${conflictInfo}
@@ -15871,6 +16027,18 @@ function renderLeaveCard(record, showActions) {
           ` : ""}
           ${record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id ? `
             <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回</button>
+          ` : ""}
+          ${record.leaveType === "rotational" && perm.manageLeaves() ? `
+            ${isRotMakeup ? `
+              <button class="btn small" onclick="toggleLeaveMakeup('${record.id}')">取消补班</button>
+              ${record.makeupLeaveId ? `
+                <button class="btn small" onclick="clearMakeupLink('${record.id}')">取消关联</button>
+              ` : `
+                <button class="btn small warning" onclick="openMakeupLink('${record.id}')">选择抵消请假</button>
+              `}
+            ` : `
+              <button class="btn small" onclick="toggleLeaveMakeup('${record.id}')">标记补班</button>
+            `}
           ` : ""}
         </div>
       </div>
@@ -16000,6 +16168,9 @@ function showLeaveDetail(id) {
   const statusLabel = LEAVE_STATUS_LABEL[record.status] || record.status;
   const reviewerDisplayName = getReviewerDisplayName(record);
   
+  const isRotMakeup = record.leaveType === "rotational" && !!record.workedMakeup;
+  const makeupOffset = record.leaveType !== "rotational" ? getMakeupForLeave(record.id) : null;
+  
   const conflicts = checkLeaveProjectConflict(record.workerId, record.startDate, record.endDate);
   
   const modalContent = `
@@ -16048,6 +16219,16 @@ function showLeaveDetail(id) {
       <div class="form-row">
         <label>审批人</label>
         <div class="input" style="background:#f3f4f6;">${esc(reviewerDisplayName)}</div>
+      </div>` : ""}
+      ${record.leaveType === "rotational" ? `
+      <div class="form-row">
+        <label>补班状态</label>
+        <div class="input" style="background:#f3f4f6;">${isRotMakeup ? "已补班（该轮休日视为实际上班）" : "未补班（正常休息）"}${record.makeupLeaveId ? "，已关联抵消一条请假" : ""}</div>
+      </div>` : ""}
+      ${makeupOffset ? `
+      <div class="form-row" style="background:#ecfdf5;border-left:3px solid #10b981;padding:10px;border-radius:4px;">
+        <span style="font-weight:bold;color:#047857;">✅ 已被补班抵消</span>
+        <div>由 ${esc(makeupOffset.workerName)} 的轮休（${esc(makeupOffset.startDate)}）上班抵消，不计入请假天数</div>
       </div>` : ""}
       <div class="form-actions">
         <button class="btn" onclick="modal.close()">关闭</button>
@@ -18308,7 +18489,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v8331553c";
+  const APP_VERSION = "v52e96a49";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
