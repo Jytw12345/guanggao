@@ -15679,6 +15679,10 @@ function renderLeaves() {
   if (!isManager() && !perm.viewAllLeaves() && currentProfile && currentProfile.id) {
     historyRecords = historyRecords.filter(r => r.workerId === currentProfile.id);
   }
+  // 待审批申请：同上权限逻辑——只有经理/有管理或查看全部权限才看全公司；普通员工只看到自己的待审
+  if (!isManager() && !perm.manageLeaves() && !perm.viewAllLeaves() && currentProfile && currentProfile.id) {
+    pendingRecords = pendingRecords.filter(r => r.workerId === currentProfile.id);
+  }
   
   renderLeaveStats(statsEl, historyRecords, pendingRecords);
 
@@ -15725,6 +15729,9 @@ function renderLeaves() {
 function renderLeaveStats(container, historyRecords, pendingRecords) {
   if (!container) return;
 
+  // 审批维度（待审/已批/被拒）属于管理视角：只有经理、有“管理休假”或“查看所有休假”权限才展示
+  const canApproveView = isManager() || perm.manageLeaves() || perm.viewAllLeaves();
+
   const rangeVal = getLeaveRangeValue();
   const rangeLabel = LEAVE_RANGE_LABEL[rangeVal] || "全部";
   let title = "";
@@ -15743,7 +15750,8 @@ function renderLeaveStats(container, historyRecords, pendingRecords) {
   const approvedRecords = (historyRecords || []).filter(r => r.status === LEAVE_STATUS.APPROVED);
 
   const typeStats = {};
-  let totalDays = 0;
+  let totalDays = 0;      // 请假天数（不含轮休、不含被补班抵消的请假）
+  let restDays = 0;       // 轮休休息天数（不含补班）
   Object.keys(LEAVE_TYPE_LABEL).forEach(type => {
     typeStats[type] = { days: 0, count: 0 };
   });
@@ -15755,7 +15763,8 @@ function renderLeaveStats(container, historyRecords, pendingRecords) {
       : calculateLeaveDays(r.startDate, r.endDate, r.startType, r.endType);
     if (r.leaveType === "rotational") {
       if (r.workedMakeup) return; // 补班：该轮休日视为上班，不计入休息天数
-      // 轮休属于正常休息日，不计入请假总天数
+      // 轮休属于正常休息，单独累计；同时计入类型分布
+      restDays += days;
       if (typeStats[r.leaveType]) {
         typeStats[r.leaveType].days += days;
         typeStats[r.leaveType].count++;
@@ -15770,6 +15779,7 @@ function renderLeaveStats(container, historyRecords, pendingRecords) {
       typeStats[r.leaveType].count++;
     }
   });
+  const totalRestDays = totalDays + restDays;
 
   const pendingCount = (pendingRecords || []).length;
   const rejectedCount = (historyRecords || []).filter(r => r.status === LEAVE_STATUS.REJECTED).length;
@@ -15797,10 +15807,13 @@ function renderLeaveStats(container, historyRecords, pendingRecords) {
     <div class="leave-stats-bar">
       <div class="leave-stats-bar__title">📊 ${title}</div>
       <div class="leave-stats-bar__kpis">
-        <span class="leave-stats-bar__kpi leave-stats-bar__kpi--days" title="总请假天数（不含轮休）"><b>${totalDays.toFixed(1)}</b>天</span>
+        <span class="leave-stats-bar__kpi leave-stats-bar__kpi--days" title="总休息天数（含轮休）"><b>${totalRestDays.toFixed(1)}</b>天</span>
+        <span class="leave-stats-bar__kpi leave-stats-bar__kpi--sub" title="请假天数 / 轮休天数"><small>${totalDays.toFixed(1)}假 / ${restDays.toFixed(1)}休</small></span>
+        ${canApproveView ? `
         <span class="leave-stats-bar__kpi leave-stats-bar__kpi--pending"><b>${pendingCount}</b>待审</span>
         <span class="leave-stats-bar__kpi leave-stats-bar__kpi--rejected"><b>${rejectedCount}</b>被拒</span>
         <span class="leave-stats-bar__kpi leave-stats-bar__kpi--approved"><b>${approvedRecords.length}</b>已批</span>
+        ` : ""}
       </div>
       <button class="leave-stats-bar__toggle" onclick="toggleLeaveStatsCollapse()">${collapsed ? "展开 ▼" : "收起 ▲"}</button>
     </div>
@@ -16019,25 +16032,25 @@ function renderLeaveCard(record, showActions) {
               <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
             ` : ""}
             ${record.status === LEAVE_STATUS.APPROVED && perm.approveLeave() && perm.withdrawLeave() && record.endDate >= todayStr() ? `
-              <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回批准</button>
+              <button class="btn small warning leave-card__btn" onclick="withdrawLeave('${record.id}')">撤回</button>
             ` : ""}
             ${record.status === LEAVE_STATUS.REJECTED && perm.rejectLeave() && perm.deleteLeave() ? `
-              <button class="btn small danger" onclick="deleteLeaveRecord('${record.id}')">删除</button>
+              <button class="btn small danger leave-card__btn" onclick="deleteLeaveRecord('${record.id}')">删除</button>
             ` : ""}
           ` : ""}
           ${record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id ? `
-            <button class="btn small warning" onclick="withdrawLeave('${record.id}')">撤回</button>
+            <button class="btn small warning leave-card__btn" onclick="withdrawLeave('${record.id}')">撤回</button>
           ` : ""}
           ${record.leaveType === "rotational" && perm.manageLeaves() ? `
             ${isRotMakeup ? `
-              <button class="btn small" onclick="toggleLeaveMakeup('${record.id}')">取消补班</button>
+              <button class="btn small leave-card__btn" onclick="toggleLeaveMakeup('${record.id}')">取消补班</button>
               ${record.makeupLeaveId ? `
-                <button class="btn small" onclick="clearMakeupLink('${record.id}')">取消关联</button>
+                <button class="btn small leave-card__btn" onclick="clearMakeupLink('${record.id}')">取消关联</button>
               ` : `
-                <button class="btn small warning" onclick="openMakeupLink('${record.id}')">选择抵消请假</button>
+                <button class="btn small warning leave-card__btn" onclick="openMakeupLink('${record.id}')">抵消请假</button>
               `}
             ` : `
-              <button class="btn small" onclick="toggleLeaveMakeup('${record.id}')">标记补班</button>
+              <button class="btn small leave-card__btn" onclick="toggleLeaveMakeup('${record.id}')">标记补班</button>
             `}
           ` : ""}
         </div>
@@ -18489,7 +18502,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v52e96a49";
+  const APP_VERSION = "v180d7339";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

@@ -3241,9 +3241,16 @@ textarea.input { resize: vertical; min-height: 50px; }
 .worker-assign { display: flex; flex-direction: column; gap: 10px; }
 .worker-assign-item { background: #fff; border: 1px solid #eef2f7; border-radius: 8px; padding: 10px 12px; }
 .worker-assign-name { font-weight: 600; font-size: 14px; color: #111827; margin-bottom: 6px; }
-.worker-assign-task { font-size: 13px; color: #374151; margin-top: 5px; line-height: 1.5; }
-.worker-assign-meta { font-size: 12px; color: #6b7280; margin-top: 2px; padding-left: 2px; }
+.worker-assign-task { font-size: 13px; color: #374151; margin-top: 6px; line-height: 1.5; padding: 8px 10px; border-radius: 8px; border: 1px solid #eef2f7; background: #fafbfc; }
+.worker-assign-meta { font-size: 12px; color: #6b7280; margin-top: 4px; padding-left: 2px; }
 .worker-assign-note { color: #b45309; }
+/* 安排列表里「超时未开工」的任务项高亮（圆角卡片） */
+.worker-assign-task.overdue-task {
+  border-left: 3px solid #dc2626;
+  border-color: #fecaca;
+  background: #fff5f5;
+  animation: overdueTaskPulse 1.6s ease-in-out infinite;
+}
 
 .sched-info-box {
   font-size: 13px;
@@ -3291,13 +3298,6 @@ textarea.input { resize: vertical; min-height: 50px; }
   50% { background: #fecaca; }
 }
 .worker-overdue-warn strong { color: #b91c1c; }
-/* 安排列表里「超时未开工」的任务项高亮 */
-.worker-assign-task.overdue-task {
-  border-left: 3px solid #dc2626;
-  background: #fff5f5;
-  padding-left: 8px;
-  animation: overdueTaskPulse 1.6s ease-in-out infinite;
-}
 @keyframes overdueTaskPulse {
   0%, 100% { background: #fff5f5; }
   50% { background: #ffe4e4; }
@@ -8530,6 +8530,13 @@ table.data.project-hours-diff thead th {
 .leave-stats-bar__kpi--pending b { color: #f59e0b; }
 .leave-stats-bar__kpi--rejected b { color: #dc2626; }
 .leave-stats-bar__kpi--approved b { color: #4338ca; }
+.leave-stats-bar__kpi--sub {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 400;
+  margin-left: -8px;
+}
+.leave-stats-bar__kpi--sub small { font-size: inherit; }
 .leave-stats-bar__toggle {
   border: 1px solid #e2e8f0;
   background: #f8fafc;
@@ -8710,6 +8717,7 @@ table.data.project-hours-diff thead th {
   .leave-stats-bar__kpis { justify-content: flex-start; gap: 12px; }
   .leave-stats-bar__kpi { font-size: 12px; }
   .leave-stats-bar__kpi b { font-size: 15px; }
+  .leave-stats-bar__kpi--sub { font-size: 10px; margin-left: -6px; }
   .leave-stats-bar__toggle { margin-left: auto; }
 }
 
@@ -10405,11 +10413,46 @@ table.data.project-hours-diff thead th {
 .leave-card__actions {
   margin-top: 8px;
   gap: 5px;
+  flex-wrap: wrap;
 }
 .leave-card__actions .btn.small {
   padding: 4px 9px;
   font-size: 11px;
   border-radius: 5px;
+}
+/* 休假卡片操作按钮：更小、更低调的文字描边按钮，避免手机端过大抢眼 */
+.leave-card__btn {
+  padding: 3px 7px !important;
+  font-size: 11px !important;
+  line-height: 1.3;
+  border-radius: 4px;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  color: #4b5563;
+  box-shadow: none;
+  font-weight: 500;
+}
+.leave-card__btn:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+.leave-card__btn.warning {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #c2410c;
+}
+.leave-card__btn.warning:hover {
+  background: #ffedd5;
+  border-color: #fb923c;
+}
+.leave-card__btn.danger {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+.leave-card__btn.danger:hover {
+  background: #fee2e2;
+  border-color: #f87171;
 }
 @media (max-width: 560px) {
   .leave-hist-bar { padding: 2px 2px 6px; font-size: 12px; }
@@ -10421,6 +10464,7 @@ table.data.project-hours-diff thead th {
   .leave-card__tags { gap: 3px; margin-top: 7px; }
   .leave-card__tag { padding: 1px 5px; font-size: 9px; }
   .leave-card__detail { padding: 2px 6px; font-size: 10px; }
+  .leave-card__btn { padding: 2px 5px !important; font-size: 10px !important; }
 }
 @media (max-width: 420px) {
   .leave-card__main { padding: 7px 8px; }
