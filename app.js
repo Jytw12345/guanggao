@@ -18696,7 +18696,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v9bc109e0";
+  const APP_VERSION = "v2fc625c7";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -19326,7 +19326,7 @@ function returnPanelHtml(v, trip) {
                  placeholder="输入还车时总里程"
                  onfocus="moveInputCursorToEnd(this)"
                  oninput="this.value = this.value.replace(/[^0-9]/g, ''); calcQuickMileage()" />
-          <div id="vtqMileage" class="vtq-mileage">已填入起始公里，请改为还车读数</div>
+          <div id="vtqMileage" class="vtq-mileage hint">👉 已填入起始公里，请改为还车读数</div>
         </div>
         <div class="veh-quick-fields">
           <div class="veh-ret-info">使用中：${esc(trip.driverName || "未知")}<br>出发 ${fmtDateTime(trip.outTime)}</div>
@@ -20046,6 +20046,7 @@ function calcQuickMileage() {
   const endEl = document.getElementById("vtqEnd");
   const preview = document.getElementById("vtqMileage");
   if (!endEl || !preview) return;
+  preview.classList.remove("hint");
   const start = startEl ? (Number((startEl.value || "").replace(/\D/g, "")) || 0) : 0;
   const end = Number((endEl.value || "").replace(/\D/g, "")) || 0;
   if (end > 0 && end < start) {

@@ -8655,6 +8655,18 @@ table.data.project-hours-diff thead th {
 }
 .vtq-mileage { margin-top: 6px; font-size: 14px; font-weight: 600; color: var(--primary, #2563eb); }
 .vtq-mileage.warn { color: #dc2626; }
+.vtq-mileage.hint {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 7px 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #8a5300;
+  background: #fff7e6;
+  border: 1px solid #f0c36d;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
 .veh-quick-fields { flex: 2 1 280px; min-width: 240px; display: flex; flex-direction: column; gap: 10px; }
 .veh-quick-actions { margin-top: 16px; display: flex; gap: 10px; }
 .veh-history-title { margin: 18px 0 8px; font-size: 15px; }
