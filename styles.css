@@ -1085,13 +1085,6 @@ body.narrow-view .container {
   min-height: 36px;
 }
 
-.psi-label {
-  font-size: 13px;
-  color: var(--muted);
-  flex-shrink: 0;
-  margin-right: 2px;
-}
-
 .psi-pill {
   display: inline-flex;
   align-items: center;
@@ -8131,9 +8124,6 @@ table.data.project-hours-diff thead th {
     width: 100%;
     padding-top: 10px;
     border-top: 1px solid var(--border);
-  }
-  .project-status-indicator .psi-label {
-    display: none;
   }
   .project-status-indicator .psi-pill {
     flex: 1 1 0;
