@@ -18476,14 +18476,24 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     if (_auCountTimer) { clearInterval(_auCountTimer); _auCountTimer = null; }
   }
 
-  // 统一的硬刷新：清掉所有 SW 缓存后带 cache-busting 参数刷新，确保从网络拿最新资源。
+  // 统一的硬刷新：清掉所有 SW 缓存后重新加载，确保从网络拿最新资源。
   // refreshing 标志保证无论 controllerchange 还是兜底定时器触发，都只会刷新一次。
   function hardReloadNow() {
     if (refreshing) return;
     refreshing = true;
+    try { localStorage.setItem("gg_updating", String(Date.now())); } catch (e) {}
     caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).finally(() => {
-      window.location.href = window.location.pathname + "?v=" + Date.now();
+      try { window.location.reload(true); } catch (e) { window.location.href = window.location.pathname; }
     });
+  }
+
+  // 防循环：若 5 分钟内刚执行过更新重载，则抑制新的更新提示，避免「倒计时重启后又循环收到」。
+  function shouldSuppressUpdateNotice() {
+    try {
+      const t = localStorage.getItem("gg_updating");
+      if (t && Date.now() - Number(t) < 5 * 60 * 1000) return true;
+    } catch (e) {}
+    return false;
   }
 
   function hasOpenModal() {
@@ -18495,6 +18505,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   function applyAppUpdate() {
     clearAuCount();
     try { localStorage.setItem("gg_just_updated", String(Date.now())); } catch (e) {}
+    try { localStorage.setItem("gg_updating", String(Date.now())); } catch (e) {}
     const el = document.getElementById("appUpdate");
     if (el) {
       const t = el.querySelector(".au-title"), s = el.querySelector(".au-sub");
@@ -18508,22 +18519,22 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     updateRequested = true;
     const reg = swRegistration;
     const wake = (w) => { try { w.postMessage({ type: "SKIP_WAITING" }); } catch (e) {} };
-    const fallbackReload = (ms) => setTimeout(() => { try { window.location.reload(); } catch (e) {} }, ms);
     if (reg && reg.waiting) {
       wake(reg.waiting);
-      fallbackReload(3000);
     } else if (reg && reg.installing) {
       const nw = reg.installing;
       nw.addEventListener("statechange", () => { if (nw.state === "installed") wake(nw); });
-      fallbackReload(5000);
-    } else {
-      fallbackReload(600);
     }
+    // 兜底：若 4s 内 controllerchange 未触发重载（极少数浏览器 skipWaiting 后不触发），
+    // 则强制触发；hardReloadNow 内有 refreshing 防重，不会重复刷新。
+    setTimeout(hardReloadNow, 4000);
   }
 
   // 新版本可用提示。默认自动倒计时 6 秒后更新；若当前有弹窗填表，则改为手动模式不自动刷新。
   function showUpdateBanner(version) {
     const v = version || "";
+    // 防循环：5 分钟内刚执行过更新重载 → 不再弹，避免「倒计时重启后又循环收到」
+    if (shouldSuppressUpdateNotice()) return;
     // 用户已主动关闭过此版本的更新提示 → 不再弹（避免"老是弹同一更新"）
     try {
       if (v && localStorage.getItem("sw_update_dismissed") === v) return;
@@ -18627,7 +18638,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vbf89a2ba";
+  const APP_VERSION = "vbe03c24e";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18650,7 +18661,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
       // 检测到新版本：统一只弹常驻横幅，由用户点「立即更新」主动刷新。
       // 不再自动 location.reload() —— 自动刷新会把刚弹出的横幅冲掉（表现为“一闪就没”）。
       // 若一开始就存在等待激活的新 SW（如页面加载时已在 waiting），立即提示
-      if (registration.waiting) promptUpdateBanner();
+      if (registration.waiting && !shouldSuppressUpdateNotice()) promptUpdateBanner();
 
       // 检测到新版本：新 SW 进入 waiting 后提示更新（不自动刷新，等用户点「立即更新」）
       registration.addEventListener("updatefound", () => {
@@ -18667,7 +18678,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
       navigator.serviceWorker.addEventListener("message", (e) => {
         if (e.data && e.data.type === "VERSION_UPDATED") {
           const v = e.data.version;
-          if (v && v !== APP_VERSION) showUpdateBanner(v);
+          if (v && v !== APP_VERSION && !shouldSuppressUpdateNotice()) showUpdateBanner(v);
         }
       });
 
@@ -18676,10 +18687,11 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
       const checkSwVersion = () => {
         try {
           if (!navigator.serviceWorker.controller) return; // 首次访问尚无 controller，跳过
+          if (shouldSuppressUpdateNotice()) return;
           const channel = new MessageChannel();
           channel.port1.onmessage = (ev) => {
             const v = ev.data && ev.data.version;
-            if (v && v !== APP_VERSION) showUpdateBanner(v);
+            if (v && v !== APP_VERSION && !shouldSuppressUpdateNotice()) showUpdateBanner(v);
           };
           navigator.serviceWorker.controller.postMessage({ type: "GET_VERSION" }, [channel.port2]);
         } catch (_) {}
