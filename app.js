@@ -18467,6 +18467,11 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   let swRegistration = null;
   let refreshing = false;
   let updateRequested = false;
+  let _auCountTimer = null;
+
+  function clearAuCount() {
+    if (_auCountTimer) { clearInterval(_auCountTimer); _auCountTimer = null; }
+  }
 
   // 统一的硬刷新：清掉所有 SW 缓存后带 cache-busting 参数刷新，确保从网络拿最新资源。
   // refreshing 标志保证无论 controllerchange 还是兜底定时器触发，都只会刷新一次。
@@ -18478,30 +18483,101 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     });
   }
 
-  // 版本更新横幅：常驻顶部，点击即强制硬刷新，避免用户关闭提示后一直停留在旧版
-  // dismissedVer 记录用户已关闭的版本号（sessionStorage），同一版本不再重复弹
+  function hasOpenModal() {
+    return !!(document.querySelector(".modal-mask.show") || document.querySelector("#modal.modal-mask.show"));
+  }
+
+  // 执行更新：先切到「正在更新…」过渡态，再唤醒 waiting 中的新 SW，由 controllerchange 触发 reload。
+  // 更新前打标记，重载后由 showUpdatedNotice() 给出回执，明确"这是更新不是崩溃"。
+  function applyAppUpdate() {
+    clearAuCount();
+    try { localStorage.setItem("gg_just_updated", String(Date.now())); } catch (e) {}
+    const el = document.getElementById("appUpdate");
+    if (el) {
+      const t = el.querySelector(".au-title"), s = el.querySelector(".au-sub");
+      const ico = el.querySelector(".au-ico"), foot = el.querySelector(".au-foot");
+      if (ico) ico.textContent = "⏳";
+      if (t) t.textContent = "正在更新…";
+      if (s) s.textContent = "正在载入新版本，页面稍后会自动重新加载，请勿关闭。";
+      if (foot) foot.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:2px 0">请稍候…</div>';
+      el.classList.add("show");
+    }
+    updateRequested = true;
+    const reg = swRegistration;
+    const wake = (w) => { try { w.postMessage({ type: "SKIP_WAITING" }); } catch (e) {} };
+    const fallbackReload = (ms) => setTimeout(() => { try { window.location.reload(); } catch (e) {} }, ms);
+    if (reg && reg.waiting) {
+      wake(reg.waiting);
+      fallbackReload(3000);
+    } else if (reg && reg.installing) {
+      const nw = reg.installing;
+      nw.addEventListener("statechange", () => { if (nw.state === "installed") wake(nw); });
+      fallbackReload(5000);
+    } else {
+      fallbackReload(600);
+    }
+  }
+
+  // 新版本可用提示。默认自动倒计时 6 秒后更新；若当前有弹窗填表，则改为手动模式不自动刷新。
   function showUpdateBanner(version) {
-    if (document.getElementById("swUpdateBar")) return;
     const v = version || "";
-    // 用户已主动关闭过此版本的更新提示 → 本会话不再弹（避免"老是弹同一更新"）
+    // 用户已主动关闭过此版本的更新提示 → 不再弹（避免"老是弹同一更新"）
     try {
       if (v && localStorage.getItem("sw_update_dismissed") === v) return;
     } catch (_) {}
-    const bar = document.createElement("div");
-    bar.id = "swUpdateBar";
-    bar.innerHTML = `<span class="sw-update__icon">🔄</span>
-      <span class="sw-update__text">发现新版本 <b>${v}</b>，建议立即更新以体验最新功能与修复</span>
-      <button type="button" id="swUpdateBtn" class="sw-update__btn">立即更新</button>
-      <button type="button" id="swUpdateClose" class="sw-update__close" aria-label="稍后更新" title="稍后更新">×</button>`;
-    document.body.appendChild(bar);
-    document.getElementById("swUpdateBtn").addEventListener("click", () => applyUpdate());
-    document.getElementById("swUpdateClose").addEventListener("click", () => {
-      try { if (v) localStorage.setItem("sw_update_dismissed", v); } catch (_) {}
-      bar.remove();
-    });
+    // 移除旧的顶部横幅（如果存在）
+    const oldBar = document.getElementById("swUpdateBar");
+    if (oldBar) oldBar.remove();
+
+    let el = document.getElementById("appUpdate");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "appUpdate";
+      el.className = "app-update";
+      el.innerHTML =
+        '<div class="au-top"></div>' +
+        '<div class="au-body">' +
+          '<div class="au-ico">🚀</div>' +
+          '<div class="au-text">' +
+            '<div class="au-title">发现新版本</div>' +
+            '<div class="au-sub">已部署更新，点击立即体验新功能与修复。</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="au-foot">' +
+          '<button class="au-btn ghost" id="auLater">稍后</button>' +
+          '<button class="au-btn primary" id="auNow">立即更新</button>' +
+        '</div>';
+      document.body.appendChild(el);
+      document.getElementById("auNow").addEventListener("click", applyAppUpdate);
+      document.getElementById("auLater").addEventListener("click", () => {
+        clearAuCount();
+        try { if (v) localStorage.setItem("sw_update_dismissed", v); } catch (_) {}
+        el.classList.remove("show");
+      });
+    }
+    requestAnimationFrame(() => el.classList.add("show"));
+
+    clearAuCount();
+    const sub = el.querySelector(".au-sub");
+    const btn = document.getElementById("auNow");
+    const auto = !hasOpenModal();
+    if (!auto) {
+      if (sub) sub.textContent = "已部署更新，点「立即更新」重新加载以应用。";
+      if (btn) btn.textContent = "立即更新";
+      return;
+    }
+    let left = 6;
+    const tick = () => {
+      if (left <= 0) { applyAppUpdate(); return; }
+      if (sub) sub.textContent = "已部署更新，" + left + " 秒后自动重新加载；不想现在更新可点「稍后」。";
+      if (btn) btn.textContent = "立即更新（" + left + "）";
+      left--;
+    };
+    tick();
+    _auCountTimer = setInterval(tick, 1000);
   }
 
-  // 询问正在 waiting 的新 SW 真实版本号，再弹出更新横幅（横幅显示“新版本号”而非当前页旧版号）
+  // 询问正在 waiting 的新 SW 真实版本号，再弹出更新提示（显示"新版本号"而非当前页旧版号）
   function promptUpdateBanner() {
     try {
       if (swRegistration && swRegistration.waiting) {
@@ -18514,29 +18590,41 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     showUpdateBanner(APP_VERSION);
   }
 
-  // 点击「立即更新」：通知等待中的新 Service Worker 立即接管（skipWaiting），
-  // 接管后触发 controllerchange，由该处统一刷新页面，避免"刷新了但旧 SW 仍控制页面"的死循环。
-  // 关键：reload 前先清掉所有 SW 缓存，确保刷新后从网络拿最新资源，
-  // 否则缓存竞态下 reload 仍命中旧 app.js（APP_VERSION 旧），与 controller 新版本不一致 → 又弹更新 → 死循环。
+  // applyUpdate 保留同名函数供老入口调用，实际走 applyAppUpdate
   function applyUpdate() {
-    const bar = document.getElementById("swUpdateBar");
-    if (bar) bar.remove();
-    // 标记“用户已主动请求更新”，让 controllerchange 监听器知道该刷新（而不是其它来源的 controllerchange）。
-    updateRequested = true;
-    // 通知等待中的新 SW 立即接管（skipWaiting）。
-    // 刷新由 controllerchange 统一处理；若极少数浏览器 skipWaiting 后不触发 controllerchange，
-    // 则 2.5s 兜底定时器强制从网络硬刷，确保一定更新成功。
-    if (swRegistration && swRegistration.waiting) {
-      swRegistration.waiting.postMessage({ type: "SKIP_WAITING" });
-      setTimeout(hardReloadNow, 2500);
-    } else {
-      // 没有 waiting 的 SW（罕见路径，例如本标签页尚未检测到新 SW）→ 直接清缓存硬刷，从网络拿最新
-      hardReloadNow();
-    }
+    applyAppUpdate();
+  }
+
+  // 更新完成回执：重载后告知用户「刚才的重新加载是版本更新」，消除"闪退"错觉
+  function showUpdatedNotice() {
+    let flag = null;
+    try { flag = localStorage.getItem("gg_just_updated"); } catch (e) {}
+    if (!flag) return;
+    try { localStorage.removeItem("gg_just_updated"); } catch (e) {}
+    const ts = Number(flag);
+    if (ts && Date.now() - ts > 5 * 60 * 1000) return;
+    const el = document.createElement("div");
+    el.className = "app-update";
+    el.innerHTML =
+      '<div class="au-top"></div>' +
+      '<div class="au-body">' +
+        '<div class="au-ico">✅</div>' +
+        '<div class="au-text">' +
+          '<div class="au-title">已更新到最新版本</div>' +
+          '<div class="au-sub">刚才的重新加载是版本更新，不是程序异常。</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="au-foot"><button class="au-btn primary">知道了</button></div>';
+    document.body.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("show"));
+    const close = () => { el.classList.remove("show"); setTimeout(() => { try { el.remove(); } catch (e) {} }, 400); };
+    const okBtn = el.querySelector(".au-btn");
+    if (okBtn) okBtn.addEventListener("click", close);
+    setTimeout(close, 6000);
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v682dfcb2";
+  const APP_VERSION = "v0dd6d838";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -18603,8 +18691,11 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
         if (updateRequested) hardReloadNow();
       });
     }).catch((err) => console.warn("Service Worker 注册失败", err));
+
+    // 更新完成后回执：重载后告诉用户这是版本更新，不是异常
+    setTimeout(() => { try { showUpdatedNotice(); } catch (e) {} }, 900);
   });
-  
+
   let resizeTimeout;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimeout);

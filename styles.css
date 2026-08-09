@@ -9906,6 +9906,86 @@ table.data.project-hours-diff thead th {
   #swUpdateBar .sw-update__btn { order: 4; flex: 1; }
 }
 
+/* 应用版本更新浮层（PWA：自动倒计时更新提示） */
+.app-update {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 10000;
+  width: 320px;
+  max-width: calc(100vw - 40px);
+  background: var(--card);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 18px 50px rgba(79, 70, 229, .25), 0 4px 14px rgba(0, 0, 0, .12);
+  border: 1px solid rgba(79, 70, 229, .20);
+  transform: translateY(140%);
+  opacity: 0;
+  transition: transform .45s cubic-bezier(.22, 1, .36, 1), opacity .45s;
+  font-family: inherit;
+}
+.app-update.show { transform: translateY(0); opacity: 1; }
+.app-update .au-top {
+  height: 4px;
+  background: linear-gradient(90deg, #4f46e5, #0891b2, #f59e0b, #4f46e5);
+  background-size: 300% 100%;
+  animation: au-shimmer 2.6s linear infinite;
+}
+@keyframes au-shimmer { 0% { background-position: 0 0; } 100% { background-position: 300% 0; } }
+.app-update .au-body {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px 18px 12px;
+}
+.app-update .au-ico {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 21px;
+  background: linear-gradient(135deg, var(--primary-light), #e0f2fe);
+  animation: au-pulse 1.8s ease-in-out infinite;
+}
+@keyframes au-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.09); } }
+.app-update .au-title { font-weight: 700; font-size: 15px; color: var(--text); }
+.app-update .au-sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.55; }
+.app-update .au-foot { display: flex; gap: 8px; padding: 0 18px 16px; }
+.app-update .au-btn {
+  flex: 1;
+  border: none;
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 600;
+  font-family: inherit;
+  transition: transform .2s, box-shadow .2s, background .2s;
+}
+.app-update .au-btn.primary {
+  background: linear-gradient(135deg, #4f46e5, #2563eb);
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, .35);
+}
+.app-update .au-btn.primary:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(37, 99, 235, .45); }
+.app-update .au-btn.ghost { background: #f3f4f6; color: #4b5563; }
+.app-update .au-btn.ghost:hover { background: #e5e7eb; }
+@media (max-width: 480px) {
+  .app-update {
+    left: 50%;
+    right: auto;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+    min-width: 280px;
+    max-width: calc(100vw - 24px);
+    transform: translate(-50%, 140%);
+  }
+  .app-update.show { transform: translate(-50%, 0); }
+}
+
 /* 安装引导横幅（PWA：可安装到桌面/主屏时显示） */
 .install-bar {
   position: fixed;
