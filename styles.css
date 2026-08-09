@@ -1133,8 +1133,11 @@ body.narrow-view .container {
 .psi-delayed { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
 .psi-delayed:hover, .psi-delayed.active { background: #fee2e2; }
 
-/* 手机端专用：时间筛选下拉（桌面端隐藏） */
-#projectTimeFilterMobile { display: none !important; }
+/* 手机端专用：时间筛选下拉（桌面端隐藏原生 select 及其自定义下拉 wrapper） */
+#projectTimeFilterMobile,
+.project-filter-row > .custom-select:has(#projectTimeFilterMobile) {
+  display: none !important;
+}
 
 .input {
   padding: 8px 12px;
@@ -8100,7 +8103,8 @@ table.data.project-hours-diff thead th {
     padding: 8px 6px !important;
     font-size: 12px !important;
   }
-  #projectTimeFilterMobile {
+  #projectTimeFilterMobile,
+  .project-filter-row > .custom-select:has(#projectTimeFilterMobile) {
     display: block !important;
   }
 
