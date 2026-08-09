@@ -16565,15 +16565,19 @@ function renderCalDay() {
     </div>`;
 }
 
-function calPrevMonth() { 
-  calViewMode = "calendar";
-  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); 
-  renderCalendar(); 
+function calPrevMonth() {
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1);
+  if (calViewMode === "timeline") {
+    calSelectedDate = dateKey(calMonth);
+  }
+  renderCalendar();
 }
-function calNextMonth() { 
-  calViewMode = "calendar";
-  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); 
-  renderCalendar(); 
+function calNextMonth() {
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1);
+  if (calViewMode === "timeline") {
+    calSelectedDate = dateKey(calMonth);
+  }
+  renderCalendar();
 }
 function calGotoToday() {
   const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0);
@@ -18638,7 +18642,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc8c3664b";
+  const APP_VERSION = "v156dd25b";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

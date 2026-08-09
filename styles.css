@@ -979,6 +979,32 @@ body.narrow-view .container {
 /* 项目列表筛选 */
 #projectStoreFilter, #projectStatusFilter { max-width: 150px; }
 
+/* 项目预约筛选下拉：选项文字居中 */
+#projectStatusFilter,
+#projectStoreFilter,
+#projectTimeFilterMobile,
+#projectTimeFilterDesktop {
+  text-align: center;
+}
+#projectStatusFilter option,
+#projectStoreFilter option,
+#projectTimeFilterMobile option,
+#projectTimeFilterDesktop option {
+  text-align: center;
+}
+/* 自定义下拉面板中的选项也居中 */
+.project-filter-row .custom-select .cs-option {
+  justify-content: center;
+}
+/* 自定义下拉触发器中的文字也居中 */
+.project-filter-row .custom-select .cs-trigger {
+  justify-content: center;
+}
+.project-filter-row .custom-select .cs-trigger .cs-text {
+  flex: 0 1 auto;
+  text-align: center;
+}
+
 /* 项目预约：筛选行（桌面端默认 flex 布局，手机端改为 grid） */
 .project-filter-row {
   display: flex;
