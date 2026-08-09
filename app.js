@@ -6690,9 +6690,8 @@ let currentProjectId = "";
 /* 日历视图状态（移至下方统一定义） */
 
 function refreshProjectSelector() {
-  // 缓存可选项目列表，供自定义选择弹窗使用
+  // 缓存可选项目列表，供自定义选择弹窗使用；不再预先过滤已完成状态，由弹窗内复选框控制
   constructionProjectList = cache.projects.slice()
-    .filter(p => p.status !== STATUS.REVIEWED && p.status !== STATUS.ACCEPTED)
     .sort((a, b) =>
     new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0));
   updateConstructionSelectLabel();
@@ -6731,10 +6730,25 @@ function updateConstructionSelectLabel() {
 /* 打开自定义项目选择弹窗（替代原生 select 的系统下拉） */
 let constructionProjectList = [];
 let projectPickerSearchKeyword = "";
+/* 施工管理项目选择弹窗状态过滤，默认不勾选（隐藏已完工/已验收/已审核，展示活跃项目） */
+let projectPickerStatusFilters = {
+  done: false,
+  accepted: false,
+  reviewed: false
+};
+
+function applyProjectPickerFilters(items) {
+  return items.filter(p => {
+    if (p.status === STATUS.DONE && !projectPickerStatusFilters.done) return false;
+    if (p.status === STATUS.ACCEPTED && !projectPickerStatusFilters.accepted) return false;
+    if (p.status === STATUS.REVIEWED && !projectPickerStatusFilters.reviewed) return false;
+    return true;
+  });
+}
 
 function openProjectPicker() {
   const keyword = projectPickerSearchKeyword.trim().toLowerCase();
-  let items = constructionProjectList;
+  let items = applyProjectPickerFilters(constructionProjectList);
   if (keyword) {
     items = items.filter(p => {
       const { store, name, date } = buildProjectDisplay(p);
@@ -6763,11 +6777,29 @@ function openProjectPicker() {
       }).join("")
     : `<div class="project-picker-empty">没有匹配的项目</div>`;
 
+  const filtersHtml = `
+    <div class="project-picker-filters">
+      <label class="pp-filter-label">
+        <input type="checkbox" ${projectPickerStatusFilters.done ? "checked" : ""} onchange="toggleProjectPickerFilter('done', this.checked)">
+        <span>已完工</span>
+      </label>
+      <label class="pp-filter-label">
+        <input type="checkbox" ${projectPickerStatusFilters.accepted ? "checked" : ""} onchange="toggleProjectPickerFilter('accepted', this.checked)">
+        <span>已验收</span>
+      </label>
+      <label class="pp-filter-label">
+        <input type="checkbox" ${projectPickerStatusFilters.reviewed ? "checked" : ""} onchange="toggleProjectPickerFilter('reviewed', this.checked)">
+        <span>已审核</span>
+      </label>
+    </div>
+  `;
+
   const body = `
     <div class="project-picker">
       <div class="project-picker-search">
         <input type="text" id="projectPickerSearch" class="input" placeholder="🔍 搜索门店 / 项目名 / 日期 / 客户 / 地址" value="${esc(projectPickerSearchKeyword)}" oninput="onProjectPickerSearch(this.value)" />
       </div>
+      ${filtersHtml}
       <div class="project-picker-count">共 ${items.length} 个可选项目</div>
       <div class="project-picker-list" id="projectPickerList">${listHtml}</div>
     </div>
@@ -6776,13 +6808,18 @@ function openProjectPicker() {
   modal.open("选择项目", body, { hideFooter: true });
 }
 
+function toggleProjectPickerFilter(key, checked) {
+  projectPickerStatusFilters[key] = !!checked;
+  onProjectPickerSearch(projectPickerSearchKeyword);
+}
+
 function onProjectPickerSearch(val) {
   projectPickerSearchKeyword = val || "";
   const listEl = document.getElementById("projectPickerList");
   const countEl = document.querySelector(".project-picker-count");
   if (!listEl) return;
   const keyword = projectPickerSearchKeyword.trim().toLowerCase();
-  let items = constructionProjectList;
+  let items = applyProjectPickerFilters(constructionProjectList);
   if (keyword) {
     items = items.filter(p => {
       const { store, name, date } = buildProjectDisplay(p);
@@ -6872,7 +6909,7 @@ function renderConstruction() {
   const dateControls = `
     <div class="schedule-date-controls">
       <button class="btn small" onclick="prevDaySchedule()">◀</button>
-      <button class="btn small ${isToday ? 'primary' : ''}" onclick="todaySchedule()">${isToday ? '今天' : '回到今天'}</button>
+      <button class="btn small ${isToday ? 'primary' : ''}" onclick="todaySchedule()">今天</button>
       <input type="date" id="scheduleDatePicker" value="${dateStr}" onchange="setViewScheduleDate(this.value)" class="input" style="width:auto;min-width:140px;">
       <button class="btn small" onclick="nextDaySchedule()">▶</button>
     </div>
@@ -9627,9 +9664,26 @@ function generateWorkerScheduleDescription(dateStr = null) {
         const chips = workers.map(n => `<span class="sched-team-person"><span class="sched-team-avatar">${esc(n.charAt(0))}</span>${esc(n)} <em>· ${perHrs}h</em></span>`).join("");
         const note = getProjectStatusNote(p, { includeStatus: true, showReason: false });
         const teamReasonColor = STAT_COLOR[p.status] || "#6b7280";
+        let timeExtra = "";
+        if (p.status === STATUS.WORKING && p.startedAt) {
+          const started = new Date(p.startedAt);
+          if (!isNaN(started)) {
+            const mins = Math.max(0, Math.floor((Date.now() - started.getTime()) / 60000));
+            const h = Math.floor(mins / 60);
+            const m = mins % 60;
+            timeExtra = `已施工${h > 0 ? h + "小时" : ""}${m > 0 ? m + "分钟" : h > 0 ? "" : "1分钟"}`;
+          }
+        } else {
+          const pStart = projectStart(p);
+          const pEnd = projectEnd(p);
+          const startTime = pStart ? `${String(pStart.getHours()).padStart(2, "0")}:${String(pStart.getMinutes()).padStart(2, "0")}` : "";
+          const endTime = pEnd ? `${String(pEnd.getHours()).padStart(2, "0")}:${String(pEnd.getMinutes()).padStart(2, "0")}` : "";
+          timeExtra = startTime ? `${startTime}${endTime ? "-" + endTime : "起"}` : "";
+        }
+        const metaText = [note, timeExtra].filter(Boolean).join(" · ");
         description += `<div class="sched-team-card">`;
         description += `<div class="sched-team-head"><span class="sched-team-badge">👥</span><span class="sched-team-name">${esc(p.name)}</span><span class="sched-team-chip">${workers.length}人</span></div>`;
-        description += `${note ? `<div class="sched-team-meta"><span class="sched-team-reason" style="color:${teamReasonColor}">${esc(note)}</span></div>` : ""}`;
+        description += `${metaText ? `<div class="sched-team-meta"><span class="sched-team-reason" style="color:${teamReasonColor}">${esc(metaText)}</span></div>` : ""}`;
         description += `<div class="sched-team-body">${chips}</div>`;
         description += `</div>`;
       });
@@ -18642,7 +18696,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v156dd25b";
+  const APP_VERSION = "v74d76080";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

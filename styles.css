@@ -856,6 +856,29 @@ body.narrow-view .container {
   flex-direction: column;
   gap: 10px;
 }
+.project-picker-filters {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 4px 2px;
+  flex-wrap: wrap;
+}
+.pp-filter-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pp-filter-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+}
 .project-picker-search .input {
   width: 100%;
   padding: 9px 12px;
@@ -3574,6 +3597,22 @@ textarea.input { resize: vertical; min-height: 50px; }
   padding: 6px 10px;
 }
 
+@media (max-width: 768px) {
+  .schedule-date-controls {
+    gap: 6px;
+  }
+  .schedule-date-controls .btn {
+    min-width: 36px;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  .schedule-date-controls input[type="date"] {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+  }
+}
+
 .schedule-progress {
   margin-top: 16px;
   padding-top: 16px;
@@ -5121,6 +5160,9 @@ table.data.project-hours-diff thead th {
     max-width: none;
     padding: 10px 14px;
     font-size: 15px;
+  }
+  .project-select-btn .project-select-text {
+    text-align: center;
   }
   .pp-name { font-size: 17px; }
 
