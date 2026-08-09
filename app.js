@@ -494,6 +494,7 @@ const perm = {
   deleteVehicleTrip: () => can(CAP.VEHICLE_TRIP_DELETE),
   doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE) || can(CAP.CONSTRUCTION_LOG_WORK) || can(CAP.CONSTRUCTION_LOG_OUTSOURCED)),
   manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT) || can(CAP.LEAVE_VIEW_ALL),
+  manageMakeup: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_BATCH_ROTATIONAL),
   viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
 };
 
@@ -4464,7 +4465,6 @@ function openLeaveForm(workerId) {
           <select class="input" id="leaveType">
             <option value="personal">事假</option>
             <option value="sick">病假</option>
-            <option value="annual">年假</option>
             <option value="comp">调休</option>
             <option value="rotational">轮休</option>
             <option value="other">其他</option>
@@ -5298,7 +5298,7 @@ async function deleteLeaveRecord(id) {
 /* 标记/取消「轮休日实际上班（补班）」。标记后会从「休息」变为「正常出勤」。 */
 async function toggleLeaveMakeup(id) {
   try {
-    if (!perm.manageLeaves()) { toast("权限不足：无法操作补班"); return; }
+    if (!perm.manageMakeup()) { toast("权限不足：无法操作补班"); return; }
     const record = getLeaveRecord(id);
     if (!record) return;
     if (record.leaveType !== "rotational") { toast("只有轮休记录可以标记补班"); return; }
@@ -5318,7 +5318,7 @@ async function toggleLeaveMakeup(id) {
 /* 选择「被抵消的请假」：列出该员工已批、非轮休、且未被其他补班关联的请假 */
 async function openMakeupLink(id) {
   try {
-    if (!perm.manageLeaves()) { toast("权限不足"); return; }
+    if (!perm.manageMakeup()) { toast("权限不足"); return; }
     const record = getLeaveRecord(id);
     if (!record) return;
     const candidates = cache.leaveRecords.filter((l) =>
@@ -5360,6 +5360,7 @@ async function openMakeupLink(id) {
 
 async function confirmMakeupLink(id) {
   try {
+    if (!perm.manageMakeup()) { toast("权限不足"); return; }
     const sel = document.getElementById("makeupLeaveSelect");
     if (!sel) return;
     const targetId = sel.value;
@@ -5382,7 +5383,7 @@ async function confirmMakeupLink(id) {
 
 async function clearMakeupLink(id) {
   try {
-    if (!perm.manageLeaves()) { toast("权限不足"); return; }
+    if (!perm.manageMakeup()) { toast("权限不足"); return; }
     const record = getLeaveRecord(id);
     if (!record) return;
     await repo.saveLeaveRecord({ ...record, makeupLeaveId: null }, id);
@@ -15831,7 +15832,7 @@ function renderLeaveStats(container, historyRecords, pendingRecords) {
       <div class="leave-stats-card leave-stats-card--compact">
         <h4 class="leave-stats-card__title" style="font-size:13px;">📈 类型分布</h4>
         <div class="leave-type-list">
-          ${Object.entries(typeStats).map(([type, stats]) => `
+          ${Object.entries(typeStats).filter(([type]) => type !== "annual").map(([type, stats]) => `
             <div class="leave-type-item ${type === 'rotational' ? 'leave-type-item--rotational' : ''}">
               <span class="leave-type-item__name">${LEAVE_TYPE_LABEL[type]}</span>
               <div class="leave-type-item__bar-wrap">
@@ -16041,7 +16042,7 @@ function renderLeaveCard(record, showActions) {
           ${record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id ? `
             <button class="btn small warning leave-card__btn" onclick="withdrawLeave('${record.id}')">撤回</button>
           ` : ""}
-          ${record.leaveType === "rotational" && perm.manageLeaves() ? `
+          ${record.leaveType === "rotational" && perm.manageMakeup() ? `
             ${isRotMakeup ? `
               <button class="btn small leave-card__btn" onclick="toggleLeaveMakeup('${record.id}')">取消补班</button>
               ${record.makeupLeaveId ? `
@@ -18502,7 +18503,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v180d7339";
+  const APP_VERSION = "v5c766abd";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
