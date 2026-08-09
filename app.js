@@ -18638,7 +18638,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vb7ebb271";
+  const APP_VERSION = "vc8c3664b";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
