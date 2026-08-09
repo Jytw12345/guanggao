@@ -154,6 +154,15 @@
           <select id="projectStoreFilter" class="input" style="width:140px;">
             <option value="">全部门店</option>
           </select>
+          <!-- 桌面端：时间筛选下拉（默认显示，手机端隐藏） -->
+          <select id="projectTimeFilterDesktop" class="input" style="width:110px;" onchange="setProjectTimeFilter(parseInt(this.value,10))">
+            <option value="0">全部时间</option>
+            <option value="3">近3天</option>
+            <option value="7">近7天</option>
+            <option value="15">近15天</option>
+            <option value="30">近1个月</option>
+            <option value="90">近3个月</option>
+          </select>
           <!-- 手机端：时间筛选收敛为下拉框，与状态、门店同处一行，节省垂直空间 -->
           <select id="projectTimeFilterMobile" class="input mobile-only" style="width:110px;" onchange="setProjectTimeFilter(parseInt(this.value,10))">
             <option value="0">全部时间</option>
