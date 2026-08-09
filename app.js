@@ -1331,7 +1331,7 @@ function sendNotificationForProjectChange(eventType, project) {
  * - 其他实体（workers, stores, leave_records 等）遵循相同规则
  * ============================================================ */
 let modifiedProjectIds = new Set();
-let projectTimeFilterDays = 7;
+let projectTimeFilterDays = 0;
 // 施工中“连续”超过此时长(小时)即视为疑似忘记点完工，可由总经理在「系统设置→提醒设置」中调整。
 // 云端模式：该值为全局部署在 app_settings 表，登录时从云端拉取（全员共享、统一标准）；
 // 本地模式（单机）：降级为 localStorage 兜底，仅影响本机。
@@ -5561,7 +5561,6 @@ function renderProjects() {
   const kw = document.getElementById("projectSearch").value.trim().toLowerCase();
   const status = document.getElementById("projectStatusFilter").value;
   const storeFilter = document.getElementById("projectStoreFilter").value;
-  const includeCompleted = document.getElementById("includeCompleted")?.checked || false;
   const list = document.getElementById("projectList");
   // 需要重点关注的项目优先置顶：超期未完工 / 开工超阈值仍施工中（疑似忘点完工）
   const isPendingOverdue = (p) => {
@@ -5592,31 +5591,37 @@ function renderProjects() {
     startDate.setDate(startDate.getDate() - projectTimeFilterDays);
     const endDate = new Date(now);
     endDate.setDate(endDate.getDate() + projectTimeFilterDays);
-    // 未完工（活跃）项目不受时间窗口限制，始终显示，避免遗忘；
-    // 仅已完工/已验收/已审核/已取消等“已结束”项目受窗口过滤。
-    const ACTIVE_STATUS = [STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED];
+    // 时间窗口按「预约时间」过滤：已结束项目（已完工/已验收/已审核/已取消）与「预约中」的预约都受窗口限制；
+    // 仅「施工中 / 已暂停 / 已延期」这类正在进行中的工作恒显示，避免遗漏在做的活。
+    const ALWAYS_VISIBLE = [STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED];
     items = items.filter((p) => {
-      if (ACTIVE_STATUS.includes(p.status)) return true;
+      if (ALWAYS_VISIBLE.includes(p.status)) return true;
       const aptTime = new Date(p.appointmentTime);
       return !isNaN(aptTime.getTime()) && aptTime >= startDate && aptTime <= endDate;
     });
   }
 
-  if (!includeCompleted && !kw && !status) {
+  // 默认（未选状态、无关键词）仅显示活跃项目，隐藏已完工/已验收/已审核，避免列表被历史项目淹没。
+  // 想看这些已结束项目，直接在状态下拉中选对应状态即可（已取消默认仍可见）。
+  if (!kw && !status) {
     items = items.filter((p) => ![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status));
   }
+
+  // 权限/门店过滤先执行，得到「用户当前可见范围」；
+  // 状态指示器基于该范围统计，不受关键词/状态下拉影响，保持数字稳定。
+  if (!isManager() && !perm.viewProjectAll() && myStore()) {
+    items = items.filter((p) => (p.storeId || "") === myStore());
+  } else if (storeFilter) {
+    items = items.filter((p) => (p.storeId || "") === storeFilter);
+  }
+
+  updateProjectStatusIndicator(items);
 
   if (kw) {
     items = items.filter((p) =>
       [p.name, p.customer, p.address].some((f) => (f || "").toLowerCase().includes(kw)));
   }
   if (status) items = items.filter((p) => p.status === status);
-  // 非经理且无“查看所有门店项目”权限时，只能看到本门店项目；经理或拥有该权限者可查看全部。
-  if (!isManager() && !perm.viewProjectAll() && myStore()) {
-    items = items.filter((p) => (p.storeId || "") === myStore());
-  } else if (storeFilter) {
-    items = items.filter((p) => (p.storeId || "") === storeFilter);
-  }
 
   if (items.length === 0) {
     list.innerHTML = `<div class="empty">暂无项目${perm.createProject() ? "，点击右上角「新建预约」创建。" : "。"}</div>`;
@@ -5829,23 +5834,51 @@ function refreshProjectStoreFilter() {
 }
 
 function onProjectStatusChange(status) {
-  const completedStatuses = ["已完工", "已验收", "已审核"];
-  const includeCompletedEl = document.getElementById("includeCompleted");
-  if (includeCompletedEl && completedStatuses.includes(status)) {
-    includeCompletedEl.checked = true;
-  }
   renderProjects();
 }
 
 function setProjectTimeFilter(days) {
   projectTimeFilterDays = days;
-  
-  document.getElementById("timeFilterAll").classList.toggle("primary", days === 0);
-  document.getElementById("timeFilter3").classList.toggle("primary", days === 3);
-  document.getElementById("timeFilter7").classList.toggle("primary", days === 7);
-  document.getElementById("timeFilter15").classList.toggle("primary", days === 15);
-  
+
+  const mobileSel = document.getElementById("projectTimeFilterMobile");
+  if (mobileSel) mobileSel.value = String(days);
+
   renderProjects();
+}
+
+function filterProjectsByStatus(status) {
+  const sel = document.getElementById("projectStatusFilter");
+  if (!sel) return;
+  // 点击已选中的 pill 视为取消筛选，恢复全部状态；否则切换到对应状态
+  const newValue = sel.value === status ? "" : status;
+  if (sel.value === newValue) return;
+  sel.value = newValue;
+  // 手动触发 change，让自定义下拉组件同步显示文本，同时触发已有的 change 监听器
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function updateProjectStatusIndicator(items) {
+  const counts = {
+    booked: items.filter((p) => p.status === STATUS.BOOKED).length,
+    working: items.filter((p) => p.status === STATUS.WORKING).length,
+    paused: items.filter((p) => p.status === STATUS.PAUSED).length,
+    delayed: items.filter((p) => p.status === STATUS.DELAYED).length,
+  };
+  const els = {
+    booked: document.getElementById("psiCountBooked"),
+    working: document.getElementById("psiCountWorking"),
+    paused: document.getElementById("psiCountPaused"),
+    delayed: document.getElementById("psiCountDelayed"),
+  };
+  Object.keys(els).forEach((k) => {
+    if (els[k]) els[k].textContent = String(counts[k]);
+  });
+
+  // 高亮当前选中的状态 pill
+  const status = document.getElementById("projectStatusFilter")?.value || "";
+  document.querySelectorAll(".psi-pill").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.status === status);
+  });
 }
 
 /* 施工内容可选项（广告安装类常用项，可在自定义中输入补充） */
@@ -18503,7 +18536,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v5c766abd";
+  const APP_VERSION = "v37c67866";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

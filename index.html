@@ -138,8 +138,8 @@
         <button class="btn primary" id="btnNewProject">+ 新建预约</button>
       </div>
       <div class="toolbar">
-        <div class="project-filter-row" style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
-          <input type="text" id="projectSearch" class="input" placeholder="搜索项目名称 / 客户 / 地址" style="flex:1;min-width:150px;max-width:350px;" />
+        <div class="project-filter-row">
+          <input type="text" id="projectSearch" class="input" placeholder="搜索项目名称 / 客户 / 地址" />
           <select id="projectStatusFilter" class="input" style="width:140px;">
             <option value="">全部状态</option>
             <option value="预约中">预约中</option>
@@ -154,15 +154,23 @@
           <select id="projectStoreFilter" class="input" style="width:140px;">
             <option value="">全部门店</option>
           </select>
+          <!-- 手机端：时间筛选收敛为下拉框，与状态、门店同处一行，节省垂直空间 -->
+          <select id="projectTimeFilterMobile" class="input mobile-only" style="width:110px;" onchange="setProjectTimeFilter(parseInt(this.value,10))">
+            <option value="0">全部时间</option>
+            <option value="3">近3天</option>
+            <option value="7">近7天</option>
+            <option value="15">近15天</option>
+            <option value="30">近1个月</option>
+            <option value="90">近3个月</option>
+          </select>
         </div>
-        <div class="toolbar-time-filter">
-          <button class="btn small" id="timeFilterAll" onclick="setProjectTimeFilter(0)">全部</button>
-          <button class="btn small" id="timeFilter3" onclick="setProjectTimeFilter(3)">3天</button>
-          <button class="btn small primary" id="timeFilter7" onclick="setProjectTimeFilter(7)">7天</button>
-          <button class="btn small" id="timeFilter15" onclick="setProjectTimeFilter(15)">15天</button>
-          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-left:auto;font-size:12px;color:var(--muted);">
-            <input type="checkbox" id="includeCompleted" onchange="renderProjects()" style="width:14px;height:14px;vertical-align:middle;"> 包含已完工
-          </label>
+        <!-- 桌面端：时间按钮改为状态指示器，显示活跃项目数量总览 -->
+        <div class="project-status-indicator">
+          <span class="psi-label">状态</span>
+          <button class="psi-pill psi-booked" data-status="预约中" onclick="filterProjectsByStatus('预约中')">预约中 <strong id="psiCountBooked">0</strong></button>
+          <button class="psi-pill psi-working" data-status="施工中" onclick="filterProjectsByStatus('施工中')">施工中 <strong id="psiCountWorking">0</strong></button>
+          <button class="psi-pill psi-paused" data-status="已暂停" onclick="filterProjectsByStatus('已暂停')">已暂停 <strong id="psiCountPaused">0</strong></button>
+          <button class="psi-pill psi-delayed" data-status="已延期" onclick="filterProjectsByStatus('已延期')">已延期 <strong id="psiCountDelayed">0</strong></button>
         </div>
       </div>
       <div id="projectList" class="card-grid"></div>
