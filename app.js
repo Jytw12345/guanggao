@@ -206,6 +206,7 @@ const CAP = {
   MANAGE_OUTSOURCED: "manage_outsourced",
   REPAIR_CREATE: "repair_create",
   REPAIR_COMPLETE: "repair_complete",
+  REWORK_PROJECT: "rework_project",
   MANAGE_WAGE_CONFIG: "manage_wage_config",
   PROJECT_EDIT_APPOINTMENT_OWN: "project_edit_appointment_own",
   PROJECT_EDIT_APPOINTMENT_ALL: "project_edit_appointment_all",
@@ -308,6 +309,7 @@ const CAP_LABEL = {
   repair_create: "发起维修单",
   manage_wage_config: "管理工时单价",
   repair_complete: "完成维修",
+  rework_project: "返工项目",
 };
 
 /* 权限项分组（角色权限配置页与个性权限弹窗按组展示，方便勾选） */
@@ -316,7 +318,7 @@ const CAP_GROUPS = [
   { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","construction_log_work","construction_log_outsourced","worklog_delete","worker_assign","worker_unassign"] },
   { label: "人员管理", caps: ["worker_add","worker_edit","worker_delete","worker_view","manage_outsourced"] },
   { label: "休假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","leave_delete","leave_withdraw","leave_batch_rotational"] },
-  { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_complete"] },
+  { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_complete","rework_project"] },
   { label: "数据统计", caps: ["view_stats_global","view_stats_store"] },
   { label: "数据工具", caps: ["export_projects","export_worklogs","export_leaves","export_workers","export_stores","export_all","import_data","view_operation_logs"] },
   { label: "系统管理", caps: ["manage_stores","manage_accounts","manage_wage_config"] },
@@ -345,7 +347,7 @@ const DEFAULT_ROLE_PERMS = {
     project_edit_appointment_own: true, project_edit_appointment_all: true, project_edit_hours_own: true, project_edit_hours_all: true,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
     import_data: false, view_operation_logs: false,
-    repair_create: true, repair_complete: false,
+    repair_create: true, repair_complete: false, rework_project: true,
     schedule_view: true, schedule_view_all: true, schedule_add: true, schedule_edit_own: true, schedule_edit_all: true, schedule_delete_own: true, schedule_delete_all: true,
     task_view: true, task_add: true, task_start: true, task_complete: true, task_delete: true, task_verify: true,
     internal_work_log: false,
@@ -365,7 +367,7 @@ const DEFAULT_ROLE_PERMS = {
     review_project: false, unreview_project: false, accept_project: false,
     view_stats_global: false, view_stats_store: false,
     manage_stores: false, manage_accounts: false, manage_wage_config: false,
-    repair_create: false, repair_complete: true,
+    repair_create: false, repair_complete: true, rework_project: false,
     manage_outsourced: false,
     project_edit_appointment_own: false, project_edit_appointment_all: false, project_edit_hours_own: false, project_edit_hours_all: false,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
@@ -446,6 +448,7 @@ const perm = {
   exportData: () => can(CAP.EXPORT_PROJECTS) || can(CAP.EXPORT_WORKLOGS) || can(CAP.EXPORT_LEAVES) || can(CAP.EXPORT_WORKERS) || can(CAP.EXPORT_STORES) || can(CAP.EXPORT_ALL) || can(CAP.IMPORT_DATA) || can(CAP.VIEW_OPERATION_LOGS),
   createRepair: () => can(CAP.REPAIR_CREATE),
   completeRepair: () => can(CAP.REPAIR_COMPLETE),
+  rework: (p) => can(CAP.REWORK_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
   manageWageConfig: () => isManager() || can(CAP.MANAGE_WAGE_CONFIG),
   // 注意：项目一旦开工或进入终态，预约时间即锁定，任何权限都不能再改（须走「延期」流程）
   editAppointment: (p) => !isReviewed(p) && !isAppointmentLocked(p) && (
@@ -962,6 +965,19 @@ function hoursDiff(project) {
   return { est, act, diff: act - est, hasActual: act > 0 };
 }
 
+/* 返工单关联：reworkOf 非空即独立返工单（新预约）。以下辅助供老单子回看返工记录。 */
+function getReworkOrders(id) {
+  return (cache.projects || []).filter((x) => x.reworkOf === id);
+}
+function getReworkHours(id) {
+  return getReworkOrders(id).reduce((s, r) => s + (r.workLogs || []).reduce((a, l) => a + (Number(l.hours) || 0), 0), 0);
+}
+/* 某项目的返工工时：独立返工单（reworkOf 非空）的全部工时为返工工时。 */
+function projectReworkHours(p) {
+  if (!p || !p.reworkOf) return 0;
+  return (p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0);
+}
+
 /* 计算项目进度百分比 */
 function getProjectProgress(p, est, act, hasActual, done) {
   if (est <= 0) return 0;
@@ -1226,6 +1242,7 @@ function buildStatusTimeCards(p) {
   };
 
   push("rec-timecard--blue", svgCal(13), "预约时间", p.appointmentTime ? fmtDateTime(p.appointmentTime) : "");
+  if (p.originalAppointmentTime) push("rec-timecard--violet", svgCal(13), "已改期·原预约", fmtDateTime(p.originalAppointmentTime));
   push("rec-timecard--blue", "🚀", "开工时间", p.startedAt ? fmtDateTime(p.startedAt) : "");
   if (p.status === STATUS.PAUSED) {
     const pauseTime = p.pausedAt || (() => {
@@ -1362,6 +1379,7 @@ const mapProject = (r) => ({
   phone: r.phone,
   address: r.address,
   appointmentTime: r.appointment_time || r.appointmentTime || "",
+  originalAppointmentTime: r.original_appointment_time || r.originalAppointmentTime || null,
   endTime: r.end_time || r.endTime || "",
   estimatedHours: Number(r.estimated_hours) || Number(r.estimatedHours) || 0,
   outsourcedHours: Number(r.outsourced_hours) || Number(r.outsourcedHours) || 0,
@@ -1399,6 +1417,13 @@ const mapProject = (r) => ({
   scheduleHistory: (r.schedule_history || r.scheduleHistory) ? (typeof (r.schedule_history || r.scheduleHistory) === "string" ? safeJsonParse(r.schedule_history || r.scheduleHistory, []) : (r.schedule_history || r.scheduleHistory)) : [],
   cancelledAt: r.cancelled_at || r.cancelledAt || null,
   cancelReason: r.cancel_reason || r.cancelReason || null,
+  reworkCount: Number(r.rework_count) || 0,
+  inRework: !!r.in_rework,
+  reworkCycles: (r.rework_cycles && typeof r.rework_cycles === "string" ? safeJsonParse(r.rework_cycles, []) : r.rework_cycles) || [],
+  prevCycleWorkHours: Number(r.prev_cycle_work_hours) || 0,
+  reworkOf: r.rework_of || r.reworkOf || null,
+  reworkContent: r.rework_content || r.reworkContent || "",
+  reworkPayable: r.rework_payable === false ? false : true, // 返工工时是否计入工资，默认计入
 });
 
 const projectToRow = (p) => ({
@@ -1408,6 +1433,7 @@ const projectToRow = (p) => ({
   phone: p.phone || null,
   address: p.address || null,
   appointment_time: p.appointmentTime || null,
+  original_appointment_time: p.originalAppointmentTime || null,
   end_time: p.endTime || null,
   estimated_hours: p.estimatedHours || 0,
   outsourced_hours: p.outsourcedHours || 0,
@@ -1441,6 +1467,13 @@ const projectToRow = (p) => ({
   schedule_history: p.scheduleHistory && p.scheduleHistory.length > 0 ? JSON.stringify(p.scheduleHistory) : null,
   cancelled_at: p.cancelledAt || null,
   cancel_reason: p.cancelReason || null,
+  rework_count: p.reworkCount || 0,
+  in_rework: !!p.inRework,
+  rework_cycles: p.reworkCycles && p.reworkCycles.length > 0 ? JSON.stringify(p.reworkCycles) : null,
+  prev_cycle_work_hours: p.prevCycleWorkHours || 0,
+  rework_of: p.reworkOf || null,
+  rework_content: p.reworkContent || null,
+  rework_payable: p.reworkPayable === false ? false : true,
 });
 
 const mapLog = (r) => ({
@@ -1453,6 +1486,8 @@ const mapLog = (r) => ({
   level: r.level || "中级",
   isOutsourced: r.is_outsourced || false,
   workType: r.work_type || r.workType || "",
+  isRework: r.is_rework || false,
+  reworkCycle: r.rework_cycle != null ? Number(r.rework_cycle) : null,
 });
 
 /* 车辆里程记录（云端 snake_case <-> 前端 camelCase） */
@@ -2200,12 +2235,17 @@ const repo = {
   async addWorkLog(pid, log) {
     if (MODE === "cloud") {
       clearTimeout(reloadTimer);
+      const proj = getProject(pid);
+      const inRework = !!(proj && proj.inRework);
+      const reworkCycle = inRework ? (proj.reworkCount || 0) : null;
       let row = {
         id: uid(), project_id: pid, worker_id: log.workerId,
         worker_name: log.workerName, hours: Number(log.hours), date: log.date, note: log.note || null,
         level: log.level || "中级",
         work_type: log.workType || null,
         is_outsourced: !!log.isOutsourced,
+        is_rework: inRework,
+        rework_cycle: reworkCycle,
       };
       let { error } = await sb.from("work_logs").insert(row);
       if (error && error.message && error.message.includes('level')) {
@@ -2226,7 +2266,12 @@ const repo = {
     } else {
       const p = getProject(pid);
       if (!p.workLogs) p.workLogs = [];
-      p.workLogs.push({ id: uid(), ...log });
+      const inRework = !!(p && p.inRework);
+      p.workLogs.push({
+        id: uid(), ...log,
+        isRework: inRework,
+        reworkCycle: inRework ? (p.reworkCount || 0) : null,
+      });
       saveLocal();
     }
   },
@@ -3155,6 +3200,178 @@ function recordSyncTime() {
 /* ============================================================
  * 施工人员模块
  * ============================================================ */
+
+/* 施工人员/我的安排顶部：统一汇总「待处理提醒」，覆盖四类：
+   ① 安装项目：超时未开工（历史任何日期）+ 施工中跨夜/超时（疑似忘点完工）
+   ② 内部任务：逾期未开始（date<今天） + 已开始却超时才未完工
+   ③ 请假：待审批且已到/已过开始日（怕当天漏批又排了活）
+   ④ 个人日程：与当天项目/内部任务时间冲突（撞车）
+   workerId 为 null 时汇总全部工人（管理页），否则只汇总指定工人。 */
+function renderWorkerOverdueSection(workerId = null) {
+  const today = todayStr();
+  const items = []; // {level, badge, badgeCls, title, sub, goto, wNames}
+
+  // ① 安装项目
+  cache.projects.forEach(p => {
+    if (p.status === STATUS.CANCELLED || isCompleted(p)) return;
+    const assigned = p.assignedWorkerIds || [];
+    if (workerId && !assigned.includes(workerId)) return;
+    if (!workerId && assigned.length === 0) return;
+    const notStarted = isOverdueNotStarted(p);
+    const forgotten = getForgottenCompleteInfo(p);
+    const overtime = getProjectOvertimeInfo(p);
+    const pausedTooLong = getProjectPausedTooLongInfo(p);
+    const delayed = p.status === STATUS.DELAYED;
+    if (!notStarted && !forgotten && !overtime && !pausedTooLong && !delayed) return;
+    let badge, sub, badgeCls, level;
+    if (forgotten) {
+      badge = forgotten.level === "overnight" ? "🌙 跨夜未完工" : "⚠️ " + forgotten.text;
+      sub = `开工于 ${p.startedAt ? fmtDateTime(p.startedAt) : "时间待定"}`;
+      badgeCls = forgotten.level === "overnight" ? "overdue" : "forgotten";
+      level = forgotten.level === "overnight" ? 0 : 1;
+    } else if (overtime) {
+      badge = overtime.isAfterWork ? "🌙 加班施工" : "⏰ 施工超时";
+      sub = `预约 ${fmtDateTime(overtime.end)} 结束，现仍在施工`;
+      badgeCls = overtime.isAfterWork ? "overdue" : "pending";
+      level = overtime.isAfterWork ? 1 : 2;
+    } else if (pausedTooLong) {
+      badge = "⏸️ 暂停过久";
+      sub = `已暂停 ${pausedTooLong.text}`;
+      badgeCls = "overdue";
+      level = 2;
+    } else if (delayed) {
+      badge = "⏰ 已延期";
+      const appt = p.appointmentTime || p.startTime;
+      sub = `原预约 ${appt ? fmtDateTime(appt) : "时间待定"}` + (p.delayReason ? ` · ${p.delayReason}` : "");
+      badgeCls = "overdue";
+      level = 2;
+    } else {
+      badge = "🚨 超时未开工";
+      const appt = p.appointmentTime || p.startTime;
+      sub = `预约 ${appt ? fmtDateTime(appt) : "时间待定"}`;
+      badgeCls = "overdue";
+      level = 2;
+    }
+    items.push({
+      level, badgeCls, badge, title: p.name, sub,
+      goto: `gotoConstruction('${p.id}')`,
+      wNames: workerId ? [] : (p.assignedWorkerIds || []).map(wid => { const w = getWorker(wid); return w ? w.name : ""; }).filter(Boolean)
+    });
+  });
+
+  // ② 内部任务
+  cache.internalTasks.forEach(t => {
+    if (t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED) return;
+    if (workerId && t.workerId !== workerId) return;
+    if (!workerId && !t.workerId) return;
+    const d = t.date || "";
+    if (t.status === TASK_STATUS.PENDING) {
+      if (d && d < today) {
+        items.push({
+          level: 2, badgeCls: "overdue", badge: "⏰ 内部任务逾期未开始",
+          title: t.name, sub: `应 ${d} 开始`,
+          goto: "switchTab('internalTasks')",
+          wNames: workerId ? [] : [t.workerName].filter(Boolean)
+        });
+      }
+    } else if (t.status === TASK_STATUS.IN_PROGRESS) {
+      if (t.startTimestamp && (Date.now() - t.startTimestamp) > WORKING_TIMEOUT_HOURS * 3600 * 1000) {
+        const hrs = ((Date.now() - t.startTimestamp) / 3600000).toFixed(1);
+        items.push({
+          level: 1, badgeCls: "forgotten", badge: "⚠️ 内部任务未完工",
+          title: t.name, sub: `已进行 ${hrs} 小时`,
+          goto: "switchTab('internalTasks')",
+          wNames: workerId ? [] : [t.workerName].filter(Boolean)
+        });
+      }
+    }
+  });
+
+  // ③ 请假：待审批且已到/已过开始日
+  cache.leaveRecords.forEach(lr => {
+    if (lr.status !== LEAVE_STATUS.PENDING) return;
+    if (workerId && lr.workerId !== workerId) return;
+    if (!workerId && !lr.workerId) return;
+    const sd = lr.startDate || "";
+    if (sd && sd <= today) {
+      const typeLabel = LEAVE_TYPE_LABEL[lr.leaveType] || "请假";
+      const overdue = sd < today;
+      items.push({
+        level: 1, badgeCls: "warn",
+        badge: overdue ? "🏥 请假逾期未批" : "🏥 请假待审批",
+        title: `${lr.workerName || ""} ${typeLabel}`.trim(),
+        sub: `${sd}~${lr.endDate || sd}`,
+        goto: "switchTab('leaves')",
+        wNames: []
+      });
+    }
+  });
+
+  // ④ 个人日程冲突：同工人同天，日程时段与项目/内部任务重叠
+  cache.workerSchedules.forEach(s => {
+    if (workerId && s.workerId !== workerId) return;
+    if (!workerId && !s.workerId) return;
+    if (!s.startTime || !s.endTime) return;
+    const wid = s.workerId, day = s.startDate;
+    const sS = parseHM(s.startTime), sE = parseHM(s.endTime);
+    if (!(sS < sE)) return;
+    let conflictName = "";
+    for (const p of cache.projects) {
+      if (isCompleted(p)) continue;
+      if (!(p.assignedWorkerIds || []).includes(wid)) continue;
+      const st = projectStart(p);
+      if (!st || fmtDate(st) !== day) continue;
+      const pS = st.getHours() * 60 + st.getMinutes();
+      const en = projectEnd(p);
+      const pE = en ? (en.getHours() * 60 + en.getMinutes()) : pS + (p.estimatedHours || 2) * 60;
+      if (sS < pE && pS < sE) { conflictName = p.name; break; }
+    }
+    if (!conflictName) {
+      for (const t of cache.internalTasks) {
+        if (t.workerId !== wid || t.date !== day) continue;
+        if (t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED) continue;
+        if (!t.scheduledStartTime || !t.scheduledEndTime) continue;
+        const tS = parseHM(t.scheduledStartTime), tE = parseHM(t.scheduledEndTime);
+        if (tS < tE && sS < tE && tS < sE) { conflictName = t.name; break; }
+      }
+    }
+    if (conflictName) {
+      items.push({
+        level: 1, badgeCls: "warn", badge: "⚠️ 日程冲突",
+        title: s.title || SCHEDULE_TYPE_LABEL[s.type] || "日程",
+        sub: `与「${conflictName}」时间重叠`,
+        goto: "switchTab('schedules')",
+        wNames: workerId ? [] : [s.workerName].filter(Boolean)
+      });
+    }
+  });
+
+  if (items.length === 0) return "";
+
+  // 排序：跨夜未完工(0) > 超时/冲突(1) > 未开工(2)
+  items.sort((a, b) => a.level - b.level);
+
+  const rows = items.map(it => {
+    const wNames = it.wNames && it.wNames.length ? " · " + esc(it.wNames.join("、")) : "";
+    return `<div class="worker-overdue-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;background:#fff;border:1px solid #fee2e2;border-radius:6px;">
+      <span class="badge ${it.badgeCls}">${it.badge}</span>
+      <span class="sched-goto" onclick="${it.goto}" style="font-weight:500;cursor:pointer;">${esc(it.title)}</span>
+      <span style="font-size:12px;color:#6b7280;">${esc(it.sub)}${wNames}</span>
+    </div>`;
+  }).join("");
+
+  return `<div class="worker-overdue-section" style="margin-bottom:16px;">
+    <div style="font-weight:600;color:#b91c1c;font-size:13px;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+      <span>⚠️</span>
+      <span>待处理提醒</span>
+      <span style="font-size:11px;color:#7f1d1d;font-weight:400;">（含项目超期/忘完工、内部任务、请假、日程冲突）</span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${rows}
+    </div>
+  </div>`;
+}
+
 function renderWorkerAssignmentsText(dateStr, workerId = null) {
   const target = dateStr ? fmtDate(new Date(dateStr)) : fmtDate(new Date());
   const dayProjects = cache.projects.filter(p => {
@@ -3193,8 +3410,11 @@ function renderWorkerAssignmentsText(dateStr, workerId = null) {
       const timeStr = pStart && pEnd ? `${startStr} ~ ${endStr}` : (pStart ? `从 ${startStr} 起` : "时间待定");
       const workType = (p.workContent && p.workContent.length) ? p.workContent.join("、") : "";
       const overdueTag = isOverdueNotStarted(p) ? `<span class="badge overdue">🚨 超时未开工</span> ` : "";
-      html += `<div class="worker-assign-task${isOverdueNotStarted(p) ? ' overdue-task' : ''}">`;
-      html += `<div>${overdueTag}🕐 ${timeStr} · 📍 ${esc(place)} · 做 <b>${esc(p.name)}</b>${p.customer ? ` · 👤 ${esc(p.customer)}` : ""}${p.phone ? ` · 📞 <a href="javascript:void(0)" data-tel="${esc(p.phone)}" class="tel-link" onclick="event.stopPropagation(); callPhone(event)">${esc(p.phone)}</a>` : ""}</div>`;
+      const forgottenInfo = getForgottenCompleteInfo(p);
+      const forgottenTag = forgottenInfo ? `<span class="badge forgotten">${forgottenInfo.level === "overnight" ? "🌙 跨夜未完工" : "⚠️ " + forgottenInfo.text}</span> ` : "";
+      const taskClass = (isOverdueNotStarted(p) ? " overdue-task" : "") + (forgottenInfo ? " forgotten-task" : "");
+      html += `<div class="worker-assign-task${taskClass}">`;
+      html += `<div>${overdueTag}${forgottenTag}🕐 ${timeStr} · 📍 ${esc(place)} · 做 <b>${esc(p.name)}</b>${p.customer ? ` · 👤 ${esc(p.customer)}` : ""}${p.phone ? ` · 📞 <a href="javascript:void(0)" data-tel="${esc(p.phone)}" class="tel-link" onclick="event.stopPropagation(); callPhone(event)">${esc(p.phone)}</a>` : ""}</div>`;
       if (workType) html += `<div class="worker-assign-meta">工作类型：${esc(workType)}</div>`;
       if (p.note) html += `<div class="worker-assign-meta worker-assign-note">⚠️ 注意事项：${esc(p.note)}</div>`;
       html += `</div>`;
@@ -3241,7 +3461,8 @@ function renderWorkers(dateStr) {
   const isDayAfter = displayDate === dayAfterStr;
   
   const scheduleHtml = renderWorkerAssignmentsText(displayDate);
-  
+  const overdueSection = renderWorkerOverdueSection();
+
   list.innerHTML = `
     <div id="workerScheduleSection" style="margin-bottom: 24px;">
       <div class="section-head" style="margin-bottom: 12px; display:flex; align-items:center; justify-content:space-between;">
@@ -3253,6 +3474,7 @@ function renderWorkers(dateStr) {
           <button class="btn small" onclick="renderWorkers()">🔄 刷新</button>
         </div>
       </div>
+      ${overdueSection}
       <div id="workerScheduleView">${scheduleHtml}</div>
     </div>
     <div class="section-head" style="margin-bottom: 12px;">
@@ -3631,28 +3853,8 @@ function renderWorkerScheduleForWorker(dateStr) {
   const workerId = currentWorker ? currentWorker.id : null;
 
   const scheduleHtml = renderWorkerAssignmentsText(dateStr, workerId);
-
-  // 施工人员端「我的安排」顶部提醒：当天/所选日期里，分配给本人的「超时未开工」项目
-  let overdueWarn = "";
-  if (workerId) {
-    const target = dateStr ? fmtDate(new Date(dateStr)) : todayStr;
-    const dayProjects = cache.projects.filter(p => {
-      if (p.status === STATUS.CANCELLED || isCompleted(p)) return false;
-      const start = projectStart(p);
-      if (!start) return false;
-      return fmtDate(start) === target;
-    });
-    const overdueNotStarted = dayProjects.filter(p =>
-      (p.assignedWorkerIds || []).includes(workerId) && isOverdueNotStarted(p)
-    );
-    if (overdueNotStarted.length > 0) {
-      const names = overdueNotStarted.slice(0, 3).map(p =>
-        `<span class="sched-goto" onclick="gotoConstruction('${p.id}')">${esc(p.name)}</span>`
-      ).join("、");
-      const more = overdueNotStarted.length > 3 ? ` 等${overdueNotStarted.length}个` : "";
-      overdueWarn = `<div class="sched-warn-amber worker-overdue-warn">🚨 <strong>超时未开工</strong>：${names}${more}，请尽快开始施工</div>`;
-    }
-  }
+  // 顶部汇总：历史超期未开工 + 施工中跨夜/超时（疑似忘点完工），不限于当前所选日期
+  const overdueSection = renderWorkerOverdueSection(workerId);
 
   list.innerHTML = `
     <div id="workerScheduleSection" style="margin-bottom: 24px;">
@@ -3665,7 +3867,7 @@ function renderWorkerScheduleForWorker(dateStr) {
           ${workerId && perm.applyLeave() ? `<button class="btn small" onclick="openLeaveForm('${workerId}')" style="background:#ef4444;color:#fff">🏥 请假</button>` : ""}
         </div>
       </div>
-      ${overdueWarn}
+      ${overdueSection}
       <div id="workerScheduleView">${scheduleHtml}</div>
     </div>`;
 }
@@ -5557,6 +5759,78 @@ function autoCalcEndTime() {
 /* ============================================================
  * 项目预约模块
  * ============================================================ */
+// 疑似忘记点完工检测：
+//  - overnight（跨夜）：开工日期已不是今天（跨越了午夜仍在施工中），不可能整夜作业，视为确定忘点完工；
+//  - long（长时）：连续施工超过阈值 WORKING_TIMEOUT_HOURS，视为疑似。
+// 返回 null 或 { level:'overnight'|'long', nights, hours, text }。
+function getForgottenCompleteInfo(p) {
+  if (p.status !== STATUS.WORKING || !p.startedAt) return null;
+  const start = new Date(p.startedAt);
+  const now = new Date();
+  const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const nights = Math.round((today - startDay) / 86400000); // 跨越的午夜数
+  const hours = (now - start) / 3600000;
+  if (nights >= 1) {
+    return { level: "overnight", nights, hours, text: `已跨${nights}夜` };
+  }
+  if (hours > WORKING_TIMEOUT_HOURS) {
+    const d = Math.floor(hours / 24), rem = Math.round(hours % 24);
+    const t = d > 0 ? (rem > 0 ? `${d}天${rem}小时` : `${d}天`) : `${Math.round(hours)}小时`;
+    return { level: "long", nights: 0, hours, text: `连续施工${t}` };
+  }
+  return null;
+}
+
+/* 施工中但已超过预约结束时间，或拖到正常下班后（18:00）仍未完工。
+   与 getForgottenCompleteInfo 区别：这里关注"超预约/加班施工"，不一定是忘点完工。
+   OVERTIME_GRACE_MS：超过预约结束时间满 30 分钟才提示，避免刚过点收尾/整理工具误报。 */
+const WORK_END_HOUR = 18;
+const OVERTIME_GRACE_MS = 30 * 60 * 1000;
+function getProjectOvertimeInfo(p) {
+  if (p.status !== STATUS.WORKING || !p.startedAt) return null;
+  const now = new Date();
+  const end = projectEnd(p);
+  if (!end || isNaN(end.getTime())) return null;
+  if (now <= new Date(end.getTime() + OVERTIME_GRACE_MS)) return null;
+  const workEndToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), WORK_END_HOUR, 0, 0, 0);
+  return {
+    overtimeMs: now - end,
+    isAfterWork: now >= workEndToday,
+    end
+  };
+}
+
+/* 已暂停(PAUSED)但暂停超过阈值，疑似忘记恢复施工。与忘点完工对称。 */
+const PAUSED_TIMEOUT_HOURS = 24;
+function getProjectPausedTooLongInfo(p) {
+  if (p.status !== STATUS.PAUSED || !p.pausedAt) return null;
+  const pausedAt = new Date(p.pausedAt);
+  if (isNaN(pausedAt.getTime())) return null;
+  const ms = Date.now() - pausedAt.getTime();
+  if (ms < PAUSED_TIMEOUT_HOURS * 3600 * 1000) return null;
+  const hours = ms / 3600000;
+  const d = Math.floor(hours / 24), rem = Math.round(hours % 24);
+  const text = d > 0 ? (rem > 0 ? `${d}天${rem}小时` : `${d}天`) : `${Math.round(hours)}小时`;
+  return { ms, hours, text };
+}
+
+// 从项目列表卡片进入施工管理：若疑似忘点完工，先提示并可一键标记完工。
+async function openProjectFromCard(id) {
+  const p = getProject(id);
+  const info = p ? getForgottenCompleteInfo(p) : null;
+  if (info) {
+    const msg = info.level === "overnight"
+      ? `「${p.name}」${info.text}，不可能整夜施工，疑似忘记点完工。\n是否立即标记为完工？`
+      : `「${p.name}」${info.text}，疑似忘记点完工。\n是否立即标记为完工？`;
+    if (await confirmDialog(msg, "疑似忘点完工")) {
+      openCompleteProjectForm(id);
+      return;
+    }
+  }
+  gotoConstruction(id);
+}
+
 function renderProjects() {
   const kw = document.getElementById("projectSearch").value.trim().toLowerCase();
   const status = document.getElementById("projectStatusFilter").value;
@@ -5569,15 +5843,19 @@ function renderProjects() {
     if (p.status !== STATUS.BOOKED || !p.appointmentTime) return false;
     return new Date() > new Date(p.appointmentTime);
   };
-  // 连续施工超过阈值仍“施工中”（疑似忘记点完工）。
+  // 连续施工超过阈值 / 跨夜仍“施工中”（疑似忘记点完工），见 getForgottenCompleteInfo。
   // 基于 startedAt 计算，而 resumeProject / 下拉恢复施工都会把 startedAt 重置为当前时间，
   // 因此“暂停施工”不计入连续时长——多天项目每晚暂停、次晨恢复不会误报。
   // 阈值 WORKING_TIMEOUT_HOURS 为全局部署变量（默认 12，由总经理在「提醒设置」中统一调整，云端存于 app_settings 表）。
-  const isWorkingTooLong = (p) => {
-    if (p.status !== STATUS.WORKING || !p.startedAt) return false;
-    return (Date.now() - new Date(p.startedAt).getTime()) > WORKING_TIMEOUT_HOURS * 3600 * 1000;
+  const attentionLevel = (p) => {
+    const f = getForgottenCompleteInfo(p);
+    if (f) return f.level === "overnight" ? 3 : 2;
+    const ot = getProjectOvertimeInfo(p);
+    if (ot) return ot.isAfterWork ? 2 : 1;
+    if (getProjectPausedTooLongInfo(p)) return 1;
+    if (p.status === STATUS.DELAYED) return 1;
+    return isPendingOverdue(p) ? 1 : 0;
   };
-  const attentionLevel = (p) => isWorkingTooLong(p) ? 2 : (isPendingOverdue(p) ? 1 : 0);
   let items = cache.projects.slice().sort((a, b) => {
     const wa = attentionLevel(a), wb = attentionLevel(b);
     if (wa !== wb) return wb - wa; // 需关注项目排最前（施工中超时优先于预约超期）
@@ -5624,7 +5902,25 @@ function renderProjects() {
   if (status) items = items.filter((p) => p.status === status);
 
   if (items.length === 0) {
-    list.innerHTML = `<div class="empty">暂无项目${perm.createProject() ? "，点击右上角「新建预约」创建。" : "。"}</div>`;
+    let emptyText = "暂无项目";
+    if (status === STATUS.PAUSED) {
+      emptyText = "暂无已暂停项目。施工中项目可点击「暂停施工」进入此状态。";
+    } else if (status === STATUS.DELAYED) {
+      emptyText = "暂无已延期项目。预约中或施工中项目可点击「延期」进入此状态。";
+    } else if (status === STATUS.BOOKED) {
+      emptyText = perm.createProject() ? "暂无预约中项目，点击右上角「新建预约」创建。" : "暂无预约中项目。";
+    } else if (status === STATUS.WORKING) {
+      emptyText = "暂无施工中项目。预约中项目可点击「开始施工」进入此状态。";
+    } else if (status === STATUS.DONE || status === STATUS.ACCEPTED || status === STATUS.REVIEWED) {
+      emptyText = `暂无${status}项目。`;
+    } else if (status === STATUS.CANCELLED) {
+      emptyText = "暂无已取消项目。";
+    } else if (perm.createProject()) {
+      emptyText = "暂无项目，点击右上角「新建预约」创建。";
+    } else {
+      emptyText = "暂无项目。";
+    }
+    list.innerHTML = `<div class="empty">${emptyText}</div>`;
     return;
   }
 
@@ -5643,12 +5939,22 @@ function renderProjects() {
     const end = new Date(p.endTime || p.startTime);
     const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
     const isPending = isPendingOverdue(p); // 未完工且预约时间已过的超期待处理
-    const workingTooLong = isWorkingTooLong(p); // 开工超阈值仍施工中（疑似忘点完工）
+    const forgottenInfo = getForgottenCompleteInfo(p); // 开工超阈值 / 跨夜仍施工中（疑似忘点完工）
+    const workingTooLong = !!forgottenInfo;
+    const overnight = forgottenInfo && forgottenInfo.level === "overnight";
+    const overtimeInfo = getProjectOvertimeInfo(p);   // 已超预约结束时间 / 下班后仍在施工
+    const isOvertimeWorking = !!overtimeInfo;
+    const isAfterWork = overtimeInfo && overtimeInfo.isAfterWork;
+    const pausedTooLongInfo = getProjectPausedTooLongInfo(p); // 已暂停超阈值，疑似忘记恢复施工
+    const isPausedTooLong = !!pausedTooLongInfo;
+    const isDelayed = p.status === STATUS.DELAYED;
+    const isRescheduled = !isDelayed && (!!p.originalAppointmentTime || p.timeModified); // 改过预约时间（持久化原值 / 会话内刚改）
     const workElapsedText = workingTooLong ? (() => {
       const h = (Date.now() - new Date(p.startedAt).getTime()) / 3600000;
       const d = Math.floor(h / 24), rem = Math.round(h % 24);
       return d > 0 ? (rem > 0 ? `${d}天${rem}小时` : `${d}天`) : `${Math.round(h)}小时`;
     })() : "";
+    const overtimeText = isOvertimeWorking ? calcActualWorkDuration({ accumulatedWorkHours: (overtimeInfo.overtimeMs || 0) / 3600000 }) : "";
     
     const pStart = new Date(p.appointmentTime || p.startTime);
     const pEnd = new Date(p.endTime || p.appointmentTime);
@@ -5661,16 +5967,19 @@ function renderProjects() {
     });
     
     return `
-      <div class="card ${(isOverdue || isPending || workingTooLong) ? "card-overdue" : ""}" data-status="${esc(p.status)}">
+      <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed || isPausedTooLong) ? "card-overdue" + ((overnight || isAfterWork || isPausedTooLong) ? " card-overdue--overnight" : "") : ""}" data-status="${esc(p.status)}">
         <div class="card-status-bar"></div>
         <div class="card-title">
           <h3>${esc(p.name)}</h3>
           <div style="display: flex; gap: 4px;">
             <span class="badge ${p.status}">${p.status}</span>
-            ${workingTooLong ? `<span class="badge pending badge--multiline"><span>⚠️ 连续施工中</span><span class="badge__line">${workElapsedText}</span></span>` : ""}
-            ${!workingTooLong && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
+            ${workingTooLong ? `<span class="badge ${overnight ? "overdue" : "pending"} badge--multiline"><span>${overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工"}</span><span class="badge__line">${workElapsedText}</span></span>` : ""}
+            ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"} badge--multiline"><span>${isAfterWork ? "🌙 加班施工" : "⏰ 施工超时"}</span><span class="badge__line">${isAfterWork ? `已加班 ${overtimeText}` : `已超预约 ${overtimeText}`}</span></span>` : ""}
+            ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
             ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
-            ${p.timeModified ? `<span class="badge modified">✏️ 已改点</span>` : ""}
+            ${isDelayed ? `<span class="badge overdue">⏰ 已延期</span>` : ""}
+            ${isPausedTooLong ? `<span class="badge overdue badge--multiline"><span>⏸️ 暂停过久</span><span class="badge__line">已暂停 ${pausedTooLongInfo.text}</span></span>` : ""}
+            ${isRescheduled ? `<span class="badge modified">📅 已改期</span>` : ""}
             ${leaveConflicts.length > 0 ? `<span class="badge danger">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
           </div>
         </div>
@@ -5784,7 +6093,7 @@ function renderProjects() {
         </div>` : ""}
 
         <div class="card-actions">
-          <button class="btn small primary" onclick="gotoConstruction('${p.id}')">🔧 施工管理</button>
+          <button class="btn small primary" onclick="openProjectFromCard('${p.id}')">🔧 施工管理</button>
           ${canEdit ? `<button class="btn small" onclick="editProject('${p.id}')">✏️ 编辑</button>` : ""}
           ${(() => {
             const items = [];
@@ -6264,6 +6573,7 @@ async function saveQuickEditProjectTime(id) {
 
   const payload = {
     appointmentTime: fullTime,
+    originalAppointmentTime: p.originalAppointmentTime || p.appointmentTime,
     endTime: fullEnd,
     estimatedHours,
     workerCount,
@@ -6369,6 +6679,12 @@ async function saveProject(id) {
     workContent,
     storeId,
   };
+
+  // 改期留痕：编辑已有项目时，把"改之前的预约时间"记为最初预约时间（已有则保留最初的）
+  if (id) {
+    const _ex0 = getProject(id);
+    if (_ex0) payload.originalAppointmentTime = _ex0.originalAppointmentTime || _ex0.appointmentTime;
+  }
 
   // 已开工 / 终态项目：预约时间、结束时间、预计工时不允许修改，强制保持数据库原值（即使前端表单被绕过也安全）
   if (id) {
@@ -6926,6 +7242,8 @@ function renderConstruction() {
   const totalHours = sumHours(p);
   const reviewed = isReviewed(p);
   const canEdit = perm.doConstruction(p);
+  // 手动登记工时（添加/编辑/删除）只允许「施工中」或「已暂停」；预约中没开工、已完工/已验收后不应再改工时。
+  const canLogWork = canEdit && [STATUS.WORKING, STATUS.PAUSED].includes(p.status);
   const canAssign = perm.assignWorker(p);
   const canReview = perm.reviewProject(p);
   const logsRows = (p.workLogs || []).length
@@ -6939,7 +7257,7 @@ function renderConstruction() {
           <td>${esc(normWorkType(l.workType))}</td>
           <td>${esc(l.level || "中级")}</td>
           <td>${esc(l.note || "—")}</td>
-          <td>${canEdit ? `<button class="btn small" onclick="editWorkLog('${p.id}','${l.id}')">修改</button><button class="btn small danger" onclick="deleteWorkLog('${p.id}','${l.id}')">删除</button>` : ""}</td>
+          <td>${canLogWork ? `<button class="btn small" onclick="editWorkLog('${p.id}','${l.id}')">修改</button><button class="btn small danger" onclick="deleteWorkLog('${p.id}','${l.id}')">删除</button>` : ""}</td>
         </tr>`;
       }).join("")
     : `<tr><td colspan="7" style="color:var(--muted)">暂无施工工时记录</td></tr>`;
@@ -6948,6 +7266,9 @@ function renderConstruction() {
     `<option value="${w.id}">${esc(w.name)}</option>`).join("");
 
   const ac = p.acceptance;
+  // 验收区块仅对终态项目显示（已完工/已验收/已审核）；已取消仅在有验收记录时显示。
+  // 施工中/预约中/已暂停/已延期等阶段不允许验收，隐藏该区块，避免误点。
+  const showAcceptance = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) || (p.status === STATUS.CANCELLED && !!ac);
 
   const assigned = p.assignedWorkerIds || [];
   const assignedChips = assigned.length
@@ -7042,6 +7363,7 @@ function renderConstruction() {
           <span class="proj-hero__name">${esc(p.name)}</span>
           <div class="proj-hero__badges">
             <span class="badge ${p.status}">${p.status}</span>
+            ${p.reworkCount > 0 ? `<span class="badge rework">🔄 返工 ${p.reworkCount} 次</span>` : ""}
             ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
           </div>
         </div>
@@ -7082,12 +7404,43 @@ function renderConstruction() {
       <div class="info-grid">
         <div class="info-item"><div class="k">预计工时</div><div class="v">${fmtHours(p.estimatedHours || 0)} 工时</div></div>
         <div class="info-item"><div class="k">外协工时</div><div class="v" style="color:#8b5cf6">${fmtHours(p.outsourcedHoursFromLogs || 0)} 工时</div></div>
-        <div class="info-item"><div class="k">实际工时</div><div class="v">${fmtHours((p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0))} 工时</div></div>
+        <div class="info-item"><div class="k">实际工时</div><div class="v">${fmtHours((p.workLogs || []).filter(l => isReworkLogPayable(p, l)).reduce((sum, l) => sum + (Number(l.hours) || 0), 0))} 工时</div></div>
+        ${(getReworkOrders(p.id).length > 0) ? `<div class="info-item"><div class="k">🔄 返工工时</div><div class="v" style="color:#8b5cf6">${fmtHours(getReworkHours(p.id))} 工时</div></div>` : ""}
         <div class="info-item"><div class="k">差异</div><div class="v">${diffLabel(p)}</div></div>
+        ${(p.reworkOf && getProject(p.reworkOf)) ? `<div class="info-item"><div class="k">🔄 返工源自</div><div class="v"><a href="javascript:void(0)" onclick="gotoConstruction('${esc(p.reworkOf)}')">${esc(getProject(p.reworkOf).name || "原项目")}</a></div></div>` : ""}
+        ${(p.reworkContent) ? `<div class="info-item" style="grid-column:1/-1;"><div class="k">🔧 返工内容</div><div class="v" style="white-space:pre-wrap;">${esc(p.reworkContent)}</div></div>` : ""}
         ${p.startedAt ? `<div class="info-item"><div class="k">⏰ 开工</div><div class="v">${esc(fmtDateTime(p.startedAt))}</div></div>` : ""}
         ${p.finishedAt ? `<div class="info-item"><div class="k">✅ 完工</div><div class="v">${esc(fmtDateTime(p.finishedAt))}</div></div>` : ""}
         ${p.startedAt && p.finishedAt ? `<div class="info-item"><div class="k">⏱️ 时长</div><div class="v"><b>${esc(calcActualWorkDuration(p))}</b></div></div>` : ""}
       </div>
+      ${(() => {
+        const reworks = getReworkOrders(p.id);
+        if (!reworks.length) return "";
+        const totalRW = getReworkHours(p.id);
+        return `<div class="rework-children">
+          <div class="rework-children__title">🔄 返工单（共 ${reworks.length} 次，累计返工工时 ${fmtHours(totalRW)}）</div>
+          ${reworks.map(r => {
+            const rwH = (r.workLogs || []).reduce((a, l) => a + (Number(l.hours) || 0), 0);
+            const rc = r.reworkContent ? `<div class="rework-children__content">🔧 ${esc(r.reworkContent)}</div>` : "";
+            return `<div class="rework-children__item">
+              <div class="rework-children__row">
+                <a href="javascript:void(0)" onclick="gotoConstruction('${esc(r.id)}')">${esc(r.name || '返工单')}</a>
+                <span class="rework-children__status">${esc(r.status || '')}</span>
+                <span class="rework-children__hours">${fmtHours(rwH)} 工时</span>
+              </div>
+              ${rc}
+            </div>`;
+          }).join("")}
+        </div>`;
+      })()}
+      ${(p.reworkOf && perm.viewGlobalStats()) ? `
+      <div class="rework-pay-control">
+        <label class="rework-pay-toggle">
+          <input type="checkbox" ${(p.reworkPayable !== false) ? "checked" : ""} onchange="setReworkPayable('${p.id}', this.checked)" />
+          <span>🔧 返工工时计入工资</span>
+        </label>
+        <span class="rework-pay-hint">取消勾选：仅作成本核算，不计入工人工资</span>
+      </div>` : ""}
       ${(canEdit || canReview || (reviewed && perm.unreviewProject(p)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair())) ? `
       <div class="action-groups">
         <!-- 状态流转操作 -->
@@ -7127,20 +7480,16 @@ function renderConstruction() {
         <div class="action-group">
           <button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>
         </div>` : ""}
-        ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `
+        <!-- 审核 / 维修 / 返工：横向一排并列（移动端同一 action-group 内 flex-row） -->
+        ${(canReview && !reviewed && p.status === STATUS.ACCEPTED) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `
         <div class="action-group">
-          <button class="btn small success" onclick="reviewProject('${p.id}')">🔍 审核项目</button>
+          ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `<button class="btn small success" onclick="reviewProject('${p.id}')">🔍 审核项目</button>` : ""}
+          ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `<button class="btn small warning" onclick="openRepairOrderForm('${p.id}')">🔧 发起维修单</button>` : ""}
+          ${[STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `<button class="btn small danger" onclick="reworkProject('${p.id}')">🔄 返工</button>` : ""}
         </div>` : ""}
-
-        <!-- 反审核 / 维修单 -->
-        ${(reviewed && perm.unreviewProject(p)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) ? `<span class="action-group__divider"></span>` : ""}
         ${reviewed && perm.unreviewProject(p) ? `
         <div class="action-group">
           <button class="btn small warning" onclick="unreviewProject('${p.id}')">↩ 反审核</button>
-        </div>` : ""}
-        ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `
-        <div class="action-group">
-          <button class="btn small warning" onclick="openRepairOrderForm('${p.id}')">🔧 发起维修单</button>
         </div>` : ""}
       </div>` : ""}
     </div>
@@ -7488,7 +7837,7 @@ function renderConstruction() {
         </tfoot>
       </table>
 
-      ${canEdit ? `
+      ${canLogWork ? `
       <div class="worklog-form">
         <div class="field">
           <label>人员类型</label>
@@ -7549,6 +7898,7 @@ function renderConstruction() {
       </div>` : ""}
     </div>
 
+    ${showAcceptance ? `
     <div class="detail-block">
       <h3>✅ 验收信息</h3>
       ${ac ? `
@@ -7573,7 +7923,7 @@ function renderConstruction() {
         <p class="hint" style="margin:0 0 10px">项目完成后填写验收信息。</p>
         <button class="btn primary" onclick="openAcceptance('${p.id}')">填写验收信息</button>
       ` : `<p class="hint" style="margin:0">暂无验收信息。</p>`)}
-    </div>
+    </div>` : ``}
   `;
   initCustomSelects(document.getElementById("construction"));
 }
@@ -8899,12 +9249,392 @@ async function unreviewProject(id) {
   toast("已取消审核");
 }
 
+/* 返工：基于已完工 / 已验收 / 已审核的项目，生成一条【全新的返工预约】（状态回到「预约中」），
+   原项目保持不变。新预约复制客户/地址/施工内容/派工等关键信息，便于重新排期、派工、填写工时；
+   通过 rework_of 关联原项目、reworkCount 标记第几次返工，详情页会显示「🔄 返工 N 次」徽标。 */
+/* 返工：基于原项目生成一条独立的新预约（「预约中」）。发起人在弹出的表单里填写
+   新的预约时间 / 时间段 / 返工内容 / 注意事项，人数与工时预填原值可改。
+   原项目保持「已完工 / 已验收 / 已审核」不变，作为历史留存。 */
+function reworkProject(id) {
+  const p = getProject(id);
+  if (!p) { toast("项目不存在"); return; }
+  if (!perm.rework(p)) { toast("无权限执行返工"); return; }
+  if (![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) {
+    toast("仅已完工 / 已验收 / 已审核的项目可以返工");
+    return;
+  }
+  openReworkForm(id);
+}
+
+function openReworkForm(id) {
+  window.__rwProjectId = id;
+  modal.open("生成返工预约", reworkProjectForm(id));
+  setTimeout(rwUpdateHint, 100);
+}
+
+/* 返工表单：沿用原项目的客户/电话/地址/门店/派工，新填预约时间与返工内容，
+   人数与工时预填原值（可改）。控件用 rw 前缀避免与新建项目表单(p 前缀)冲突。 */
+function reworkProjectForm(id) {
+  const p = getProject(id);
+  if (!p) return '<p>项目不存在</p>';
+  const selectedStore = p.storeId || "";
+  const storeOpts = `<option value="">未指定门店</option>` +
+    cache.stores.map((s) => `<option value="${s.id}" ${s.id === selectedStore ? "selected" : ""}>${esc(s.name)}</option>`).join("");
+  const startDate = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d; })();
+  const assignedNames = (p.assignedWorkerIds || []).map(wid => { const w = getWorker(wid); return w ? w.name : null; }).filter(Boolean);
+  const timeOpts = (def) => {
+    const times = [];
+    for (let h = 5; h <= 21; h++) for (let m = 0; m < 60; m += 10) times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    times.push('22:00');
+    return times.map(t => `<option value="${t}" ${t === def ? 'selected' : ''}>${t}</option>`).join('');
+  };
+  return `
+    <div id="rwModeHint" style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:8px 10px;font-size:12px;color:#9a3412;margin-bottom:10px;">
+      🔄 基于「${esc(p.name)}」生成一条<strong>独立的新返工预约</strong>。原项目保持「${esc(p.status)}」不变。
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <label style="flex:1;display:flex;align-items:center;gap:6px;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;font-size:13px;background:#fff;">
+        <input type="radio" name="rwMode" value="new" checked onchange="rwOnModeChange()" /> 🆕 新建返工单
+      </label>
+      <label style="flex:1;display:flex;align-items:center;gap:6px;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;cursor:pointer;font-size:13px;background:#fff;">
+        <input type="radio" name="rwMode" value="reopen" onchange="rwOnModeChange()" /> ♻️ 转回老单重做
+      </label>
+    </div>
+    <div style="display:flex;align-items:flex-start;gap:10px;width:100%;">
+      <div style="flex-shrink:0;">
+        <label style="display:block;margin-bottom:4px;"><span style="color:var(--primary)">🏪</span> 所属门店</label>
+        <select class="input" id="rwStore" style="width:auto;max-width:160px;">${storeOpts}</select>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <label style="display:block;margin-bottom:4px;"><span style="color:var(--primary)">📋</span> 项目名称 *</label>
+        <input class="input" id="rwName" value="${esc(p.name + "（返工）")}" placeholder="项目名称" style="width:100%;" />
+      </div>
+    </div>
+    <div class="form-grid">
+      <div class="form-row">
+        <label><span style="color:#0891b2">👤</span> 客户名称</label>
+        <input class="input" id="rwCustomer" value="${esc(p.customer || "")}" placeholder="客户 / 单位" />
+      </div>
+      <div class="form-row">
+        <label><span style="color:#0891b2">📞</span> 联系电话</label>
+        <input class="input" id="rwPhone" value="${esc(p.phone || "")}" placeholder="客户电话" />
+      </div>
+    </div>
+    <div class="form-row">
+      <label><span style="color:#0891b2">📍</span> 安装地址</label>
+      <input class="input" id="rwAddress" value="${esc(p.address || "")}" placeholder="施工现场地址" />
+    </div>
+    <div class="form-row">
+      <label><span style="color:var(--warn)">${svgCal(14)}</span> 预约时间 *</label>
+      <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
+        <input class="input" type="date" id="rwDate" value="${dateKey(startDate)}" onchange="rwOnDateChange()" style="width:100%;" />
+        <div style="display:flex;align-items:center;gap:6px;width:100%;">
+          <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
+          <select class="input" id="rwTime" onchange="rwUpdateHint()" style="flex:1;max-width:90px;">${timeOpts('09:00')}</select>
+          <span style="font-size:14px;color:#94a3b8;flex-shrink:0;">→</span>
+          <span style="font-size:11px;color:#64748b;flex-shrink:0;">结束</span>
+          <select class="input" id="rwEnd" onchange="rwUpdateHint()" style="flex:1;max-width:90px;">${timeOpts('12:00')}</select>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+        <button class="btn small" onclick="rwSetTimeRange('twohour')" style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:4px;padding:3px 8px;font-size:12px;">⏱️ 2小时</button>
+        <button class="btn small" onclick="rwSetTimeRange('morning')" style="background:#e0f2fe;color:#0891b2;border-color:#7dd3fc;border-radius:4px;padding:3px 8px;font-size:12px;">🌅 上午</button>
+        <button class="btn small" onclick="rwSetTimeRange('afternoon')" style="background:#fef3c7;color:#d97706;border-color:#fcd34d;border-radius:4px;padding:3px 8px;font-size:12px;">☀️ 下午</button>
+        <button class="btn small" onclick="rwSetTimeRange('full')" style="background:#dcfce7;color:#16a34a;border-color:#86efac;border-radius:4px;padding:3px 8px;font-size:12px;">${svgCal(13)} 全天</button>
+      </div>
+    </div>
+    <div id="rwDurationCard" style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:24px;">⏳</span>
+        <div><div style="font-size:12px;color:#64748b;">施工时长</div><div id="rwDurationValue" style="font-size:20px;font-weight:700;color:#1e293b;">--</div></div>
+      </div>
+      <div style="text-align:right;"><div style="font-size:12px;color:#64748b;">建议人数</div><div id="rwSuggestWorkers" style="font-size:16px;font-weight:600;color:#2563eb;">--</div></div>
+    </div>
+    <div class="form-grid">
+      <div class="form-row">
+        <label><span style="color:var(--success)">⚙️</span> 预计总工时</label>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input class="input" type="number" min="0" step="0.5" id="rwEst" value="${esc(p.estimatedHours ?? "")}" placeholder="0" style="width:auto;max-width:100px;" oninput="rwUpdateHint()" />
+          <span style="font-size:12px;color:var(--muted)">人·小时</span>
+        </div>
+        <small class="hint" style="font-size:11px;margin:2px 0 0;color:#16a34a;">预填原项目工时，可按实际返工范围调整</small>
+      </div>
+      <div class="form-row">
+        <label><span style="color:var(--success)">👷</span> 施工人数</label>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <select class="input" id="rwWorkers" onchange="rwAutoCalcEndTime()" style="width:auto;max-width:100px;">${workerCountOptions({ workerCount: p.workerCount })}</select>
+          <button class="btn small" onclick="rwAutoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">计算</button>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <label><span style="color:#0ea5e9;">🔧</span> 返工内容 *</label>
+      <textarea class="input" id="rwContent" placeholder="描述本次返工需要整改的具体内容，例如：门头右侧发光字不亮，需重新接线加固" style="min-height:60px;"></textarea>
+    </div>
+    <div class="form-row">
+      <label><span style="color:#6b7280;">💬</span> 注意事项</label>
+      <textarea class="input" id="rwNote" placeholder="施工注意事项、特殊要求等" style="min-height:50px;">${esc(p.note || "")}</textarea>
+    </div>
+    ${assignedNames.length ? `<div style="font-size:12px;color:#64748b;margin:2px 0 8px;">👷 派工人员沿用原项目：${esc(assignedNames.join("、"))}（可在详情页调整）</div>` : ""}
+    <label id="rwPayableWrap" style="display:flex;align-items:center;gap:8px;font-size:13px;margin:2px 0 8px;cursor:pointer;">
+      <input type="checkbox" id="rwPayable" /> <span>返工工时计入工资（勾选后计入工人工资；取消勾选仅作成本核算）</span>
+    </label>
+    <div class="form-actions">
+      <button class="btn" onclick="modal.close()">取消</button>
+      <button class="btn primary" onclick="confirmRework('${id}')">生成返工预约</button>
+    </div>`;
+}
+
+/* 以下 rw* 辅助函数对应新建项目表单的 setPTimeRange / onDateChange / updateSpanHint / autoCalcEndTime，
+   但操作 rw 前缀的 DOM，互不干扰。 */
+function rwOnModeChange() {
+  const mode = document.querySelector('input[name="rwMode"]:checked')?.value || "new";
+  const hint = document.getElementById("rwModeHint");
+  const payableWrap = document.getElementById("rwPayableWrap");
+  const nameInput = document.getElementById("rwName");
+  if (!hint) return;
+  if (mode === "reopen") {
+    hint.style.background = "#eff6ff";
+    hint.style.borderColor = "#bfdbfe";
+    hint.style.color = "#1e40af";
+    hint.innerHTML = `♻️ 将把「${esc(nameInput ? nameInput.value : '')}」本身转回「预约中」并填入新的返工预约时间，原项目历史工时保留。不会生成新单。`;
+    if (payableWrap) payableWrap.style.display = "none"; // 转回老单时整个单子正常计薪，无需单独开关
+  } else {
+    hint.style.background = "#fff7ed";
+    hint.style.borderColor = "#fed7aa";
+    hint.style.color = "#9a3412";
+    hint.innerHTML = `🔄 基于「${esc(getProjectFormName())}」生成一条<strong>独立的新返工预约</strong>。原项目保持「${esc(getProjectFormName())}」不变。`;
+    if (payableWrap) payableWrap.style.display = "";
+  }
+}
+function getProjectFormName() {
+  const p = getProjectFormId();
+  const proj = p ? getProject(p) : null;
+  return proj ? proj.name : "原项目";
+}
+function getProjectFormId() {
+  // 表单通过 openReworkForm(id) 打开，id 存于闭包；这里用隐藏字段兜底
+  const el = document.getElementById("rwFormProjectId");
+  return el ? el.value : (window.__rwProjectId || null);
+}
+function rwSetTimeRange(type) {
+  const date = document.getElementById("rwDate").value;
+  if (!date) { toast("请先选择预约日期"); return; }
+  const timeSel = document.getElementById("rwTime");
+  const endSel = document.getElementById("rwEnd");
+  function setSelect(el, val) {
+    if (!el || el.disabled) return;
+    el.value = val;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  if (type === "morning") { setSelect(timeSel, "08:00"); setSelect(endSel, "12:00"); }
+  else if (type === "afternoon") { setSelect(timeSel, "13:00"); setSelect(endSel, "18:00"); }
+  else if (type === "full") { setSelect(timeSel, "08:00"); setSelect(endSel, "18:00"); }
+  else if (type === "twohour") {
+    const currentTime = timeSel ? timeSel.value : "";
+    if (currentTime) {
+      const [h, m] = currentTime.split(":").map(Number);
+      const endH = String((h + 2) % 24).padStart(2, "0");
+      const endM = String(m).padStart(2, "0");
+      setSelect(endSel, `${endH}:${endM}`);
+    } else { setSelect(timeSel, "09:00"); setSelect(endSel, "11:00"); }
+  }
+  rwUpdateHint();
+}
+
+function rwOnDateChange() {
+  const dateEl = document.getElementById("rwDate");
+  const timeEl = document.getElementById("rwTime");
+  const endEl = document.getElementById("rwEnd");
+  if (!dateEl || !timeEl || !endEl) return;
+  const selectedDate = dateEl.value;
+  const todayStr = dateKey(new Date());
+  if (selectedDate === todayStr) {
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = Math.ceil(now.getMinutes() / 10) * 10;
+    const minsStr = minutes >= 60 ? '00' : String(minutes).padStart(2, '0');
+    const hoursAdjusted = minutes >= 60 ? String((now.getHours() + 1) % 24).padStart(2, '0') : hours;
+    let startTime = `${hoursAdjusted}:${minsStr}`;
+    const startH = parseInt(hoursAdjusted), startM = parseInt(minsStr);
+    let endH = startH + 2, endM = startM;
+    if (endH >= 24) { endH = 23; endM = 59; }
+    const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+    timeEl.value = startTime; endEl.value = endTime;
+  }
+  rwUpdateHint();
+}
+
+function rwUpdateHint() {
+  const durationCard = document.getElementById("rwDurationCard");
+  const durationValue = document.getElementById("rwDurationValue");
+  const suggestWorkers = document.getElementById("rwSuggestWorkers");
+  const dateEl = document.getElementById("rwDate");
+  const timeEl = document.getElementById("rwTime");
+  const endEl = document.getElementById("rwEnd");
+  const estEl = document.getElementById("rwEst");
+  if (!dateEl || !timeEl || !endEl || !durationCard || !durationValue || !suggestWorkers) return;
+  const date = dateEl.value, start = timeEl.value, end = endEl.value;
+  const estHours = Number(estEl?.value) || 0;
+  if (!date || !start || !end) {
+    durationCard.style.opacity = "0.5"; durationValue.textContent = "--"; suggestWorkers.textContent = "--"; return;
+  }
+  const s = new Date(`${date}T${start}`), e = new Date(`${date}T${end}`);
+  if (isNaN(s) || isNaN(e)) { durationCard.style.opacity = "0.5"; durationValue.textContent = "--"; suggestWorkers.textContent = "--"; return; }
+  if (e <= s) {
+    durationCard.style.opacity = "1";
+    durationValue.innerHTML = `<span style="color:var(--danger);font-size:14px;">结束时间需晚于开始时间</span>`;
+    suggestWorkers.textContent = "--";
+    return;
+  }
+  durationCard.style.opacity = "1";
+  const mins = Math.round((e - s) / 60000);
+  const h = Math.floor(mins / 60), m = mins % 60;
+  const durationText = (h > 0 && m > 0) ? `${h}小时${m}分钟` : (h > 0 ? `${h}小时` : `${m}分钟`);
+  durationValue.innerHTML = `<span style="color:#1e293b;">${durationText}</span>`;
+  if (estHours > 0) {
+    const hoursPerPerson = mins / 60;
+    const suggested = Math.max(1, Math.ceil(estHours / hoursPerPerson));
+    suggestWorkers.innerHTML = `<span style="color:#2563eb;">${suggested}人</span> <span style="font-size:11px;color:#64748b;">(总工时÷时长)</span>`;
+  } else {
+    suggestWorkers.innerHTML = `<span style="font-size:11px;color:#64748b;">填写总工时后估算</span>`;
+  }
+}
+
+function rwAutoCalcEndTime() {
+  const dateEl = document.getElementById("rwDate");
+  const timeEl = document.getElementById("rwTime");
+  const estEl = document.getElementById("rwEst");
+  const workersEl = document.getElementById("rwWorkers");
+  const endSel = document.getElementById("rwEnd");
+  if (!dateEl || !timeEl || !estEl || !workersEl || !endSel) { toast("表单元素未找到"); return; }
+  const date = dateEl.value, time = timeEl.value;
+  const estHours = Number(estEl.value) || 0, workerCount = Number(workersEl.value) || 1;
+  if (!date || !time) { toast("请先选择日期和开始时间"); return; }
+  if (estHours <= 0) { toast("请先填写预计工时"); return; }
+  const hoursNeeded = Math.ceil(estHours / workerCount * 10) / 10;
+  const [sh, sm] = time.split(":").map(Number);
+  const totalMin = sh * 60 + sm + Math.round(hoursNeeded * 60);
+  const eh = String(Math.floor(totalMin / 60) % 24).padStart(2, '0');
+  const em = String(totalMin % 60).padStart(2, '0');
+  endSel.value = `${eh}:${em}`;
+  rwUpdateHint();
+}
+
+async function confirmRework(id) {
+  const p = getProject(id);
+  if (!p) { toast("项目不存在"); return; }
+  if (!perm.rework(p)) { toast("无权限执行返工"); return; }
+  const name = document.getElementById("rwName").value.trim();
+  const date = document.getElementById("rwDate").value;
+  const time = document.getElementById("rwTime").value;
+  const end = document.getElementById("rwEnd").value;
+  const content = document.getElementById("rwContent").value.trim();
+  const phone = document.getElementById("rwPhone").value.trim();
+  if (!name) { toast("请填写项目名称"); return; }
+  if (!date) { toast("请选择预约日期"); return; }
+  if (!time) { toast("请选择开始时间"); return; }
+  if (!end) { toast("请选择结束时间"); return; }
+  if (!content) { toast("请填写返工内容"); return; }
+  if (!validatePhone(phone)) { toast("请输入有效的手机号码"); return; }
+  const fullTime = buildLocalDateTime(date, time);
+  const fullEnd = buildLocalDateTime(date, end);
+  if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
+  const workerCountInput = document.getElementById("rwWorkers").value;
+  if (!validateWorkerCount(workerCountInput)) { toast("施工人数必须在 1-8 之间"); return; }
+  const workerCount = Number(workerCountInput);
+  const inputEstHours = Number(document.getElementById("rwEst").value) || 0;
+  const durationHours = (new Date(fullEnd) - new Date(fullTime)) / (1000 * 60 * 60);
+  const autoEstHours = Math.round(durationHours * workerCount * 10) / 10;
+  const estimatedHours = inputEstHours > 0 ? inputEstHours : autoEstHours; // 未填则按 时长×人数 自动算
+  const reworkCount = (p.reworkCount || 0) + 1;
+  const operator = currentProfile.name || currentUser?.email || "系统";
+  const mode = document.querySelector('input[name="rwMode"]:checked')?.value || "new";
+  const payable = document.getElementById("rwPayable") ? document.getElementById("rwPayable").checked : true;
+  clearTimeout(reloadTimer);
+  try {
+    if (mode === "reopen") {
+      // 转回老单重做：原项目本身转回「预约中」并填入新的返工预约时间，历史工时保留（不改名，因是同一单）
+      await repo.patchProject(p.id, {
+        appointmentTime: fullTime,
+        endTime: fullEnd,
+        estimatedHours,
+        workerCount,
+        status: STATUS.BOOKED,
+        note: document.getElementById("rwNote").value.trim(),
+        reworkContent: content,
+        reworkCount,
+        startedAt: null,
+        finishedAt: null,
+        reviewedAt: null,
+        acceptedAt: null,
+        acceptance: null,
+      });
+      await repo.loadAll();
+      modal.close();
+      renderAll();
+      toast("已将原项目转回「预约中」，可重新排期 / 派工");
+      logOperation("PROJECT_REWORK", name || "项目", `转回老单重做（第 ${reworkCount} 次返工）`);
+      showNotificationAlert(`♻️ 已转回老单重做：${name}`);
+      return;
+    }
+    // 新建独立返工单（默认）
+    const newProject = {
+      name,
+      customer: document.getElementById("rwCustomer").value.trim(),
+      phone,
+      address: document.getElementById("rwAddress").value.trim(),
+      appointmentTime: fullTime,
+      endTime: fullEnd,
+      estimatedHours,
+      workerCount,
+      status: STATUS.BOOKED,
+      note: document.getElementById("rwNote").value.trim(),
+      reworkContent: content,
+      workContent: Array.isArray(p.workContent) ? p.workContent.slice() : [],
+      storeId: document.getElementById("rwStore").value || p.storeId || "",
+      assignedWorkerIds: Array.isArray(p.assignedWorkerIds) ? p.assignedWorkerIds.slice() : [],
+      outsourcedWorkers: p.outsourcedWorkers || "",
+      reworkCount,
+      reworkOf: p.id,
+      reworkPayable: payable,
+      actionLogs: [{ time: new Date().toISOString(), action: "rework_create", description: `基于「${p.name}」生成返工预约（第 ${reworkCount} 次返工）`, operator, operatorRole: currentProfile.role }],
+    };
+    await repo.saveProject(newProject);
+    await repo.patchProject(p.id, { reworkCount }); // 同步老单子返工次数，使其徽标/回指可见
+    await repo.loadAll();
+    modal.close();
+    renderAll();
+    toast("已生成返工预约，可在预约列表重新排期 / 派工");
+    logOperation("PROJECT_REWORK", name || "项目", `源自 ID: ${id}（第 ${reworkCount} 次返工）`);
+    showNotificationAlert(`🔄 已生成返工预约：${name}`);
+  } catch (error) {
+    console.error("生成返工预约失败:", error);
+    toast("生成返工预约失败，请重试");
+  }
+}
+
 async function saveActualHours(id) {
   const v = Number(document.getElementById("cActual").value) || 0;
   await repo.patchProject(id, { actual_hours: v });
   await repo.loadAll();
   renderConstruction();
   toast("已保存实际工时");
+}
+
+/* 切换某条返工单的工时是否计入工资。计入=正常发薪；不计入=仅作成本核算（如保修返工）。 */
+async function setReworkPayable(id, payable) {
+  const p = getProject(id);
+  if (!p) { toast("项目不存在"); return; }
+  if (!perm.viewGlobalStats()) { toast("无权限"); return; }
+  clearTimeout(reloadTimer);
+  await repo.patchProject(id, { rework_payable: !!payable });
+  await repo.loadAll();
+  renderProjectDetail(id);
+  renderStats();
+  toast(payable ? "返工工时已计入工资" : "返工工时已移出工资（仅成本核算）");
 }
 
 function toggleLogWorkerType() {
@@ -9620,25 +10350,20 @@ function generateWorkerScheduleDescription(dateStr = null) {
       workerHours[worker ? worker.name : "未知"] = totalHrs.toFixed(1);
     });
     
-    // 「超时提醒」收敛为：连续施工超过阈值(WORKING_TIMEOUT_HOURS)仍施工中、疑似忘点完工。
+    // 「超时提醒」收敛为：跨夜 / 连续施工超过阈值(WORKING_TIMEOUT_HOURS)仍施工中、疑似忘点完工。
     // 不再用"实际工时 > 预计工时"——否则正常推进的多天项目（如撤场）会被误报。
-    const overtimeProjects = allTodayProjects.filter(p =>
-      p.status === STATUS.WORKING && p.startedAt &&
-      (Date.now() - new Date(p.startedAt).getTime()) > WORKING_TIMEOUT_HOURS * 3600 * 1000
-    );
-    
+    const overtimeProjects = allTodayProjects.filter(p => getForgottenCompleteInfo(p));
+
     const highLoadWorkers = Object.entries(workerHours).filter(([name, hrs]) => parseFloat(hrs) > 10);
     if (overtimeProjects.length > 0 || highLoadWorkers.length > 0) {
       description += `<div class="sched-sec-h">⚠️ 今日需关注</div>`;
       if (overtimeProjects.length > 0) {
         const overtimeNames = overtimeProjects.slice(0, 5).map(p => {
-          const h = (Date.now() - new Date(p.startedAt).getTime()) / 3600000;
-          const d = Math.floor(h / 24), rem = Math.round(h % 24);
-          const span = d > 0 ? (rem > 0 ? `${d}天${rem}小时` : `${d}天`) : `${Math.round(h)}小时`;
-          return `${esc(p.name)}（已连续施工${span}）`;
+          const info = getForgottenCompleteInfo(p);
+          return `${esc(p.name)}（${info.level === "overnight" ? "🌙" + info.text : info.text}）`;
         }).join("、");
         const moreCount = overtimeProjects.length > 5 ? `等${overtimeProjects.length}个` : "";
-        description += `<div class="sched-warn-amber strong">⏰ <strong>超时提醒</strong>：${overtimeNames}${moreCount}连续施工已超${WORKING_TIMEOUT_HOURS}小时，疑似忘记点完工，请确认！</div>`;
+        description += `<div class="sched-warn-amber strong">⏰ <strong>超时提醒</strong>：${overtimeNames}${moreCount}疑似忘记点完工，请确认${overtimeProjects.some(p => getForgottenCompleteInfo(p).level === "overnight") ? "（含跨夜项目）" : ""}！</div>`;
       }
       if (highLoadWorkers.length > 0) {
         const highLoadList = highLoadWorkers.map(([name, hrs]) => `${esc(name)}(${hrs}小时)`).join("、");
@@ -10133,6 +10858,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
               ${p.description ? `<div class="detail-row"><span class="detail-label">📝 项目说明</span><span class="detail-value">${esc(p.description)}</span></div>` : ''}
               ${(p.workContent && p.workContent.length) ? `<div class="detail-row"><span class="detail-label">🛠️ 施工内容</span><span class="detail-value">${p.workContent.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("")}</span></div>` : ''}
               ${p.note ? `<div class="detail-row"><span class="detail-label">💬 注意事项</span><span class="detail-value" style="white-space:pre-wrap;">${esc(p.note)}</span></div>` : ''}
+              ${p.reworkContent ? `<div class="detail-row"><span class="detail-label">🔧 返工内容</span><span class="detail-value" style="white-space:pre-wrap;">${esc(p.reworkContent)}</span></div>` : ''}
               ${p.customer ? `<div class="detail-row"><span class="detail-label">👤 客户</span><span class="detail-value">${esc(p.customer)}</span></div>` : ''}
               ${p.contactName ? `<div class="detail-row"><span class="detail-label">📇 联系人</span><span class="detail-value">${esc(p.contactName)}${p.contactPhone ? ' ' + esc(p.contactPhone) : ''}</span></div>` : ''}
               ${p.phone ? `<div class="detail-row"><span class="detail-label">📞 电话</span><a class="detail-value" href="javascript:void(0)" data-tel="${esc(p.phone)}" onclick="event.stopPropagation(); callPhone(event)">${esc(p.phone)}</a></div>` : ''}
@@ -10252,7 +10978,12 @@ function applyCompleteAllocToAll() {
   if (sum <= 0) { toast("请至少设置一个作业类型占比"); return; }
   const p = getProject(currentProjectId);
   if (!p) return;
-  
+  // 疑似忘点完工：自动工时含空闲/过夜时间，不可靠，禁止用滑块把估算值填回
+  if (getForgottenCompleteInfo(p)) {
+    toast("该项目疑似忘点完工，系统工时估算不可靠，请逐人手动填写真实工时");
+    return;
+  }
+
   const assignedWorkerIds = p.assignedWorkerIds || [];
   const allWorkerIds = new Set([...assignedWorkerIds]);
   (p.workerChangeHistory || []).forEach(ch => { if (ch.workerId) allWorkerIds.add(ch.workerId); });
@@ -10392,6 +11123,12 @@ function applyWorkerAllocPreset(prefix, arr) {
 }
 
 function applyWorkerAllocTo(prefix, idx, kind) {
+  // 疑似忘点完工：自动工时含空闲/过夜时间，不可靠，禁止用滑块把估算值填回
+  const _p = getProject(currentProjectId);
+  if (_p && getForgottenCompleteInfo(_p)) {
+    toast("该项目疑似忘点完工，系统工时估算不可靠，请手动填写真实工时");
+    return;
+  }
   const totalEl = document.getElementById(prefix + "Total");
   const perTotal = Number(totalEl?.dataset.total) || 0;
   if (perTotal <= 0) { toast("该人员当前实际工作时长为 0，无法自动分配"); return; }
@@ -10439,7 +11176,9 @@ function openCompleteProjectForm(id) {
   if (!p) {
     return;
   }
-  
+  // 疑似忘点完工：系统自动算出的工时含忘记点完工期间的空闲/过夜时间，不可直接采用
+  const forgottenInfo = getForgottenCompleteInfo(p);
+
   const assignedWorkerIds = p.assignedWorkerIds || [];
   const allWorkerIds = new Set([...assignedWorkerIds]);
   
@@ -10498,6 +11237,21 @@ function openCompleteProjectForm(id) {
     <input type="text" value="${esc(storeName(p.storeId))}" disabled class="input">
   </div>`;
   
+  if (forgottenInfo) {
+    form += `<div class="form-row" style="grid-column:1/-1;background:#fef2f2;padding:12px 14px;border-radius:8px;border-left:4px solid #dc2626;margin-bottom:12px;">
+      <div style="display:flex;align-items:flex-start;gap:8px;">
+        <span style="font-size:18px;line-height:1.2;">⚠️</span>
+        <div>
+          <div style="font-weight:600;color:#b91c1c;font-size:13px;margin-bottom:4px;">疑似忘记点完工 — 自动工时不可直接采用</div>
+          <div style="font-size:12px;color:#7f1d1d;line-height:1.6;">
+            该项目已「<b>${esc(forgottenInfo.text)}</b>」却仍显示「施工中」。系统按"当前时刻 − 开工时间"自动算出的工时会<b>包含忘记点完工期间的空闲/过夜时间，不等于实际施工工时</b>，不能直接填入。<br>
+            请在下方<b>逐人手动填写真实工时</b>；不修改直接确认将无法通过校验。
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
   form += `<div class="form-row" style="grid-column:1/-1;background:#f0f9ff;padding:12px;border-radius:8px;margin-bottom:8px;">
     <div style="display:flex;justify-content:space-between;gap:16px;">
       <div>
@@ -10694,12 +11448,12 @@ function openCompleteProjectForm(id) {
       <span style="font-size:12px;color:#6b7280;">根据实际工作时间填写</span>
     </div>`;
     
-    form += `<div class="form-row" style="grid-column:1/-1;background:#f0fdf4;padding:10px;border-radius:6px;border-left:4px solid #22c55e;margin-bottom:8px;">
+    form += `<div class="form-row" style="grid-column:1/-1;background:${forgottenInfo ? '#fef2f2' : '#f0fdf4'};padding:10px;border-radius:6px;border-left:4px solid ${forgottenInfo ? '#dc2626' : '#22c55e'};margin-bottom:8px;">
       <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:12px;">
-        <div><span style="color:#6b7280;">总工作时长：</span><span style="font-weight:600;color:#15803d;">${totalAutoHours.toFixed(1)} 小时</span></div>
-        <div><span style="color:#6b7280;">施工人数：</span><span style="font-weight:600;color:#15803d;">${workers.length} 人</span></div>
+        <div><span style="color:#6b7280;">${forgottenInfo ? '系统估算总时长（不可靠）' : '总工作时长'}：</span><span style="font-weight:600;color:${forgottenInfo ? '#b91c1c' : '#15803d'};">${totalAutoHours.toFixed(1)} 小时</span>${forgottenInfo ? ' <span style="font-size:11px;color:#dc2626;">⚠️含忘记点完工时段</span>' : ''}</div>
+        <div><span style="color:#6b7280;">施工人数：</span><span style="font-weight:600;color:${forgottenInfo ? '#b91c1c' : '#15803d'};">${workers.length} 人</span></div>
       </div>
-      <div style="margin-top:4px;font-size:11px;color:#86efac;">💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整</div>
+      <div style="margin-top:4px;font-size:11px;color:${forgottenInfo ? '#b91c1c' : '#86efac'};">${forgottenInfo ? '⚠️ 此估算包含忘记点完工的空闲/过夜时间，不等于实际工时，请逐人手动填写真实工时' : '💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整'}</div>
     </div>`;
     
     workers.forEach((w, idx) => {
@@ -10719,7 +11473,11 @@ function openCompleteProjectForm(id) {
           const loggedHours = (p.workLogs || []).filter(l => l.workerId === w.id).reduce((s, l) => s + (Number(l.hours) || 0), 0);
           if (loggedHours > 0) autoHours = loggedHours;
         }
-        segs = [{ type: "地面施工", level: "中级", hours: autoHours > 0 ? autoHours.toFixed(1) : "", note: autoHours > 0 ? "系统自动计算" : "" }];
+        let segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
+        let segNote = autoHours > 0 ? "系统自动计算" : "";
+        // 疑似忘点完工：自动工时含空闲/过夜时间不可靠，清空并提示手动填写真实工时
+        if (forgottenInfo) { segHours = ""; segNote = "⚠️请填真实工时"; }
+        segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
       }
 
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
@@ -10759,7 +11517,10 @@ function openCompleteProjectForm(id) {
         }));
       } else {
         const autoHours = window._completeWorkerAutoHours[workerId] || 0;
-        segs = [{ type: "地面施工", level: "中级", hours: autoHours > 0 ? autoHours.toFixed(1) : "", note: autoHours > 0 ? "系统自动计算" : "" }];
+        let segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
+        let segNote = autoHours > 0 ? "系统自动计算" : "";
+        if (forgottenInfo) { segHours = ""; segNote = "⚠️请填真实工时"; }
+        segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
       }
 
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
@@ -10902,6 +11663,8 @@ function openCompleteProjectForm(id) {
         p.finishedAt = nowStr;
         p.accumulatedWorkHours = totalWorkHours;
         p.workSessions = workSessions;
+        const wasInRework = !!p.inRework; // 完工时若仍处于返工周期，本次登记的工时属于返工
+        p.inRework = false; // 返工周期结束，后续记的工时不再标记为返工
 
         const completionActionLogs = [...(p.actionLogs || [])];
         completionActionLogs.push({
@@ -10913,7 +11676,7 @@ function openCompleteProjectForm(id) {
         });
         p.actionLogs = completionActionLogs;
 
-        const newLogs = logs.map(log => ({ id: uid(), ...log }));
+        const newLogs = logs.map(log => ({ id: uid(), ...log, isRework: wasInRework, reworkCycle: wasInRework ? (p.reworkCount || 0) : null }));
         const newLogKeys = new Set(newLogs.map(l => `${l.workerId}_${l.date}`));
         const preservedLogs = (p.workLogs || []).filter(l => !newLogKeys.has(`${l.workerId}_${l.date}`));
         p.workLogs = [...preservedLogs, ...newLogs];
@@ -10928,6 +11691,7 @@ function openCompleteProjectForm(id) {
               accumulated_work_hours: totalWorkHours,
               work_sessions: workSessions,
               action_logs: completionActionLogs,
+              in_rework: false,
               updated_at: nowStr
             }).eq("id", id),
             ...newLogs.map(log =>
@@ -10935,7 +11699,9 @@ function openCompleteProjectForm(id) {
                 id: log.id, project_id: id, worker_id: log.workerId,
                 worker_name: log.workerName, hours: log.hours, date: log.date, note: log.note,
                 level: log.level || "中级",
-                is_outsourced: log.isOutsourced || false
+                is_outsourced: log.isOutsourced || false,
+                is_rework: wasInRework,
+                rework_cycle: wasInRework ? (p.reworkCount || 0) : null
               })
             )
           ]);
@@ -11116,6 +11882,15 @@ function refreshStoreSelectors() {
   if (prev) sel.value = prev;
 }
 
+/* 返工工时是否计入工资：仅当该项目该返工周期被标记为 payable 时才计入。
+   默认不计入，避免「已结算并发过工资的工时」被重复发放。 */
+function isReworkLogPayable(p, log) {
+  if (!log || !log.isRework) return true; // 非返工工时照常计入
+  const cycles = p.reworkCycles || [];
+  const c = cycles.find(c => c.cycle === log.reworkCycle);
+  return !!(c && c.payable);
+}
+
 function collectStats() {
   const period = document.getElementById("statsPeriod").value;
   const month = document.getElementById("statsMonth").value;
@@ -11146,6 +11921,8 @@ function collectStats() {
   const rows = {};
   cache.projects.forEach((p) => {
     if (storeFilter && p.storeId !== storeFilter) return;
+    // 返工单未计入工资：其工时不进工人工资/统计（仍可在「返工工时」成本卡查看）
+    if (p.reworkOf && p.reworkPayable === false) return;
     (p.workLogs || []).forEach((l) => {
       const logMonth = monthKey(l.date);
       if (!isInPeriod(l.date)) return;
@@ -11266,15 +12043,26 @@ function collectProjectStats() {
     })
     .map((p) => {
       const est = Number(p.estimatedHours) || 0;
-      const act = (p.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
+      const act = (p.workLogs || [])
+        .filter(l => isReworkLogPayable(p, l))
+        .reduce((sum, l) => sum + (Number(l.hours) || 0), 0);
       const diff = act - est;
       const hasActual = act > 0;
+      // 返工工时（独立返工单：reworkOf 非空，其全部工时为返工工时）
+      const reworkHours = projectReworkHours(p);
       // 按施工人员汇总工时（区分内部和外协）
       const workerMap = {};
       const outsourcedWorkerMap = {};
       const levelHours = {初级:0, 中级:0, 高级:0, 特级:0};
+      const reworkWorkerMap = {};
       (p.workLogs || []).forEach((l) => {
         if (workerFilter && l.workerId !== workerFilter) return;
+        // 独立返工单（reworkOf 非空）的工时：单独进 reworkWorkerMap 用于展示，同时仍计入上方正常工时汇总
+        if (p.reworkOf) {
+          const rk = l.workerId || l.workerName || "未知";
+          if (!reworkWorkerMap[rk]) reworkWorkerMap[rk] = { name: l.workerName || "未知", hours: 0 };
+          reworkWorkerMap[rk].hours += Number(l.hours) || 0;
+        }
         const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
         const key = l.workerId || l.workerName || "未知";
         const nm = l.workerName || "未知";
@@ -11407,20 +12195,20 @@ function collectProjectStats() {
         .filter(l => l.note && l.note.trim() && (!workerFilter || l.workerId === workerFilter))
         .map(l => (l.workerName || "未知") + "：" + l.note.trim())
         .join("；");
-      return { 
-        id: p.id, 
-        name: p.name, 
-        status: p.status, 
-        est, 
-        act, 
-        diff, 
-        hasActual, 
-        workerHours, 
+      return {
+        id: p.id,
+        name: p.name,
+        status: p.status,
+        est,
+        act,
+        diff,
+        hasActual,
+        workerHours,
         outsourcedWorkerHours,
         levelHours,
-        outsourcedCount, 
-        hasOutsourced: outsourcedCount > 0, 
-        outsourcedHours: p.outsourcedHours || 0, 
+        outsourcedCount,
+        hasOutsourced: outsourcedCount > 0,
+        outsourcedHours: p.outsourcedHours || 0,
         outsourcedHoursFromLogs: Math.max(p.outsourcedHoursFromLogs || 0, totalOutsourcedHoursFromLogs),
         date: p.appointmentTime,
         store: storeName(p.storeId),
@@ -11428,7 +12216,12 @@ function collectProjectStats() {
         autoWorkerHours,
         notes,
         appointmentTime: p.appointmentTime,
-        startedAt: p.startedAt
+        startedAt: p.startedAt,
+        reworkHours,
+        reworkWorkerHours: Object.values(reworkWorkerMap).sort((a, b) => b.hours - a.hours),
+        inRework: p.inRework,
+        reworkCycles: p.reworkCycles || [],
+        reworkCount: p.reworkCount || 0
       };
     })
     .sort((a, b) => b.diff - a.diff);
@@ -11481,7 +12274,8 @@ function renderStats() {
   });
   const recorded = projRows.filter((r) => r.hasActual);
   const totalEst = allProjects.reduce((s, r) => s + (Number(r.estimatedHours) || 0), 0);
-  const totalAct = allProjects.reduce((s, r) => s + ((r.workLogs || []).reduce((sum, l) => sum + (Number(l.hours) || 0), 0)), 0);
+  const totalAct = allProjects.reduce((s, r) => s + ((r.workLogs || []).filter(l => isReworkLogPayable(r, l)).reduce((sum, l) => sum + (Number(l.hours) || 0), 0)), 0);
+  const totalReworkAct = allProjects.reduce((s, r) => s + projectReworkHours(r), 0);
   const totalDiff = totalAct - totalEst;
   
   const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
@@ -11508,11 +12302,17 @@ function renderStats() {
   else if (efficiencyRate < 100) { efficiencyColor = "#f59e0b"; efficiencyLabel = "正常"; }
   
   const summary = document.getElementById("statsSummary");
-  
+
+  // 返工工时汇总卡（独立返工单工时，单列用于成本分析；仍正常计入工资）
+  const reworkCardHtml = totalReworkAct > 0
+    ? `<div class="stat-card rework-stat"><div class="num">${fmtHours(totalReworkAct)}h</div><div class="lbl">返工工时</div></div>`
+    : "";
+
   if (!perm.viewGlobalStats() && myStore()) {
     summary.innerHTML = `
       <div class="stat-card"><div class="num">${fmtHours(totalEst)}</div><div class="lbl">预计工时(小时)</div></div>
       <div class="stat-card"><div class="num">${fmtHours(totalAct)}</div><div class="lbl">实际工时(小时)</div></div>
+      ${reworkCardHtml}
       <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
       <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
       ${typeCards}
@@ -11523,6 +12323,7 @@ function renderStats() {
       <div class="stat-card"><div class="num">${fmtHours(totalHours)}</div><div class="lbl">合计工时(小时)</div></div>
       <div class="stat-card"><div class="num">${fmtHours(totalEst)}</div><div class="lbl">预计工时(小时)</div></div>
       <div class="stat-card"><div class="num">${fmtHours(totalAct)}</div><div class="lbl">实际工时(小时)</div></div>
+      ${reworkCardHtml}
       <div class="stat-card"><div class="num" style="color:#8b5cf6">${fmtHours(totalOutsourcedHours)}h</div><div class="lbl">外协工时</div></div>
       <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedWorkers}人</div><div class="lbl">外协人员</div></div>
       <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
@@ -13186,6 +13987,7 @@ async function exportStats() {
     ['预计工时(小时)', fmtHoursNum(totalEst)],
     ['实际工时(小时)', fmtHoursNum(totalAct)],
     ['工时差异', (totalDiff >= 0 ? '+' : '') + fmtHoursNum(totalDiff)],
+    ['返工工时', fmtHoursNum(totalReworkAct)],
     ['', ''],
     ['高负荷预警', highWorkloadWorkers.length > 0 ? highWorkloadWorkers.map(w => w.name).join("、") : '无'],
     ['效率建议', lowEfficiencyWorkers.length > 0 ? lowEfficiencyWorkers.map(w => w.name).join("、") : '无'],
@@ -16849,10 +17651,11 @@ function renderTimelineInDetail() {
             <span class="timeline-task-name">${esc(p.name)}</span>
             <div class="timeline-task-badges">
               <span class="timeline-task-status status-${p.status}">${p.status}</span>
+              ${p.reworkCount > 0 ? `<span class="timeline-task-rework-badge">🔄 返工 ${p.reworkCount}</span>` : ""}
               ${p.repairOrder && p.repairOrder.status === "待维修" ? `<span class="timeline-task-repair-badge">🔧 维修</span>` : ""}
               ${isOverdue ? `<span class="timeline-task-overdue-badge">🔴 超期</span>` : ""}
               ${hasOutsourced(p) ? `<span class="timeline-task-outsourced-badge">🤝 外协</span>` : ""}
-              ${p.timeModified ? `<span class="timeline-task-modified-badge">✏️ 已改点</span>` : ""}
+              ${p.originalAppointmentTime || p.timeModified ? `<span class="timeline-task-modified-badge">📅 已改期</span>` : ""}
               ${isOvertime ? `<span class="timeline-task-overtime-badge">🌙 加班</span>` : ""}
               ${conflicts >= 1 ? `<span class="timeline-task-conflict-badge">⚠ ${conflicts} 冲突</span>` : ""}
             </div>
@@ -17796,6 +18599,7 @@ async function saveTimelineTaskTime(projectId, newStart, newEnd) {
   const patch = {
     appointment_time: newStart.toISOString(),
     end_time: newEnd.toISOString(),
+    original_appointment_time: p.originalAppointmentTime || p.appointmentTime,
   };
   
   await repo.patchProject(projectId, patch);
@@ -18696,7 +19500,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v5c4b8bcf";
+  const APP_VERSION = "v7abbf2df";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

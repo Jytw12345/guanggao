@@ -1361,6 +1361,11 @@ select.input {
   background: linear-gradient(135deg, #fff 0%, #fef2f2 100%) !important;
   position: relative;
 }
+.card-overdue--overnight {
+  border-color: #dc2626 !important;
+  background: linear-gradient(135deg, #fff5f5 0%, #fee2e2 100%) !important;
+  box-shadow: 0 0 0 1px #dc2626, 0 4px 14px rgba(220, 38, 38, 0.18) !important;
+}
 .card-overdue::before {
   content: "";
   position: absolute;
@@ -1982,7 +1987,69 @@ select.input {
 .badge.已暂停 { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
 .badge.已延期 { background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5; }
 .badge.已取消 { background: #f9fafb; color: #6b7280; border: 1px solid #d1d5db; }
+.badge.rework { background: #faf5ff; color: #7e22ce; border: 1px solid #d8b4fe; }
 .badge.modified { background: #faf5ff; color: #7c3aed; border: 1px solid #ddd6fe; }
+.badge.forgotten { background: #fff7ed; color: #c2410c; border: 1px solid #fb923c; animation: pulseAmber 1.5s infinite; }
+.badge.warn { background: #fffbeb; color: #b45309; border: 1px solid #fcd34d; animation: pulseAmber 1.5s infinite; }
+
+/* 返工记录区（项目详情页）：列出每次返工与「计入工资」开关 */
+.rework-cycles {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  background: #faf5ff;
+  border: 1px solid #e9d5ff;
+  border-radius: 10px;
+}
+.rework-cycles__title { font-size: 13px; font-weight: 700; color: #7e22ce; margin-bottom: 8px; }
+.rework-cycles__row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 5px 0; font-size: 13px;
+  border-top: 1px dashed #eadbff;
+}
+.rework-cycles__row:first-of-type { border-top: none; }
+.rework-pay-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; color: #374151; }
+.rework-pay-toggle input { width: 16px; height: 16px; accent-color: #7e22ce; }
+.rework-cycles__hours { color: #7e22ce; font-weight: 600; white-space: nowrap; }
+
+/* 统计页返工工时汇总卡 */
+.rework-stat { background: #faf5ff !important; border: 1px solid #e9d5ff !important; }
+.rework-stat .num { color: #7e22ce !important; }
+
+/* 详情页：老单子回指返工单列表 */
+.rework-children {
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  background: #faf5ff;
+  border: 1px solid #e9d5ff;
+  border-radius: 10px;
+}
+.rework-children__title { font-size: 13px; font-weight: 700; color: #7e22ce; margin-bottom: 8px; }
+.rework-children__item { padding: 6px 0; border-top: 1px dashed #eadbff; }
+.rework-children__item:first-of-type { border-top: none; padding-top: 0; }
+.rework-children__row {
+  display: flex; align-items: center; gap: 10px; font-size: 13px;
+}
+.rework-children__row a { color: #6d28d9; font-weight: 600; text-decoration: none; }
+.rework-children__row a:hover { text-decoration: underline; }
+.rework-children__status {
+  margin-left: auto; padding: 1px 8px; border-radius: 999px; font-size: 12px;
+  background: #ede9fe; color: #6d28d9; white-space: nowrap;
+}
+.rework-children__content {
+  margin: 4px 0 2px; padding: 6px 10px; font-size: 12px; line-height: 1.5;
+  color: #581c87; background: #f3e8ff; border-radius: 6px; white-space: pre-wrap;
+}
+.rework-children__hours { color: #7e22ce; font-weight: 600; white-space: nowrap; }
+
+/* 详情页：返工单计薪开关 */
+.rework-pay-control {
+  margin: 10px 0 4px; padding: 10px 12px;
+  background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.rework-pay-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; font-weight: 600; color: #92400e; }
+.rework-pay-toggle input { width: 16px; height: 16px; accent-color: #d97706; }
+.rework-pay-hint { font-size: 12px; color: #a16207; }
 .badge.pending { background: #fff7ed; color: #c2410c; border: 1px solid #fb923c; font-weight: 600; animation: pulseAmber 1.8s ease-in-out infinite; }
 .badge--multiline {
   display: inline-flex;
@@ -3420,6 +3487,12 @@ textarea.input { resize: vertical; min-height: 50px; }
   background: #fff5f5;
   animation: overdueTaskPulse 1.6s ease-in-out infinite;
 }
+/* 安排列表里「施工中跨夜/超时」的忘点完工任务项高亮 */
+.worker-assign-task.forgotten-task {
+  border-left: 3px solid #c2410c;
+  border-color: #fed7aa;
+  background: #fffaf0;
+}
 
 .sched-info-box {
   font-size: 13px;
@@ -4280,6 +4353,9 @@ body.modal-open {
 .rec-timecard--indigo { background: var(--tc-indigo-bg); }
 .rec-timecard--indigo .rec-timecard__label { color: var(--tc-indigo-label); }
 .rec-timecard--indigo .rec-timecard__value { color: var(--tc-indigo-value); }
+.rec-timecard--violet { background: #faf5ff; border-left: 3px solid #7c3aed; }
+.rec-timecard--violet .rec-timecard__label { color: #7c3aed; }
+.rec-timecard--violet .rec-timecard__value { color: #6d28d9; }
 
 /* ===== 施工记录：折叠面板 ===== */
 .rec-details { border-radius: 8px; padding: 0 12px; margin-bottom: 12px; border-left: 4px solid; }
@@ -5597,7 +5673,7 @@ table.data.project-hours-diff thead th {
     gap: 6px;
   }
   .action-group > .btn.small {
-    flex: 0 0 auto;
+    flex: 1 1 0;
     min-width: 0;
     padding: 6px 10px;
     font-size: 12px;
@@ -5953,6 +6029,7 @@ table.data.project-hours-diff thead th {
   .empty {
     padding: 32px 0;
     font-size: 14px;
+    text-align: center;
   }
 
   .hint {
@@ -7538,6 +7615,18 @@ table.data.project-hours-diff thead th {
 .timeline-task-repair-badge {
   display: inline-block;
   background: #f59e0b;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 999px;
+  line-height: 1.2;
+  margin-left: 4px;
+}
+
+.timeline-task-rework-badge {
+  display: inline-block;
+  background: #a855f7;
   color: #fff;
   font-size: 8px;
   font-weight: 600;
