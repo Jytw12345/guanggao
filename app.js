@@ -7178,16 +7178,15 @@ async function cancelProject(id) {
       operator: currentProfile.name || currentUser?.email || "系统",
       operatorRole: currentProfile.role
     });
-    await repo.patchProject(id, { 
+    const cancelPatch = { 
       status: STATUS.CANCELLED, 
       cancelledAt: now,
       cancelReason: reason,
       actionLogs
-    });
+    };
     clearTimeout(reloadTimer);
-    await repo.loadAll();
-    renderAll();
-    toast("项目已取消");
+    const _ok = await repo.patchProject(id, cancelPatch);
+    if (_ok !== false) optimisticApplyAndSync(id, cancelPatch, "项目已取消");
     logOperation("PROJECT_CANCEL", p.name || "项目", `ID: ${id}, 原因: ${reason}`);
   } catch (error) {
     console.error("取消项目失败:", error);
@@ -8824,6 +8823,20 @@ function statusTransitionPermOk(p, newStatus) {
   }
 }
 
+/* 状态变更后的 UI 反馈优化：patch 写入服务器成功后，立即把变更合并进本地内存，
+ * 秒级 renderAll() + toast()，给用户即时反馈；云端全量 loadAll（12 张表 + 缓存融合，
+ * 云端较慢）改为后台静默执行，不阻塞提示与界面刷新。最终数据仍以云端为准
+ * （后台 loadAll 拉回正确状态后会再次 renderAll）。patch 冲突（在 patchProject 内部已
+ * 处理并刷新）时调用方应跳过本函数。 */
+function optimisticApplyAndSync(id, patch, toastMsg) {
+  const p = getProject(id);
+  if (p) Object.assign(p, patch);
+  if (typeof renderAll === "function") renderAll();
+  toast(toastMsg);
+  repo.loadAll().then(() => { if (typeof renderAll === "function") renderAll(); })
+    .catch((e) => console.warn("[sync] 状态变更后台同步失败：", e));
+}
+
 async function updateProjectStatus(id, newStatus) {
   const lockKey = `updateProjectStatus:${id}`;
   if (!lockAction(lockKey)) { toast("操作处理中，请勿重复点击"); return; }
@@ -8994,11 +9007,9 @@ async function updateProjectStatus(id, newStatus) {
   }
   clearTimeout(reloadTimer);
   try {
-    await repo.patchProject(id, patch);
-    await repo.loadAll();
-    renderAll();
-    toast("状态已更新");
-    
+    const _patchOk = await repo.patchProject(id, patch);
+    if (_patchOk !== false) optimisticApplyAndSync(id, patch, "状态已更新");
+
     if (newStatus === STATUS.WORKING) {
       sendNotificationForProjectChange("start", p);
       logOperation("PROJECT_START", p.name || "项目", `ID: ${id}`);
@@ -9122,10 +9133,8 @@ async function pauseProject(id) {
     };
     
     clearTimeout(reloadTimer);
-    await repo.patchProject(id, patch);
-    await repo.loadAll();
-    renderAll();
-    toast(`项目已暂停：${reason}${settled.length ? `，已结算 ${settled.length} 人` : ""}`);
+    const _ok = await repo.patchProject(id, patch);
+    if (_ok !== false) optimisticApplyAndSync(id, patch, `项目已暂停：${reason}${settled.length ? `，已结算 ${settled.length} 人` : ""}`);
     sendNotificationForProjectChange("pause", getProject(id));
     logOperation("PROJECT_PAUSE", p.name || "项目", `ID: ${id}, 原因: ${reason || "未填写"}`);
   } catch (error) {
@@ -9176,10 +9185,8 @@ async function resumeProject(id) {
     };
     
     clearTimeout(reloadTimer);
-    await repo.patchProject(id, patch);
-    await repo.loadAll();
-    renderAll();
-    toast("项目已恢复施工");
+    const _ok = await repo.patchProject(id, patch);
+    if (_ok !== false) optimisticApplyAndSync(id, patch, "项目已恢复施工");
     sendNotificationForProjectChange("resume", getProject(id));
     logOperation("PROJECT_RESUME", p.name || "项目", `ID: ${id}`);
   } catch (error) {
@@ -9339,10 +9346,8 @@ function delayProject(id) {
       };
       
       clearTimeout(reloadTimer);
-      await repo.patchProject(id, patch);
-      await repo.loadAll();
-      renderAll();
-      toast(`项目已延期至 ${newDate} ${newTime}`);
+      const _ok = await repo.patchProject(id, patch);
+      if (_ok !== false) optimisticApplyAndSync(id, patch, `项目已延期至 ${newDate} ${newTime}`);
       sendNotificationForProjectChange("delay", getProject(id));
       logOperation("PROJECT_DELAY", p.name || "项目", `ID: ${id}, 原时间: ${originalDateStr} ${originalTimeStr}, 新时间: ${newDate} ${newTime}, 原因: ${reason}`);
       } catch (error) {
@@ -12173,10 +12178,11 @@ function openCompleteProjectForm(id) {
           saveLocal();
         }
 
-        await repo.loadAll();
+        // 内存 p 已就地更新为 DONE + 新 workLogs，立即反馈；云端全量 loadAll 改后台静默执行
+        renderConstruction();
         toast(`项目已完工，总工时：${totalHours.toFixed(1)} 工时`);
         logOperation("PROJECT_COMPLETE", p.name || "项目", `ID: ${id}, 总工时: ${totalHours.toFixed(1)} 工时`);
-        renderConstruction();
+        repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] 完工后台同步失败：", e));
         renderAll();
         return true;
       } catch (error) {
@@ -20031,7 +20037,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v3f6a114d";
+  const APP_VERSION = "vd8e84d4e";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
