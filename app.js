@@ -429,7 +429,9 @@ const perm = {
   logOutsourcedHours: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_LOG_OUTSOURCED),
   deleteWorkLog: (p) => (!isReviewed(p) && can(CAP.WORKLOG_DELETE)) || perm.editWorkLog(p),
   delayProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELAY),
-  cancelProject: (p) => !isReviewed(p) && can(CAP.PROJECT_CANCEL),
+  // 取消仅允许「开工前/施工中/暂停/延期」阶段；已完工/已验收/已审核/已取消均不可取消
+  // （与 STATUS_TRANSITIONS 状态机、详情页取消按钮可见性保持一致，避免防御性缺口）
+  cancelProject: (p) => p && ![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED].includes(p.status) && can(CAP.PROJECT_CANCEL),
   assignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_ASSIGN),
   unassignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_UNASSIGN),
   addWorker: () => can(CAP.WORKER_ADD),
@@ -7677,8 +7679,12 @@ function renderConstruction() {
         <div class="action-group action-group--post-completion">
           ${canReview && !reviewed && p.status === STATUS.DONE ? `<button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>` : ""}
           ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `<button class="btn small success" onclick="reviewProject('${p.id}')">🔍 审核项目</button>` : ""}
-          ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `<button class="btn small warning" onclick="openRepairOrderForm('${p.id}')">🔧 发起维修单</button>` : ""}
-          ${[STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `<button class="btn small danger" onclick="reworkProject('${p.id}')">🔄 返工</button>` : ""}
+          ${((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p)) ? `
+          <select class="btn small post-action-select" onchange="selectPostAction(this, '${p.id}')">
+            <option value="">后续处理 ▾</option>
+            ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `<option value="repair">🔧 发起维修单</option>` : ""}
+            ${[STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `<option value="rework">🔄 返工</option>` : ""}
+          </select>` : ""}
           ${perm.editWorkLog(p) && (p.workLogs || []).length > 0 ? `<button class="btn small" onclick="openEditWorkHoursForm('${p.id}')">✏️ 修改工时</button>` : ""}
           ${reviewed && perm.unreviewProject(p) ? `<button class="btn small warning" onclick="unreviewProject('${p.id}')">↩ 反审核</button>` : ""}
         </div>` : ""}
@@ -9513,6 +9519,16 @@ async function unreviewProject(id) {
 /* 返工：基于原项目生成一条独立的新预约（「预约中」）。发起人在弹出的表单里填写
    新的预约时间 / 时间段 / 返工内容 / 注意事项，人数与工时预填原值可改。
    原项目保持「已完工 / 已验收 / 已审核」不变，作为历史留存。 */
+/* 详情页「后续处理」下拉：合并「发起维修单」与「返工」入口，避免终态按钮过多
+   且在手机端横排拥挤。后台仍是两套独立机制。 */
+function selectPostAction(sel, id) {
+  const v = sel.value;
+  sel.value = ""; // 重置，使下次选同一项仍可触发 onchange
+  if (!v) return;
+  if (v === "repair") openRepairOrderForm(id);
+  else if (v === "rework") reworkProject(id);
+}
+
 function reworkProject(id) {
   const p = getProject(id);
   if (!p) { toast("项目不存在"); return; }
@@ -15744,18 +15760,12 @@ function performSearch(query) {
 }
 
 function searchNavigateToProject(id) {
-  switchTab("projects");
   document.getElementById("globalSearch").value = "";
   document.getElementById("globalSearchResults").classList.remove("show");
-  setTimeout(() => {
-    // 全局搜索是「跳转/定位」，不应把关键字回填到项目列表搜索框；
-    // 否则手机端 projectSearch 输入框被隐藏，用户无法清除筛选。
-    const ps = document.getElementById("projectSearch");
-    if (ps && ps.value) {
-      ps.value = "";
-      renderProjects();
-    }
-  }, 100);
+  // 全局搜索是「跳转/定位」：直接打开该项目详情（施工视图），并清空项目列表残留筛选
+  const ps = document.getElementById("projectSearch");
+  if (ps && ps.value) ps.value = "";
+  gotoConstruction(id);
 }
 
 function searchNavigateToWorker(id) {
@@ -20044,7 +20054,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v57c41733";
+  const APP_VERSION = "v64d1465f";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
