@@ -2178,6 +2178,7 @@ const repo = {
           : (await sb.from("projects").insert(row)).error;
       }
       if (error) return fail(error);
+      return base;   // 返回保存后的对象（含云端生成的 id），供调用方后台同步后取用
     } else {
       if (id) {
         Object.assign(getProject(id), project);
@@ -2185,6 +2186,7 @@ const repo = {
         cache.projects.push({ id: uid(), ...project, actualHours: 0, assignedWorkerIds: project.assignedWorkerIds || [], workLogs: [], repairOrders: project.repairOrders || [], acceptance: null, createdAt: new Date().toISOString() });
       }
       saveLocal();
+      return id ? getProject(id) : cache.projects[cache.projects.length - 1];
     }
   },
   async deleteProject(id) {
@@ -4000,7 +4002,7 @@ async function saveWorker(id) {
       role: document.getElementById("wRole").value.trim(),
     };
     await repo.saveWorker(payload, id);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] saveWorker 后台同步失败：", e));
     modal.close();
     renderAll();
     toast("已保存");
@@ -4017,7 +4019,7 @@ async function deleteWorker(id) {
     if (used && !(await confirmDialog("该人员已有施工工时记录，删除不会移除历史记录。确定删除该人员？", "删除人员"))) return;
     if (!used && !(await confirmDialog("确定删除该人员？", "删除人员"))) return;
     await repo.deleteWorker(id);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteWorker 后台同步失败：", e));
     renderAll();
     toast("已删除");
   } catch (e) {
@@ -4089,7 +4091,7 @@ async function saveOutsourcedWorker(id) {
       phone: document.getElementById("owPhone").value.trim(),
     };
     await repo.saveOutsourcedWorker(payload, id);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] saveOutsourcedWorker 后台同步失败：", e));
     modal.close();
     renderAll();
     toast("已保存");
@@ -4104,7 +4106,7 @@ async function deleteOutsourcedWorker(id) {
     if (!perm.manageOutsourced()) { toast("权限不足"); return; }
     if (!(await confirmDialog("确定删除该外协人员？", "删除外协人员"))) return;
     await repo.deleteOutsourcedWorker(id);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteOutsourcedWorker 后台同步失败：", e));
     renderAll();
     toast("已删除");
   } catch (e) {
@@ -4601,7 +4603,7 @@ async function saveWorkerSchedule(id) {
   };
   
   await repo.saveWorkerSchedule(payload, id);
-  await repo.loadAll();
+  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] saveWorkerSchedule 后台同步失败：", e));
   
   const createTask = document.getElementById("wsCreateTask");
   if (createTask && createTask.checked && perm.addTask()) {
@@ -4663,7 +4665,7 @@ async function deleteWorkerSchedule(id) {
     if (s && !perm.deleteSchedule(s)) { toast("无「删除日程」权限"); return; }
     if (!(await confirmDialog("确定删除该日程？", "删除日程"))) return;
     await repo.deleteWorkerSchedule(id);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteWorkerSchedule 后台同步失败：", e));
     renderAll();
     toast("已删除");
   } catch (e) {
@@ -5195,7 +5197,7 @@ async function submitLeaveForm() {
     startDate, startTime, startType,
     endDate, endTime, endType, reason, status,
   });
-  await repo.loadAll();
+  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] submitLeaveForm 后台同步失败：", e));
   modal.close();
   renderAll();
   toast(status === LEAVE_STATUS.APPROVED ? "请假已批准" : "请假申请已提交，等待审批");
@@ -5548,7 +5550,7 @@ async function submitBatchRotational() {
       localStorage.setItem("lastRotSun", JSON.stringify(sunIds));
     }
     rotPlanBatches = [];
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] submitBatchRotational 后台同步失败：", e));
     modal.close();
     renderAll();
     toast(skipped.length ? `已生成 ${created} 条轮休，${skipped.length} 条重复已跳过` : `已生成 ${created} 条轮休记录`);
@@ -5583,7 +5585,7 @@ async function toggleLeaveMakeup(id) {
     const next = { ...record, workedMakeup: !record.workedMakeup };
     if (!next.workedMakeup) next.makeupLeaveId = null; // 取消补班时一并解除关联
     await repo.saveLeaveRecord(next, id);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] toggleLeaveMakeup 后台同步失败：", e));
     logOperation("LEAVE_MAKEUP", `${record.workerName}的轮休(${record.startDate})`, next.workedMakeup ? "标记为补班（实际上班）" : "取消补班标记");
     renderAll();
     toast(next.workedMakeup ? "已标记为补班（该轮休日视为实际上班）" : "已取消补班标记");
@@ -5648,7 +5650,7 @@ async function confirmMakeupLink(id) {
     const target = getLeaveRecord(targetId);
     if (!target) { toast("选择的请假不存在"); return; }
     await repo.saveLeaveRecord({ ...record, workedMakeup: true, makeupLeaveId: targetId }, id);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] confirmMakeupLink 后台同步失败：", e));
     logOperation("LEAVE_MAKEUP", `${record.workerName}的轮休(${record.startDate})`, `抵消 ${LEAVE_TYPE_LABEL[target.leaveType] || target.leaveType}(${target.startDate})`);
     modal.close();
     renderAll();
@@ -5665,7 +5667,7 @@ async function clearMakeupLink(id) {
     const record = getLeaveRecord(id);
     if (!record) return;
     await repo.saveLeaveRecord({ ...record, makeupLeaveId: null }, id);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] clearMakeupLink 后台同步失败：", e));
     renderAll();
     toast("已取消关联（仍保留补班标记）");
   } catch (e) {
@@ -6665,8 +6667,9 @@ async function saveQuickEditProjectTime(id) {
   }
 
   try {
-    await repo.saveProject(payload, id);
-    await repo.loadAll();
+    const saved = await repo.saveProject(payload, id);
+    const savedId = (saved && saved.id) || id;
+    // 乐观反馈：写入成功后立即关弹窗 + 提示，loadAll 后台静默同步，避免「保存中…」卡 2-4 秒
     modal.close();
     renderAll();
     toast("已更新施工安排");
@@ -6680,8 +6683,11 @@ async function saveQuickEditProjectTime(id) {
       logOperation("PROJECT_EDIT", p.name, `ID: ${id}, 变更: ${changes.join("; ")}`);
     }
 
-    const updated = getProject(id);
-    if (updated) sendNotificationForProjectChange("update", updated);
+    // 通知依赖最新缓存，后台同步完成后再发
+    repo.loadAll().then(() => {
+      const updated = getProject(savedId);
+      if (updated) sendNotificationForProjectChange("update", updated);
+    }).catch((e) => console.warn("[sync] 修改预约后台同步失败：", e));
   } catch (e) {
     console.error(e);
     toast("保存失败: " + (e.message || "未知错误"));
@@ -6808,6 +6814,8 @@ async function saveProject(id) {
     }
   }
 
+  const preExisting = id ? getProject(id) : null;  // 保存前快照，供变更日志对比（loadAll 前即正确）
+
   // 防重复提交：保存期间加锁，禁用按钮并显示“保存中...”，避免用户误以为卡住而重复点击导致重复保存
   if (window._savingProject) return;
   window._savingProject = true;
@@ -6821,20 +6829,23 @@ async function saveProject(id) {
   }
 
   try {
-    await repo.saveProject(payload, id);
-    await repo.loadAll();
+    const saved = await repo.saveProject(payload, id);
+    const savedId = (saved && saved.id) || id;
+    // 乐观反馈：写入成功后立即关弹窗 + 提示，loadAll 改为后台静默同步，
+    // 避免云端全量刷新（12+ 表）导致按钮「保存中…」卡 2-4 秒。
     modal.close();
     renderAll();
     toast(autoCalculated ? `已保存，预计总工时已根据施工时间和人数自动计算为 ${estimatedHours} 小时` : "已保存");
     // 保存成功，释放锁（弹窗已关闭，按钮随之销毁）
     window._savingProject = false;
-    
+
     if (payload.customer) {
       upsertCustomer(payload.customer, payload.phone, payload.address);
     }
-    
-    if (id) {
-      const existing = getProject(id);
+
+    // 变更日志：用保存前快照对比（loadAll 前即正确）
+    if (id && preExisting) {
+      const existing = preExisting;
       const changes = [];
       if (existing.name !== name) changes.push(`项目名称: ${existing.name} -> ${name}`);
       if (existing.customer !== payload.customer) changes.push(`客户: ${existing.customer || "无"} -> ${payload.customer || "无"}`);
@@ -6852,21 +6863,17 @@ async function saveProject(id) {
       if (existing.storeId !== payload.storeId) changes.push(`门店: ${storeName(existing.storeId) || "无"} -> ${storeName(payload.storeId) || "无"}`);
       const changeDetail = changes.length > 0 ? changes.join("; ") : "无字段变更";
       logOperation("PROJECT_EDIT", name, `ID: ${id}, 变更: ${changeDetail}`);
-    } else {
+    } else if (!id) {
       logOperation("PROJECT_CREATE", name, `客户: ${payload.customer || "无"}, 电话: ${payload.phone || "无"}, 地址: ${payload.address || "无"}, 预约时间: ${payload.appointmentTime}, 预计工时: ${payload.estimatedHours}小时, 施工人数: ${payload.workerCount}, 门店: ${storeName(payload.storeId) || "无"}`);
     }
-    
-    if (id) {
-      const p = getProject(id);
+
+    // 通知依赖最新缓存（新建项目需 loadAll 后才进缓存），后台同步完成后再发
+    repo.loadAll().then(() => {
+      const p = getProject(savedId);
       if (p) {
-        sendNotificationForProjectChange("update", p);
+        sendNotificationForProjectChange(id ? "update" : "new", p);
       }
-    } else {
-      const newProject = cache.projects[cache.projects.length - 1];
-      if (newProject) {
-        sendNotificationForProjectChange("new", newProject);
-      }
-    }
+    }).catch((e) => console.warn("[sync] 保存项目后台同步失败：", e));
   } catch (error) {
     console.error("保存项目失败:", error);
     toast("保存失败：" + (error.message || "未知错误"));
@@ -6900,18 +6907,29 @@ function openRepairOrderForm(projectId) {
     }
   }
   
+  const workers = (p.assignedWorkerIds || []).map(wid => getWorker(wid)).filter(Boolean);
+  const workerRows = workers.length ? workers.map((w, i) => `
+    <div class="form-row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <input type="checkbox" id="repairWorker_${w.id}" value="${w.id}" ${i === 0 ? 'checked' : ''} style="width:18px;height:18px;flex:0 0 auto;">
+      <span style="flex:1;min-width:0;">${esc(w.name)}</span>
+    </div>`).join("") : `<div class="hint">原项目未分配人员，维修人员将待分配。</div>`;
+  
   const form = `
     <div class="repair-form">
       <div class="form-row">
         <label>维修项目（必填）</label>
-        <textarea class="input" id="repairItems" placeholder="请填写需要维修的项目，多个项目用换行分隔"></textarea>
+        <textarea class="input" id="repairItems" placeholder="请填写需要维修的项目，多个项目用换行分隔" style="min-height:60px;"></textarea>
         <small class="hint" style="margin:2px 0 0">例如：灯箱更换、线路检修、支架加固等</small>
       </div>
       <div class="form-row">
         <label>维修原因</label>
-        <textarea class="input" id="repairReason" placeholder="请填写维修原因"></textarea>
+        <textarea class="input" id="repairReason" placeholder="请填写维修原因" style="min-height:50px;"></textarea>
       </div>
-      <div class="form-row" style="display:flex;gap:8px;align-items:center;">
+      <div class="form-row">
+        <label>维修地址</label>
+        <input class="input" type="text" id="repairAddress" value="${esc(p.address || '')}" placeholder="请填写维修地址" />
+      </div>
+      <div class="form-row" style="display:flex;gap:8px;align-items:flex-start;">
         <div style="flex:1;">
           <label>维修日期</label>
           <input class="input" type="date" id="repairDate" value="${tomorrowDate}" min="${dateKey(now)}" />
@@ -6922,6 +6940,30 @@ function openRepairOrderForm(projectId) {
             ${times.map(t => `<option value="${t}" ${t === defaultTime ? 'selected' : ''}>${t}</option>`).join('')}
           </select>
         </div>
+      </div>
+      <div class="form-row" style="display:flex;gap:8px;align-items:flex-start;">
+        <div style="flex:1;">
+          <label>紧急程度</label>
+          <div style="display:flex;gap:12px;margin-top:6px;">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="repairUrgency" value="普通" checked /> 普通</label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="repairUrgency" value="加急" /> 加急</label>
+          </div>
+        </div>
+        <div style="flex:1;">
+          <label>预计工时</label>
+          <div style="display:flex;align-items:center;gap:4px;">
+            <input class="input" type="number" id="repairEstimatedHours" min="0" step="0.5" placeholder="0" style="flex:1;" />
+            <span style="color:#6b7280;font-size:12px;white-space:nowrap;">小时</span>
+          </div>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>维修人员</label>
+        ${workerRows}
+      </div>
+      <div class="form-row">
+        <label>备注 / 注意事项</label>
+        <textarea class="input" id="repairNotes" placeholder="填写上门维修注意事项、需携带物料等" style="min-height:50px;"></textarea>
       </div>
       <div class="form-actions">
         <button class="btn" onclick="modal.close()">取消</button>
@@ -6936,8 +6978,13 @@ async function submitRepairOrder(projectId) {
   if (!perm.createRepair()) { toast("无权限发起维修单"); return; }
   const items = document.getElementById("repairItems").value.trim();
   const reason = document.getElementById("repairReason").value.trim();
+  const address = document.getElementById("repairAddress").value.trim();
   const date = document.getElementById("repairDate").value;
   const time = document.getElementById("repairTime").value;
+  const urgencyEl = document.querySelector('input[name="repairUrgency"]:checked');
+  const urgency = urgencyEl ? urgencyEl.value : "普通";
+  const estimatedHours = Number(document.getElementById("repairEstimatedHours").value) || 0;
+  const notes = document.getElementById("repairNotes").value.trim();
   
   if (!items) {
     toast("请填写维修项目");
@@ -6948,9 +6995,14 @@ async function submitRepairOrder(projectId) {
     return;
   }
   
-  const fullTime = `${date}T${time}`;
   const p = getProject(projectId);
   if (!p) return;
+  const assignedWorkerIds = (p.assignedWorkerIds || []).filter(wid => {
+    const cb = document.getElementById("repairWorker_" + wid);
+    return cb && cb.checked;
+  });
+  
+  const fullTime = `${date}T${time}`;
   const repairOrders = Array.isArray(p.repairOrders) ? p.repairOrders.slice() : [];
   const seq = repairOrders.length + 1;
   const newRepair = {
@@ -6958,7 +7010,12 @@ async function submitRepairOrder(projectId) {
     seq,
     items,
     reason,
+    address,
     appointmentTime: new Date(fullTime).toISOString(),
+    urgency,
+    estimatedHours,
+    assignedWorkerIds,
+    notes,
     status: "待维修",
     createdAt: new Date().toISOString(),
   };
@@ -6967,12 +7024,13 @@ async function submitRepairOrder(projectId) {
   // 注意：维修单挂在原项目上（数组，支持同一项目多次维修），预约时间只存 repairOrder.appointmentTime，
   // 不再写回项目的 appointmentTime/endTime，避免污染已完工原单的预约时间。
   await repo.patchProject(projectId, { repairOrders });
-  await repo.loadAll();
+  const p2 = getProject(projectId);
+  if (p2) p2.repairOrders = repairOrders;
   modal.close();
   gotoConstruction(projectId);
   toast("维修单已提交");
-
   showNotificationAlert(`🔧 维修单已发起：${p.name}`);
+  repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("维修单后台同步失败：", e));
 }
 
 async function completeRepair(projectId, repairId) {
@@ -6989,7 +7047,8 @@ function openCompleteRepairForm(projectId, repairId) {
   const p = getProject(projectId);
   if (!p) return;
   const ro = (p.repairOrders || []).find(r => r.id === repairId) || {};
-  const workers = (p.assignedWorkerIds || []).map(wid => getWorker(wid)).filter(Boolean);
+  const workerSourceIds = (ro.assignedWorkerIds && ro.assignedWorkerIds.length) ? ro.assignedWorkerIds : (p.assignedWorkerIds || []);
+  const workers = workerSourceIds.map(wid => getWorker(wid)).filter(Boolean);
   const workerRows = workers.length ? workers.map(w => `
     <div class="form-row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
       <input type="checkbox" id="repairW_${w.id}" checked style="width:18px;height:18px;flex:0 0 auto;">
@@ -7055,10 +7114,12 @@ async function submitCompleteRepair(projectId, repairId) {
       payable
     };
     await repo.patchProject(projectId, { repairOrders });
-    await repo.loadAll();
+    const p2 = getProject(projectId);
+    if (p2) p2.repairOrders = repairOrders;
     modal.close();
     gotoConstruction(projectId);
     toast("维修已完成");
+    repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("完成维修后台同步失败：", e));
   } finally {
     unlockAction(lockKey);
   }
@@ -7112,10 +7173,12 @@ async function submitRepairReschedule(projectId, repairId) {
   const repairOrders = p.repairOrders.slice();
   repairOrders[idx] = ro;
   await repo.patchProject(projectId, { repairOrders });
-  await repo.loadAll();
+  const p2 = getProject(projectId);
+  if (p2) p2.repairOrders = repairOrders;
   modal.close();
   gotoConstruction(projectId);
   toast("维修单已改期");
+  repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("维修改期后台同步失败：", e));
 }
 
 /* 删除维修单 */
@@ -7126,9 +7189,11 @@ async function deleteRepairOrder(projectId, repairId) {
   if (!(await confirmDialog("确定删除该维修单？删除后不可恢复。", "删除维修单"))) return;
   const repairOrders = p.repairOrders.filter(r => r.id !== repairId);
   await repo.patchProject(projectId, { repairOrders });
-  await repo.loadAll();
+  const p2 = getProject(projectId);
+  if (p2) p2.repairOrders = repairOrders;
   gotoConstruction(projectId);
   toast("维修单已删除");
+  repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("删除维修单后台同步失败：", e));
 }
 
 async function deleteProject(id) {
@@ -7692,13 +7757,21 @@ function renderConstruction() {
       <h3>🔧 维修单（共 ${(p.repairOrders || []).length} 单）</h3>
       ${(p.repairOrders || []).map((ro) => `
         <div class="repair-order-item" style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px;">
-          <div class="info-grid">
+          ${(() => {
+            const repairWorkerNames = (ro.assignedWorkerIds || []).map(wid => getWorker(wid)?.name).filter(Boolean).join("、") || "—";
+            return `<div class="info-grid">
             <div class="info-item"><div class="k">维修单 #${ro.seq || ""}</div><div class="v" style="color:#f59e0b">${esc(ro.items || "—")}</div></div>
             <div class="info-item"><div class="k">维修原因</div><div class="v">${esc(ro.reason || "—")}</div></div>
+            <div class="info-item"><div class="k">维修地址</div><div class="v">${esc(ro.address || "—")}</div></div>
             <div class="info-item"><div class="k">预约维修时间</div><div class="v">${ro.appointmentTime ? fmtDateTime(ro.appointmentTime) : "—"}</div></div>
             <div class="info-item"><div class="k">维修状态</div><div class="v">${ro.status || "待维修"}</div></div>
+            <div class="info-item"><div class="k">紧急程度</div><div class="v" style="${ro.urgency === '加急' ? 'color:#dc2626;font-weight:600;' : ''}">${esc(ro.urgency || "普通")}</div></div>
+            <div class="info-item"><div class="k">预计工时</div><div class="v">${ro.estimatedHours ? fmtHours(ro.estimatedHours) + ' 小时' : "—"}</div></div>
+            <div class="info-item"><div class="k">维修人员</div><div class="v">${esc(repairWorkerNames)}</div></div>
             ${ro.originalRepairTime ? `<div class="info-item"><div class="k">原预约维修</div><div class="v">${fmtDateTime(ro.originalRepairTime)}</div></div>` : ""}
-          </div>
+            ${ro.notes ? `<div class="info-item" style="grid-column:1/-1;"><div class="k">备注 / 注意事项</div><div class="v" style="white-space:pre-wrap;">${esc(ro.notes)}</div></div>` : ""}
+          </div>`;
+          })()}
           ${ro.workLogs && ro.workLogs.length ? `
           <div class="info-grid" style="margin-top:10px">
             <div class="info-item"><div class="k">维修工时</div><div class="v">${ro.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0).toFixed(1)} 小时</div></div>
@@ -8498,12 +8571,25 @@ async function assignWorker(pid) {
     });
     
     try {
-      await repo.setAssignedWorkers(pid, cur.concat(wid));
-      await repo.patchProject(pid, { workerChangeHistory, actionLogs });
-      await repo.loadAll();
+      const newIds = cur.concat(wid);
+      await repo.setAssignedWorkers(pid, newIds);
+      const patchOk = await repo.patchProject(pid, { workerChangeHistory, actionLogs });
+      if (patchOk === false) {
+        // patchProject 内部已处理版本冲突并刷新
+        toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
+        return;
+      }
+      // 乐观更新内存，秒级反馈；云端全量 loadAll 改为后台静默
+      const p2 = getProject(pid);
+      if (p2) {
+        p2.assignedWorkerIds = newIds;
+        p2.workerChangeHistory = workerChangeHistory;
+        p2.actionLogs = actionLogs;
+      }
       renderAll();
       toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
       logOperation("PROJECT_ASSIGN", p.name || "项目", `ID: ${pid}, 人员: ${worker ? worker.name : "未知"}${worker?.phone ? `(${worker.phone})` : ""}`);
+      repo.loadAll().then(() => renderAll()).catch((e) => console.warn("分配人员后台同步失败：", e));
     } catch (error) {
       console.error("分配人员失败:", error);
       toast("分配失败，请重试");
@@ -8570,7 +8656,13 @@ async function saveOutsourcedWorkers(pid, names) {
     });
 
     await repo.patchProject(pid, { outsourcedWorkers: names.trim(), workerChangeHistory, actionLogs });
-    await repo.loadAll();
+    // 乐观更新内存，秒级反馈；云端全量 loadAll 改为后台静默
+    const p2 = getProject(pid);
+    if (p2) {
+      p2.outsourcedWorkers = names.trim();
+      p2.workerChangeHistory = workerChangeHistory;
+      p2.actionLogs = actionLogs;
+    }
     renderAll();
     toast(names.trim() ? "外协人员已保存，该任务不再占用内部施工人员" : "外协人员已清除");
 
@@ -8580,6 +8672,7 @@ async function saveOutsourcedWorkers(pid, names) {
     removed.forEach(name => {
       logOperation("PROJECT_OUTSOURCE_REMOVE", p.name || "项目", `ID: ${pid}, 外协人员: ${name}`);
     });
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("外协名单后台同步失败：", e));
   } finally {
     unlockAction(lockKey);
   }
@@ -8609,7 +8702,7 @@ async function addOutsourcedWorker(pid, name) {
     const actionLogs = [...(p.actionLogs || [])];
     actionLogs.push({ time: nowStr, action: "outsource_assign", description: `添加外协：${name.trim()}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
     await repo.patchProject(pid, { outsourcedWorkers: newWorkers.join(","), workerChangeHistory, actionLogs });
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] addOutsourcedWorker 后台同步失败：", e));
     renderAll();
     toast("已添加外协：" + name.trim());
     logOperation("PROJECT_OUTSOURCE_ADD", p.name || "项目", `ID: ${pid}, 外协人员: ${name.trim()}`);
@@ -8673,7 +8766,7 @@ async function removeOutsourcedWorker(pid, name) {
     }
     actionLogs.push({ time: nowStr, action: "outsource_unassign", description: `移除外协：${name.trim()}${didAuto ? `，自动记录工时 ${autoHours} 小时` : ""}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
     await repo.patchProject(pid, { outsourcedWorkers: newWorkers.join(","), workerChangeHistory, actionLogs });
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] removeOutsourcedWorker 后台同步失败：", e));
     renderAll();
     toast(didAuto ? `已移除外协，自动记录 ${autoHours} 工时` : "已移除外协");
     logOperation("PROJECT_OUTSOURCE_REMOVE", p.name || "项目", `ID: ${pid}, 外协人员: ${name.trim()}${didAuto ? `, 自动记录工时: ${autoHours}` : ""}`);
@@ -8747,11 +8840,23 @@ async function unassignWorker(pid, wid) {
     });
     
     await repo.setAssignedWorkers(pid, next);
-    await repo.patchProject(pid, { workerChangeHistory, actionLogs });
-    await repo.loadAll();
+    const patchOk = await repo.patchProject(pid, { workerChangeHistory, actionLogs });
+    if (patchOk === false) {
+      // patchProject 内部已处理版本冲突并刷新
+      toast(autoHours > 0 ? `已移除，自动记录 ${autoHours} 工时` : "已移除");
+      return;
+    }
+    // 乐观更新内存，秒级反馈；云端全量 loadAll 改为后台静默
+    const p2 = getProject(pid);
+    if (p2) {
+      p2.assignedWorkerIds = next;
+      p2.workerChangeHistory = workerChangeHistory;
+      p2.actionLogs = actionLogs;
+    }
     renderAll();
     toast(autoHours > 0 ? `已移除，自动记录 ${autoHours} 工时` : "已移除");
     logOperation("PROJECT_UNASSIGN", p.name || "项目", `ID: ${pid}, 人员: ${worker ? worker.name : "未知"}${worker?.phone ? `(${worker.phone})` : ""}, 自动记录工时: ${autoHours}`);
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("移除人员后台同步失败：", e));
   } finally {
     unlockAction(lockKey);
   }
@@ -9488,10 +9593,12 @@ async function reviewProject(id) {
     operatorRole: currentProfile.role
   });
   await repo.patchProject(id, { status: STATUS.REVIEWED, reviewedAt, actionLogs });
-  await repo.loadAll();
+  const p2 = getProject(id);
+  if (p2) { p2.status = STATUS.REVIEWED; p2.reviewedAt = reviewedAt; p2.actionLogs = actionLogs; }
   renderAll();
   toast("已审核");
   logOperation("PROJECT_REVIEW", p.name || "项目", `ID: ${id}`);
+  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("审核后台同步失败：", e));
 }
 
 async function unreviewProject(id) {
@@ -9504,9 +9611,11 @@ async function unreviewProject(id) {
   if (!(await confirmDialog("确定取消审核？取消后项目将恢复为「已完工」状态，可继续编辑。", "取消审核"))) return;
   clearTimeout(reloadTimer);
   await repo.patchProject(id, { status: STATUS.DONE });
-  await repo.loadAll();
+  const p2 = getProject(id);
+  if (p2) p2.status = STATUS.DONE;
   renderAll();
   toast("已取消审核");
+  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("反审核后台同步失败：", e));
 }
 
 /* 返工：基于已完工 / 已验收 / 已审核的项目，生成一条【全新的返工预约】（状态回到「预约中」），
@@ -9832,12 +9941,28 @@ async function confirmRework(id) {
         acceptedAt: null,
         acceptance: null,
       });
-      await repo.loadAll();
+      const p2 = getProject(p.id);
+      if (p2) Object.assign(p2, {
+        appointmentTime: fullTime,
+        endTime: fullEnd,
+        estimatedHours,
+        workerCount,
+        status: STATUS.BOOKED,
+        note: document.getElementById("rwNote").value.trim(),
+        reworkContent: content,
+        reworkCount,
+        startedAt: null,
+        finishedAt: null,
+        reviewedAt: null,
+        acceptedAt: null,
+        acceptance: null,
+      });
       modal.close();
       renderAll();
       toast("已将原项目转回「预约中」，可重新排期 / 派工");
       logOperation("PROJECT_REWORK", name || "项目", `转回老单重做（第 ${reworkCount} 次返工）`);
       showNotificationAlert(`♻️ 已转回老单重做：${name}`);
+      repo.loadAll().then(() => renderAll()).catch((e) => console.warn("返工后台同步失败：", e));
       return;
     }
     // 新建独立返工单（默认）
@@ -9865,12 +9990,14 @@ async function confirmRework(id) {
     };
     await repo.saveProject(newProject);
     await repo.patchProject(p.id, { reworkCount }); // 同步老单子返工次数，使其徽标/回指可见
-    await repo.loadAll();
+    const p2 = getProject(p.id);
+    if (p2) p2.reworkCount = reworkCount;
     modal.close();
     renderAll();
     toast("已生成返工预约，可在预约列表重新排期 / 派工");
     logOperation("PROJECT_REWORK", name || "项目", `源自 ID: ${id}（第 ${reworkCount} 次返工）`);
     showNotificationAlert(`🔄 已生成返工预约：${name}`);
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("返工后台同步失败：", e));
   } catch (error) {
     console.error("生成返工预约失败:", error);
     toast("生成返工预约失败，请重试");
@@ -9880,9 +10007,11 @@ async function confirmRework(id) {
 async function saveActualHours(id) {
   const v = Number(document.getElementById("cActual").value) || 0;
   await repo.patchProject(id, { actual_hours: v });
-  await repo.loadAll();
+  const p2 = getProject(id);
+  if (p2) p2.actualHours = v;
   renderConstruction();
   toast("已保存实际工时");
+  repo.loadAll().then(() => renderConstruction()).catch((e) => console.warn("保存实际工时后台同步失败：", e));
 }
 
 /* 切换某条返工单的工时是否计入工资。计入=正常发薪；不计入=仅作成本核算（如保修返工）。 */
@@ -9892,10 +10021,12 @@ async function setReworkPayable(id, payable) {
   if (!perm.viewGlobalStats()) { toast("无权限"); return; }
   clearTimeout(reloadTimer);
   await repo.patchProject(id, { rework_payable: !!payable });
-  await repo.loadAll();
+  const p2 = getProject(id);
+  if (p2) p2.reworkPayable = !!payable;
   renderProjectDetail(id);
   renderStats();
   toast(payable ? "返工工时已计入工资" : "返工工时已移出工资（仅成本核算）");
+  repo.loadAll().then(() => { renderProjectDetail(id); renderStats(); }).catch((e) => console.warn("返工计薪后台同步失败：", e));
 }
 
 function toggleLogWorkerType() {
@@ -9974,12 +10105,12 @@ async function addWorkLog(id) {
     if (p.status === STATUS.BOOKED) {
       const now = new Date().toISOString();
       await repo.patchProject(id, { status: STATUS.WORKING, startedAt: now, originalStartedAt: now });
+      p.status = STATUS.WORKING; p.startedAt = now; p.originalStartedAt = now;
     }
     clearTimeout(reloadTimer);
-    await repo.loadAll();
-    await recomputeActualHours(id);
     renderAll();
     toast("已添加施工工时");
+    repo.loadAll().then(async () => { await recomputeActualHours(id); renderAll(); }).catch((e) => console.warn("登记工时后台同步失败：", e));
   } catch (error) {
     console.error("添加工时失败:", error);
     toast("添加工时失败：" + (error.message || "请重试"));
@@ -10331,12 +10462,16 @@ function editWorkLog(pid, lid) {
       const note = document.getElementById("editNote").value.trim();
       await repo.updateWorkLog(pid, lid, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
       clearTimeout(reloadTimer);
-      await repo.loadAll();
-      await recomputeActualHours(pid);
+      const p2 = getProject(pid);
+      if (p2 && p2.workLogs) {
+        const wl = p2.workLogs.find((l) => l.id === lid);
+        if (wl) Object.assign(wl, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
+      }
       logOperation("WORK_LOG_UPDATE", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}，作业类型：${workType}，等级：${level}，备注：${note || "无"}，类型：${type === "outsourced" ? "外协" : "内部"}`);
       renderAll();
       modal.close();
       toast("已保存修改");
+      repo.loadAll().then(async () => { await recomputeActualHours(pid); renderAll(); }).catch((e) => console.warn("修改工时后台同步失败：", e));
       } catch (error) {
         console.error("保存工时修改失败:", error);
         toast("保存失败：" + (error.message || "请重试"));
@@ -10352,11 +10487,12 @@ async function deleteWorkLog(pid, lid) {
   if (p && !perm.deleteWorkLog(p)) { toast("无权限删除工时记录"); return; }
   const log = (p.workLogs || []).find(l => l.id === lid);
   await repo.deleteWorkLog(pid, lid);
-  await repo.loadAll();
-  await recomputeActualHours(pid);
+  const p2 = getProject(pid);
+  if (p2 && p2.workLogs) p2.workLogs = p2.workLogs.filter((l) => l.id !== lid);
   logOperation("WORK_LOG_DELETE", `${p.name} - ${log?.workerName || ""}`, `工时：${log?.hours || 0}小时，日期：${log?.date || "未知"}，等级：${log?.level || "未知"}，类型：${log?.isOutsourced ? "外协" : "内部"}`);
   renderAll();
   toast("已删除");
+  repo.loadAll().then(async () => { await recomputeActualHours(pid); renderAll(); }).catch((e) => console.warn("删除工时后台同步失败：", e));
 }
 
 /* 修改完工工时用的分段行（携带 data-wid / data-date / data-id 等元数据，便于保存时还原归属与日期） */
@@ -10557,7 +10693,7 @@ async function submitEditWorkHours(id) {
     }
 
     clearTimeout(reloadTimer);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] submitEditWorkHours 后台同步失败：", e));
     logOperation("WORK_LOG_UPDATE", p.name, `批量修改完工工时：原 ${before.toFixed(1)} → ${total.toFixed(1)} 工时`);
     renderAll();
     modal.close();
@@ -12312,16 +12448,19 @@ async function saveAcceptance(id) {
     });
 
     await repo.patchProject(id, { acceptance, status: STATUS.ACCEPTED, finishedAt, actionLogs });
-    await repo.loadAll();
+    const p2 = getProject(id);
+    if (p2) { p2.acceptance = acceptance; p2.status = STATUS.ACCEPTED; p2.finishedAt = finishedAt; p2.actionLogs = actionLogs; }
     modal.close();
     renderAll();
     toast("验收信息已保存");
-    
-    const p = getProject(id);
-    if (p) {
-      sendNotificationForProjectChange("accepted", p);
-      logOperation("PROJECT_ACCEPT", p.name || "项目", `ID: ${id}, 验收人: ${by}, 结果: ${acceptance.quality}, 结论: ${acceptance.conclusion}`);
-    }
+    repo.loadAll().then(() => {
+      renderAll();
+      const p = getProject(id);
+      if (p) {
+        sendNotificationForProjectChange("accepted", p);
+        logOperation("PROJECT_ACCEPT", p.name || "项目", `ID: ${id}, 验收人: ${by}, 结果: ${acceptance.quality}, 结论: ${acceptance.conclusion}`);
+      }
+    }).catch((e) => console.warn("验收后台同步失败：", e));
   } finally {
     unlockAction(lockKey);
   }
@@ -15130,7 +15269,7 @@ async function saveStoreForm(id) {
   const phone = document.getElementById("sPhone").value.trim();
   if (!name) { toast("请填写门店名称"); return; }
   await repo.saveStore({ name, phone }, id);
-  await repo.loadAll();
+  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] saveStoreForm 后台同步失败：", e));
   modal.close();
   renderAll();
   toast("已保存");
@@ -15144,7 +15283,7 @@ async function removeStore(id) {
     : "确定删除该门店？";
   if (!(await confirmDialog(msg, "删除门店"))) return;
   await repo.deleteStore(id);
-  await repo.loadAll();
+  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] removeStore 后台同步失败：", e));
   renderAll();
   toast("已删除");
 }
@@ -17520,7 +17659,7 @@ async function approveLeave(id) {
     reviewerName: currentProfile.name || currentUser?.email || "系统",
     reviewedAt: new Date().toISOString(),
   }, id);
-  await repo.loadAll();
+  repo.loadAll().then(() => renderLeaves()).catch((e) => console.warn("[sync] approveLeave 后台同步失败：", e));
   logOperation("LEAVE_APPROVE", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `时间段：${record.startDate}~${record.endDate}`);
   renderLeaves();
   toast(`已批准 ${record.workerName} 的请假申请`);
@@ -17548,7 +17687,7 @@ async function rejectLeave(id) {
     reviewerName: currentProfile.name || currentUser?.email || "系统",
     reviewedAt: new Date().toISOString(),
   }, id);
-  await repo.loadAll();
+  repo.loadAll().then(() => renderLeaves()).catch((e) => console.warn("[sync] rejectLeave 后台同步失败：", e));
   logOperation("LEAVE_REJECT", `${record.workerName}的${LEAVE_TYPE_LABEL[record.leaveType]}`, `时间段：${record.startDate}~${record.endDate}，原因：${note}`);
   renderLeaves();
   toast(`已拒绝 ${record.workerName} 的请假申请`);
@@ -18520,7 +18659,9 @@ async function timelineQuickAssignWorker(pid, wid) {
     }
   }
   await repo.setAssignedWorkers(pid, cur.concat(wid));
-  await repo.loadAll();
+  // 乐观更新内存，秒级反馈；云端全量 loadAll 改为后台静默
+  const tlP = getProject(pid);
+  if (tlP) tlP.assignedWorkerIds = cur.concat(wid);
   renderTimelineInDetail();
   setTimeout(() => {
     const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
@@ -18529,14 +18670,18 @@ async function timelineQuickAssignWorker(pid, wid) {
     }
   }, 100);
   toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
+  repo.loadAll().then(() => renderTimelineInDetail()).catch((e) => console.warn("时间轴分配后台同步失败：", e));
 }
 
 /* 时间线快速移除安装人员 */
 async function timelineUnassignWorker(pid, wid) {
   const p = getProject(pid);
   if (!p) return;
-  await repo.setAssignedWorkers(pid, (p.assignedWorkerIds || []).filter((x) => x !== wid));
-  await repo.loadAll();
+  const next = (p.assignedWorkerIds || []).filter((x) => x !== wid);
+  await repo.setAssignedWorkers(pid, next);
+  // 乐观更新内存，秒级反馈；云端全量 loadAll 改为后台静默
+  const tlP = getProject(pid);
+  if (tlP) tlP.assignedWorkerIds = next;
   renderTimelineInDetail();
   setTimeout(() => {
     const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
@@ -18545,6 +18690,7 @@ async function timelineUnassignWorker(pid, wid) {
     }
   }, 100);
   toast("已移除人员");
+  repo.loadAll().then(() => renderTimelineInDetail()).catch((e) => console.warn("时间轴移除后台同步失败：", e));
 }
 
 async function timelineAddOutsourcedWorker(pid, name) {
@@ -19144,7 +19290,7 @@ async function saveTimelineTaskTime(projectId, newStart, newEnd) {
   
   modifiedProjectIds.add(projectId);
   
-  await repo.loadAll();
+  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] saveTimelineTaskTime 后台同步失败：", e));
   
   renderAll();
   toast("预约时间已更新");
@@ -20043,7 +20189,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v77b1e3fa";
+  const APP_VERSION = "v189b5dbc";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -21625,7 +21771,7 @@ async function saveUseVehicle() {
   };
   try {
     await repo.saveVehicleTrip(trip);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderVehicleTrips()).catch((e) => console.warn("[sync] saveUseVehicle 后台同步失败：", e));
     closeVehicleQuick();
     renderVehicleTrips();
     toast(`已用车 · ${v.name}（${driverName}）`);
@@ -21667,7 +21813,7 @@ async function saveReturnVehicle() {
   };
   try {
     await repo.saveVehicleTrip(updated);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderVehicleTrips()).catch((e) => console.warn("[sync] saveReturnVehicle 后台同步失败：", e));
     closeVehicleQuick();
     renderVehicleTrips();
     toast(`已还车 · ${trip.vehicleName} 本次 ${mileage.toLocaleString()} km`);
@@ -21682,7 +21828,7 @@ async function deleteVehicleTripHandler(id) {
   if (!(await confirmDialog("确定删除这条里程记录？", "删除里程"))) return;
   try {
     await repo.deleteVehicleTrip(id);
-    await repo.loadAll();
+    repo.loadAll().then(() => renderVehicleTrips()).catch((e) => console.warn("[sync] deleteVehicleTripHandler 后台同步失败：", e));
     renderVehicleTrips();
     toast("已删除");
   } catch (e) {
