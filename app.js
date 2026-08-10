@@ -1442,7 +1442,9 @@ const mapProject = (r) => ({
   workLogs: r.workLogs || [],
   timeModified: modifiedProjectIds.has(r.id),
   repairOrders: (() => {
-    const raw = r.repair_order ? (typeof r.repair_order === "string" ? safeJsonParse(r.repair_order, null) : r.repair_order) : null;
+    const raw = (r.repair_orders || r.repair_order)
+      ? (typeof (r.repair_orders || r.repair_order) === "string" ? safeJsonParse((r.repair_orders || r.repair_order), null) : (r.repair_orders || r.repair_order))
+      : null;
     if (!raw) return [];
     return Array.isArray(raw) ? raw : [raw]; // 兼容旧版单值维修单
   })(),
@@ -1495,7 +1497,7 @@ const projectToRow = (p) => ({
   original_started_at: p.originalStartedAt || null,
   finished_at: p.finishedAt || null,
   updated_at: new Date().toISOString(),
-  repair_order: (p.repairOrders && p.repairOrders.length) ? JSON.stringify(p.repairOrders) : null,
+  repair_orders: (p.repairOrders && p.repairOrders.length) ? JSON.stringify(p.repairOrders) : null,
   paused_at: p.pausedAt || null,
   pause_reason: p.pauseReason || null,
   pause_count: p.pauseCount || 0,
@@ -2206,7 +2208,7 @@ const repo = {
         }
       }
       if (row.repairOrders) {
-        row.repair_order = JSON.stringify(row.repairOrders);
+        row.repair_orders = JSON.stringify(row.repairOrders);
         delete row.repairOrders;
       }
       if (row.schedule_history && Array.isArray(row.schedule_history)) {
@@ -15746,8 +15748,13 @@ function searchNavigateToProject(id) {
   document.getElementById("globalSearch").value = "";
   document.getElementById("globalSearchResults").classList.remove("show");
   setTimeout(() => {
-    document.getElementById("projectSearch").value = getProject(id)?.name || "";
-    renderProjects();
+    // 全局搜索是「跳转/定位」，不应把关键字回填到项目列表搜索框；
+    // 否则手机端 projectSearch 输入框被隐藏，用户无法清除筛选。
+    const ps = document.getElementById("projectSearch");
+    if (ps && ps.value) {
+      ps.value = "";
+      renderProjects();
+    }
   }, 100);
 }
 
@@ -20037,7 +20044,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vd8e84d4e";
+  const APP_VERSION = "v57c41733";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
