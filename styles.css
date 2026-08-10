@@ -3493,6 +3493,11 @@ textarea.input { resize: vertical; min-height: 50px; }
   border-color: #fed7aa;
   background: #fffaf0;
 }
+.worker-assign-task.repair-task {
+  border-left: 3px solid #f59e0b;
+  border-color: #fde68a;
+  background: #fffbeb;
+}
 
 .sched-info-box {
   font-size: 13px;
