@@ -4323,21 +4323,6 @@ body.modal-open {
 }
 .action-group__divider { width: 1px; height: 22px; background: var(--border); }
 
-/* 详情页「后续处理」下拉：外观对齐 .btn small，去掉原生箭头、文字居中 */
-.post-action-select {
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  appearance: none;
-  background-image: none;
-  text-align: center;
-  text-align-last: center;
-  padding-right: 10px;
-  cursor: pointer;
-  min-width: 116px;
-}
-.post-action-select::-ms-expand { display: none; }
-.post-action-select option { text-align: left; }
-
 /* 进度跟踪操作按钮：中性风格，不使用彩色背景，保持简洁 */
 .action-group > .btn.tiny {
   background: #f8f9fb;
@@ -5706,11 +5691,6 @@ table.data.project-hours-diff thead th {
   .action-group > select,
   .action-group .custom-select {
     flex: 1 1 100%;
-    max-width: none;
-  }
-  /* 「后续处理」下拉不应独占一行，与同组按钮横向均分 */
-  .action-group > select.post-action-select {
-    flex: 1 1 0;
     max-width: none;
   }
   .action-group__divider { display: none; }

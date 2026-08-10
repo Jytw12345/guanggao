@@ -7679,13 +7679,9 @@ function renderConstruction() {
         <div class="action-group action-group--post-completion">
           ${canReview && !reviewed && p.status === STATUS.DONE ? `<button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>` : ""}
           ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `<button class="btn small success" onclick="reviewProject('${p.id}')">🔍 审核项目</button>` : ""}
-          ${((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p)) ? `
-          <select class="btn small post-action-select" onchange="selectPostAction(this, '${p.id}')">
-            <option value="">后续处理 ▾</option>
-            ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `<option value="repair">🔧 发起维修单</option>` : ""}
-            ${[STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `<option value="rework">🔄 返工</option>` : ""}
-          </select>` : ""}
-          ${perm.editWorkLog(p) && (p.workLogs || []).length > 0 ? `<button class="btn small" onclick="openEditWorkHoursForm('${p.id}')">✏️ 修改工时</button>` : ""}
+          ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `<button class="btn small outline" onclick="openRepairOrderForm('${p.id}')">🔧 发起维修</button>` : ""}
+          ${[STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `<button class="btn small" onclick="reworkProject('${p.id}')">🔄 发起返工</button>` : ""}
+          ${perm.editWorkLog(p) && (p.workLogs || []).length > 0 ? `<button class="btn small ${isReviewed(p) ? 'warning' : ''}" onclick="openEditWorkHoursForm('${p.id}')">✏️ 修改工时</button>` : ""}
           ${reviewed && perm.unreviewProject(p) ? `<button class="btn small warning" onclick="unreviewProject('${p.id}')">↩ 反审核</button>` : ""}
         </div>` : ""}
       </div>` : ""}
@@ -7716,7 +7712,7 @@ function renderConstruction() {
           </div>` : ""}
         </div>
       `).join("")}
-      ${perm.createRepair() ? `<div class="card-actions"><button class="btn" onclick="openRepairOrderForm('${p.id}')">🔄 再发起维修单</button></div>` : ""}
+      ${perm.createRepair() ? `<div class="card-actions"><button class="btn outline" onclick="openRepairOrderForm('${p.id}')">🔄 再发起维修单</button></div>` : ""}
     </div>` : ""}
 
     ${assignBlock}
@@ -9519,16 +9515,6 @@ async function unreviewProject(id) {
 /* 返工：基于原项目生成一条独立的新预约（「预约中」）。发起人在弹出的表单里填写
    新的预约时间 / 时间段 / 返工内容 / 注意事项，人数与工时预填原值可改。
    原项目保持「已完工 / 已验收 / 已审核」不变，作为历史留存。 */
-/* 详情页「后续处理」下拉：合并「发起维修单」与「返工」入口，避免终态按钮过多
-   且在手机端横排拥挤。后台仍是两套独立机制。 */
-function selectPostAction(sel, id) {
-  const v = sel.value;
-  sel.value = ""; // 重置，使下次选同一项仍可触发 onchange
-  if (!v) return;
-  if (v === "repair") openRepairOrderForm(id);
-  else if (v === "rework") reworkProject(id);
-}
-
 function reworkProject(id) {
   const p = getProject(id);
   if (!p) { toast("项目不存在"); return; }
@@ -16063,9 +16049,10 @@ function exportProjects() {
 
 function exportWorkLogs() {
   if (!perm.exportWorkLogs() && !perm.exportAll()) { toast("权限不足"); hideExportMenu(); return; }
-  const headers = ["日志ID", "项目ID", "项目名称", "门店", "员工ID", "员工姓名", "日期", "工时", "工时等级", "开始时间", "结束时间", "备注", "是否外协"];
-  const rows = cache.projects.flatMap(p => 
-    (p.workLogs || []).map(l => [
+  const headers = ["日志ID", "项目ID", "项目名称", "门店", "员工ID", "员工姓名", "日期", "工时", "工时等级", "开始时间", "结束时间", "备注", "是否外协", "是否返工", "是否计薪"];
+  // 与工资统计口径一致：剔除「不计入工资的返工工时」(isReworkLogPayable 为 false 的返工段)
+  const rows = cache.projects.flatMap(p =>
+    (p.workLogs || []).filter(l => isReworkLogPayable(p, l)).map(l => [
       l.id || "",
       p.id,
       p.name || "",
@@ -16078,7 +16065,9 @@ function exportWorkLogs() {
       l.startTime || "",
       l.endTime || "",
       l.note || "",
-      l.isOutsourced ? "是" : "否"
+      l.isOutsourced ? "是" : "否",
+      l.isRework ? "是" : "否",
+      "是"
     ])
   );
   const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
@@ -18459,7 +18448,7 @@ function openTimelineActionMenu(taskEl, projectId) {
       ${(p.repairOrders || []).filter(ro => ro.status === "待维修").map(ro => `<button class="btn small" onclick="closeTimelineActionMenu(); completeRepair('${p.id}','${ro.id}')">✅ 完成维修${(p.repairOrders.filter(r => r.status === "待维修").length > 1) ? " #" + (ro.seq || "") : ""}</button>`).join("")}
       ${perm.editProject(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); editProject('${p.id}')">编辑</button>` : ""}
       ${(perm.editAppointment(p) || perm.editHours(p)) && !isAppointmentLocked(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); quickEditProjectTime('${p.id}')">✏️ 修改预约</button>` : ""}
-      ${perm.editWorkLog(p) && (p.workLogs || []).length > 0 ? `<button class="btn small" onclick="closeTimelineActionMenu(); openEditWorkHoursForm('${p.id}')">✏️ 修改工时</button>` : ""}
+      ${perm.editWorkLog(p) && (p.workLogs || []).length > 0 ? `<button class="btn small ${isReviewed(p) ? 'warning' : ''}" onclick="closeTimelineActionMenu(); openEditWorkHoursForm('${p.id}')">✏️ 修改工时</button>` : ""}
       ${perm.reviewProject(p) && !isReviewed(p) && p.status === STATUS.ACCEPTED ? `<button class="btn small" onclick="closeTimelineActionMenu(); reviewProject('${p.id}')">审核</button>` : ""}
       ${perm.deleteProject(p) ? `<button class="btn small danger" onclick="closeTimelineActionMenu(); deleteProject('${p.id}')">删除</button>` : ""}
     </div>`;
@@ -20054,7 +20043,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v64d1465f";
+  const APP_VERSION = "v77b1e3fa";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
