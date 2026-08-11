@@ -2784,10 +2784,27 @@ textarea.input { resize: vertical; min-height: 50px; }
 .sched-team-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 2px 0 4px 28px;
   font-size: 12px;
   line-height: 1.4;
+}
+.sched-team-meta-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.sched-team-meta-warn.warn { color: #f59e0b; }
+.sched-team-meta-warn.critical { color: #dc2626; }
+@media (max-width: 480px) {
+  .sched-team-meta-warn {
+    width: 100%;
+    margin-top: 2px;
+  }
 }
 /* 左侧团队图标徽标 */
 .sched-team-badge {

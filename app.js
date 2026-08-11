@@ -1020,6 +1020,7 @@ function addSegDay() {
     nextDate = d.toISOString().slice(0, 10);
   }
   list.insertAdjacentHTML("beforeend", segRowHtml(labelNo, nextDate, "08:00", "18:00", false));
+  updateSegFirstDayLabel();
   updateSpanHint();
 }
 
@@ -1027,7 +1028,18 @@ function addSegDay() {
 function removeSegDay(uid) {
   const row = document.querySelector(`.seg-row[data-uid="${uid}"]`);
   if (row) row.remove();
+  updateSegFirstDayLabel();
   updateSpanHint();
+}
+
+/* 跨天：主预约「开始日期」旁的「第1天」标签随额外分段有无自动显隐
+   ——新建表单点击「添加一天」后，第1天也应标注，避免只有「第2天」而无「第1天」。 */
+function updateSegFirstDayLabel() {
+  const lbl = document.getElementById("segFirstDayLabel");
+  if (!lbl) return;
+  const list = document.getElementById("segExtraList");
+  const hasExtra = !!list && list.querySelectorAll(".seg-row").length >= 1;
+  lbl.style.display = hasExtra ? "" : "none";
 }
 
 /* 收集所有分段：第1天取 pDate/pTime/pEnd，其余取 segExtraList 各行 */
@@ -6632,7 +6644,7 @@ function projectForm(p = {}) {
       <label><span style="color:var(--warn)">${svgCal(14)}</span> 预约时间 *</label>
       <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
         <div style="display:flex;align-items:center;gap:6px;width:100%;">
-          ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-label">第1天</span>' : ''}
+          ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-label" id="segFirstDayLabel">第1天</span>' : '<span class="seg-label" id="segFirstDayLabel" style="display:none;">第1天</span>'}
           <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" style="flex:1;" ${apptDisabled ? "disabled" : ""} />
         </div>
         <div style="display:flex;align-items:center;gap:6px;width:100%;">
@@ -6839,7 +6851,7 @@ function quickEditProjectTimeForm(p = {}) {
     <div class="form-row">
       <label><span style="color:var(--warn)">${svgCal(14)}</span> 施工日期</label>
       <div style="display:flex;align-items:center;gap:6px;width:100%;">
-        ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-label">第1天</span>' : ''}
+        ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-label" id="segFirstDayLabel">第1天</span>' : '<span class="seg-label" id="segFirstDayLabel" style="display:none;">第1天</span>'}
         <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" style="flex:1;" />
       </div>
     </div>
@@ -11425,7 +11437,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
         const metaParts = [];
         if (note) metaParts.push(`<span style="color:${teamReasonColor}">${esc(note)}</span>`);
         if (timeExtra) metaParts.push(`<span>${esc(timeExtra)}</span>`);
-        if (!f.ok) metaParts.push(`<span style="color:${f.level === 'critical' ? '#dc2626' : '#f59e0b'};font-weight:500;">⚠ 人均${f.perPersonHours.toFixed(1)}h，但当天仅${f.availableHours.toFixed(1)}h可用</span>`);
+        if (!f.ok) metaParts.push(`<span class="sched-team-meta-warn ${f.level === 'critical' ? 'critical' : 'warn'}">⚠ 人均${f.perPersonHours.toFixed(1)}h，但当天仅${f.availableHours.toFixed(1)}h可用</span>`);
         const metaHtml = metaParts.join(' <span style="color:#d1d5db;">·</span> ');
         description += `<div class="sched-team-card">`;
         description += `<div class="sched-team-head"><span class="sched-team-badge">👥</span><span class="sched-team-name">${esc(p.name)}</span><span class="sched-team-chip">${workers.length}人</span></div>`;
@@ -20914,7 +20926,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vca1efb85";
+  const APP_VERSION = "v85cec926";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
