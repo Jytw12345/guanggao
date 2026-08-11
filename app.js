@@ -526,6 +526,19 @@ function isReviewed(p) {
   return p && p.status === STATUS.REVIEWED;
 }
 
+/* 判断项目是否为系统自动审核（验收满设定时长后自动置为已审核）。
+   依据：最后一条 review 操作日志的描述包含「系统自动审核」。 */
+function isAutoReviewed(p) {
+  if (!p || p.status !== STATUS.REVIEWED) return false;
+  const logs = p.actionLogs || [];
+  for (let i = logs.length - 1; i >= 0; i--) {
+    if (logs[i].action === "review") {
+      return (logs[i].description || "").includes("系统自动审核");
+    }
+  }
+  return false;
+}
+
 /* 终态项目（已完工 / 已验收 / 已审核）：预约时间与预约工时不可再修改，
    编辑表单中对应控件禁用，快速修改入口直接拦截。与代码内既有的终态集合保持一致。 */
 function isProjectLocked(p) {
@@ -822,6 +835,39 @@ function projectEnd(p) {
   return isNaN(d) ? null : d;
 }
 
+/* 取时间的 HH:MM 文本 */
+function hmOf(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/* 项目的「每日施工时段」数组（跨天施工的核心数据）。
+   优先读取 p.workSegments（[{date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM'}, ...]）；
+   无 workSegments 时由 appointmentTime/endTime 合成单段，保证旧数据兼容。
+   每段返回 { date, start(Date), end(Date), startHM, endHM }，跳过非法段。 */
+function getBookedSegments(p) {
+  if (p && Array.isArray(p.workSegments) && p.workSegments.length) {
+    const out = [];
+    for (const s of p.workSegments) {
+      if (!s || !s.date || !s.start || !s.end) continue;
+      const st = new Date(`${s.date}T${s.start}`);
+      const en = new Date(`${s.date}T${s.end}`);
+      if (isNaN(st) || isNaN(en) || en <= st) continue;
+      out.push({ date: s.date, start: st, end: en, startHM: s.start, endHM: s.end });
+    }
+    if (out.length) return out;
+  }
+  const s = projectStart(p), e = projectEnd(p);
+  if (s && e && e > s) return [{ date: dateKey(s), start: s, end: e, startHM: hmOf(s), endHM: hmOf(e) }];
+  return [];
+}
+
+/* 取项目在指定日期 ds 的施工时段（用于时间线按天裁剪 / 日历按天显示）。
+   返回该日首段或 null。 */
+function projectSegOnDate(p, ds) {
+  return getBookedSegments(p).find((s) => s.date === ds) || null;
+}
+
 /* 两个时间区间是否重叠：[s1,e1) 与 [s2,e2) */
 function intervalsOverlap(s1, e1, s2, e2) {
   return s1 < e2 && s2 < e1;
@@ -838,15 +884,16 @@ function isAddressSimilar(addr1, addr2) {
 
 /* 预约时间段文本："YYYY-MM-DD HH:mm ~ HH:mm"，跨日则结束显示完整日期 */
 function fmtTimeRange(p) {
-  const s = projectStart(p);
-  if (!s) return "—";
-  const e = projectEnd(p);
-  const startStr = fmtDateTime(p.appointmentTime);
-  if (!e || e.getTime() === s.getTime()) return startStr;
-  const pad = (n) => String(n).padStart(2, "0");
-  const sameDay = s.getFullYear() === e.getFullYear() && s.getMonth() === e.getMonth() && s.getDate() === e.getDate();
-  const endStr = sameDay ? `${pad(e.getHours())}:${pad(e.getMinutes())}` : fmtDateTime(e);
-  return `${startStr} ~ ${endStr}`;
+  const segs = getBookedSegments(p);
+  if (!segs.length) return "—";
+  const s = segs[0].start, e = segs[segs.length - 1].end;
+  const startStr = fmtDateTime(segs[0].start.toISOString());
+  if (segs.length === 1 && segs[0].start.getDate() === segs[0].end.getDate()) {
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${startStr} ~ ${pad(e.getHours())}:${pad(e.getMinutes())}`;
+  }
+  // 跨天 / 多段：显示首段起 ~ 末段止（带日期）
+  return `${fmtDateTime(s.toISOString())} ~ ${fmtDateTime(e.toISOString())}`;
 }
 
 /* 日期变化时自动设置时间 */
@@ -887,89 +934,148 @@ function onDateChange() {
   updateSpanHint();
 }
 
-/* 表单里根据开始/结束时间实时提示现场时长，或校验结束是否晚于开始 */
+/* 表单里根据开始/结束时间实时提示现场时长（多段跨天版见下方 updateSpanHint 重写） */
+
+/* ===== 跨天施工：多日分段编辑器 ===== */
+/* 渲染一行额外分段（第 idx 天，idx 从 2 开始）。用随机 uid 作 DOM 标识，避免增删后 id 冲突。 */
+function segRowHtml(labelNo, date, start, end, disabled) {
+  const uid = "s" + Math.random().toString(36).slice(2, 9);
+  const dis = disabled ? "disabled" : "";
+  return `
+    <div class="seg-row" data-uid="${uid}">
+      <div class="seg-date-line">
+        <span class="seg-label">第${labelNo}天</span>
+        <input class="input segDate" type="date" value="${date || ""}" onchange="updateSpanHint()" ${dis} />
+      </div>
+      <div class="seg-time-line">
+        <span class="seg-txt">开始</span>
+        <select class="input segStart" onchange="updateSpanHint()" ${dis}>${generateTimeOptions(start)}</select>
+        <span class="seg-arrow">→</span>
+        <span class="seg-txt">结束</span>
+        <select class="input segEnd" onchange="updateSpanHint()" ${dis}>${generateTimeOptions(end)}</select>
+        <button type="button" class="btn small seg-del" onclick="removeSegDay('${uid}')" ${dis}>✕</button>
+      </div>
+    </div>`;
+}
+
+/* 添加一天（默认下一天 08:00-18:00） */
+function addSegDay() {
+  const list = document.getElementById("segExtraList");
+  if (!list) return;
+  const existing = list.querySelectorAll(".seg-row").length;
+  const labelNo = existing + 2; // 第1天是主预约(pDate/pTime/pEnd)，额外段从第2天起
+  const firstDate = document.getElementById("pDate") ? document.getElementById("pDate").value : "";
+  let nextDate = firstDate;
+  if (firstDate) {
+    const d = new Date(firstDate);
+    d.setDate(d.getDate() + existing + 1);
+    nextDate = d.toISOString().slice(0, 10);
+  }
+  list.insertAdjacentHTML("beforeend", segRowHtml(labelNo, nextDate, "08:00", "18:00", false));
+  updateSpanHint();
+}
+
+/* 删除某分段（按 uid 定位 DOM 行） */
+function removeSegDay(uid) {
+  const row = document.querySelector(`.seg-row[data-uid="${uid}"]`);
+  if (row) row.remove();
+  updateSpanHint();
+}
+
+/* 收集所有分段：第1天取 pDate/pTime/pEnd，其余取 segExtraList 各行 */
+function readAllSegments() {
+  const segs = [];
+  const d0 = document.getElementById("pDate") ? document.getElementById("pDate").value : "";
+  const t0 = document.getElementById("pTime") ? document.getElementById("pTime").value : "";
+  const e0 = document.getElementById("pEnd") ? document.getElementById("pEnd").value : "";
+  if (d0 && t0 && e0) segs.push({ date: d0, start: t0, end: e0 });
+  const list = document.getElementById("segExtraList");
+  if (list) {
+    list.querySelectorAll(".seg-row").forEach((row) => {
+      const d = row.querySelector(".segDate") ? row.querySelector(".segDate").value : "";
+      const s = row.querySelector(".segStart") ? row.querySelector(".segStart").value : "";
+      const e = row.querySelector(".segEnd") ? row.querySelector(".segEnd").value : "";
+      if (d && s && e) segs.push({ date: d, start: s, end: e });
+    });
+  }
+  return segs;
+}
+
+/* 重写 updateSpanHint：按所有分段求和显示总施工时长与建议人数（支持跨天多段） */
 function updateSpanHint() {
   const durationCard = document.getElementById("pDurationCard");
   const durationValue = document.getElementById("pDurationValue");
   const suggestWorkers = document.getElementById("pSuggestWorkers");
-  const dateEl = document.getElementById("pDate");
-  const timeEl = document.getElementById("pTime");
-  const endEl = document.getElementById("pEnd");
   const estEl = document.getElementById("pEst");
-  
-  if (!dateEl || !timeEl || !endEl || !durationCard || !durationValue || !suggestWorkers) {
-    return;
-  }
-  
-  const date = dateEl.value;
-  const start = timeEl.value;
-  const end = endEl.value;
-  const estHours = Number(estEl?.value) || 0;
-  const crossDayEl = document.getElementById("pCrossDay");
-  
-  if (!date || !start || !end) {
+  const calcBtn = document.getElementById("pCalcBtn");
+  const estHint = document.getElementById("pEstHint");
+  if (!durationCard || !durationValue || !suggestWorkers) return;
+
+  const segs = (typeof readAllSegments === "function") ? readAllSegments() : [];
+  if (!segs.length) {
     durationCard.style.opacity = "0.5";
     durationValue.textContent = "--";
     suggestWorkers.textContent = "--";
     return;
   }
-  
-  const endDateEl = document.getElementById("pEndDate");
-  let endDate = endDateEl ? endDateEl.value : "";
-  if (!crossDayEl?.checked || !endDate) {
-    endDate = date;
+
+  let totalMins = 0;
+  const days = new Set();
+  let bad = false;
+  for (const s of segs) {
+    const st = new Date(`${s.date}T${s.start}`);
+    const en = new Date(`${s.date}T${s.end}`);
+    if (isNaN(st) || isNaN(en) || en <= st) { bad = true; continue; }
+    totalMins += Math.round((en - st) / 60000);
+    days.add(s.date);
   }
-  
-  const s = new Date(`${date}T${start}`), e = new Date(`${endDate}T${end}`);
-  if (isNaN(s) || isNaN(e)) {
-    if (durationCard) durationCard.style.opacity = "0.5";
-    if (durationValue) durationValue.textContent = "--";
-    if (suggestWorkers) suggestWorkers.textContent = "--";
+
+  if (bad) {
+    durationCard.style.opacity = "1";
+    durationValue.innerHTML = `<span style="color:var(--danger);font-size:14px;">每段结束时间需晚于开始时间</span>`;
+    suggestWorkers.textContent = "--";
     return;
   }
-  
-  if (e <= s) {
-    if (durationCard) durationCard.style.opacity = "1";
-    if (durationValue) durationValue.innerHTML = `<span style="color:var(--danger);font-size:14px;">结束时间需晚于开始时间</span>`;
-    if (suggestWorkers) suggestWorkers.textContent = "--";
-    return;
-  }
-  
-  if (durationCard) durationCard.style.opacity = "1";
-  
-  const mins = Math.round((e - s) / 60000);
-  const days = Math.floor(mins / (24 * 60));
-  const h = Math.floor((mins % (24 * 60)) / 60);
-  const m = mins % 60;
-  
-  let durationText = "";
-  if (days > 0) {
-    if (h > 0 && m > 0) {
-      durationText = `${days}天${h}小时${m}分钟`;
-    } else if (h > 0) {
-      durationText = `${days}天${h}小时`;
-    } else if (m > 0) {
-      durationText = `${days}天${m}分钟`;
-    } else {
-      durationText = `${days}天`;
-    }
-  } else if (h > 0 && m > 0) {
-    durationText = `${h}小时${m}分钟`;
+
+  durationCard.style.opacity = "1";
+  const daysN = days.size;
+  const isCrossDay = daysN > 1;
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  let durText;
+  if (isCrossDay) {
+    durText = `${daysN}天 共${h}小时${m ? m + "分钟" : ""}`;
   } else if (h > 0) {
-    durationText = `${h}小时`;
+    durText = `${h}小时${m ? m + "分钟" : ""}`;
   } else {
-    durationText = `${m}分钟`;
+    durText = `${m}分钟`;
   }
-  
-  if (durationValue) {
-    durationValue.innerHTML = `<span style="color:#1e293b;">${durationText}</span>`;
+  durationValue.innerHTML = `<span style="color:#1e293b;">${durText}</span>`;
+
+  const workersEl = document.getElementById("pWorkers");
+  const workerCount = Number(workersEl ? workersEl.value : 1) || 1;
+  const autoEstHours = Math.round((totalMins / 60) * workerCount * 10) / 10;
+
+  // 跨天施工：计算按钮按单日连续时段推算，会覆盖多段设置，故隐藏并更换提示
+  if (calcBtn) calcBtn.style.display = isCrossDay ? "none" : "";
+  if (estHint) {
+    if (isCrossDay) {
+      estHint.innerHTML = `<span style="color:#0891b2;">跨天施工：总工时 = 各段时长之和 × 施工人数，修改分段时间即可自动重算</span>`;
+    } else {
+      estHint.innerHTML = `<span style="color:#16a34a;">先填写总工时，方便计算结束时间</span>`;
+    }
   }
-  
-  if (suggestWorkers && estHours > 0) {
-    const hoursPerPerson = mins / 60;
+  // 跨天且用户未手动改动过工时时，自动回填推荐总工时
+  if (isCrossDay && estEl && !window._estDirty) {
+    estEl.value = autoEstHours;
+  }
+
+  const estHours = Number(estEl ? estEl.value : 0) || 0;
+  if (estHours > 0 && totalMins > 0) {
+    const hoursPerPerson = totalMins / 60;
     const suggested = Math.max(1, Math.ceil(estHours / hoursPerPerson));
     suggestWorkers.innerHTML = `<span style="color:#2563eb;">${suggested}人</span> <span style="font-size:11px;color:#64748b;">(总工时÷时长)</span>`;
-  } else if (suggestWorkers) {
+  } else {
     suggestWorkers.textContent = "--";
   }
 }
@@ -1044,20 +1150,30 @@ function fmtHours(n) {
   return Number(v.toFixed(2)).toString();
 }
 
-/* 工时数值：四舍五入到2位小数，用于 Excel/CSV 数值单元格 */
+/* 工时数值：四舍五入到1位小数，用于 Excel/CSV 数值单元格 */
 function fmtHoursNum(n) {
   const v = Number(n);
   if (!isFinite(v)) return 0;
-  return Number(v.toFixed(2));
+  return Number(v.toFixed(1));
 }
 
 /* 计算项目实际人工工时（人·小时）。
    - 未开工/预约中/取消：0
-   - 已暂停/已延期/已完工/已验收/已审核：以 accumulatedWorkHours 为准（状态变更时已结算）
+   - 已完工/已验收/已审核：优先以 actualHours/workLogs 真实工时为准；无记录时 fallback 到 accumulatedWorkHours
+   - 已暂停/已延期：accumulatedWorkHours 已在状态变更时结算
    - 施工中：accumulatedWorkHours + 本次恢复后持续到现在的时长
    历史数据若缺少 accumulatedWorkHours，则退化为按起止锚点与暂停历史推算。 */
 function calcProjectActualPersonHours(p) {
   if (!p || !p.startedAt) return 0;
+
+  // 已完工/已验收/已审核：优先采用真实登记工时（完工时 actualHours 已汇总 workLogs）
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) {
+    const fromActual = Number(p.actualHours) || 0;
+    if (fromActual > 0) return fromActual;
+    const fromLogs = (p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0);
+    if (fromLogs > 0) return fromLogs;
+  }
+
   const workerCount = Math.max(1, (p.assignedWorkerIds || []).length);
 
   // 已结束/暂停/延期/取消：accumulatedWorkHours 已在状态变更时结算
@@ -1111,7 +1227,12 @@ function calcActualWorkDuration(p) {
     const mins = Math.floor((accumulatedWorkHours - hours) * 60);
     const days = Math.floor(hours / 24);
     const remainingHours = hours % 24;
-    if (days > 0) return `${days}天 ${remainingHours}小时 ${mins}分钟`;
+    if (days > 0) {
+      if (remainingHours > 0 && mins > 0) return `${days}天 ${remainingHours}小时 ${mins}分钟`;
+      if (remainingHours > 0) return `${days}天 ${remainingHours}小时`;
+      if (mins > 0) return `${days}天 ${mins}分钟`;
+      return `${days}天`;
+    }
     if (hours > 0) return `${hours}小时 ${mins}分钟`;
     return `${mins}分钟`;
   }
@@ -1127,9 +1248,62 @@ function calcActualWorkDuration(p) {
   const days = Math.floor(actualMs / (1000 * 60 * 60 * 24));
   const hours = Math.floor((actualMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
   const mins = Math.floor((actualMs % (1000 * 60 * 60)) / (1000 * 60));
-  if (days > 0) return `${days}天 ${hours}小时 ${mins}分钟`;
+  if (days > 0) {
+    if (hours > 0 && mins > 0) return `${days}天 ${hours}小时 ${mins}分钟`;
+    if (hours > 0) return `${days}天 ${hours}小时`;
+    if (mins > 0) return `${days}天 ${mins}分钟`;
+    return `${days}天`;
+  }
   if (hours > 0) return `${hours}小时 ${mins}分钟`;
   return `${mins}分钟`;
+}
+
+/* 生成项目卡片的「实际施工时间线」HTML。
+   - 单天项目：保持简洁，显示开工 / 完工 / 总时长。
+   - 跨天项目（workSegments.length > 1）：按 workSessions 逐段列出实际施工时间，
+     方便一眼看到每天真实干了多久；无 sessions 时退回总开工/完工。 */
+function buildCardActualTimeline(p) {
+  const segs = getBookedSegments(p);
+  const isCrossDay = segs.length > 1;
+  const sessions = (p.workSessions || []).filter(s => s && s.startTime && s.endTime);
+
+  // 跨天且存在施工会话：按日期分组显示逐段实际施工时间
+  if (isCrossDay && sessions.length > 0) {
+    const groups = {};
+    for (const s of sessions) {
+      const d = new Date(s.startTime);
+      const key = dateKey(d);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(s);
+    }
+    const lines = [];
+    Object.keys(groups).sort().forEach(key => {
+      const list = groups[key];
+      let dayMins = 0;
+      const parts = list.map(s => {
+        const st = new Date(s.startTime);
+        const en = new Date(s.endTime);
+        const mins = Math.max(0, Math.round((en - st) / 60000));
+        dayMins += mins;
+        return `${hmOf(st)}–${hmOf(en)}`;
+      }).join("、");
+      const h = Math.floor(dayMins / 60);
+      const m = dayMins % 60;
+      const durText = h > 0 ? `${h}小时${m > 0 ? m + "分钟" : ""}` : `${m}分钟`;
+      lines.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--blue"></span><span>${key} ${parts} · ${durText}</span></div>`);
+    });
+    if (lines.length) {
+      lines.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--gray"></span><span>实际合计 ${calcActualWorkDuration(p)}</span></div>`);
+      return lines.join("");
+    }
+  }
+
+  // 单天 / 无会话：保持原样
+  const parts = [];
+  if (p.startedAt) parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--blue"></span><span>开工 ${fmtDateTime(p.startedAt)}</span></div>`);
+  if (p.finishedAt) parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--green"></span><span>完工 ${fmtDateTime(p.finishedAt)}</span></div>`);
+  if (p.startedAt && p.finishedAt) parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--gray"></span><span>时长 ${calcActualWorkDuration(p)}</span></div>`);
+  return parts.join("");
 }
 
 function getProjectEffectiveEndTime(p) {
@@ -1424,6 +1598,8 @@ const mapProject = (r) => ({
   appointmentTime: r.appointment_time || r.appointmentTime || "",
   originalAppointmentTime: r.original_appointment_time || r.originalAppointmentTime || null,
   endTime: r.end_time || r.endTime || "",
+  workSegments: (r.work_segments ? (typeof r.work_segments === "string" ? safeJsonParse(r.work_segments, null) : r.work_segments) : null)
+    || (r.workSegments ? (typeof r.workSegments === "string" ? safeJsonParse(r.workSegments, null) : r.workSegments) : null),
   estimatedHours: Number(r.estimated_hours) || Number(r.estimatedHours) || 0,
   outsourcedHours: Number(r.outsourced_hours) || Number(r.outsourcedHours) || 0,
   workerCount: Number(r.worker_count) || Number(r.workerCount) || 1,
@@ -1484,6 +1660,7 @@ const projectToRow = (p) => ({
   appointment_time: p.appointmentTime || null,
   original_appointment_time: p.originalAppointmentTime || null,
   end_time: p.endTime || null,
+  work_segments: (p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length) ? JSON.stringify(p.workSegments) : null,
   estimated_hours: p.estimatedHours || 0,
   outsourced_hours: p.outsourcedHours || 0,
   worker_count: p.workerCount || 1,
@@ -5770,22 +5947,32 @@ function autoCalcEndTime() {
   const estEl = document.getElementById("pEst");
   const workersEl = document.getElementById("pWorkers");
   const endSel = document.getElementById("pEnd");
-  
+
   if (!dateEl || !timeEl || !estEl || !workersEl || !endSel) {
     toast("表单元素未找到");
     return;
   }
-  
+
+  // 跨天施工：结束时间由多段分段决定，不能按单日连续时段推算
+  if (typeof readAllSegments === "function") {
+    const segs = readAllSegments();
+    const days = new Set(segs.filter(s => s.date).map(s => s.date));
+    if (days.size > 1) {
+      toast("跨天施工请直接修改各分段时间，系统会自动计算总工时");
+      return;
+    }
+  }
+
   const date = dateEl.value;
   const time = timeEl.value;
   const estHours = Number(estEl.value) || 0;
   const workerCount = Number(workersEl.value) || 1;
-  
+
   if (!date || !time) {
     toast("请先选择日期和开始时间");
     return;
   }
-  
+
   if (estHours <= 0) {
     toast("请先填写预计工时");
     return;
@@ -5837,10 +6024,24 @@ function autoCalcEndTime() {
 /* ============================================================
  * 项目预约模块
  * ============================================================ */
-// 疑似忘记点完工检测：
-//  - overnight（跨夜）：开工日期已不是今天（跨越了午夜仍在施工中），不可能整夜作业，视为确定忘点完工；
-//  - long（长时）：连续施工超过阈值 WORKING_TIMEOUT_HOURS，视为疑似。
-// 返回 null 或 { level:'overnight'|'long', nights, hours, text }。
+// 判断是否为「夜间预约」：预约开工在深夜（22:00~次日06:00）或预约时段跨越午夜。
+// 夜间施工跨午夜属正常，不应误判为“跨夜未完工”，也不应把下班后时段算成“加班施工”。
+function isNightBookingProject(p) {
+  const s = projectStart(p);
+  if (!s || isNaN(s.getTime())) return false;
+  const h = s.getHours();
+  if (h >= 22 || h < 6) return true;
+  const e = projectEnd(p);
+  if (e && !isNaN(e.getTime()) && e < s) return true; // 预约时段跨越午夜
+  return false;
+}
+
+// 疑似忘记点完工检测（异常工时判断，相对「预约施工时长」+ 生理上限）：
+//  - overnight（跨夜）：非夜间预约且开工日期已不是今天（跨越了午夜仍在施工中），不可能整夜作业，视为确定忘点完工；
+//  - long（长时）：实际连续施工超阈值视为疑似。阈值 = min(预约时长×0.83 + 5.5, 18小时)。
+//     例：预约3h→阈值约8h（超过即异常）；预约15h(早6-晚9)→阈值18h（延到半夜正常，超过异常）。
+//     18h 为人一天连续施工的生理上限（如6点-24点），任何预约都适用；无预约时长信息时退回 WORKING_TIMEOUT_HOURS。
+// 返回 null 或 { level:'overnight'|'long', nights, hours, text, bookedDuration, nightBooking }。
 function getForgottenCompleteInfo(p) {
   if (p.status !== STATUS.WORKING || !p.startedAt) return null;
   const start = new Date(p.startedAt);
@@ -5849,20 +6050,43 @@ function getForgottenCompleteInfo(p) {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const nights = Math.round((today - startDay) / 86400000); // 跨越的午夜数
   const hours = (now - start) / 3600000;
-  if (nights >= 1) {
-    return { level: "overnight", nights, hours, text: `已跨${nights}夜` };
+
+  // 预约施工总时长（小时）= 各段时长之和（跨整天也按真实施工时长计，不按挂钟跨度）
+  const bookedSegs = getBookedSegments(p);
+  let bookedDuration = 0;
+  if (bookedSegs.length) {
+    bookedDuration = bookedSegs.reduce((sum, s) => sum + (s.end - s.start) / 3600000, 0);
+  } else {
+    const apptStart = projectStart(p);
+    const apptEnd = projectEnd(p);
+    if (apptStart && apptEnd && !isNaN(apptStart.getTime()) && !isNaN(apptEnd.getTime()) && apptEnd > apptStart) {
+      bookedDuration = (apptEnd - apptStart) / 3600000;
+    }
   }
-  if (hours > WORKING_TIMEOUT_HOURS) {
+  const nightBooking = isNightBookingProject(p);
+
+  // 异常工时阈值：相对预约时长 + 生理上限 18h。短预约容差收紧，长预约不超过硬上限。
+  const longThreshold = bookedDuration > 0
+    ? Math.min(bookedDuration * 0.83 + 5.5, 18)
+    : WORKING_TIMEOUT_HOURS;
+
+  // 跨夜：仅「非夜间预约」才视为“跨夜未完工”（夜间施工跨午夜属正常）
+  if (nights >= 1 && !nightBooking) {
+    return { level: "overnight", nights, hours, text: `已跨${nights}夜`, bookedDuration, nightBooking };
+  }
+  // 长时：相对预约时长判断（无预约时长信息时退回原绝对阈值）
+  if (hours > longThreshold) {
     const d = Math.floor(hours / 24), rem = Math.round(hours % 24);
     const t = d > 0 ? (rem > 0 ? `${d}天${rem}小时` : `${d}天`) : `${Math.round(hours)}小时`;
-    return { level: "long", nights: 0, hours, text: `连续施工${t}` };
+    return { level: "long", nights: 0, hours, text: `连续施工${t}`, bookedDuration, nightBooking };
   }
   return null;
 }
 
 /* 施工中但已超过预约结束时间，或拖到正常下班后（18:00）仍未完工。
    与 getForgottenCompleteInfo 区别：这里关注"超预约/加班施工"，不一定是忘点完工。
-   OVERTIME_GRACE_MS：超过预约结束时间满 30 分钟才提示，避免刚过点收尾/整理工具误报。 */
+   加班起点：预约结束、今天下班（18:00）、实际开工三者中最晚者；18:00 前属于正常上班/预约时段，不计入加班。
+   夜间预约（如午夜开工）跨午夜属正常，不计“下班后加班”，仅按“超预约结束”判定施工超时。 */
 const WORK_END_HOUR = 18;
 const OVERTIME_GRACE_MS = 30 * 60 * 1000;
 function getProjectOvertimeInfo(p) {
@@ -5870,11 +6094,18 @@ function getProjectOvertimeInfo(p) {
   const now = new Date();
   const end = projectEnd(p);
   if (!end || isNaN(end.getTime())) return null;
-  if (now <= new Date(end.getTime() + OVERTIME_GRACE_MS)) return null;
   const workEndToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), WORK_END_HOUR, 0, 0, 0);
+  const startedAt = new Date(p.startedAt);
+  if (isNaN(startedAt.getTime())) return null;
+  const nightBooking = isNightBookingProject(p);
+  // 加班起点：夜间预约不计“下班后”，仅按「预约结束、实际开工」最晚者；其余三者的方式
+  const overtimeStart = nightBooking
+    ? new Date(Math.max(end.getTime(), startedAt.getTime()))
+    : new Date(Math.max(end.getTime(), workEndToday.getTime(), startedAt.getTime()));
+  if (now <= new Date(overtimeStart.getTime() + OVERTIME_GRACE_MS)) return null;
   return {
-    overtimeMs: now - end,
-    isAfterWork: now >= workEndToday,
+    overtimeMs: now - overtimeStart,
+    isAfterWork: !nightBooking && now >= workEndToday,
     end
   };
 }
@@ -5899,8 +6130,8 @@ async function openProjectFromCard(id) {
   const info = p ? getForgottenCompleteInfo(p) : null;
   if (info) {
     const msg = info.level === "overnight"
-      ? `「${p.name}」${info.text}，不可能整夜施工，疑似忘记点完工。\n是否立即标记为完工？`
-      : `「${p.name}」${info.text}，疑似忘记点完工。\n是否立即标记为完工？`;
+      ? `「${p.name}」${info.text}，不可能整夜施工，疑似忘记点完工。\n确认后将进入手动填工时流程，系统估算工时不会自动回填，是否立即标记为完工？`
+      : `「${p.name}」${info.text}，疑似忘记点完工。\n确认后将进入手动填工时流程，系统估算工时不会自动回填，是否立即标记为完工？`;
     if (await confirmDialog(msg, "疑似忘点完工")) {
       openCompleteProjectForm(id);
       return;
@@ -5957,10 +6188,22 @@ function renderProjects() {
     });
   }
 
-  // 默认（未选状态、无关键词）仅显示活跃项目，隐藏已完工/已验收/已审核，避免列表被历史项目淹没。
-  // 想看这些已结束项目，直接在状态下拉中选对应状态即可（已取消默认仍可见）。
+  // 默认（未选状态、无关键词）仅显示活跃项目：隐藏已完工/已验收/已审核。
+  // 已取消项目：取消当天仍保留在活跃列表，次日及以后自动从默认活跃列表隐藏
+  // （想看历史已取消项目，在状态下拉中选「已取消」即可）。旧数据无 cancelledAt 时仍可见，向后兼容。
   if (!kw && !status) {
-    items = items.filter((p) => ![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status));
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const TERMINAL = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED];
+    items = items.filter((p) => {
+      if (TERMINAL.includes(p.status)) return false;
+      if (p.status === STATUS.CANCELLED) {
+        const cAt = p.cancelledAt ? new Date(p.cancelledAt) : null;
+        // 取消当天（cancelledAt 日期 == 今天）保留；更早取消的从默认活跃列表隐藏
+        if (cAt && cAt < today) return false;
+      }
+      return true;
+    });
   }
 
   // 权限/门店过滤先执行，得到「用户当前可见范围」；
@@ -6027,6 +6270,7 @@ function renderProjects() {
     const isPausedTooLong = !!pausedTooLongInfo;
     const isDelayed = p.status === STATUS.DELAYED;
     const isRescheduled = !isDelayed && (!!p.originalAppointmentTime || p.timeModified); // 改过预约时间（持久化原值 / 会话内刚改）
+    const isCrossDay = Array.isArray(p.workSegments) && p.workSegments.length > 1; // 跨天多段施工
     const workElapsedText = workingTooLong ? (() => {
       const h = (Date.now() - new Date(p.startedAt).getTime()) / 3600000;
       const d = Math.floor(h / 24), rem = Math.round(h % 24);
@@ -6049,22 +6293,23 @@ function renderProjects() {
         <div class="card-status-bar"></div>
         <div class="card-title">
           <h3>${esc(p.name)}</h3>
-          <div style="display: flex; gap: 4px;">
+          <div style="display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 50%;">
             <span class="badge ${p.status}">${p.status}</span>
-            ${workingTooLong ? `<span class="badge ${overnight ? "overdue" : "pending"} badge--multiline"><span>${overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工"}</span><span class="badge__line">${workElapsedText}</span></span>` : ""}
-            ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"} badge--multiline"><span>${isAfterWork ? "🌙 加班施工" : "⏰ 施工超时"}</span><span class="badge__line">${isAfterWork ? `已加班 ${overtimeText}` : `已超预约 ${overtimeText}`}</span></span>` : ""}
+            ${isCrossDay ? `<span class="badge crossday">📅 跨天${p.workSegments.length}天</span>` : ""}
+            ${workingTooLong ? `<span class="badge ${overnight ? "overdue" : "pending"}">${overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工"} ${workElapsedText}</span>` : ""}
+            ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
+            ${isPausedTooLong ? `<span class="badge overdue">⏸️ 暂停过久 已暂停 ${pausedTooLongInfo.text}</span>` : ""}
             ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
             ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
-            ${isDelayed ? `<span class="badge overdue">⏰ 已延期</span>` : ""}
-            ${isPausedTooLong ? `<span class="badge overdue badge--multiline"><span>⏸️ 暂停过久</span><span class="badge__line">已暂停 ${pausedTooLongInfo.text}</span></span>` : ""}
             ${isRescheduled ? `<span class="badge modified">📅 已改期</span>` : ""}
             ${leaveConflicts.length > 0 ? `<span class="badge danger">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
           </div>
         </div>
 
-        <!-- 暂停/延期原因 -->
+        <!-- 暂停/延期/取消原因 -->
         ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}</div>` : ""}
         ${p.delayReason ? `<div class="card-reason delayed">🕒 延期原因：${esc(p.delayReason)}</div>` : ""}
+        ${p.status === STATUS.CANCELLED && p.cancelReason ? `<div class="card-reason cancelled">✕ 取消原因：${esc(p.cancelReason)}</div>` : ""}
 
         <!-- 摘要行：门店 / 客户 -->
         <div class="card-meta">
@@ -6093,11 +6338,16 @@ function renderProjects() {
             else timeStr = `${startStr} ~ ${endStr}`;
           }
           let durationLabel = "";
-          if (s && e) {
-            const hrs = (e - s) / 3600000;
-            const h = Math.floor(hrs);
-            const m = Math.round((hrs - h) * 60);
-            durationLabel = `<span class="card-highlight__duration">${m > 0 ? `${h}小时${m}分钟` : `${h}小时`}</span>`;
+          // 时长按各段「真实施工工时」之和（跨天项目排除夜间睡觉时间，不再用挂钟跨度）
+          {
+            const bookedSegs = getBookedSegments(p);
+            let totalMins = 0;
+            for (const seg of bookedSegs) totalMins += Math.round((seg.end - seg.start) / 60000);
+            if (totalMins > 0) {
+              const h = Math.floor(totalMins / 60);
+              const m = totalMins % 60;
+              durationLabel = `<span class="card-highlight__duration">${m > 0 ? `${h}小时${m}分钟` : `${h}小时`}</span>`;
+            }
           }
           return `
           <div class="card-highlight">
@@ -6162,13 +6412,13 @@ function renderProjects() {
           <span class="card-progress__pct">${Math.round(getProjectProgress(p, est, act, hasActual, done))}%</span>
         </div>
 
-        <!-- 时间节点（仅在有值时显示） -->
+        <!-- 时间节点（仅在有值时显示；跨天项目显示实际施工会话逐段明细） -->
         ${(p.startedAt || p.finishedAt) ? `
         <div class="card-timeline">
-          ${p.startedAt ? `<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--blue"></span><span>开工 ${fmtDateTime(p.startedAt)}</span></div>` : ""}
-          ${p.finishedAt ? `<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--green"></span><span>完工 ${fmtDateTime(p.finishedAt)}</span></div>` : ""}
-          ${p.startedAt && p.finishedAt ? `<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--gray"></span><span>时长 ${calcActualWorkDuration(p)}</span></div>` : ""}
+          ${buildCardActualTimeline(p)}
         </div>` : ""}
+
+        ${isAutoReviewed(p) ? `<div class="card-auto-stamp" title="系统自动审核（验收满设定时长后自动审核）">自动审核</div>` : ""}
 
         <div class="card-actions">
           <button class="btn small primary" onclick="openProjectFromCard('${p.id}')">🔧 施工管理</button>
@@ -6328,7 +6578,10 @@ function projectForm(p = {}) {
     <div class="form-row">
       <label><span style="color:var(--warn)">${svgCal(14)}</span> 预约时间 *</label>
       <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
-        <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" style="width:100%;" ${apptDisabled ? "disabled" : ""} />
+        <div style="display:flex;align-items:center;gap:6px;width:100%;">
+          ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-label">第1天</span>' : ''}
+          <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" style="flex:1;" ${apptDisabled ? "disabled" : ""} />
+        </div>
         <div style="display:flex;align-items:center;gap:6px;width:100%;">
           <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
           <select class="input" id="pTime" onchange="updateSpanHint()" style="flex:1;max-width:90px;" ${apptDisabled ? "disabled" : ""}>
@@ -6362,6 +6615,15 @@ function projectForm(p = {}) {
         </div>
       </div>
     </div>
+    <div id="segExtraList">
+      ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1
+        ? p.workSegments.slice(1).map((s, i) => segRowHtml(i + 2, s.date, s.start, s.end, apptDisabled)).join("")
+        : ""}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;flex-wrap:wrap;">
+      <button type="button" class="btn small" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ 添加一天（跨天施工）</button>
+      <span style="font-size:11px;color:#64748b;">每天各填一段施工时间，中间留休息/睡觉，时间线按天显示</span>
+    </div>
     <div class="form-row">
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
         <button class="btn small" onclick="setPTimeRange('twohour')" ${apptDisabled ? "disabled" : ""} style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:4px;padding:3px 8px;font-size:12px;">⏱️ 2小时</button>
@@ -6391,15 +6653,17 @@ function projectForm(p = {}) {
           <input class="input" type="number" min="0" step="0.5" id="pEst" value="${esc(p.estimatedHours ?? "")}" placeholder="0" style="width:auto;max-width:100px;" oninput="window._estDirty=true;updateSpanHint()" ${hoursDisabled ? "disabled" : ""} />
           <span style="font-size:12px;color:var(--muted)">人·小时</span>
         </div>
-        ${hoursDisabled ? (locked ? '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">🔒 ' + esc(lockMsg) + '</small>' : '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">⛔ 您没有「修改预约工时」权限，无法修改预约工时</small>') : '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#16a34a;">先填写总工时，方便计算结束时间</small>'}
+        ${hoursDisabled
+          ? (locked ? '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">🔒 ' + esc(lockMsg) + '</small>' : '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">⛔ 您没有「修改预约工时」权限，无法修改预约工时</small>')
+          : '<small id="pEstHint" class="hint" style="font-size:11px;margin:2px 0 0;color:#16a34a;">先填写总工时，方便计算结束时间</small>'}
       </div>
       <div class="form-row">
         <label><span style="color:var(--success)">👷</span> 施工人数</label>
         <div style="display:flex;align-items:center;gap:8px;">
-          <select class="input" id="pWorkers" onchange="autoCalcEndTime()" style="width:auto;max-width:100px;" ${basicDisabled ? "disabled" : ""}>
+          <select class="input" id="pWorkers" onchange="autoCalcEndTime();updateSpanHint();" style="width:auto;max-width:100px;" ${basicDisabled ? "disabled" : ""}>
             ${workerCountOptions(p)}
           </select>
-          <button class="btn small" onclick="autoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">计算</button>
+          <button id="pCalcBtn" class="btn small" onclick="autoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">计算</button>
         </div>
       </div>
     </div>
@@ -6521,7 +6785,10 @@ function quickEditProjectTimeForm(p = {}) {
   return `
     <div class="form-row">
       <label><span style="color:var(--warn)">${svgCal(14)}</span> 施工日期</label>
-      <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" style="width:100%;" />
+      <div style="display:flex;align-items:center;gap:6px;width:100%;">
+        ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-label">第1天</span>' : ''}
+        <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" style="flex:1;" />
+      </div>
     </div>
     <div class="form-row">
       <label>施工时间段</label>
@@ -6557,6 +6824,15 @@ function quickEditProjectTimeForm(p = {}) {
         </select>
       </div>
     </div>
+    <div id="segExtraList">
+      ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1
+        ? p.workSegments.slice(1).map((s, i) => segRowHtml(i + 2, s.date, s.start, s.end, apptDisabled)).join("")
+        : ""}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;flex-wrap:wrap;">
+      <button type="button" class="btn small" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ 添加一天（跨天施工）</button>
+      <span style="font-size:11px;color:#64748b;">每天各填一段施工时间，中间留休息/睡觉，时间线按天显示</span>
+    </div>
     <div class="form-row">
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
         <button class="btn small" onclick="setPTimeRange('twohour')" ${apptDisabled ? "disabled" : ""} style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:4px;padding:3px 8px;font-size:12px;">⏱️ 2小时</button>
@@ -6586,14 +6862,17 @@ function quickEditProjectTimeForm(p = {}) {
           <input class="input" type="number" min="0" step="0.5" id="pEst" value="${esc(p.estimatedHours ?? "")}" placeholder="0" style="width:auto;max-width:110px;" oninput="window._estDirty=true;updateSpanHint()" ${hoursDisabled ? "disabled" : ""} />
           <span style="font-size:12px;color:var(--muted);">人·小时</span>
         </div>
+        ${hoursDisabled
+          ? (locked ? '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">🔒 ' + esc(lockMsg) + '</small>' : '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">⛔ 您没有「修改预约工时」权限，无法修改预约工时</small>')
+          : '<small id="pEstHint" class="hint" style="font-size:11px;margin:2px 0 0;color:#16a34a;">先填写总工时，方便计算结束时间</small>'}
       </div>
       <div class="form-row">
         <label><span style="color:var(--success)">👷</span> 施工人数</label>
         <div style="display:flex;align-items:center;gap:8px;">
-          <select class="input" id="pWorkers" onchange="autoCalcEndTime()" style="width:auto;max-width:110px;">
+          <select class="input" id="pWorkers" onchange="autoCalcEndTime();updateSpanHint();" style="width:auto;max-width:110px;">
             ${workerCountOptions(p)}
           </select>
-          <button class="btn small" onclick="autoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">计算</button>
+          <button id="pCalcBtn" class="btn small" onclick="autoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">计算</button>
         </div>
       </div>
     </div>
@@ -6628,23 +6907,47 @@ async function saveQuickEditProjectTime(id) {
     return;
   }
 
-  const date = document.getElementById("pDate").value;
-  const time = document.getElementById("pTime").value;
-  const end = document.getElementById("pEnd").value;
-  if (!date) { toast("请选择施工日期"); return; }
-  if (!time) { toast("请选择开始时间"); return; }
-  if (!end) { toast("请选择结束时间"); return; }
+  // 跨天施工：收集所有分段（第1天 + 额外天），每段结束需晚于开始
+  const segs = (typeof readAllSegments === "function") ? readAllSegments() : [];
+  let fullTime, fullEnd, totalBookedHours, segPayload = null;
 
-  const fullTime = buildLocalDateTime(date, time);
-  const fullEnd = buildLocalDateTime(date, end);
-  if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
+  if (segs.length > 1) {
+    for (const s of segs) {
+      const st = new Date(`${s.date}T${s.start}`);
+      const en = new Date(`${s.date}T${s.end}`);
+      if (isNaN(st) || isNaN(en) || en <= st) { toast("每段结束时间需晚于开始时间"); return; }
+    }
+    const firstSeg = segs[0];
+    const lastSeg = segs[segs.length - 1];
+    fullTime = buildLocalDateTime(firstSeg.date, firstSeg.start);
+    fullEnd = buildLocalDateTime(lastSeg.date, lastSeg.end);
+    let tb = 0;
+    for (const s of segs) {
+      const st = new Date(`${s.date}T${s.start}`);
+      const en = new Date(`${s.date}T${s.end}`);
+      tb += (en - st) / (1000 * 60 * 60);
+    }
+    totalBookedHours = Math.round(tb * 10) / 10;
+    segPayload = segs;
+  } else {
+    const date = document.getElementById("pDate").value;
+    const time = document.getElementById("pTime").value;
+    const end = document.getElementById("pEnd").value;
+    if (!date) { toast("请选择施工日期"); return; }
+    if (!time) { toast("请选择开始时间"); return; }
+    if (!end) { toast("请选择结束时间"); return; }
+
+    fullTime = buildLocalDateTime(date, time);
+    fullEnd = buildLocalDateTime(date, end);
+    if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
+    totalBookedHours = (new Date(fullEnd) - new Date(fullTime)) / (1000 * 60 * 60);
+  }
 
   const workerCountInput = document.getElementById("pWorkers").value;
   if (!validateWorkerCount(workerCountInput)) { toast("施工人数必须在 1-8 之间"); return; }
   const workerCount = Number(workerCountInput);
   const inputEstHours = Number(document.getElementById("pEst").value) || 0;
-  const durationHours = (new Date(fullEnd) - new Date(fullTime)) / (1000 * 60 * 60);
-  const autoEstHours = Math.round(durationHours * workerCount * 10) / 10;
+  const autoEstHours = Math.round(totalBookedHours * workerCount * 10) / 10;
   // 未填写总工时，或用户未手动改动过工时字段时，自动按 施工时长 × 人数 计算；
   // 无「修改预约工时」权限时后续会强制保持原值
   const estimatedHours = (inputEstHours <= 0 || !window._estDirty) ? autoEstHours : inputEstHours;
@@ -6656,11 +6959,13 @@ async function saveQuickEditProjectTime(id) {
     estimatedHours,
     workerCount,
   };
+  if (segPayload) payload.workSegments = segPayload;
 
   // 权限细化：无「修改预约时间」/「修改预约工时」权限时，强制保持原值（即使表单被绕过也安全）
   if (!perm.editAppointment(p)) {
     payload.appointmentTime = p.appointmentTime;
     payload.endTime = p.endTime;
+    if (segPayload) payload.workSegments = p.workSegments; // 分段决定预约时间，无权限时回退原值
   }
   if (!perm.editHours(p)) {
     payload.estimatedHours = p.estimatedHours;
@@ -6700,21 +7005,32 @@ async function saveProject(id) {
   const date = document.getElementById("pDate").value;
   const time = document.getElementById("pTime").value;
   const end = document.getElementById("pEnd").value;
-  const crossDayEl = document.getElementById("pCrossDay");
   if (!name) { toast("请填写项目名称"); return; }
   if (!date) { toast("请选择预约日期"); return; }
   if (!time) { toast("请选择开始时间"); return; }
   if (!end) { toast("请选择结束时间"); return; }
-  
-  const endDateEl = document.getElementById("pEndDate");
-  let endDate = endDateEl ? endDateEl.value : "";
-  if (!crossDayEl?.checked || !endDate) {
-    endDate = date;
+
+  // 跨天施工：收集所有分段（第1天 + 额外天），每段结束需晚于开始
+  const segs = readAllSegments();
+  if (!segs.length) { toast("请填写预约时间"); return; }
+  for (const s of segs) {
+    const st = new Date(`${s.date}T${s.start}`);
+    const en = new Date(`${s.date}T${s.end}`);
+    if (isNaN(st) || isNaN(en) || en <= st) { toast("每段结束时间需晚于开始时间"); return; }
   }
-  
-  const fullTime = buildLocalDateTime(date, time);
-  const fullEnd = buildLocalDateTime(endDate, end);
-  if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
+  const firstSeg = segs[0];
+  const lastSeg = segs[segs.length - 1];
+  const fullTime = buildLocalDateTime(firstSeg.date, firstSeg.start);
+  const fullEnd = buildLocalDateTime(lastSeg.date, lastSeg.end);
+
+  // 总预约施工时长（各段之和，跨天按真实施工工时计）
+  let totalBookedHours = 0;
+  for (const s of segs) {
+    const st = new Date(`${s.date}T${s.start}`);
+    const en = new Date(`${s.date}T${s.end}`);
+    totalBookedHours += (en - st) / (1000 * 60 * 60);
+  }
+  totalBookedHours = Math.round(totalBookedHours * 10) / 10;
   const storeEl = document.getElementById("pStore");
   let storeId = storeEl ? storeEl.value : "";
   if (isStoreManager() && myStore() != null && myStore() !== "") storeId = myStore();
@@ -6729,8 +7045,8 @@ async function saveProject(id) {
   const inputEstHours = Number(document.getElementById("pEst").value) || 0;
   const startTime = new Date(fullTime);
   const endTime = new Date(fullEnd);
-  const durationHours = (endTime - startTime) / (1000 * 60 * 60);
-  const autoEstHours = Math.round(durationHours * workerCount * 10) / 10;
+  const durationHours = totalBookedHours; // 总预约时长（各段之和）
+  const autoEstHours = Math.round(totalBookedHours * workerCount * 10) / 10;
   
   let estimatedHours = inputEstHours;
   let autoCalculated = false;
@@ -6754,6 +7070,7 @@ async function saveProject(id) {
     address: document.getElementById("pAddress").value.trim(),
     appointmentTime: fullTime,
     endTime: fullEnd,
+    workSegments: segs,
     estimatedHours,
     workerCount,
     status: document.getElementById("pStatus").value,
@@ -6775,6 +7092,7 @@ async function saveProject(id) {
       payload.appointmentTime = _ex.appointmentTime;
       payload.endTime = _ex.endTime;
       payload.estimatedHours = _ex.estimatedHours;
+      payload.workSegments = _ex.workSegments; // 跨天分段同样锁定，避免绕过
     }
   }
 
@@ -6784,6 +7102,7 @@ async function saveProject(id) {
     if (_ex && !perm.editAppointment(_ex)) {
       payload.appointmentTime = _ex.appointmentTime;
       payload.endTime = _ex.endTime;
+      payload.workSegments = _ex.workSegments;
     }
     if (_ex && !perm.editHours(_ex)) {
       payload.estimatedHours = _ex.estimatedHours;
@@ -7706,7 +8025,7 @@ function renderConstruction() {
         </label>
         <span class="rework-pay-hint">取消勾选：仅作成本核算，不计入工人工资</span>
       </div>` : ""}
-      ${(canEdit || canReview || perm.editWorkLog(p) || (reviewed && perm.unreviewProject(p)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p))) ? `
+      ${(canEdit || canReview || (perm.editWorkLog(p) && (p.workLogs || []).length > 0) || (reviewed && perm.unreviewProject(p)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p))) ? `
       <div class="action-groups">
         <!-- 状态流转操作 -->
         <div class="action-group">
@@ -7740,14 +8059,14 @@ function renderConstruction() {
         </div>
 
         <!-- 已完工/已验收/已审核后的操作：合并到同一 action-group，移动端横向排列 -->
-        ${(canReview && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p)) || (perm.editWorkLog(p) && (p.workLogs || []).length > 0) || (reviewed && perm.unreviewProject(p)) ? `
+        ${(canReview && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p)) || (reviewed && perm.unreviewProject(p)) || (perm.editWorkLog(p) && (p.workLogs || []).length > 0) ? `
         <div class="action-group action-group--post-completion">
-          ${canReview && !reviewed && p.status === STATUS.DONE ? `<button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>` : ""}
+          ${canReview && !reviewed && p.status === STATUS.DONE ? `<button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>${!ac && perm.acceptProject(p) ? `<button class="btn small outline" onclick="openAcceptance('${p.id}')">📋 验收登记</button>` : ""}` : ""}
           ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `<button class="btn small success" onclick="reviewProject('${p.id}')">🔍 审核项目</button>` : ""}
           ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `<button class="btn small outline" onclick="openRepairOrderForm('${p.id}')">🔧 发起维修</button>` : ""}
           ${[STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `<button class="btn small" onclick="reworkProject('${p.id}')">🔄 发起返工</button>` : ""}
-          ${perm.editWorkLog(p) && (p.workLogs || []).length > 0 ? `<button class="btn small ${isReviewed(p) ? 'warning' : ''}" onclick="openEditWorkHoursForm('${p.id}')">✏️ 修改工时</button>` : ""}
           ${reviewed && perm.unreviewProject(p) ? `<button class="btn small warning" onclick="unreviewProject('${p.id}')">↩ 反审核</button>` : ""}
+          ${perm.editWorkLog(p) && (p.workLogs || []).length > 0 ? `<button class="btn small ${isReviewed(p) ? 'warning' : ''}" onclick="openEditWorkHoursForm('${p.id}')">✏️ 修改工时</button>` : ""}
         </div>` : ""}
       </div>` : ""}
     </div>
@@ -7779,13 +8098,13 @@ function renderConstruction() {
           </div>` : ""}
           ${(ro.status === "待维修") ? `
           <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
-            ${perm.completeRepair() ? `<button class="btn primary" onclick="completeRepair('${p.id}','${ro.id}')">✅ 完成维修</button>` : ""}
-            ${perm.createRepair() ? `<button class="btn" onclick="openRepairReschedule('${p.id}','${ro.id}')">📅 改期</button>` : ""}
-            ${perm.createRepair() ? `<button class="btn danger" onclick="deleteRepairOrder('${p.id}','${ro.id}')">🗑 删除</button>` : ""}
+            ${perm.completeRepair() ? `<button class="btn small success" onclick="completeRepair('${p.id}','${ro.id}')">✅ 完成</button>` : ""}
+            ${perm.createRepair() ? `<button class="btn small" onclick="openRepairReschedule('${p.id}','${ro.id}')">📅 改期</button>` : ""}
+            ${perm.createRepair() ? `<button class="btn small danger" onclick="deleteRepairOrder('${p.id}','${ro.id}')">🗑 删除</button>` : ""}
           </div>` : ""}
         </div>
       `).join("")}
-      ${perm.createRepair() ? `<div class="card-actions"><button class="btn outline" onclick="openRepairOrderForm('${p.id}')">🔄 再发起维修单</button></div>` : ""}
+      ${perm.createRepair() ? `<div class="card-actions" style="margin-top:10px;"><button class="btn small outline" onclick="openRepairOrderForm('${p.id}')">🔄 再发起</button></div>` : ""}
     </div>` : ""}
 
     ${assignBlock}
@@ -8179,7 +8498,7 @@ function renderConstruction() {
 
     ${showAcceptance ? `
     <div class="detail-block">
-      <h3>✅ 验收信息</h3>
+      <h3 style="justify-content:space-between">✅ 验收信息${canEdit ? `<button class="btn small" style="flex-shrink:0" onclick="openAcceptance('${p.id}')">✏️ 修改</button>` : ""}</h3>
       ${ac ? `
         <div class="info-grid">
           <div class="info-item"><div class="k">验收人</div><div class="v">${esc(ac.acceptedBy)}</div></div>
@@ -8197,10 +8516,8 @@ function renderConstruction() {
           </div>
         </div>` : ""}
         <div class="info-item" style="margin-top:10px"><div class="k">验收备注</div><div class="v" style="font-weight:400">${esc(ac.note || "—")}</div></div>
-        ${canEdit ? `<div class="card-actions"><button class="btn small" onclick="openAcceptance('${p.id}')">修改验收</button></div>` : ""}
       ` : (canEdit ? `
-        <p class="hint" style="margin:0 0 10px">项目完成后填写验收信息。</p>
-        <button class="btn primary" onclick="openAcceptance('${p.id}')">填写验收信息</button>
+        <p class="hint" style="margin:0">项目完成后，可在上方操作区「验收登记」填写验收信息。</p>
       ` : `<p class="hint" style="margin:0">暂无验收信息。</p>`)}
     </div>` : ``}
   `;
@@ -9938,7 +10255,6 @@ async function confirmRework(id) {
         startedAt: null,
         finishedAt: null,
         reviewedAt: null,
-        acceptedAt: null,
         acceptance: null,
       });
       const p2 = getProject(p.id);
@@ -9954,7 +10270,6 @@ async function confirmRework(id) {
         startedAt: null,
         finishedAt: null,
         reviewedAt: null,
-        acceptedAt: null,
         acceptance: null,
       });
       modal.close();
@@ -10713,10 +11028,13 @@ function generateWorkerScheduleDescription(dateStr = null) {
   
   const allTodayProjects = cache.projects.filter(p => {
     if (p.status === STATUS.CANCELLED) return false; // 已取消项目不计入"今日"运营视图
-    const pStart = projectStart(p);
-    if (!pStart) return false;
-    return dateKey(pStart) === dateStrFormatted;
-  }).sort((a, b) => projectStart(a) - projectStart(b));
+    return !!projectSegOnDate(p, dateStrFormatted);
+  }).sort((a, b) => {
+    const sa = projectSegOnDate(a, dateStrFormatted);
+    const sb = projectSegOnDate(b, dateStrFormatted);
+    if (!sa || !sb) return 0;
+    return sa.start - sb.start;
+  });
   
   const todayProjects = allTodayProjects.filter(p => !isCompleted(p));
   
@@ -11297,6 +11615,25 @@ function generateWorkerScheduleDescription(dateStr = null) {
     if (!isSaved && !isOver && totalEstimatedHours > 0) description += `<span class="sched-hours-legend remaining"><span class="legend-dot"></span>剩余 ${hoursRemaining.toFixed(1)}h</span>`;
     if (internalActualHours > 0) description += `<span class="sched-hours-legend internal"><span class="legend-dot"></span>内务 ${internalActualHours.toFixed(1)}h</span>`;
     description += `</div>`;
+
+    // 跨天项目：列出各项目的计划/实际工时，避免单看汇总被 0 或超大数字误导
+    const crossDayProjects = allTodayProjects.filter(p => Array.isArray(p.workSegments) && p.workSegments.length > 1);
+    if (crossDayProjects.length > 0) {
+      description += '<div class="sched-hours-crossday" style="margin-top:10px;padding:8px 10px;background:#f8fafc;border-radius:6px;border-left:3px solid #6366f1;">';
+      description += '<div style="font-size:12px;font-weight:600;color:#4f46e5;margin-bottom:6px;">📅 跨天项目实际工时明细</div>';
+      crossDayProjects.forEach(p => {
+        const est = Number(p.estimatedHours) || 0;
+        const actual = calcProjectActualPersonHours(p);
+        const segs = getBookedSegments(p);
+        const durationText = segs.map(s => `${dateKey(s.start)} ${s.startHM}~${s.endHM}`).join('、');
+        description += `<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f1f5f9;gap:8px;">
+          <span style="color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(durationText)}">${esc(p.name)} <span style="color:#94a3b8;">${esc(durationText)}</span></span>
+          <span style="font-weight:500;color:${actual > 0 ? (actual > est ? '#dc2626' : '#16a34a') : '#94a3b8'};flex-shrink:0;">${actual.toFixed(1)} / ${est.toFixed(1)} h</span>
+        </div>`;
+      });
+      description += '</div>';
+    }
+
     description += `</div>`;
 
     
@@ -11323,8 +11660,19 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const storeName = store ? store.name : "未知门店";
       const pStart = projectStart(p);
       const pEnd = projectEnd(p);
-      const startTime = pStart ? `${String(pStart.getHours()).padStart(2, "0")}:${String(pStart.getMinutes()).padStart(2, "0")}` : "08:00";
-      const endTime = pEnd ? `${String(pEnd.getHours()).padStart(2, "0")}:${String(pEnd.getMinutes()).padStart(2, "0")}` : "12:00";
+      const isCrossDayTrack = Array.isArray(p.workSegments) && p.workSegments.length > 1;
+      const segs = isCrossDayTrack ? getBookedSegments(p) : [];
+      const todaySeg = isCrossDayTrack ? projectSegOnDate(p, dateStrFormatted) : null;
+      // 跨天项目在按天视图中显示：第几天 / 共几天 + 当天施工时段
+      let trackTimeText;
+      if (isCrossDayTrack && todaySeg && segs.length > 1) {
+        const dayIndex = segs.findIndex(s => s.date === todaySeg.date) + 1;
+        trackTimeText = `第${dayIndex}天 · ${todaySeg.startHM}~${todaySeg.endHM}`;
+      } else {
+        const startTime = pStart ? `${String(pStart.getHours()).padStart(2, "0")}:${String(pStart.getMinutes()).padStart(2, "0")}` : "08:00";
+        const endTime = pEnd ? `${String(pEnd.getHours()).padStart(2, "0")}:${String(pEnd.getMinutes()).padStart(2, "0")}` : "12:00";
+        trackTimeText = `${startTime} ~ ${endTime}`;
+      }
       
       let statusText = p.status;
       let statusColor = "#6b7280";
@@ -11444,10 +11792,11 @@ function generateWorkerScheduleDescription(dateStr = null) {
           <div class="schedule-progress-header" onclick="toggleProgressDetail(this)" data-pid="${esc(p.id)}">
             <div class="schedule-progress-title">
               <span class="schedule-progress-name" style="cursor:pointer;">${esc(p.name)}</span>
+              ${isCrossDayTrack && todaySeg && segs.length > 1 ? `<span class="badge crossday" style="margin-left:6px;font-size:10px;padding:1px 7px;">📅 第${segs.findIndex(s => s.date === todaySeg.date) + 1}天/共${segs.length}天</span>` : ""}
               <span class="schedule-progress-store">${esc(storeName)}</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-              <span class="schedule-progress-time">${startTime} ~ ${endTime} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
+              <span class="schedule-progress-time">${trackTimeText} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
               <span class="progress-toggle-icon">▶</span>
             </div>
           </div>
@@ -11788,6 +12137,12 @@ function openCompleteProjectForm(id) {
   // 疑似忘点完工：系统自动算出的工时含忘记点完工期间的空闲/过夜时间，不可直接采用
   const forgottenInfo = getForgottenCompleteInfo(p);
 
+  // 跨天项目提前完工提示：预约还没到末天结束时间就点完工，应改用暂停/恢复流程
+  const bookedSegs = getBookedSegments(p);
+  const isCrossDay = bookedSegs.length > 1;
+  const lastSeg = isCrossDay ? bookedSegs[bookedSegs.length - 1] : null;
+  const crossDayEarlyInfo = isCrossDay && lastSeg && new Date() < lastSeg.end;
+
   const assignedWorkerIds = p.assignedWorkerIds || [];
   const allWorkerIds = new Set([...assignedWorkerIds]);
   
@@ -11855,6 +12210,25 @@ function openCompleteProjectForm(id) {
           <div style="font-size:12px;color:#7f1d1d;line-height:1.6;">
             该项目已「<b>${esc(forgottenInfo.text)}</b>」却仍显示「施工中」。系统按"当前时刻 − 开工时间"自动算出的工时会<b>包含忘记点完工期间的空闲/过夜时间，不等于实际施工工时</b>，不能直接填入。<br>
             请在下方<b>逐人手动填写真实工时</b>；不修改直接确认将无法通过校验。
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  if (crossDayEarlyInfo) {
+    const lastEndStr = `${esc(dateKey(lastSeg.end))} ${esc(lastSeg.endHM)}`;
+    form += `<div class="form-row" style="grid-column:1/-1;background:#fff7ed;padding:12px 14px;border-radius:8px;border-left:4px solid #ea580c;margin-bottom:12px;">
+      <div style="display:flex;align-items:flex-start;gap:8px;">
+        <span style="font-size:18px;line-height:1.2;">📅</span>
+        <div>
+          <div style="font-weight:600;color:#c2410c;font-size:13px;margin-bottom:4px;">跨天项目 · 尚未到预约最后一天</div>
+          <div style="font-size:12px;color:#9a3412;line-height:1.6;">
+            该项目为跨天施工，预约到 <b>${lastEndStr}</b> 才结束，当前还没到。<br>
+            请确认是否真的提前完工：<br>
+            · 若当天施工已结束、后面还要继续，应点<b>「暂停」</b>而非完工；<br>
+            · 次日开工后点<b>「恢复」</b>，最后一天再点<b>「完工」</b>。<br>
+            若确实今天就要结束全部施工，请<b>逐人手动填写真实工时</b>，不要依赖系统自动计算。
           </div>
         </div>
       </div>
@@ -12019,50 +12393,54 @@ function openCompleteProjectForm(id) {
     });
     window._completeWorkerAutoHours = allAutoHours;
     
-    const defaultAlloc = [0, 0, 80, 20];
-    const sliderRows = WORK_TYPES.map((t, i) => {
-      const isFixed = i === 3; // 路程备料固定占 20%
-      return `
-      <div class="alloc-row">
-        <div class="alloc-label">${t}${isFixed ? ' <span style="font-size:11px;color:#9ca3af;">(固定)</span>' : ''} <span class="alloc-pct" id="completeAllocPct${i}">${defaultAlloc[i]}%</span></div>
-        <input type="range" min="0" max="100" value="${defaultAlloc[i]}" id="completeAllocSlider${i}" ${isFixed ? 'disabled' : `oninput="onCompleteSliderInput(${i})"`} class="alloc-slider" />
-        <div class="alloc-hours" id="completeAllocHours${i}">0h</div>
+    // 疑似忘点完工 / 跨天提前完工：系统自动估算的工时不可靠，禁止用滑块自动分配，只能逐人手动填写
+    if (!forgottenInfo && !crossDayEarlyInfo) {
+      const defaultAlloc = [0, 0, 80, 20];
+      const sliderRows = WORK_TYPES.map((t, i) => {
+        const isFixed = i === 3; // 路程备料固定占 20%
+        return `
+        <div class="alloc-row">
+          <div class="alloc-label">${t}${isFixed ? ' <span style="font-size:11px;color:#9ca3af;">(固定)</span>' : ''} <span class="alloc-pct" id="completeAllocPct${i}">${defaultAlloc[i]}%</span></div>
+          <input type="range" min="0" max="100" value="${defaultAlloc[i]}" id="completeAllocSlider${i}" ${isFixed ? 'disabled' : `oninput="onCompleteSliderInput(${i})"`} class="alloc-slider" />
+          <div class="alloc-hours" id="completeAllocHours${i}">0h</div>
+        </div>`;
+      }).join("");
+      form += `<div class="form-row" style="grid-column:1/-1;">
+        <div class="alloc-form" style="width:100%;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <label style="font-weight:500;">自动分配比例</label>
+            <span style="font-size:12px;color:#6b7280;">拖动滑块，按实际工作时长自动分配各等级工时</span>
+          </div>
+          <div class="alloc-presets" style="margin-bottom:8px;">
+            <button type="button" class="chip" onclick="applyCompletePreset([0,0,80,20])">地面为主</button>
+            <button type="button" class="chip" onclick="applyCompletePreset([80,0,0,20])">高空为主</button>
+            <button type="button" class="chip" onclick="applyCompletePreset([0,80,0,20])">高级为主</button>
+            <button type="button" class="chip" onclick="applyCompletePreset([27,27,26,20])">均衡</button>
+          </div>
+          <div class="alloc-sliders">${sliderRows}</div>
+          <div class="alloc-summary">
+            预计总工时 <span id="completeAllocTotal" data-total="${totalAutoHours.toFixed(1)}">${totalAutoHours.toFixed(1)}h</span>
+            · 占比之和 <span id="completeAllocSumPct">100%</span>
+            · 分配合计 <span id="completeAllocSumHours">0.0h</span>
+          </div>
+          <small style="font-size:11px;color:#9ca3af;">路程备料固定占 20%，其余在 高空/高级/地面 间分配；默认按地面施工比例（80%地面 + 20%路程备料），高空、高级默认为 0，仅点对应预设才激活。</small>
+          <button type="button" class="btn primary small" onclick="applyCompleteAllocToAll()" style="margin-top:8px;align-self:flex-start;">应用到所有施工人员</button>
+        </div>
       </div>`;
-    }).join("");
-    form += `<div class="form-row" style="grid-column:1/-1;">
-      <div class="alloc-form" style="width:100%;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-          <label style="font-weight:500;">自动分配比例</label>
-          <span style="font-size:12px;color:#6b7280;">拖动滑块，按实际工作时长自动分配各等级工时</span>
-        </div>
-        <div class="alloc-presets" style="margin-bottom:8px;">
-          <button type="button" class="chip" onclick="applyCompletePreset([0,0,80,20])">地面为主</button>
-          <button type="button" class="chip" onclick="applyCompletePreset([80,0,0,20])">高空为主</button>
-          <button type="button" class="chip" onclick="applyCompletePreset([0,80,0,20])">高级为主</button>
-          <button type="button" class="chip" onclick="applyCompletePreset([27,27,26,20])">均衡</button>
-        </div>
-        <div class="alloc-sliders">${sliderRows}</div>
-        <div class="alloc-summary">
-          预计总工时 <span id="completeAllocTotal" data-total="${totalAutoHours.toFixed(1)}">${totalAutoHours.toFixed(1)}h</span>
-          · 占比之和 <span id="completeAllocSumPct">100%</span>
-          · 分配合计 <span id="completeAllocSumHours">0.0h</span>
-        </div>
-        <small style="font-size:11px;color:#9ca3af;">路程备料固定占 20%，其余在 高空/高级/地面 间分配；默认按地面施工比例（80%地面 + 20%路程备料），高空、高级默认为 0，仅点对应预设才激活。</small>
-        <button type="button" class="btn primary small" onclick="applyCompleteAllocToAll()" style="margin-top:8px;align-self:flex-start;">应用到所有施工人员</button>
-      </div>
-    </div>`;
+    }
     
     form += `<div class="form-row" style="grid-column:1/-1;">
       <label>施工人员工时</label>
       <span style="font-size:12px;color:#6b7280;">根据实际工作时间填写</span>
     </div>`;
     
-    form += `<div class="form-row" style="grid-column:1/-1;background:${forgottenInfo ? '#fef2f2' : '#f0fdf4'};padding:10px;border-radius:6px;border-left:4px solid ${forgottenInfo ? '#dc2626' : '#22c55e'};margin-bottom:8px;">
+    const hintUnreliable = forgottenInfo || crossDayEarlyInfo;
+    form += `<div class="form-row" style="grid-column:1/-1;background:${hintUnreliable ? '#fef2f2' : '#f0fdf4'};padding:10px;border-radius:6px;border-left:4px solid ${hintUnreliable ? '#dc2626' : '#22c55e'};margin-bottom:8px;">
       <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:12px;">
-        <div><span style="color:#6b7280;">${forgottenInfo ? '系统估算总时长（不可靠）' : '总工作时长'}：</span><span style="font-weight:600;color:${forgottenInfo ? '#b91c1c' : '#15803d'};">${totalAutoHours.toFixed(1)} 小时</span>${forgottenInfo ? ' <span style="font-size:11px;color:#dc2626;">⚠️含忘记点完工时段</span>' : ''}</div>
-        <div><span style="color:#6b7280;">施工人数：</span><span style="font-weight:600;color:${forgottenInfo ? '#b91c1c' : '#15803d'};">${workers.length} 人</span></div>
+        <div><span style="color:#6b7280;">${hintUnreliable ? '系统估算总时长（不可靠）' : '总工作时长'}：</span><span style="font-weight:600;color:${hintUnreliable ? '#b91c1c' : '#15803d'};">${totalAutoHours.toFixed(1)} 小时</span>${hintUnreliable ? ' <span style="font-size:11px;color:#dc2626;">⚠️请逐人手动填写</span>' : ''}</div>
+        <div><span style="color:#6b7280;">施工人数：</span><span style="font-weight:600;color:${hintUnreliable ? '#b91c1c' : '#15803d'};">${workers.length} 人</span></div>
       </div>
-      <div style="margin-top:4px;font-size:11px;color:${forgottenInfo ? '#b91c1c' : '#86efac'};">${forgottenInfo ? '⚠️ 此估算包含忘记点完工的空闲/过夜时间，不等于实际工时，请逐人手动填写真实工时' : '💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整'}</div>
+      <div style="margin-top:4px;font-size:11px;color:${hintUnreliable ? '#b91c1c' : '#86efac'};">${hintUnreliable ? '⚠️ 系统估算可能包含非实际施工时段，不等于真实工时，请逐人手动填写' : '💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整'}</div>
     </div>`;
     
     workers.forEach((w, idx) => {
@@ -12084,9 +12462,11 @@ function openCompleteProjectForm(id) {
         }
         let segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
         let segNote = autoHours > 0 ? "系统自动计算" : "";
-        // 疑似忘点完工：自动工时含空闲/过夜时间不可靠，清空并提示手动填写真实工时
-        if (forgottenInfo) { segHours = ""; segNote = "⚠️请填真实工时"; }
         segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
+      }
+      // 疑似忘点完工：系统内任何工时（含当日已登记记录、自动估算）均可能包含空闲/过夜时间，不可靠，强制清空并要求逐人手动填写真实工时
+      if (forgottenInfo) {
+        segs = [{ type: "地面施工", level: "中级", hours: "", note: "⚠️请填真实工时" }];
       }
 
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
@@ -12094,10 +12474,10 @@ function openCompleteProjectForm(id) {
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
             <span style="min-width:80px;font-weight:500;flex-shrink:0;color:${isAssigned ? "#1f2937" : "#9ca3af"};">👷 ${esc(w.name)}${!isAssigned ? ` <span style="font-size:11px;color:#d1d5db;">(已移除)</span>` : ""}</span>
             <button type="button" class="btn small" onclick="addWorkerSeg(${idx},'w')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
-            <button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'w')" style="padding:2px 8px;font-size:12px;">设置比例</button>
+            ${(forgottenInfo || crossDayEarlyInfo) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'w')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
           </div>
           <div class="worker-alloc-panel" id="walloc_${idx}" style="display:none; margin-bottom:8px;">
-            ${workerAllocPanelHtml("walloc" + idx, idx, "w", w.name, workerAutoHours[w.id] || 0)}
+            ${workerAllocPanelHtml("walloc" + idx, idx, "w", w.name, (forgottenInfo || crossDayEarlyInfo) ? 0 : (workerAutoHours[w.id] || 0))}
           </div>
           <div class="worker-segs" id="wsegs_${idx}">
             ${segs.map(s => workerSegRowHtml(s)).join("")}
@@ -12128,8 +12508,11 @@ function openCompleteProjectForm(id) {
         const autoHours = window._completeWorkerAutoHours[workerId] || 0;
         let segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
         let segNote = autoHours > 0 ? "系统自动计算" : "";
-        if (forgottenInfo) { segHours = ""; segNote = "⚠️请填真实工时"; }
         segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
+      }
+      // 疑似忘点完工：系统内任何工时（含当日已登记记录、自动估算）均可能包含空闲/过夜时间，不可靠，强制清空并要求逐人手动填写真实工时
+      if (forgottenInfo) {
+        segs = [{ type: "地面施工", level: "中级", hours: "", note: "⚠️请填真实工时" }];
       }
 
       form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
@@ -12137,10 +12520,10 @@ function openCompleteProjectForm(id) {
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
             <span style="min-width:80px;font-weight:500;flex-shrink:0;color:#8b5cf6;">👤 ${esc(name)}（外协）</span>
             <button type="button" class="btn small" onclick="addWorkerSeg(${idx},'o')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
-            <button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'o')" style="padding:2px 8px;font-size:12px;">设置比例</button>
+            ${(forgottenInfo || crossDayEarlyInfo) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'o')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
           </div>
           <div class="worker-alloc-panel" id="oalloc_${idx}" style="display:none; margin-bottom:8px;">
-            ${workerAllocPanelHtml("oalloc" + idx, idx, "o", name, window._completeWorkerAutoHours[workerId] || 0)}
+            ${workerAllocPanelHtml("oalloc" + idx, idx, "o", name, (forgottenInfo || crossDayEarlyInfo) ? 0 : (window._completeWorkerAutoHours[workerId] || 0))}
           </div>
           <div class="worker-segs" id="osegs_${idx}">
             ${segs.map(s => workerSegRowHtml(s)).join("")}
@@ -12235,6 +12618,14 @@ function openCompleteProjectForm(id) {
           const pauseTimeStr = pauseHours > 0 ? `${pauseHours}小时${pauseMins}分钟` : `${pauseMins}分钟`;
           const confirmHtml = `该项目施工过程中曾暂停 ${pauseCount} 次，累计暂停 ${pauseTimeStr}，已从总用时中扣除。<br><br>确认要完成该项目吗？`;
           if (!(await confirmDialog(confirmHtml, "确认完工"))) {
+            return false;
+          }
+        }
+
+        if (crossDayEarlyInfo) {
+          const lastEndStr = `${dateKey(lastSeg.end)} ${lastSeg.endHM}`;
+          const confirmHtml2 = `该项目为跨天施工，当前尚未到预约的最后一天（${lastEndStr}）。<br><br>若今天施工已结束、后面还要继续，应点「暂停」而非完工；第二天开工后点「恢复」，最后一天再完工。<br><br>确认要提前完工吗？`;
+          if (!(await confirmDialog(confirmHtml2, "确认提前完工"))) {
             return false;
           }
         }
@@ -12830,10 +13221,17 @@ function collectProjectStats() {
         });
       }
       const autoHours = autoWorkerHours.reduce((sum, w) => sum + w.hours, 0);
-      const notes = (p.workLogs || [])
+      const noteLogs = (p.workLogs || [])
         .filter(l => l.note && l.note.trim() && (!workerFilter || l.workerId === workerFilter))
-        .map(l => (l.workerName || "未知") + "：" + l.note.trim())
-        .join("；");
+        .map(l => {
+          let note = l.note.trim();
+          if (note.includes("系统自动计算")) note = "系统自动计算";
+          return { name: l.workerName || "未知", note };
+        });
+      const allAuto = noteLogs.length > 0 && noteLogs.every(l => l.note === "系统自动计算");
+      const notes = allAuto
+        ? "系统自动计算"
+        : noteLogs.map(l => l.name + "：" + l.note).join("；");
       return {
         id: p.id,
         name: p.name,
@@ -13230,13 +13628,13 @@ function openReminderSettingsModal() {
       </div>
       <div class="modal-body" style="padding:14px;">
         <p style="color:#666;margin-bottom:14px;font-size:12px;line-height:1.6;">
-          项目被点「开工」后，若<b>连续施工</b>超过设定时长仍未点「完工」，会在「项目预约」列表自动置顶并标红提醒（中途暂停施工不计时长，适合需要多天完成的工程）。<br/>
-          <b style="color:#b45309;">此为全局设置，由总经理统一调整，对全体成员的提醒标准一致。</b>
+          项目被点「开工」后，若<b>连续施工</b>超过阈值仍未点「完工」，会在「项目预约」列表自动置顶并标红提醒（中途暂停施工不计时长）。<br/>
+          <b style="color:#b45309;">判断时优先对比「预约施工时长」：实际工时超过「预约时长 + 误差余量（预约时长×50%＋2小时）」才视为异常；无预约时长信息时，按下方设定值判断。夜间预约（22:00~次日6:00 或跨午夜）跨午夜属正常，不误报。</b>
         </p>
         <div style="display:flex;flex-direction:column;gap:6px;">
           <label style="font-weight:bold;font-size:13px;">连续施工超过（小时）提醒</label>
           <input type="number" id="workTimeoutHoursInput" value="${WORKING_TIMEOUT_HOURS}" class="input" min="1" max="168" placeholder="12" style="font-size:14px;padding:8px 10px;width:100%;box-sizing:border-box;" />
-          <span style="color:#999;font-size:11px;">建议 10–12 小时（一个满工作日+加班）。范围 1–168。</span>
+          <span style="color:#999;font-size:11px;">仅当项目无「预约时长」时生效，作为兜底阈值。建议 10–12 小时。范围 1–168。</span>
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;margin-top:14px;border-top:1px solid #eee;padding-top:14px;">
           <label style="font-weight:bold;font-size:13px;">验收后自动审核（小时）</label>
@@ -14593,6 +14991,7 @@ async function exportStats() {
   const totalEst = projRecorded.reduce((s, r) => s + r.est, 0);
   const totalAct = projRecorded.reduce((s, r) => s + r.act, 0);
   const totalDiff = totalAct - totalEst;
+  const totalReworkAct = projRows.reduce((s, r) => s + (r.reworkHours || 0), 0);
 
   const internalRows = rows.filter(r => !r.isOutsourced);
   const lowEfficiencyWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
@@ -14617,15 +15016,88 @@ async function exportStats() {
     return true;
   }
 
-  const titleStyle = { font: { bold: true, size: 14, color: { argb: 'FF1F2937' } }, alignment: { horizontal: 'center' } };
-  const infoStyle = { font: { size: 11 }, alignment: { vertical: 'middle' } };
-  const sectionTitleStyle = { font: { bold: true, size: 12, color: { argb: 'FF4F46E5' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF2FF' } }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
-  const headerStyle = { font: { bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
-  const totalStyle = { font: { bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
-  const dataStyle = { alignment: { vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
-  const numStyle = { alignment: { horizontal: 'right', vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
-  const leaveStyle = { font: { color: { argb: 'FFFF0000' } }, alignment: { vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
-  const highlightStyle = { font: { bold: true, color: { argb: 'FFDC2626' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } } };
+  // ===== Excel 主题与样式工具 =====
+  // 方案A：去掉单元格框线，仅表头下方/合计上方保留粗分隔线，行与行靠斑马纹区分
+  const thinLine = { style: 'thin', color: { argb: 'FFD1D5DB' } };
+  const borderThin = { top: thinLine, left: thinLine, bottom: thinLine, right: thinLine };
+  const borderHeader = { top: thinLine, left: thinLine, bottom: { style: 'medium', color: { argb: 'FF1E3A8A' } }, right: thinLine };
+  const borderTotal = { top: { style: 'medium', color: { argb: 'FF1E3A8A' } }, left: thinLine, bottom: thinLine, right: thinLine };
+  const titleStyle = { font: { bold: true, size: 16, color: { argb: 'FF1E3A8A' } }, alignment: { horizontal: 'center', vertical: 'middle' } };
+  const infoStyle = { font: { size: 11, color: { argb: 'FF374151' } }, alignment: { vertical: 'middle' } };
+  const sectionTitleStyle = { font: { bold: true, size: 12, color: { argb: 'FF1E3A8A' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } }, alignment: { horizontal: 'left', vertical: 'middle' }, border: borderThin };
+  const headerStyle = { font: { bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } }, alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }, border: borderHeader };
+  const totalStyle = { font: { bold: true, color: { argb: 'FF1F2937' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderTotal };
+  const dataStyle = { font: { color: { argb: 'FF374151' } }, alignment: { vertical: 'middle', wrapText: true }, border: borderThin };
+  const centerDataStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }, border: borderThin };
+  const numStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '0.0' };
+  const leaveStyle = { font: { color: { argb: 'FFDC2626' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF2F2' } }, alignment: { vertical: 'middle', wrapText: true }, border: borderThin };
+  const positiveStyle = { font: { color: { argb: 'FF047857' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDF4' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '+0.0;-0.0;0.0' };
+  const negativeStyle = { font: { color: { argb: 'FFB91C1C' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF2F2' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '+0.0;-0.0;0.0' };
+  const highlightStyle = { font: { bold: true, color: { argb: 'FF92400E' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '0.0' };
+  const moneyStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: borderThin, numFmt: '¥#,##0.00' };
+  const labelStyle = { font: { bold: true, color: { argb: 'FF1E3A8A' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: borderThin };
+  const valueStyle = { font: { color: { argb: 'FF374151' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }, alignment: { horizontal: 'left', vertical: 'middle' }, border: borderThin };
+
+  const statusColorMap = {
+    '预约中': { fg: 'FF1D4ED8', bg: 'FFDBEAFE' },
+    '施工中': { fg: 'FF15803D', bg: 'FFDCFCE7' },
+    '已暂停': { fg: 'FFA16207', bg: 'FFFEF3C7' },
+    '已延期': { fg: 'FFB91C1C', bg: 'FFFEE2E2' },
+    '已完工': { fg: 'FF4B5563', bg: 'FFF3F4F6' },
+    '已验收': { fg: 'FF4338CA', bg: 'FFE0E7FF' },
+    '已审核': { fg: 'FF0F766E', bg: 'FFCCFBF1' },
+    '已取消': { fg: 'FF6B7280', bg: 'FFE5E7EB' },
+    '未登记': { fg: 'FFA16207', bg: 'FFFEF9C3' }
+  };
+
+  function applyHeaderRow(sheet, rowIndex) {
+    const row = sheet.getRow(rowIndex);
+    row.height = 24;
+    row.eachCell(cell => { cell.style = { ...headerStyle }; });
+  }
+
+  function applyZebraStripes(sheet, startRow, endRow) {
+    for (let i = startRow; i <= endRow; i++) {
+      if ((i - startRow) % 2 === 1) {
+        sheet.getRow(i).eachCell(cell => {
+          const existingFill = cell.fill && cell.fill.fgColor && cell.fill.fgColor.argb;
+          if (!existingFill || existingFill === 'FFFFFFFF') {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+          }
+        });
+      }
+    }
+  }
+
+  function applyTotalRow(sheet, rowIndex) {
+    const row = sheet.getRow(rowIndex);
+    row.height = 22;
+    row.eachCell(cell => { cell.style = { ...totalStyle }; });
+  }
+
+  function applyAutoFilter(sheet, headerRow, lastCol) {
+    sheet.autoFilter = { from: { row: headerRow, column: 1 }, to: { row: headerRow, column: lastCol } };
+  }
+
+  function freezeTopRow(sheet) {
+    sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: 1 }];
+  }
+
+  function styleStatusCell(cell, value) {
+    const cfg = statusColorMap[value];
+    if (!cfg) return;
+    cell.font = { bold: true, color: { argb: cfg.fg } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: cfg.bg } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = borderThin;
+  }
+
+  function styleDiffCell(cell, value) {
+    if (typeof value !== 'number') return;
+    if (value > 0) cell.style = { ...positiveStyle };
+    else if (value < 0) cell.style = { ...negativeStyle };
+    else cell.style = { ...numStyle };
+  }
 
   if (typeof ExcelJS === "undefined") await ensureExcelJS();
   const workbook = new ExcelJS.Workbook();
@@ -14634,51 +15106,67 @@ async function exportStats() {
   workbook.created = new Date();
   workbook.modified = new Date();
 
-  const summaryData = [
-    ['统计项', '数值'],
-    ['统计周期', month],
-    ['统计类型', period === 'month' ? '月度' : period === 'quarter' ? '季度' : '年度'],
-    ['', ''],
-    ['施工人员总数', rows.length],
-    ['内部人员', totalWorkers],
-    ['外协人员', totalOutsourcedWorkers],
-    ['总工时(小时)', fmtHoursNum(totalHours)],
-    ['人均工时(小时)', fmtHoursNum(avgHours)],
-    ['', ''],
-    ['初级工时', fmtHoursNum(totalLevelHours.初级)],
-    ['中级工时', fmtHoursNum(totalLevelHours.中级)],
-    ['高级工时', fmtHoursNum(totalLevelHours.高级)],
-    ['特级工时', fmtHoursNum(totalLevelHours.特级)],
-    ['外协工时', fmtHoursNum(totalOutsourcedHours) + 'h'],
-    ['', ''],
-    ['预计工时(小时)', fmtHoursNum(totalEst)],
-    ['实际工时(小时)', fmtHoursNum(totalAct)],
-    ['工时差异', (totalDiff >= 0 ? '+' : '') + fmtHoursNum(totalDiff)],
-    ['返工工时', fmtHoursNum(totalReworkAct)],
-    ['', ''],
-    ['高负荷预警', highWorkloadWorkers.length > 0 ? highWorkloadWorkers.map(w => w.name).join("、") : '无'],
-    ['效率建议', lowEfficiencyWorkers.length > 0 ? lowEfficiencyWorkers.map(w => w.name).join("、") : '无'],
-    ['本月之星', topWorker && topHours > 0 ? topWorker + ' (' + fmtHours(topHours) + '小时)' : '无']
-  ];
   const summarySheet = workbook.addWorksheet("统计概览");
-  summaryData.forEach((row, rowIndex) => {
-    const excelRow = summarySheet.addRow(row);
-    row.forEach((cell, colIndex) => {
-      const excelCell = excelRow.getCell(colIndex + 1);
-      if (rowIndex === 0) {
-        excelCell.style = { ...headerStyle };
-      } else if (rowIndex === summaryData.length - 1 && row[0] === '合计') {
-        excelCell.style = { ...totalStyle };
-      } else {
-        excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
-      }
-    });
-  });
-  summarySheet.columns = [{ key: 'A', width: 15 }, { key: 'B', width: 25 }];
+  let sr = 1;
+  summarySheet.addRow(['广告施工预约系统 — 工时统计报表']);
+  summarySheet.mergeCells(`A${sr}:D${sr}`);
+  summarySheet.getRow(sr).getCell(1).style = { ...titleStyle };
+  summarySheet.getRow(sr).height = 34;
+  sr++;
+
+  summarySheet.addRow(['统计周期', month === '全部' ? '全部' : month, '统计类型', period === 'month' ? '月度' : period === 'quarter' ? '季度' : '年度']);
+  summarySheet.getRow(sr).eachCell((cell, ci) => { cell.style = ci % 2 === 1 ? { ...labelStyle } : { ...valueStyle }; });
+  sr += 2;
+
+  function addSectionTitle(sheet, title) {
+    const r = sheet.addRow([title]);
+    sheet.mergeCells(`A${r.number}:D${r.number}`);
+    sheet.getRow(r.number).getCell(1).style = { ...sectionTitleStyle };
+    sheet.getRow(r.number).height = 26;
+    return r.number;
+  }
+
+  function addKV(sheet, label, value, isNum) {
+    const r = sheet.addRow([label, value, '', '']);
+    r.getCell(1).style = { ...labelStyle };
+    r.getCell(2).style = isNum ? { ...numStyle } : { ...valueStyle };
+    r.getCell(3).style = { ...valueStyle };
+    r.getCell(4).style = { ...valueStyle };
+    sheet.mergeCells(`B${r.number}:D${r.number}`);
+    return r.number;
+  }
+
+  addSectionTitle(summarySheet, '人员统计');
+  addKV(summarySheet, '施工人员总数', rows.length, true);
+  addKV(summarySheet, '内部人员', totalWorkers, true);
+  addKV(summarySheet, '外协人员', totalOutsourcedWorkers, true);
+  addKV(summarySheet, '总工时(小时)', fmtHoursNum(totalHours), true);
+  addKV(summarySheet, '人均工时(小时)', fmtHoursNum(avgHours), true);
+
+  addSectionTitle(summarySheet, '工时等级');
+  addKV(summarySheet, '初级工时', fmtHoursNum(totalLevelHours.初级), true);
+  addKV(summarySheet, '中级工时', fmtHoursNum(totalLevelHours.中级), true);
+  addKV(summarySheet, '高级工时', fmtHoursNum(totalLevelHours.高级), true);
+  addKV(summarySheet, '特级工时', fmtHoursNum(totalLevelHours.特级), true);
+  addKV(summarySheet, '外协工时', fmtHoursNum(totalOutsourcedHours), true);
+
+  addSectionTitle(summarySheet, '项目工时');
+  addKV(summarySheet, '预计工时(小时)', fmtHoursNum(totalEst), true);
+  addKV(summarySheet, '实际工时(小时)', fmtHoursNum(totalAct), true);
+  const diffRowNum = addKV(summarySheet, '工时差异', totalDiff, true);
+  styleDiffCell(summarySheet.getRow(diffRowNum).getCell(2), totalDiff);
+  addKV(summarySheet, '返工工时', fmtHoursNum(totalReworkAct), true);
+
+  addSectionTitle(summarySheet, '分析与预警');
+  addKV(summarySheet, '高负荷预警', highWorkloadWorkers.length > 0 ? highWorkloadWorkers.map(w => w.name).join("、") : '无', false);
+  addKV(summarySheet, '效率建议', lowEfficiencyWorkers.length > 0 ? lowEfficiencyWorkers.map(w => w.name).join("、") : '无', false);
+  addKV(summarySheet, '本月之星', topWorker && topHours > 0 ? topWorker + ' (' + fmtHours(topHours) + '小时)' : '无', false);
+
+  summarySheet.columns = [{ key: 'A', width: 18 }, { key: 'B', width: 20 }, { key: 'C', width: 18 }, { key: 'D', width: 18 }];
 
   const workerData = [['施工人员', '类型', '工时(小时)', 'vs平均', '初级工时', '中级工时', '高级工时', '特级工时', '施工天数', '请假天数', '轮休天数', '参与项目数']];
   rows.forEach((r) => {
-    const vsAvg = r.isOutsourced ? "" : ((r.hours - avgHours) >= 0 ? "+" : "") + fmtHours(r.hours - avgHours);
+    const vsAvg = r.isOutsourced ? null : fmtHoursNum(r.hours - avgHours);
     workerData.push([
       r.name,
       r.isOutsourced ? '外协' : '内部',
@@ -14706,9 +15194,14 @@ async function exportStats() {
         excelCell.style = { ...totalStyle };
       } else {
         excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
+        if (colIndex === 3 && typeof cell === 'number') styleDiffCell(excelCell, cell);
       }
     });
   });
+  applyAutoFilter(workerSheet, 1, 12);
+  freezeTopRow(workerSheet);
+  applyZebraStripes(workerSheet, 2, workerData.length - 2);
+  applyTotalRow(workerSheet, workerData.length);
   workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 10 }, { key: 'K', width: 10 }, { key: 'L', width: 12 }];
 
   const dailyData = [['施工人员', '类型', '日期', '工时(小时)', '作业类型', '工时等级', '项目/工作类型', '当日状态']];
@@ -14731,10 +15224,19 @@ async function exportStats() {
         excelCell.style = { ...headerStyle };
       } else {
         excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
+        if (colIndex === 7 && cell === '请假') excelCell.style = { ...leaveStyle };
+        if (colIndex === 7 && cell === '轮休') {
+          excelCell.font = { color: { argb: 'FF92400E' } };
+          excelCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+          excelCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
       }
     });
   });
-  dailySheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 10 }, { key: 'F', width: 20 }, { key: 'G', width: 12 }, { key: 'H', width: 10 }];
+  applyAutoFilter(dailySheet, 1, 8);
+  freezeTopRow(dailySheet);
+  applyZebraStripes(dailySheet, 2, dailyData.length - 1);
+  dailySheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 12 }, { key: 'F', width: 12 }, { key: 'G', width: 28 }, { key: 'H', width: 10 }];
 
   const hasLeaves = rows.some((r) => r.leaveRecords && r.leaveRecords.length > 0);
   if (hasLeaves) {
@@ -14757,7 +15259,10 @@ async function exportStats() {
         }
       });
     });
-    leaveSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 10 }, { key: 'D', width: 20 }, { key: 'E', width: 25 }];
+    applyAutoFilter(leaveSheet, 1, 5);
+    freezeTopRow(leaveSheet);
+    applyZebraStripes(leaveSheet, 2, leaveData.length - 1);
+    leaveSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 10 }, { key: 'D', width: 26 }, { key: 'E', width: 40 }];
   }
 
   const hasRests = rows.some((r) => r.restRecords && r.restRecords.length > 0);
@@ -14779,6 +15284,9 @@ async function exportStats() {
         excelCell.style = rowIndex === 0 ? { ...headerStyle } : { ...dataStyle };
       });
     });
+    applyAutoFilter(restSheet, 1, 4);
+    freezeTopRow(restSheet);
+    applyZebraStripes(restSheet, 2, restData.length - 1);
     restSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 14 }, { key: 'D', width: 8 }];
   }
 
@@ -14796,9 +15304,9 @@ async function exportStats() {
       r.store || '',
       r.name,
       r.status,
-      r.hasActual ? fmtHoursNum(r.est) : '',
-      r.hasActual ? fmtHoursNum(r.act) : '',
-      r.hasActual ? (r.diff >= 0 ? '+' : '') + fmtHoursNum(r.diff) : '未登记',
+      r.hasActual ? fmtHoursNum(r.est) : null,
+      r.hasActual ? fmtHoursNum(r.act) : null,
+      r.hasActual ? r.diff : '未登记',
       fmtHoursNum(r.levelHours?.初级 || 0),
       fmtHoursNum(r.levelHours?.中级 || 0),
       fmtHoursNum(r.levelHours?.高级 || 0),
@@ -14809,7 +15317,7 @@ async function exportStats() {
       r.notes || ''
     ]);
   });
-  projectData.push(['', '', '', '', '', '合计', fmtHoursNum(totalEst), fmtHoursNum(totalAct), (totalDiff >= 0 ? '+' : '') + fmtHoursNum(totalDiff),
+  projectData.push(['', '', '', '', '', '合计', fmtHoursNum(totalEst), fmtHoursNum(totalAct), totalDiff,
     fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0)),
     fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0)),
     fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0)),
@@ -14822,14 +15330,35 @@ async function exportStats() {
       const excelCell = excelRow.getCell(colIndex + 1);
       if (rowIndex === 0) {
         excelCell.style = { ...headerStyle };
-      } else if (rowIndex === projectData.length - 1 && row[0] === '') {
+      } else if (rowIndex === projectData.length - 1 && row[5] === '合计') {
         excelCell.style = { ...totalStyle };
       } else {
-        excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
+        if (colIndex === 5) {
+          styleStatusCell(excelCell, cell);
+        } else if (colIndex === 8) {
+          if (typeof cell === 'number') styleDiffCell(excelCell, cell);
+          else {
+            excelCell.style = { ...dataStyle };
+            excelCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF9C3' } };
+            excelCell.font = { color: { argb: 'FFA16207' }, bold: true };
+            excelCell.alignment = { horizontal: 'center', vertical: 'middle' };
+          }
+        } else {
+          if ([13, 14, 15, 16].includes(colIndex)) {
+            excelCell.style = { ...centerDataStyle };
+          } else {
+            excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
+          }
+        }
       }
     });
   });
-  projectSheet.columns = [{ key: 'A', width: 10 }, { key: 'B', width: 12 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 25 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 8 }, { key: 'K', width: 8 }, { key: 'L', width: 8 }, { key: 'M', width: 8 }, { key: 'N', width: 25 }, { key: 'O', width: 10 }, { key: 'P', width: 15 }, { key: 'Q', width: 30 }];
+  applyAutoFilter(projectSheet, 1, 17);
+  freezeTopRow(projectSheet);
+  applyZebraStripes(projectSheet, 2, projectData.length - 2);
+  applyTotalRow(projectSheet, projectData.length);
+  styleDiffCell(projectSheet.getRow(projectData.length).getCell(9), totalDiff);
+  projectSheet.columns = [{ key: 'A', width: 10 }, { key: 'B', width: 12 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 28 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 8 }, { key: 'K', width: 8 }, { key: 'L', width: 8 }, { key: 'M', width: 8 }, { key: 'N', width: 32 }, { key: 'O', width: 10 }, { key: 'P', width: 22 }, { key: 'Q', width: 16 }];
 
   const usedNames = {};
   rows.forEach((r) => {
@@ -14852,60 +15381,84 @@ async function exportStats() {
     
     rowNum++;
     
-    sheet.addRow(['姓名', r.name, '', '类型', r.isOutsourced ? '外协人员' : '内部人员', '', '统计周期', month]);
-    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...infoStyle });
+    const infoRow1 = sheet.addRow(['姓名', r.name, '', '类型', r.isOutsourced ? '外协人员' : '内部人员', '', '统计周期', month === '全部' ? '全部' : month]);
+    infoRow1.getCell(1).style = { ...labelStyle };
+    infoRow1.getCell(2).style = { ...valueStyle };
+    infoRow1.getCell(4).style = { ...labelStyle };
+    infoRow1.getCell(5).style = { ...valueStyle };
+    infoRow1.getCell(7).style = { ...labelStyle };
+    infoRow1.getCell(8).style = { ...valueStyle };
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`E${rowNum}:F${rowNum}`);
+    sheet.mergeCells(`H${rowNum}:I${rowNum}`);
     rowNum++;
-    
-    sheet.addRow(['总工时', fmtHoursNum(r.hours || 0), '小时', '施工天数', (r.days || 0), '天', '请假天数', (r.leaveDays || 0), '天']);
-    sheet.getRow(rowNum).eachCell((cell, ci) => {
-      cell.style = ci === 1 || ci === 4 || ci === 7 ? { ...numStyle } : { ...infoStyle };
-    });
+
+    const infoRow2 = sheet.addRow(['总工时', fmtHoursNum(r.hours || 0), '小时', '施工天数', (r.days || 0), '天', '请假天数', (r.leaveDays || 0), '天']);
+    infoRow2.getCell(1).style = { ...labelStyle };
+    infoRow2.getCell(2).style = { ...numStyle };
+    infoRow2.getCell(3).style = { ...valueStyle };
+    infoRow2.getCell(4).style = { ...labelStyle };
+    infoRow2.getCell(5).style = { ...numStyle };
+    infoRow2.getCell(6).style = { ...valueStyle };
+    infoRow2.getCell(7).style = { ...labelStyle };
+    infoRow2.getCell(8).style = { ...numStyle };
+    infoRow2.getCell(9).style = { ...valueStyle };
     rowNum++;
-    
-    sheet.addRow(['轮休天数', (r.restDays || 0), '天', '（周末轮流休息，不计入请假）', '', '', '', '', '']);
-    sheet.getRow(rowNum).eachCell((cell, ci) => {
-      cell.style = ci === 1 ? { ...numStyle } : { ...infoStyle };
-    });
+
+    const infoRow3 = sheet.addRow(['轮休天数', (r.restDays || 0), '天', '（周末轮流休息，不计入请假）', '', '', '', '', '']);
+    infoRow3.getCell(1).style = { ...labelStyle };
+    infoRow3.getCell(2).style = { ...numStyle };
+    infoRow3.getCell(3).style = { ...valueStyle };
+    infoRow3.getCell(4).style = { ...valueStyle };
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
     rowNum++;
-    
+
     rowNum++;
-    
+
     sheet.addRow(['工时等级统计']);
     sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
     sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+    sheet.getRow(rowNum).height = 26;
     rowNum++;
-    
-    sheet.addRow(['等级', '工时(小时)', '占比', '单价(元/小时)', '金额(元)']);
-    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+
+    const levelHeaderRowNum = rowNum;
+    sheet.addRow(['等级', '工时(小时)', '占比', '单价(元/小时)', '金额(元)', '', '', '', '']);
+    sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci <= 5) cell.style = { ...headerStyle }; });
+    sheet.mergeCells(`E${rowNum}:I${rowNum}`);
     rowNum++;
-    
+
     const levels = ['初级', '中级', '高级', '特级'];
     const levelRowNums = [];
-    levels.forEach((level, idx) => {
+    levels.forEach((level) => {
       const hours = fmtHoursNum(r.levelHours?.[level] || 0);
-      const percentage = r.hours > 0 ? fmtHours((hours / r.hours) * 100) + '%' : '0%';
+      const percentage = r.hours > 0 ? fmtHoursNum((hours / r.hours) * 100) : 0;
       const price = wageConfig[level] || 0;
       levelRowNums.push(rowNum);
-      sheet.addRow([level, hours, percentage, price, '']);
+      sheet.addRow([level, hours, percentage / 100, price, '']);
       const amountCell = sheet.getRow(rowNum).getCell(5);
       amountCell.value = { formula: `=B${rowNum}*D${rowNum}`, result: fmtHoursNum(hours * price) };
-      amountCell.style = { ...numStyle };
+      amountCell.style = { ...moneyStyle };
       sheet.getRow(rowNum).eachCell((cell, ci) => {
-        if (ci === 4) return;
-        cell.style = ci === 1 || ci === 3 || ci === 4 ? { ...numStyle } : { ...dataStyle };
+        if (ci === 5) return;
+        if (ci === 1) cell.style = { ...dataStyle };
+        else if (ci === 2 || ci === 4) cell.style = { ...numStyle };
+        else if (ci === 3) cell.style = { ...numStyle, numFmt: '0.00%' };
+        else cell.style = { ...dataStyle };
       });
+      sheet.mergeCells(`E${rowNum}:I${rowNum}`);
       rowNum++;
     });
-    
+
     const totalAmount = levels.reduce((sum, level) => sum + (r.levelHours?.[level] || 0) * (wageConfig[level] || 0), 0);
     sheet.addRow(['合计', '', '', '', '']);
     const totalCell = sheet.getRow(rowNum).getCell(5);
     totalCell.value = { formula: `=SUM(E${levelRowNums[0]}:E${levelRowNums[levelRowNums.length-1]})`, result: totalAmount };
-    totalCell.style = { ...highlightStyle };
+    totalCell.style = { ...highlightStyle, numFmt: '¥#,##0.00' };
     sheet.getRow(rowNum).eachCell((cell, ci) => {
-      if (ci === 4) return;
+      if (ci === 5) return;
       cell.style = { ...totalStyle };
     });
+    sheet.mergeCells(`E${rowNum}:I${rowNum}`);
     rowNum++;
     const totalAmountRowNum = rowNum - 1;
     
@@ -14914,10 +15467,12 @@ async function exportStats() {
     const calTitleRow = sheet.addRow(['每日工时日历']);
     calTitleRow.getCell(1).style = { ...sectionTitleStyle };
     sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+    sheet.getRow(rowNum).height = 26;
     rowNum++;
-    
+
+    const calHeaderRowNum = rowNum;
     sheet.addRow(['日期', '星期', '初级工时', '中级工时', '高级工时', '特级工时', '合计工时', '项目', '请假/轮休']);
-    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+    applyHeaderRow(sheet, rowNum);
     rowNum++;
     
     const dates = [];
@@ -14992,9 +15547,13 @@ async function exportStats() {
       const isRestDay = !isLeaveDay && !!restMap[date];
       sheet.addRow([date, weekDay, levelHoursMap.初级[date] || 0, levelHoursMap.中级[date] || 0, levelHoursMap.高级[date] || 0, levelHoursMap.特级[date] || 0, hours, projectMap[date] || '', isLeaveDay ? leaveMap[date] : (isRestDay ? '轮休' : '')]);
       sheet.getRow(rowNum).eachCell((cell, ci) => {
-        if (isLeaveDay && ci === 8) {
+        if (isLeaveDay && ci === 9) {
           cell.style = { ...leaveStyle };
-        } else if (ci >= 2 && ci <= 6) {
+        } else if (isRestDay && ci === 9) {
+          cell.font = { color: { argb: 'FF92400E' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        } else if (ci >= 3 && ci <= 7) {
           cell.style = { ...numStyle };
         } else {
           cell.style = { ...dataStyle };
@@ -15002,12 +15561,16 @@ async function exportStats() {
       });
       rowNum++;
     });
-    
+
     sheet.addRow(['合计', '', calLevelTotals.初级, calLevelTotals.中级, calLevelTotals.高级, calLevelTotals.特级, calTotalHours, '', '']);
     sheet.getRow(rowNum).eachCell((cell, ci) => {
-      cell.style = ci >= 2 && ci <= 6 ? { ...highlightStyle } : { ...totalStyle };
+      if (ci >= 3 && ci <= 7) cell.style = { ...highlightStyle };
+      else cell.style = { ...totalStyle };
     });
     rowNum++;
+
+    sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: calHeaderRowNum }];
+    applyZebraStripes(sheet, calHeaderRowNum + 1, rowNum - 2);
     
     rowNum++;
     
@@ -15015,98 +15578,132 @@ async function exportStats() {
       sheet.addRow(['请假记录']);
       sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
       sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+      sheet.getRow(rowNum).height = 26;
       rowNum++;
-      
+
+      const leaveHeaderRowNum = rowNum;
       sheet.addRow(['序号', '开始日期', '结束日期', '请假天数', '请假类型', '请假原因', '', '', '']);
-      sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+      applyHeaderRow(sheet, rowNum);
+      sheet.mergeCells(`F${rowNum}:I${rowNum}`);
       rowNum++;
-      
+
       r.leaveRecords.forEach((lr, idx) => {
         const start = new Date(lr.startDate);
         const end = new Date(lr.endDate);
         const days = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
         sheet.addRow([idx + 1, lr.startDate, lr.endDate, days, LEAVE_TYPE_LABEL[lr.leaveType] || '请假', lr.reason || '', '', '', '']);
         sheet.getRow(rowNum).eachCell((cell, ci) => {
-          cell.style = ci === 3 ? { ...numStyle } : { ...dataStyle };
+          if (ci === 4) cell.style = { ...numStyle };
+          else cell.style = { ...dataStyle };
         });
+        sheet.mergeCells(`F${rowNum}:I${rowNum}`);
         rowNum++;
       });
-      
+      applyZebraStripes(sheet, leaveHeaderRowNum + 1, rowNum - 1);
+
       rowNum++;
     }
-    
+
     if (r.restRecords && r.restRecords.length > 0) {
       sheet.addRow(['轮休记录（周末休息，非请假）']);
       sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
       sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+      sheet.getRow(rowNum).height = 26;
       rowNum++;
-      
+
+      const restHeaderRowNum = rowNum;
       sheet.addRow(['序号', '轮休日期', '星期', '', '', '', '', '', '']);
-      sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+      applyHeaderRow(sheet, rowNum);
       rowNum++;
-      
+
       const weekNames2 = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
       r.restRecords.forEach((lr, idx) => {
         const d = new Date(lr.startDate + "T00:00:00");
         sheet.addRow([idx + 1, lr.startDate, isNaN(d) ? '' : weekNames2[d.getDay()], '', '', '', '', '', '']);
-        sheet.getRow(rowNum).eachCell(cell => cell.style = { ...dataStyle });
+        sheet.getRow(rowNum).eachCell((cell, ci) => {
+          cell.style = ci === 1 || ci === 3 ? { ...dataStyle, alignment: { horizontal: 'center', vertical: 'middle' } } : { ...dataStyle };
+        });
         rowNum++;
       });
-      
+      applyZebraStripes(sheet, restHeaderRowNum + 1, rowNum - 1);
+
       rowNum++;
     }
-    
+
     sheet.addRow(['工资核算']);
     sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
     sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+    sheet.getRow(rowNum).height = 26;
     rowNum++;
-    
+
     sheet.addRow(['项目', '金额(元)', '', '计算公式']);
-    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...headerStyle });
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      if (ci <= 4) cell.style = { ...headerStyle };
+    });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
     rowNum++;
-    
+
     const wageRowNum = rowNum;
     sheet.addRow(['工时工资合计', '', '', '各等级工时 x 对应单价之和']);
     const wageCell = sheet.getRow(rowNum).getCell(2);
     wageCell.value = { formula: `=E${totalAmountRowNum}`, result: totalAmount };
-    wageCell.style = { ...numStyle };
+    wageCell.style = { ...moneyStyle };
     sheet.getRow(rowNum).eachCell((cell, ci) => {
-      if (ci === 1) return;
-      cell.style = { ...dataStyle };
+      if (ci === 2) return;
+      if (ci === 1) cell.style = { ...labelStyle };
+      else cell.style = { ...dataStyle };
     });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
     rowNum++;
-    
+
     sheet.addRow(['其他补贴', '', '', '']);
-    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...dataStyle });
+    sheet.getRow(rowNum).getCell(1).style = { ...labelStyle };
+    sheet.getRow(rowNum).getCell(2).style = { ...moneyStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci > 2) cell.style = { ...dataStyle }; });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
     rowNum++;
-    
+
     const grossRowNum = rowNum;
     sheet.addRow(['应发工资合计', '', '', '工时工资 + 其他补贴']);
     const grossCell = sheet.getRow(rowNum).getCell(2);
     grossCell.value = { formula: `=B${wageRowNum}+B${rowNum - 1}`, result: totalAmount };
-    grossCell.style = { ...highlightStyle };
+    grossCell.style = { ...highlightStyle, numFmt: '¥#,##0.00' };
     sheet.getRow(rowNum).eachCell((cell, ci) => {
-      if (ci === 1) return;
-      cell.style = { ...totalStyle };
+      if (ci === 2) return;
+      if (ci === 1) cell.style = { ...labelStyle };
+      else cell.style = { ...totalStyle };
     });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
     rowNum++;
-    
+
     sheet.addRow(['扣款/其他', '', '', '']);
-    sheet.getRow(rowNum).eachCell(cell => cell.style = { ...dataStyle });
+    sheet.getRow(rowNum).getCell(1).style = { ...labelStyle };
+    sheet.getRow(rowNum).getCell(2).style = { ...moneyStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci > 2) cell.style = { ...dataStyle }; });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
     rowNum++;
-    
+
     sheet.addRow(['实发工资', '', '', '应发工资 - 扣款']);
     const netCell = sheet.getRow(rowNum).getCell(2);
     netCell.value = { formula: `=B${grossRowNum}-B${rowNum - 1}`, result: totalAmount };
-    netCell.style = { ...highlightStyle };
+    netCell.style = { ...highlightStyle, numFmt: '¥#,##0.00' };
     sheet.getRow(rowNum).eachCell((cell, ci) => {
-      cell.style = ci === 1 ? { ...highlightStyle } : { ...totalStyle };
+      if (ci === 2) return;
+      if (ci === 1) cell.style = { ...labelStyle };
+      else cell.style = { ...totalStyle };
     });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
     rowNum++;
-    
+
     sheet.columns = [
-      { key: 'A', width: 15 }, { key: 'B', width: 12 }, { key: 'C', width: 5 }, { key: 'D', width: 12 },
-      { key: 'E', width: 12 }, { key: 'F', width: 8 }, { key: 'G', width: 8 }, { key: 'H', width: 30 }, { key: 'I', width: 15 }
+      { key: 'A', width: 16 }, { key: 'B', width: 14 }, { key: 'C', width: 12 }, { key: 'D', width: 14 },
+      { key: 'E', width: 14 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 28 }, { key: 'I', width: 14 }
     ];
   });
 
@@ -16575,7 +17172,7 @@ function renderMine() {
     ? cache.leaveRecords.filter((r) => r.status === LEAVE_STATUS.PENDING).length
     : 0;
 
-  // 功能中心菜单项（根据权限过滤）
+  // 功能中心菜单项（业务类入口，根据权限过滤；系统管理类见下方「系统管理」分组）
   const featureItems = [
     { tab: "workers", icon: "👷", label: "施工人员", color: "#eff6ff", show: perm.viewWorker() },
     { tab: "outsourced", icon: "🤝", label: "外协人员", color: "#f5f3ff", show: perm.manageOutsourced() },
@@ -16585,8 +17182,6 @@ function renderMine() {
     { tab: "storeStats", icon: "📊", label: "店面统计", color: "#eff6ff", show: perm.viewStoreStats() },
     { tab: "stats", icon: "📈", label: "工时统计", color: "#f0f9ff", show: perm.viewStats() },
     { tab: "internalTasks", icon: "✅", label: "内部任务", color: "#fef2f2", show: perm.viewTask() },
-    { tab: "accounts", icon: "👤", label: "账号管理", color: "#faf5ff", show: perm.manageAccounts() },
-    { tab: "rolePerms", icon: "🛡️", label: "角色权限", color: "#fffbeb", show: perm.manageAccounts() && MODE === "cloud" },
     { tab: "help", icon: "❓", label: "使用帮助", color: "#fef3c7", show: true },
   ].filter(i => i.show);
 
@@ -16607,6 +17202,36 @@ function renderMine() {
           <span class="mine-grid-label">${item.label}</span>
         </div>`).join("")}
     </div>
+
+    ${(perm.manageAccounts() || (MODE === "cloud" && isManager())) ? `
+    <div class="mine-section-title">系统管理</div>
+    <div class="mine-list">
+      ${perm.manageAccounts() ? `
+      <div class="mine-list-item" onclick="switchTab('accounts')">
+        <div class="mine-list-icon" style="background:#faf5ff;color:#9333ea">👤</div>
+        <span class="mine-list-text">账号管理</span>
+        <span class="mine-list-arrow">›</span>
+      </div>` : ""}
+      ${MODE === "cloud" ? `
+      <div class="mine-list-item" onclick="switchTab('rolePerms')">
+        <div class="mine-list-icon" style="background:#fffbeb;color:#d97706">🛡️</div>
+        <span class="mine-list-text">角色权限</span>
+        <span class="mine-list-arrow">›</span>
+      </div>` : ""}
+      ${isManager() && MODE === "cloud" ? `
+      <div class="mine-list-item" onclick="setAdminPassword()">
+        <div class="mine-list-icon" style="background:#fef2f2;color:#dc2626">🔐</div>
+        <span class="mine-list-text">管理密码设置${currentProfile?.adminPasswordHash ? "" : "（未设置）"}</span>
+        <span class="mine-list-arrow">›</span>
+      </div>` : ""}
+      ${isManager() && MODE === "cloud" ? `
+      <div class="mine-list-item" onclick="openReminderSettingsModal()">
+        <div class="mine-list-icon" style="background:#fef3c7;color:#d97706">🔔</div>
+        <span class="mine-list-text">提醒设置</span>
+        <span class="mine-list-arrow">›</span>
+      </div>` : ""}
+    </div>
+    ` : ""}
 
     ${(perm.exportProjects() || perm.exportWorkLogs() || perm.exportLeaves() || perm.exportWorkers() || perm.exportStores() || perm.exportAll() || perm.importData() || perm.viewOperationLogs()) ? `
     <div class="mine-section-title">数据工具</div>
@@ -16659,23 +17284,6 @@ function renderMine() {
         <span class="mine-list-text">导出全部数据</span>
         <span class="mine-list-arrow">›</span>
       </div>` : ""}
-      ${isManager() && MODE === "cloud" ? `
-      <div class="mine-list-item" onclick="setAdminPassword()">
-        <div class="mine-list-icon" style="background:#fef2f2;color:#dc2626">🔐</div>
-        <span class="mine-list-text">管理密码设置${currentProfile?.adminPasswordHash ? "" : "（未设置）"}</span>
-        <span class="mine-list-arrow">›</span>
-      </div>` : ""}
-    </div>
-    ` : ""}
-
-    ${isManager() && MODE === "cloud" ? `
-    <div class="mine-section-title">管理员设置</div>
-    <div class="mine-list">
-      <div class="mine-list-item" onclick="openReminderSettingsModal()">
-        <div class="mine-list-icon" style="background:#fef3c7;color:#d97706">🔔</div>
-        <span class="mine-list-text">提醒设置</span>
-        <span class="mine-list-arrow">›</span>
-      </div>
     </div>
     ` : ""}
 
@@ -17856,8 +18464,10 @@ function dateKey(d) {
 /* 某天的预约（按开始时间排序） */
 function projectsOnDate(ds) {
   const main = cache.projects.filter((p) => { 
-    const s = projectStart(p); 
-    return s && dateKey(s) === ds;
+    // 跨天施工：项目覆盖的每一天都算（取任一时段 date === ds）
+    const segs = getBookedSegments(p);
+    if (!segs.length) return false;
+    return segs.some((s) => s.date === ds);
   });
   const mainIds = new Set(main.map((p) => p.id));
   // 待维修的维修单（挂在原项目上、不写回项目 appointmentTime）也作为该日的事件显示
@@ -18150,13 +18760,18 @@ function renderTimelineInDetail() {
 
   const items = projectsOnDate(calSelectedDate);
 
+  // 时间线按「选中日」裁剪：跨天施工每天只显示当天的施工时段（避免整段 24h+ 溢出）
+  const _ds = calSelectedDate;
+  const _segStartOf = (p) => { const s = projectSegOnDate(p, _ds); return s ? s.start : projectStart(p); };
+  const _segEndOf = (p) => { const s = projectSegOnDate(p, _ds); return s ? s.end : projectEnd(p); };
+
   // 根据项目时间自适应扩展可视范围：默认显示 7:00-19:00，常用 8:00-18:00 居中；
   // 当有项目明显超出工作时段（8:00-18:00）时，再向两边扩展，但不超过 0:00-24:00。
   let viewStart = TL_DEFAULT_VIEW_START_HOUR;
   let viewEnd = TL_DEFAULT_VIEW_END_HOUR;
   items.forEach((p) => {
-    const s = projectStart(p);
-    const e = projectEnd(p) || new Date((s || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
+    const s = _segStartOf(p);
+    const e = _segEndOf(p) || new Date((s || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
     if (!s) return;
     const startH = s.getHours() + s.getMinutes() / 60;
     const endH = e.getHours() + e.getMinutes() / 60;
@@ -18203,8 +18818,8 @@ function renderTimelineInDetail() {
   }, 0);
   
   const statOvertime = items.filter((p) => {
-    const start = projectStart(p);
-    const end = projectEnd(p) || new Date((start || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
+    const start = _segStartOf(p);
+    const end = _segEndOf(p) || new Date((start || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
     if (!start) return false;
     const startH = start.getHours() + start.getMinutes() / 60;
     const endH = end.getHours() + end.getMinutes() / 60;
@@ -18251,8 +18866,8 @@ function renderTimelineInDetail() {
     const lanes = [];
     const itemLane = {};
     items.forEach((p) => {
-      const s = projectStart(p);
-      const e = projectEnd(p) || new Date(s.getTime() + (p.estimatedHours || 2) * 3600000);
+      const s = _segStartOf(p);
+      const e = _segEndOf(p) || new Date(s.getTime() + (p.estimatedHours || 2) * 3600000);
       const startMs = s.getTime(), endMs = e.getTime();
       let laneIdx = lanes.findIndex((lastEnd) => lastEnd <= startMs);
       if (laneIdx === -1) { laneIdx = lanes.length; lanes.push(endMs); }
@@ -18267,8 +18882,8 @@ function renderTimelineInDetail() {
     const otRightWidth = totalWidth - otRightLeft;
 
     const tasksHtml = items.map((p) => {
-      const start = projectStart(p);
-      const end = projectEnd(p) || new Date(start.getTime() + (p.estimatedHours || 2) * 3600000);
+      const start = _segStartOf(p);
+      const end = _segEndOf(p) || new Date(start.getTime() + (p.estimatedHours || 2) * 3600000);
       if (!start) return "";
 
       const startHourOffset = (start.getHours() + start.getMinutes() / 60) - TL_VIEW_START_HOUR;
@@ -18296,7 +18911,9 @@ function renderTimelineInDetail() {
       }, 0) : 0;
       const conflictClass = conflicts >= 1 ? "timeline-task-conflict" : "";
       const overtimeClass = isOvertime ? "timeline-task-overtime" : "";
-      const canDrag = p.status === STATUS.BOOKED;
+      const isCrossDay = Array.isArray(p.workSegments) && p.workSegments.length > 1;
+      // 跨天多段项目禁止时间线拖拽（避免破坏分段数据，改期请到预约弹窗）
+      const canDrag = p.status === STATUS.BOOKED && !isCrossDay;
       const dragAttr = canDrag
         ? `draggable="true" ondragstart="timelineDragStart(event)" ondragend="timelineDragEnd(event)" onmousedown="timelineDragMouseDown(event)"`
         : `draggable="false"`;
@@ -18333,6 +18950,7 @@ function renderTimelineInDetail() {
               ${hasOutsourced(p) ? `<span class="timeline-task-outsourced-badge">🤝 外协</span>` : ""}
               ${p.originalAppointmentTime || p.timeModified ? `<span class="timeline-task-modified-badge">📅 已改期</span>` : ""}
               ${isOvertime ? `<span class="timeline-task-overtime-badge">🌙 加班</span>` : ""}
+              ${isCrossDay ? `<span class="timeline-task-crossday-badge">📅 跨天${p.workSegments.length}天</span>` : ""}
               ${conflicts >= 1 ? `<span class="timeline-task-conflict-badge">⚠ ${conflicts} 冲突</span>` : ""}
             </div>
           </div>
@@ -20189,7 +20807,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v189b5dbc";
+  const APP_VERSION = "v3d736883";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

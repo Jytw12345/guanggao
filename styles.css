@@ -1223,6 +1223,78 @@ select.input {
 }
 .input.wide { min-width: 100px; flex: 1; box-sizing: border-box; max-width: 100%; }
 
+/* ===== 跨天施工：多日分段编辑器 ===== */
+.seg-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+  margin-top: 6px;
+}
+.seg-date-line,
+.seg-time-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  flex-wrap: nowrap;
+}
+.seg-label {
+  font-size: 12px;
+  color: #6366f1;
+  flex-shrink: 0;
+  min-width: 42px;
+}
+.seg-date-line .segDate {
+  flex: 1 1 auto;
+  max-width: none;
+}
+.seg-txt {
+  font-size: 11px;
+  color: #64748b;
+  flex-shrink: 0;
+}
+.seg-arrow {
+  font-size: 14px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+.seg-time-line .segStart,
+.seg-time-line .segEnd {
+  flex: 0 0 auto;
+  width: 96px;
+  min-width: 82px;
+  height: 40px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  padding-right: 24px;
+  text-overflow: clip;
+}
+.seg-time-line .seg-del {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #dc2626;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+@media (max-width: 480px) {
+  .seg-row {
+    margin-top: 8px;
+  }
+  .seg-time-line .seg-txt {
+    display: none;
+  }
+  .seg-time-line .segStart,
+  .seg-time-line .segEnd {
+    flex: 1 1 0;
+    width: auto;
+    max-width: none;
+    min-width: 78px;
+    padding-right: 20px;
+  }
+}
+
 .btn {
   padding: 8px 16px;
   border: 1px solid var(--border);
@@ -1300,12 +1372,17 @@ select.input {
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  grid-auto-rows: 1fr;
+  align-items: start;
   gap: 18px;
 }
-/* 移动端：取消强制等高，卡片按自身内容高度、顶部对齐，信息多寡互不拉高 */
+/* 移动端：保持卡片按自身内容高度、顶部对齐 */
 @media (max-width: 768px) {
-  .card-grid { grid-auto-rows: auto; align-items: start; }
+  .card-grid { align-items: start; }
+}
+
+/* 桌面端：卡片设最小高度，避免同行矮卡过矮、参差明显（不强制等高，内容多仍自然撑高） */
+@media (min-width: 769px) {
+  .card-grid .card { min-height: 420px; }
 }
 
 /* ===== 项目卡片：整体升级 ===== */
@@ -1408,7 +1485,14 @@ select.input {
   line-height: 1.35;
   color: #0f172a;
   word-break: break-word;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
 }
+
+.card-title .badge { white-space: nowrap; }
+
+
 
 .card-row {
   display: flex;
@@ -1502,6 +1586,40 @@ select.input {
   border-top: 1px solid #f0f2f5;
   flex-wrap: wrap;
   align-items: center;
+}
+
+/* 自动审核项目卡片水印盖章 */
+.card-auto-stamp {
+  position: absolute;
+  right: 16px;
+  bottom: 60px;
+  width: 70px;
+  height: 70px;
+  border: 2px solid rgba(220, 38, 38, 0.55);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(220, 38, 38, 0.70);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  line-height: 1.15;
+  text-align: center;
+  transform: rotate(-18deg);
+  pointer-events: none;
+  z-index: 1;
+  box-shadow:
+    inset 0 0 0 2px rgba(220, 38, 38, 0.08),
+    0 2px 8px rgba(220, 38, 38, 0.07);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.card-auto-stamp::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 1px dashed rgba(220, 38, 38, 0.32);
+  border-radius: 50%;
 }
 
 /* 修复：代码里用 class="btn small"，但 CSS 只有 .btn-small */
@@ -1797,6 +1915,11 @@ select.input {
   color: #b91c1c;
   border: 1px solid #fecaca;
 }
+.card-reason.cancelled {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
 
 /* 完成项目：单人工时多段（作业类型 + 等级 + 工时） */
 .worker-segs {
@@ -1989,6 +2112,7 @@ select.input {
 .badge.已取消 { background: #f9fafb; color: #6b7280; border: 1px solid #d1d5db; }
 .badge.rework { background: #faf5ff; color: #7e22ce; border: 1px solid #d8b4fe; }
 .badge.modified { background: #faf5ff; color: #7c3aed; border: 1px solid #ddd6fe; }
+.badge.crossday { background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe; }
 .badge.forgotten { background: #fff7ed; color: #c2410c; border: 1px solid #fb923c; animation: pulseAmber 1.5s infinite; }
 .badge.warn { background: #fffbeb; color: #b45309; border: 1px solid #fcd34d; animation: pulseAmber 1.5s infinite; }
 
@@ -5075,11 +5199,12 @@ table.data.project-hours-diff thead th {
 .mine-logout {
   display: block;
   width: 100%;
-  margin-top: 18px;
-  padding: 11px;
+  margin-top: 28px;
+  margin-bottom: 12px;
+  padding: 12px;
   border: 1px solid #fecaca;
   border-radius: 10px;
-  background: #fff;
+  background: #fef2f2;
   color: var(--danger);
   font-weight: 600;
   font-size: 14px;
@@ -5088,7 +5213,7 @@ table.data.project-hours-diff thead th {
   transition: all 0.15s ease;
 }
 .mine-logout:hover {
-  background: #fef2f2;
+  background: #fee2e2;
   border-color: #fca5a5;
 }
 .mine-logout:active {
@@ -5244,6 +5369,15 @@ table.data.project-hours-diff thead th {
       0 1px 3px rgba(15, 23, 42, 0.10),
       0 6px 16px rgba(15, 23, 42, 0.09),
       0 10px 28px rgba(15, 23, 42, 0.06);
+  }
+
+  .card-auto-stamp {
+    width: 58px;
+    height: 58px;
+    right: 10px;
+    bottom: 52px;
+    font-size: 11px;
+    letter-spacing: 0.5px;
   }
   
   #internalTaskList .card {
@@ -5955,10 +6089,16 @@ table.data.project-hours-diff thead th {
   .assign-type-btn { padding: 6px 18px; font-size: 13px; }
   .assign-chips-row { padding: 8px; gap: 6px; min-height: 32px; }
   .assign-add-area { margin-top: 8px; padding-top: 8px; }
-  .assign-input-group { flex-direction: column; align-items: stretch; gap: 6px; }
+  .assign-input-group { flex-direction: column; align-items: center; gap: 6px; }
   .assign-input-group .assign-select,
-  .assign-input-group input { max-width: none; width: 100%; }
+  .assign-input-group input { width: 100%; max-width: 280px; }
   .btn-assign, .btn-assign-sm { width: 100%; font-size: 14px; padding: 9px 16px; }
+  /* 内部人员行：横排、整体居中，下拉框按内容自适应（人名短，不必撑满） */
+  #assignInputGroup_internal { flex-direction: row; justify-content: center; flex-wrap: wrap; }
+  #assignInputGroup_internal .assign-select { width: auto; min-width: 140px; max-width: 65%; flex: 0 1 auto; }
+  #assignInputGroup_internal .btn-assign { width: auto; flex-shrink: 0; padding: 9px 16px; }
+  /* 外协人员行：竖排居中，下拉/输入框限制最大宽度，添加按钮不撑满 */
+  #assignInputGroup_outsourced .btn-assign-sm { width: auto; align-self: center; padding: 9px 24px; }
 
 
   .worklog-form {
@@ -7543,8 +7683,8 @@ table.data.project-hours-diff thead th {
 }
 
 .tl-menu-actions .btn {
-  flex: 1;
-  min-width: 70px;
+  flex: 0 0 auto;
+  min-width: auto;
 }
 
 .timeline-task-modified-badge {
@@ -7574,6 +7714,18 @@ table.data.project-hours-diff thead th {
 .timeline-task-overtime-badge {
   display: inline-block;
   background: var(--warn);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 999px;
+  line-height: 1.2;
+  margin-left: 4px;
+}
+
+.timeline-task-crossday-badge {
+  display: inline-block;
+  background: #4f46e5;
   color: #fff;
   font-size: 8px;
   font-weight: 600;
@@ -7851,7 +8003,7 @@ table.data.project-hours-diff thead th {
   .tl-menu-actions .btn {
     font-size: 12px;
     padding: 6px 10px;
-    min-width: 60px;
+    min-width: auto;
   }
 }
 
