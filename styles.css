@@ -3652,6 +3652,20 @@ textarea.input { resize: vertical; min-height: 50px; }
   border-left-color: #ef4444;
   animation: warnPulseRed 1.6s ease-in-out infinite;
 }
+.sched-warn-red {
+  font-size: 13px;
+  color: #b91c1c;
+  background: #fff;
+  animation: warnPulseRed 1.6s ease-in-out infinite;
+  border: 1px solid #e5e7eb;
+  border-left: 4px solid #dc2626;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
 @keyframes warnPulseSoft {
   0%, 100% { background: #fff; border-color: #e5e7eb; }
   50% { background: #fef3c7; border-color: #fcd34d; }
@@ -3806,6 +3820,93 @@ textarea.input { resize: vertical; min-height: 50px; }
   height: 6px;
   border-radius: 50%;
   background: currentColor;
+}
+
+/* 工时统计：跨天项目实际工时明细 */
+.sched-hours-crossday {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 6px;
+  border-left: 3px solid #6366f1;
+}
+.sched-hours-crossday-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4f46e5;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sched-hours-crossday-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+.sched-hours-crossday-row:last-child {
+  border-bottom: none;
+}
+.sched-hours-crossday-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+}
+.sched-hours-crossday-name {
+  color: #334155;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.sched-hours-crossday-time {
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  max-width: 55%;
+  min-width: 0;
+}
+.sched-hours-crossday-hours {
+  flex-shrink: 0;
+  font-weight: 500;
+  white-space: nowrap;
+  min-width: 80px;
+  text-align: right;
+}
+.sched-hours-crossday-hours[data-status="over"] { color: #dc2626; }
+.sched-hours-crossday-hours[data-status="ok"] { color: #16a34a; }
+.sched-hours-crossday-hours[data-status="zero"] { color: #94a3b8; }
+
+@media (max-width: 480px) {
+  .sched-hours-crossday-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 8px 0;
+  }
+  .sched-hours-crossday-main {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .sched-hours-crossday-time {
+    max-width: 100%;
+    width: 100%;
+  }
+  .sched-hours-crossday-hours {
+    align-self: flex-end;
+    min-width: auto;
+  }
 }
 
 .sched-encourage {
@@ -7405,6 +7506,26 @@ table.data.project-hours-diff thead th {
 @keyframes pulse-conflict {
   0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
   50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.15); }
+}
+
+/* 工时可行性异常（人均预约工时 > 当天可用施工窗口）高亮 */
+.timeline-task-infeasible-warn {
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.25);
+}
+.timeline-task-infeasible-critical {
+  border-color: #dc2626 !important;
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.3);
+}
+.timeline-task-infeasible-badge {
+  display: inline-block;
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 999px;
 }
 
 .timeline-task-header {

@@ -868,6 +868,54 @@ function projectSegOnDate(p, ds) {
   return getBookedSegments(p).find((s) => s.date === ds) || null;
 }
 
+/* 紧凑格式化跨天施工分段（用于工时统计明细等窄空间）。
+   例如各段时间相同：08-11~08-12 · 08:00~13:00
+   各段时间不同：共2天 · 08-11 08:00~13:00、08-12 14:00~18:00 */
+function formatCrossDaySegmentsCompact(segs) {
+  if (!Array.isArray(segs) || segs.length === 0) return "";
+  const dates = segs.map((s) => dateKey(s.start).slice(5));
+  const firstDate = dates[0];
+  const lastDate = dates[dates.length - 1];
+  const allSameTime = segs.every((s) => s.startHM === segs[0].startHM && s.endHM === segs[0].endHM);
+  if (allSameTime) {
+    if (segs.length === 1) return `${firstDate} ${segs[0].startHM}~${segs[0].endHM}`;
+    return `${firstDate}~${lastDate} · ${segs[0].startHM}~${segs[0].endHM}`;
+  }
+  return `共${segs.length}天 · ` + segs.map((s) => `${dateKey(s.start).slice(5)} ${s.startHM}~${s.endHM}`).join("、");
+}
+
+/* 检查项目预约工时/人数与可用施工窗口是否匹配。
+   返回 { ok, level, availableHours, perPersonHours, ratio }。
+   level: ok / warn(人均>可用窗口) / critical(人均>可用窗口×1.5)。
+   用于施工管理页警示和保存时校验。 */
+function checkProjectHourFeasibility(p, ds) {
+  const result = { ok: true, level: "ok", availableHours: 0, perPersonHours: 0, ratio: 0 };
+  if (!p) return result;
+  const workers = Math.max(1, (p.assignedWorkerIds || []).length);
+  const est = Number(p.estimatedHours) || 0;
+  if (est <= 0) return result;
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED].includes(p.status)) return result;
+
+  let seg;
+  if (Array.isArray(p.workSegments) && p.workSegments.length > 1 && ds) {
+    seg = projectSegOnDate(p, ds);
+  } else {
+    const segs = getBookedSegments(p);
+    seg = (segs && segs.length) ? segs[0] : null;
+  }
+  if (!seg || !seg.start || !seg.end || seg.end <= seg.start) return result;
+
+  const availableHours = Math.max(0, (seg.end - seg.start) / (1000 * 60 * 60));
+  const perPersonHours = est / workers;
+  const ratio = availableHours > 0 ? perPersonHours / availableHours : 0;
+  result.availableHours = availableHours;
+  result.perPersonHours = perPersonHours;
+  result.ratio = ratio;
+  if (ratio > 1.5) { result.ok = false; result.level = "critical"; }
+  else if (ratio > 1.0) { result.ok = false; result.level = "warn"; }
+  return result;
+}
+
 /* 两个时间区间是否重叠：[s1,e1) 与 [s2,e2) */
 function intervalsOverlap(s1, e1, s2, e2) {
   return s1 < e2 && s2 < e1;
@@ -3905,14 +3953,19 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       
       const pad = (n) => String(n).padStart(2, "0");
       const timeStr = `${pad(start.getHours())}:${pad(start.getMinutes())} ~ ${pad(end.getHours())}:${pad(end.getMinutes())}`;
-      
+
+      // 工时可行性提示：人均预约工时显著超过当天可用施工窗口时高亮（跨天按当天分段判定）
+      const feas = checkProjectHourFeasibility(p, dateStr);
+      const feasClass = !feas.ok ? (feas.level === "critical" ? " timeline-task-infeasible-critical" : " timeline-task-infeasible-warn") : "";
+      const feasNote = !feas.ok ? ` · <span style="color:${feas.level === "critical" ? "#dc2626" : "#f59e0b"};font-weight:600;white-space:nowrap;">⚠ 工时异常</span>` : "";
+
       tasksHtml += `
-        <div class="timeline-task timeline-task-${statusClass}" style="left:${left}px; width:${width}px; height:48px;">
+        <div class="timeline-task timeline-task-${statusClass}${feasClass}" style="left:${left}px; width:${width}px; height:48px;">
           <div class="timeline-task-header">
             <span class="timeline-task-name" style="font-size:11px;">${statusIcon} ${esc(p.name)}</span>
           </div>
           <div class="timeline-task-body" style="font-size:9px;">
-            ${esc(storeName(p.storeId))} · ${timeStr} · 需${p.workerCount || 1}人 · 本人工时${fmtHours((Number(p.estimatedHours) || 0) / Math.max(1, (p.assignedWorkerIds || []).length))}h
+            ${esc(storeName(p.storeId))} · ${timeStr} · 需${p.workerCount || 1}人 · 本人工时${fmtHours((Number(p.estimatedHours) || 0) / Math.max(1, (p.assignedWorkerIds || []).length))}h${feasNote}
           </div>
         </div>`;
     });
@@ -6295,13 +6348,13 @@ function renderProjects() {
           <h3>${esc(p.name)}</h3>
           <div style="display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 50%;">
             <span class="badge ${p.status}">${p.status}</span>
-            ${isCrossDay ? `<span class="badge crossday">📅 跨天${p.workSegments.length}天</span>` : ""}
+            ${isCrossDay ? `<span class="badge crossday">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
             ${workingTooLong ? `<span class="badge ${overnight ? "overdue" : "pending"}">${overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工"} ${workElapsedText}</span>` : ""}
             ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
             ${isPausedTooLong ? `<span class="badge overdue">⏸️ 暂停过久 已暂停 ${pausedTooLongInfo.text}</span>` : ""}
             ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
             ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
-            ${isRescheduled ? `<span class="badge modified">📅 已改期</span>` : ""}
+            ${isRescheduled ? `<span class="badge modified">${svgCal(12)} 已改期</span>` : ""}
             ${leaveConflicts.length > 0 ? `<span class="badge danger">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
           </div>
         </div>
@@ -6971,6 +7024,17 @@ async function saveQuickEditProjectTime(id) {
     payload.estimatedHours = p.estimatedHours;
   }
 
+  // 工时可行性校验：人均预约工时显著超过可用施工窗口时给出提示
+  if (estimatedHours > 0 && workerCount > 0 && totalBookedHours > 0) {
+    const perPersonHours = estimatedHours / workerCount;
+    const ratio = perPersonHours / totalBookedHours;
+    if (ratio > 1.0) {
+      const critical = ratio > 1.5;
+      const msg = `${critical ? '⚠️ 工时严重异常' : '⚠️ 工时可能不合理'}：预约总工时 ${estimatedHours}h / ${workerCount}人 = 人均 ${perPersonHours.toFixed(1)}h，但施工窗口仅 ${totalBookedHours.toFixed(1)}h，${critical ? '远超' : '大于'}可用时间。建议增加人手、拆分多天或调整预约时间。是否仍要保存？`;
+      if (!(await confirmDialog(msg, "工时异常确认"))) return;
+    }
+  }
+
   try {
     const saved = await repo.saveProject(payload, id);
     const savedId = (saved && saved.id) || id;
@@ -7134,6 +7198,17 @@ async function saveProject(id) {
   }
 
   const preExisting = id ? getProject(id) : null;  // 保存前快照，供变更日志对比（loadAll 前即正确）
+
+  // 工时可行性校验：人均预约工时显著超过可用施工窗口时给出提示
+  if (estimatedHours > 0 && workerCount > 0 && totalBookedHours > 0) {
+    const perPersonHours = estimatedHours / workerCount;
+    const ratio = perPersonHours / totalBookedHours;
+    if (ratio > 1.0) {
+      const critical = ratio > 1.5;
+      const msg = `${critical ? '⚠️ 工时严重异常' : '⚠️ 工时可能不合理'}：预约总工时 ${estimatedHours}h / ${workerCount}人 = 人均 ${perPersonHours.toFixed(1)}h，但施工窗口仅 ${totalBookedHours.toFixed(1)}h，${critical ? '远超' : '大于'}可用时间。建议增加人手、拆分多天或调整预约时间。是否仍要保存？`;
+      if (!(await confirmDialog(msg, "工时异常确认"))) return;
+    }
+  }
 
   // 防重复提交：保存期间加锁，禁用按钮并显示“保存中...”，避免用户误以为卡住而重复点击导致重复保存
   if (window._savingProject) return;
@@ -7474,7 +7549,7 @@ function openRepairReschedule(projectId, repairId) {
         <button class="btn primary" onclick="submitRepairReschedule('${projectId}','${repairId}')">确定改期</button>
       </div>
     </div>`;
-  modal.open("📅 改期维修", form);
+  modal.open(svgCal(18) + " 改期维修", form);
 }
 
 async function submitRepairReschedule(projectId, repairId) {
@@ -8099,7 +8174,7 @@ function renderConstruction() {
           ${(ro.status === "待维修") ? `
           <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
             ${perm.completeRepair() ? `<button class="btn small success" onclick="completeRepair('${p.id}','${ro.id}')">✅ 完成</button>` : ""}
-            ${perm.createRepair() ? `<button class="btn small" onclick="openRepairReschedule('${p.id}','${ro.id}')">📅 改期</button>` : ""}
+            ${perm.createRepair() ? `<button class="btn small" onclick="openRepairReschedule('${p.id}','${ro.id}')">${svgCal(13)} 改期</button>` : ""}
             ${perm.createRepair() ? `<button class="btn small danger" onclick="deleteRepairOrder('${p.id}','${ro.id}')">🗑 删除</button>` : ""}
           </div>` : ""}
         </div>
@@ -11282,7 +11357,12 @@ function generateWorkerScheduleDescription(dateStr = null) {
     const overtimeProjects = allTodayProjects.filter(p => getForgottenCompleteInfo(p));
 
     const highLoadWorkers = Object.entries(workerHours).filter(([name, hrs]) => parseFloat(hrs) > 10);
-    if (overtimeProjects.length > 0 || highLoadWorkers.length > 0) {
+    // 工时不可行检测：人均需工时 > 当天可用施工窗口
+    const infeasibleProjects = allTodayProjects
+      .map(p => ({ p, f: checkProjectHourFeasibility(p, dateStrFormatted) }))
+      .filter(({ f }) => !f.ok);
+
+    if (overtimeProjects.length > 0 || highLoadWorkers.length > 0 || infeasibleProjects.length > 0) {
       description += `<div class="sched-sec-h">⚠️ 今日需关注</div>`;
       if (overtimeProjects.length > 0) {
         const overtimeNames = overtimeProjects.slice(0, 5).map(p => {
@@ -11291,6 +11371,15 @@ function generateWorkerScheduleDescription(dateStr = null) {
         }).join("、");
         const moreCount = overtimeProjects.length > 5 ? `等${overtimeProjects.length}个` : "";
         description += `<div class="sched-warn-amber strong">⏰ <strong>超时提醒</strong>：${overtimeNames}${moreCount}疑似忘记点完工，请确认${overtimeProjects.some(p => getForgottenCompleteInfo(p).level === "overnight") ? "（含跨夜项目）" : ""}！</div>`;
+      }
+      if (infeasibleProjects.length > 0) {
+        const infList = infeasibleProjects.slice(0, 5).map(({ p, f }) => {
+          const workers = Math.max(1, (p.assignedWorkerIds || []).length);
+          return `${esc(p.name)}（${workers}人×${f.availableHours.toFixed(1)}h窗口需人均${f.perPersonHours.toFixed(1)}h）`;
+        }).join("、");
+        const moreCount = infeasibleProjects.length > 5 ? `等${infeasibleProjects.length}个` : "";
+        const isCritical = infeasibleProjects.some(({ f }) => f.level === "critical");
+        description += `<div class="${isCritical ? 'sched-warn-red' : 'sched-warn-amber'}">⚠️ <strong>工时异常</strong>：${infList}${moreCount}人均工时大于当天可用施工时间，建议增加人手、缩短工时或调整施工时间！</div>`;
       }
       if (highLoadWorkers.length > 0) {
         const highLoadList = highLoadWorkers.map(([name, hrs]) => `${esc(name)}(${hrs}小时)`).join("、");
@@ -11332,10 +11421,15 @@ function generateWorkerScheduleDescription(dateStr = null) {
           const endTime = pEnd ? `${String(pEnd.getHours()).padStart(2, "0")}:${String(pEnd.getMinutes()).padStart(2, "0")}` : "";
           timeExtra = startTime ? `${startTime}${endTime ? "-" + endTime : "起"}` : "";
         }
-        const metaText = [note, timeExtra].filter(Boolean).join(" · ");
+        const f = checkProjectHourFeasibility(p, dateStrFormatted);
+        const metaParts = [];
+        if (note) metaParts.push(`<span style="color:${teamReasonColor}">${esc(note)}</span>`);
+        if (timeExtra) metaParts.push(`<span>${esc(timeExtra)}</span>`);
+        if (!f.ok) metaParts.push(`<span style="color:${f.level === 'critical' ? '#dc2626' : '#f59e0b'};font-weight:500;">⚠ 人均${f.perPersonHours.toFixed(1)}h，但当天仅${f.availableHours.toFixed(1)}h可用</span>`);
+        const metaHtml = metaParts.join(' <span style="color:#d1d5db;">·</span> ');
         description += `<div class="sched-team-card">`;
         description += `<div class="sched-team-head"><span class="sched-team-badge">👥</span><span class="sched-team-name">${esc(p.name)}</span><span class="sched-team-chip">${workers.length}人</span></div>`;
-        description += `${metaText ? `<div class="sched-team-meta"><span class="sched-team-reason" style="color:${teamReasonColor}">${esc(metaText)}</span></div>` : ""}`;
+        description += `${metaHtml ? `<div class="sched-team-meta">${metaHtml}</div>` : ""}`;
         description += `<div class="sched-team-body">${chips}</div>`;
         description += `</div>`;
       });
@@ -11619,16 +11713,21 @@ function generateWorkerScheduleDescription(dateStr = null) {
     // 跨天项目：列出各项目的计划/实际工时，避免单看汇总被 0 或超大数字误导
     const crossDayProjects = allTodayProjects.filter(p => Array.isArray(p.workSegments) && p.workSegments.length > 1);
     if (crossDayProjects.length > 0) {
-      description += '<div class="sched-hours-crossday" style="margin-top:10px;padding:8px 10px;background:#f8fafc;border-radius:6px;border-left:3px solid #6366f1;">';
-      description += '<div style="font-size:12px;font-weight:600;color:#4f46e5;margin-bottom:6px;">📅 跨天项目实际工时明细</div>';
+      description += '<div class="sched-hours-crossday">';
+      description += '<div class="sched-hours-crossday-title">' + svgCal(13) + ' 跨天项目实际工时明细</div>';
       crossDayProjects.forEach(p => {
         const est = Number(p.estimatedHours) || 0;
         const actual = calcProjectActualPersonHours(p);
         const segs = getBookedSegments(p);
-        const durationText = segs.map(s => `${dateKey(s.start)} ${s.startHM}~${s.endHM}`).join('、');
-        description += `<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f1f5f9;gap:8px;">
-          <span style="color:#334155;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(durationText)}">${esc(p.name)} <span style="color:#94a3b8;">${esc(durationText)}</span></span>
-          <span style="font-weight:500;color:${actual > 0 ? (actual > est ? '#dc2626' : '#16a34a') : '#94a3b8'};flex-shrink:0;">${actual.toFixed(1)} / ${est.toFixed(1)} h</span>
+        const durationText = formatCrossDaySegmentsCompact(segs);
+        const fullDurationText = segs.map(s => `${dateKey(s.start)} ${s.startHM}~${s.endHM}`).join('、');
+        const status = actual > 0 ? (actual > est ? 'over' : 'ok') : 'zero';
+        description += `<div class="sched-hours-crossday-row">
+          <div class="sched-hours-crossday-main" title="${esc(fullDurationText)}">
+            <span class="sched-hours-crossday-name">${esc(p.name)}</span>
+            <span class="sched-hours-crossday-time">${esc(durationText)}</span>
+          </div>
+          <span class="sched-hours-crossday-hours" data-status="${status}">${actual.toFixed(1)} / ${est.toFixed(1)} h</span>
         </div>`;
       });
       description += '</div>';
@@ -11770,7 +11869,10 @@ function generateWorkerScheduleDescription(dateStr = null) {
       });
       const outsourcedWorkers = (p.outsourcedWorkers || "").split(",").map(n => n.trim()).filter(n => n);
       const allWorkers = [...workers, ...outsourcedWorkers.map(n => `${n}（外协）`)];
-      
+
+      const feasibility = checkProjectHourFeasibility(p, dateStrFormatted);
+      const feasibilityBadge = feasibility.ok ? "" : `<span style="display:inline-flex;align-items:center;gap:2px;margin-left:6px;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:500;${feasibility.level === 'critical' ? 'color:#b91c1c;background:#fecaca;border:1px solid #fca5a5;' : 'color:#92400e;background:#fde68a;border:1px solid #fcd34d;'}white-space:nowrap;">⚠ 工时异常</span>`;
+
       const statusClass = isOverdue ? 'overdue' : `status-${p.status}`;
 
       /* 构建展开详情内容 */
@@ -11792,11 +11894,11 @@ function generateWorkerScheduleDescription(dateStr = null) {
           <div class="schedule-progress-header" onclick="toggleProgressDetail(this)" data-pid="${esc(p.id)}">
             <div class="schedule-progress-title">
               <span class="schedule-progress-name" style="cursor:pointer;">${esc(p.name)}</span>
-              ${isCrossDayTrack && todaySeg && segs.length > 1 ? `<span class="badge crossday" style="margin-left:6px;font-size:10px;padding:1px 7px;">📅 第${segs.findIndex(s => s.date === todaySeg.date) + 1}天/共${segs.length}天</span>` : ""}
+              ${isCrossDayTrack && todaySeg && segs.length > 1 ? `<span class="badge crossday" style="margin-left:6px;font-size:10px;padding:1px 7px;">${svgCal(11)} 第${segs.findIndex(s => s.date === todaySeg.date) + 1}天/共${segs.length}天</span>` : ""}
               <span class="schedule-progress-store">${esc(storeName)}</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-              <span class="schedule-progress-time">${trackTimeText} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
+              <span class="schedule-progress-time">${trackTimeText} ${feasibilityBadge} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
               <span class="progress-toggle-icon">▶</span>
             </div>
           </div>
@@ -11822,6 +11924,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
               ${p.phone ? `<div class="detail-row"><span class="detail-label">📞 电话</span><a class="detail-value" href="javascript:void(0)" data-tel="${esc(p.phone)}" onclick="event.stopPropagation(); callPhone(event)">${esc(p.phone)}</a></div>` : ''}
               ${p.address ? `<div class="detail-row"><span class="detail-label">📍 地址</span><span class="detail-value">${esc(p.address)}</span></div>` : ''}
               <div class="detail-row"><span class="detail-label">⏱ 预计工时</span><span class="detail-value">${estHours > 0 ? estHours + ' 小时' : '未设置'}</span></div>
+              ${!feasibility.ok ? `<div class="detail-row"><span class="detail-label">⚠ 工时可行性</span><span class="detail-value" style="color:${feasibility.level === 'critical' ? '#b91c1c' : '#f59e0b'};font-weight:600;">人均需 ${feasibility.perPersonHours.toFixed(1)}h，当天仅 ${feasibility.availableHours.toFixed(1)}h 可用，建议增加人手或调整预约</span></div>` : ''}
               <div class="detail-row"><span class="detail-label">✅ 实际工时</span><span class="detail-value" style="color:${statusColor};font-weight:600;">${actualHours > 0 ? actualHours.toFixed(1) + ' 小时' : '暂无'}</span></div>
               ${p.startedAt ? `<div class="detail-row"><span class="detail-label">🚀 开工时间</span><span class="detail-value">${fmtDateTime(p.startedAt)}</span></div>` : ''}
               ${p.finishedAt ? `<div class="detail-row"><span class="detail-label">🏁 完成时间</span><span class="detail-value">${fmtDateTime(p.finishedAt)}</span></div>` : ''}
@@ -12220,7 +12323,7 @@ function openCompleteProjectForm(id) {
     const lastEndStr = `${esc(dateKey(lastSeg.end))} ${esc(lastSeg.endHM)}`;
     form += `<div class="form-row" style="grid-column:1/-1;background:#fff7ed;padding:12px 14px;border-radius:8px;border-left:4px solid #ea580c;margin-bottom:12px;">
       <div style="display:flex;align-items:flex-start;gap:8px;">
-        <span style="font-size:18px;line-height:1.2;">📅</span>
+        ${svgCal(18)}
         <div>
           <div style="font-weight:600;color:#c2410c;font-size:13px;margin-bottom:4px;">跨天项目 · 尚未到预约最后一天</div>
           <div style="font-size:12px;color:#9a3412;line-height:1.6;">
@@ -18911,6 +19014,9 @@ function renderTimelineInDetail() {
       }, 0) : 0;
       const conflictClass = conflicts >= 1 ? "timeline-task-conflict" : "";
       const overtimeClass = isOvertime ? "timeline-task-overtime" : "";
+      // 工时可行性提示：人均预约工时显著超过当天可用施工窗口时高亮（跨天按当天分段判定）
+      const feas = checkProjectHourFeasibility(p, calSelectedDate);
+      const feasClass = !feas.ok ? (feas.level === "critical" ? " timeline-task-infeasible-critical" : " timeline-task-infeasible-warn") : "";
       const isCrossDay = Array.isArray(p.workSegments) && p.workSegments.length > 1;
       // 跨天多段项目禁止时间线拖拽（避免破坏分段数据，改期请到预约弹窗）
       const canDrag = p.status === STATUS.BOOKED && !isCrossDay;
@@ -18931,7 +19037,7 @@ function renderTimelineInDetail() {
       workers = workers || "未分配";
 
       return `
-        <div class="timeline-task ${statusClass} ${conflictClass} ${overtimeClass} ${lockClass} ${overdueClass}"
+        <div class="timeline-task ${statusClass} ${conflictClass} ${overtimeClass} ${feasClass} ${lockClass} ${overdueClass}"
              ${dragAttr}
              data-project-id="${p.id}"
              data-start="${start.toISOString()}"
@@ -18948,10 +19054,11 @@ function renderTimelineInDetail() {
               ${(p.repairOrders || []).some(ro => ro && ro.status === "待维修") ? `<span class="timeline-task-repair-badge">🔧 维修</span>` : ""}
               ${isOverdue ? `<span class="timeline-task-overdue-badge">🔴 超期</span>` : ""}
               ${hasOutsourced(p) ? `<span class="timeline-task-outsourced-badge">🤝 外协</span>` : ""}
-              ${p.originalAppointmentTime || p.timeModified ? `<span class="timeline-task-modified-badge">📅 已改期</span>` : ""}
+              ${p.originalAppointmentTime || p.timeModified ? `<span class="timeline-task-modified-badge">${svgCal(12)} 已改期</span>` : ""}
               ${isOvertime ? `<span class="timeline-task-overtime-badge">🌙 加班</span>` : ""}
-              ${isCrossDay ? `<span class="timeline-task-crossday-badge">📅 跨天${p.workSegments.length}天</span>` : ""}
+              ${isCrossDay ? `<span class="timeline-task-crossday-badge">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
               ${conflicts >= 1 ? `<span class="timeline-task-conflict-badge">⚠ ${conflicts} 冲突</span>` : ""}
+              ${!feas.ok ? `<span class="timeline-task-infeasible-badge">⚠ ${feas.level === "critical" ? "工时严重异常" : "工时异常"}</span>` : ""}
             </div>
           </div>
           <div class="timeline-task-info">
@@ -20807,7 +20914,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v85eb935d";
+  const APP_VERSION = "vca1efb85";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
