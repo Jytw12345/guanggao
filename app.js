@@ -75,6 +75,39 @@ const STATUS = {
   CANCELLED: "已取消",
 };
 
+/*
+ * 状态色唯一来源（单一事实来源）。
+ * fg=文字/色条主色，bg=徽章浅底，border=徽章描边。
+ * 以下三处全部从这里派生，禁止再手写十六进制：
+ *   1) CSS 徽章 .badge.<状态> （运行时由 injectStatusBadgeStyles() 注入）
+ *   2) 店面预约统计色条 SS_FG
+ *   3) Excel 导出 statusColorMap
+ */
+const STATUS_COLOR = {
+  '预约中': { fg: '#1d4ed8', bg: '#eef6ff', border: '#bfdbfe' },
+  '施工中': { fg: '#b45309', bg: '#fffbeb', border: '#fde68a' },
+  '已完工': { fg: '#15803d', bg: '#ecfdf5', border: '#86efac' },
+  '已验收': { fg: '#5b21b6', bg: '#f5f3ff', border: '#c4b5fd' },
+  '已审核': { fg: '#155e75', bg: '#ecfeff', border: '#99f6e4' },
+  '已暂停': { fg: '#c2410c', bg: '#fff7ed', border: '#fed7aa' },
+  '已延期': { fg: '#dc2626', bg: '#fef2f2', border: '#fca5a5' },
+  '已取消': { fg: '#6b7280', bg: '#f9fafb', border: '#d1d5db' },
+};
+function statusHexToArgb(hex) { return 'FF' + hex.replace('#', '').toUpperCase(); }
+// 运行时把状态色注入为 .badge.<状态> 规则，使 CSS 不再是独立来源
+function injectStatusBadgeStyles() {
+  const rules = Object.entries(STATUS_COLOR).map(([s, c]) =>
+    `.badge.${s}{background:${c.bg};color:${c.fg};border:1px solid ${c.border};}`
+  ).join('');
+  let el = document.getElementById('status-badge-style');
+  if (!el) {
+    el = document.createElement('style');
+    el.id = 'status-badge-style';
+    document.head.appendChild(el);
+  }
+  el.textContent = rules;
+}
+
 // 请假状态枚举（别名常量：值必须保持为原始字符串字面量，不可写成 LEAVE_STATUS.PENDING，否则会自引用触发 TDZ）
 const LEAVE_STATUS = {
   PENDING: "pending",
@@ -11108,7 +11141,23 @@ function editWorkLog(pid, lid) {
       if (!date) { toast("请选择施工日期"); return false; }
       const workType = document.getElementById("editWorkType").value;
       const level = document.getElementById("editLevel").value;
-      const note = document.getElementById("editNote").value.trim();
+      const inputNote = document.getElementById("editNote").value.trim();
+      const originalNote = log.note || "";
+      const wasAutoNote = originalNote.startsWith("系统自动计算");
+      const originalType = log.isOutsourced ? "outsourced" : "internal";
+      const hasChanged =
+        workerId !== log.workerId ||
+        workerName !== log.workerName ||
+        hours !== Number(log.hours) ||
+        date !== log.date ||
+        workType !== (log.workType || "") ||
+        level !== (log.level || "中级") ||
+        type !== originalType;
+      // 系统自动计算的工时被修改、且用户没有手动改写说明时，自动标注为手动修正，并保留原始计算依据
+      let note = inputNote;
+      if (wasAutoNote && hasChanged && inputNote === originalNote) {
+        note = `手动修正（原${originalNote}）`;
+      }
       await repo.updateWorkLog(pid, lid, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
       clearTimeout(reloadTimer);
       const p2 = getProject(pid);
@@ -13872,7 +13921,7 @@ function renderStats() {
             <th class="col-num">高级</th>
             <th class="col-num">特级</th>
             <th class="col-workers">施工人员工时</th>
-            <th class="col-num" style="color:#8b5cf6">外协人数</th>
+            <th class="col-outsourced" style="color:#8b5cf6">外协人数</th>
             <th class="col-auto">系统自动工时</th>
             <th class="col-notes">工时备注</th>
           </tr>
@@ -13901,7 +13950,7 @@ function renderStats() {
               <td class="col-num" style="color:#f59e0b">${fmtHours(r.levelHours?.高级 || 0)}</td>
               <td class="col-num" style="color:#dc2626">${fmtHours(r.levelHours?.特级 || 0)}</td>
               <td class="col-workers wrap">${workerChips || `<span style="color:var(--muted)">—</span>`}</td>
-              <td class="col-num" style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
+              <td class="col-outsourced" style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
               <td class="col-auto wrap">${autoChips || `<span style="color:var(--muted)">—</span>`}</td>
               <td class="col-notes wrap">${esc(r.notes) || `<span style="color:var(--muted)">—</span>`}</td>
             </tr>`;
@@ -13913,8 +13962,8 @@ function renderStats() {
             <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0))}</td>
             <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0))}</td>
             <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0))}</td>
-            <td></td><td style="color:#8b5cf6;font-weight:600">${totalOutsourcedWorkers}人</td>
-            <td style="color:#f59e0b;font-weight:600">${fmtHours(projRows.reduce((s, r) => s + (r.autoHours || 0), 0))}</td><td></td>
+            <td></td><td class="col-outsourced" style="color:#8b5cf6;font-weight:600">${totalOutsourcedWorkers}人</td>
+            <td class="col-auto" style="color:#f59e0b;font-weight:600">${fmtHours(projRows.reduce((s, r) => s + (r.autoHours || 0), 0))}</td><td></td>
           </tr>
         </tfoot>
       </table>
@@ -15393,24 +15442,18 @@ async function exportStats() {
   const centerDataStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }, border: borderThin };
   const numStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '0.0' };
   const leaveStyle = { font: { color: { argb: 'FFDC2626' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF2F2' } }, alignment: { vertical: 'middle', wrapText: true }, border: borderThin };
-  const positiveStyle = { font: { color: { argb: 'FF047857' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDF4' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '+0.0;-0.0;0.0' };
-  const negativeStyle = { font: { color: { argb: 'FFB91C1C' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF2F2' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '+0.0;-0.0;0.0' };
+  const savedStyle = { font: { color: { argb: 'FF047857' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDF4' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '+0.0;-0.0;0.0' };
+  const exceededStyle = { font: { color: { argb: 'FFB91C1C' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF2F2' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '+0.0;-0.0;0.0' };
   const highlightStyle = { font: { bold: true, color: { argb: 'FF92400E' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '0.0' };
   const moneyStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: borderThin, numFmt: '¥#,##0.00' };
   const labelStyle = { font: { bold: true, color: { argb: 'FF1E3A8A' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: borderThin };
   const valueStyle = { font: { color: { argb: 'FF374151' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }, alignment: { horizontal: 'left', vertical: 'middle' }, border: borderThin };
 
-  const statusColorMap = {
-    '预约中': { fg: 'FF1D4ED8', bg: 'FFDBEAFE' },
-    '施工中': { fg: 'FF15803D', bg: 'FFDCFCE7' },
-    '已暂停': { fg: 'FFA16207', bg: 'FFFEF3C7' },
-    '已延期': { fg: 'FFB91C1C', bg: 'FFFEE2E2' },
-    '已完工': { fg: 'FF4B5563', bg: 'FFF3F4F6' },
-    '已验收': { fg: 'FF4338CA', bg: 'FFE0E7FF' },
-    '已审核': { fg: 'FF0F766E', bg: 'FFCCFBF1' },
-    '已取消': { fg: 'FF6B7280', bg: 'FFE5E7EB' },
-    '未登记': { fg: 'FFA16207', bg: 'FFFEF9C3' }
-  };
+  const statusColorMap = {};
+  Object.entries(STATUS_COLOR).forEach(([s, c]) => {
+    statusColorMap[s] = { fg: statusHexToArgb(c.fg), bg: statusHexToArgb(c.bg) };
+  });
+  statusColorMap['未登记'] = { fg: 'FFA16207', bg: 'FFFEF9C3' };
 
   function applyHeaderRow(sheet, rowIndex) {
     const row = sheet.getRow(rowIndex);
@@ -15456,8 +15499,8 @@ async function exportStats() {
 
   function styleDiffCell(cell, value) {
     if (typeof value !== 'number') return;
-    if (value > 0) cell.style = { ...positiveStyle };
-    else if (value < 0) cell.style = { ...negativeStyle };
+    if (value > 0) cell.style = { ...exceededStyle };
+    else if (value < 0) cell.style = { ...savedStyle };
     else cell.style = { ...numStyle };
   }
 
@@ -16131,25 +16174,58 @@ function renderStoreStats() {
     tot.count += r.count; tot.est += r.recordedEst; tot.act += r.act; tot.diff += r.recordedDiff;
     statuses.forEach((s) => { tot.byStatus[s] = (tot.byStatus[s] || 0) + (r.byStatus[s] || 0); });
   });
+  // 状态配色：直接派生自全局 STATUS_COLOR，与徽章/导出完全一致
+  const SS_FG = Object.fromEntries(Object.entries(STATUS_COLOR).map(([s, c]) => [s, c.fg]));
+  const diffArrow = (d) => (d > 0 ? '▲' : (d < 0 ? '▼' : '—'));
+  // 生成一行「预约分布」堆叠条
+  const distBar = (r) => {
+    if (!r.count) return `<span style="color:var(--muted)">—</span>`;
+    const segs = statuses.filter((s) => r.byStatus[s]).map((s) => {
+      const n = r.byStatus[s];
+      const pct = (n / r.count * 100).toFixed(2);
+      return `<span class="ss-seg" style="width:${pct}%;background:${SS_FG[s]}" title="${esc(s)}: ${n}"></span>`;
+    }).join("");
+    return `<div class="ss-bar">${segs}</div>`;
+  };
   box.innerHTML = `
     <div class="detail-block" style="padding:0;overflow:hidden">
-      <table class="data">
+      <div class="ss-legend">
+        ${statuses.map((s) => `<span class="ss-legend-item"><i style="background:${SS_FG[s]}"></i>${esc(s)}</span>`).join("")}
+      </div>
+      <table class="data store-stats-table">
         <thead>
-          <tr><th>门店</th><th>预约数</th>${statuses.map((s) => `<th>${s}</th>`).join("")}<th>预计工时</th><th>实际工时</th><th>差异</th></tr>
+          <tr>
+            <th class="ss-store">门店</th>
+            <th class="ss-num">预约数</th>
+            <th class="ss-dist">预约分布</th>
+            <th class="ss-num ss-hours">预计工时</th>
+            <th class="ss-num ss-hours">实际工时</th>
+            <th class="ss-num ss-diff">差异</th>
+          </tr>
         </thead>
         <tbody>
-          ${rows.map((r) => `
+          ${rows.map((r, i) => `
             <tr>
-              <td>${esc(r.name)}</td>
-              <td><b>${r.count}</b></td>
-              ${statuses.map((s) => `<td>${r.byStatus[s] || 0}</td>`).join("")}
-              <td>${fmtHours(r.recordedEst)}</td>
-              <td>${fmtHours(r.act)}</td>
-              <td style="color:${diffColor(r.recordedDiff)};font-weight:600">${fmtSignedDiff(r.recordedDiff)}</td>
+              <td class="ss-store">
+                <span class="ss-rank ${i === 0 ? 'ss-rank--top' : ''}">${i + 1}</span>
+                <span class="ss-store-name">${esc(r.name)}</span>
+              </td>
+              <td class="ss-num"><b>${r.count}</b></td>
+              <td class="ss-dist">${distBar(r)}</td>
+              <td class="ss-num ss-hours">${fmtHours(r.recordedEst)}</td>
+              <td class="ss-num ss-hours">${fmtHours(r.act)}</td>
+              <td class="ss-num ss-diff" style="color:${diffColor(r.recordedDiff)}">${diffArrow(r.recordedDiff)} ${fmtSignedDiff(r.recordedDiff)}</td>
             </tr>`).join("")}
         </tbody>
         <tfoot>
-          <tr><td>合计</td><td>${tot.count}</td>${statuses.map((s) => `<td>${tot.byStatus[s] || 0}</td>`).join("")}<td>${fmtHours(tot.est)}</td><td>${fmtHours(tot.act)}</td><td style="color:${diffColor(tot.diff)};font-weight:600">${fmtSignedDiff(tot.diff)}</td></tr>
+          <tr>
+            <td class="ss-store">合计</td>
+            <td class="ss-num">${tot.count}</td>
+            <td class="ss-dist"></td>
+            <td class="ss-num ss-hours">${fmtHours(tot.est)}</td>
+            <td class="ss-num ss-hours">${fmtHours(tot.act)}</td>
+            <td class="ss-num ss-diff" style="color:${diffColor(tot.diff)}">${diffArrow(tot.diff)} ${fmtSignedDiff(tot.diff)}</td>
+          </tr>
         </tfoot>
       </table>
     </div>`;
@@ -20855,6 +20931,7 @@ function setupHourDiffDrag() {
 }
 
 async function init() {
+  injectStatusBadgeStyles(); // 状态色单一来源：注入 .badge.<状态> 规则
   bindEvents();
   registerSubmitGuards();
   loadCustomDrivers();
@@ -21186,7 +21263,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc7562116";
+  const APP_VERSION = "vbf33e1a6";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

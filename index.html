@@ -86,12 +86,16 @@
       <button class="tab-btn" data-tab="storeStats">店面统计</button>
       <button class="tab-btn" data-tab="outsourced">外协人员</button>
       <div class="tab-dropdown">
-        <button class="tab-btn tab-dropdown-toggle" data-dropdown="settings" type="button" aria-haspopup="true" aria-expanded="false">系统设置 <span class="tab-caret">▾</span></button>
+        <button class="tab-btn tab-dropdown-toggle" data-dropdown="settings" type="button" aria-haspopup="true" aria-expanded="false">🛡️ 系统设置 <span class="tab-caret">▾</span></button>
         <div class="tab-dropdown-menu">
-          <button class="tab-sub" data-tab="accounts" type="button">账号管理</button>
-          <button class="tab-sub" data-tab="rolePerms" type="button">角色权限</button>
-          <button class="tab-sub" data-tab="stores" type="button">门店管理</button>
-          <button class="tab-sub" data-action="reminderSettings" type="button">提醒设置</button>
+          <div class="tab-menu-head">
+            <span class="tab-menu-head__title">⚙️ 管理面板</span>
+            <span class="tab-menu-head__sub">以下为管理员专属功能</span>
+          </div>
+          <button class="tab-sub" data-tab="accounts" type="button"><span class="ts-ico">👤</span><span class="ts-label">账号管理</span><span class="ts-arrow">›</span></button>
+          <button class="tab-sub" data-tab="rolePerms" type="button"><span class="ts-ico">🔐</span><span class="ts-label">角色权限</span><span class="ts-arrow">›</span></button>
+          <button class="tab-sub" data-tab="stores" type="button"><span class="ts-ico">🏪</span><span class="ts-label">门店管理</span><span class="ts-arrow">›</span></button>
+          <button class="tab-sub" data-action="reminderSettings" type="button"><span class="ts-ico">⏰</span><span class="ts-label">提醒设置</span><span class="ts-arrow">›</span></button>
         </div>
       </div>
     </nav>

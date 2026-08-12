@@ -671,10 +671,10 @@ body {
 .tab-dropdown.open .tab-caret { transform: rotate(180deg); }
 .tab-dropdown-menu {
   position: fixed;
-  min-width: 168px;
+  min-width: 216px;
   background: #fff;
   border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  border-radius: 14px;
   box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16);
   padding: 6px;
   display: none;
@@ -690,12 +690,37 @@ body {
   from { opacity: 0; transform: translateY(-6px); }
   to { opacity: 1; transform: none; }
 }
+/* 管理员分组标题 */
+.tab-menu-head {
+  padding: 9px 12px 10px;
+  margin: 2px 2px 4px;
+  border-bottom: 1px solid #eef1f6;
+}
+.tab-menu-head__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  letter-spacing: 0.3px;
+}
+.tab-menu-head__sub {
+  display: block;
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: 3px;
+  letter-spacing: 0.2px;
+}
 .tab-sub {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   border: none;
   background: none;
   text-align: left;
-  padding: 9px 12px;
-  border-radius: 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
   font-size: 13.5px;
   color: #475569;
   cursor: pointer;
@@ -703,12 +728,39 @@ body {
   white-space: nowrap;
   transition: background .15s ease, color .15s ease;
 }
+.tab-sub .ts-ico {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  background: #f1f5f9;
+  transition: background .15s ease;
+}
+.tab-sub .ts-label { flex: 1; }
+.tab-sub .ts-arrow {
+  flex: 0 0 auto;
+  color: #cbd5e1;
+  font-size: 17px;
+  line-height: 1;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity .15s ease, transform .15s ease;
+}
 .tab-sub:hover { background: rgba(99, 102, 241, 0.08); color: #1e293b; }
+.tab-sub:hover .ts-ico { background: #e0ecff; }
+.tab-sub:hover .ts-arrow { opacity: 1; transform: none; color: #6366f1; }
 .tab-sub.active {
   background: linear-gradient(135deg, #6366f1, #4f46e5);
   color: #fff;
   font-weight: 600;
 }
+.tab-sub.active .ts-ico { background: rgba(255, 255, 255, 0.22); }
+.tab-sub.active .ts-arrow { opacity: 1; transform: none; color: #fff; }
 /* 移动端（汉堡菜单展开为纵向列表时），下拉改为内嵌可展开分组 */
 @media (max-width: 768px) {
   .tab-dropdown { position: static; width: 100%; }
@@ -1531,6 +1583,44 @@ select.input {
 }
 .worker-card-head .card-title { margin-bottom: 0; flex: 1; }
 
+/* 外协人员卡片：比施工人员卡片更紧凑精致 */
+#outsourcedWorkerList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+#outsourcedWorkerList .card {
+  padding: 12px 13px;
+}
+#outsourcedWorkerList .worker-avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 14px;
+}
+#outsourcedWorkerList .worker-card-head {
+  gap: 9px;
+  margin-bottom: 7px;
+}
+#outsourcedWorkerList .worker-card-head .card-title h3 {
+  font-size: 15px;
+}
+#outsourcedWorkerList .role-badge--out {
+  font-size: 10px;
+  padding: 1px 7px;
+}
+#outsourcedWorkerList .card-row {
+  padding: 4px 0;
+  font-size: 12.5px;
+}
+#outsourcedWorkerList .card-actions {
+  margin-top: 8px;
+  gap: 6px;
+}
+#outsourcedWorkerList .card-actions .btn.small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 /* 施工人员卡片：工时双栏（累计 + 本月） */
 .worker-hours-row {
   display: flex;
@@ -2102,15 +2192,8 @@ select.input {
   box-shadow: 0 2px 6px rgba(0,0,0,0.08);
 }
 
-.badge.预约中 { background: #eef6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
-.badge.施工中 { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
-.badge.已完工 { background: #ecfdf5; color: #15803d; border: 1px solid #86efac; }
-.badge.已验收 { background: #f5f3ff; color: #5b21b6; border: 1px solid #c4b5fd; }
+/* 状态徽章配色由 app.js 的 STATUS_COLOR 运行时注入（.badge.<状态>），改色只改一处 */
 .badge.overdue { background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5; animation: pulse 1.5s infinite; }
-.badge.已审核 { background: #ecfeff; color: #155e75; border: 1px solid #99f6e4; }
-.badge.已暂停 { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
-.badge.已延期 { background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5; }
-.badge.已取消 { background: #f9fafb; color: #6b7280; border: 1px solid #d1d5db; }
 .badge.rework { background: #faf5ff; color: #7e22ce; border: 1px solid #d8b4fe; }
 .badge.modified { background: #faf5ff; color: #7c3aed; border: 1px solid #ddd6fe; }
 .badge.crossday { background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe; }
@@ -4843,16 +4926,83 @@ table.data td.wrap {
 table.data tr:last-child td { border-bottom: none; }
 table.data tfoot td { font-weight: 600; background: #fafafa; }
 
+/* 店面预约统计表美化 */
+.store-stats-table th,
+.store-stats-table td { text-align: left; }
+.store-stats-table .ss-num { text-align: right; font-variant-numeric: tabular-nums; }
+.store-stats-table .ss-store { white-space: nowrap; }
+.store-stats-table .ss-store-name { font-weight: 600; }
+.store-stats-table .ss-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  margin-right: 8px;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 11px;
+  font-weight: 700;
+}
+.store-stats-table .ss-rank--top { background: #fef3c7; color: #b45309; }
+.store-stats-table .ss-dist { min-width: 130px; }
+.store-stats-table .ss-hours { color: #334155; }
+.store-stats-table .ss-diff { font-weight: 600; white-space: nowrap; }
+.ss-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: #f1f5f9;
+}
+.ss-seg { height: 100%; }
+.ss-seg + .ss-seg { box-shadow: inset 1px 0 0 rgba(255,255,255,0.6); }
+.store-stats-table tbody tr { transition: background .12s; }
+.store-stats-table tbody tr:hover { background: #f8fafc; }
+.ss-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 10px 12px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  background: #fcfcfd;
+}
+.ss-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.ss-legend-item i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
 /* 角色权限配置表 */
-.perm-table th { text-align: center; }
-.perm-table th:first-child { text-align: left; }
-.perm-table td { vertical-align: middle; }
+.perm-table {
+  table-layout: fixed;
+  width: 100%;
+}
+.perm-table th,
+.perm-table td {
+  vertical-align: middle;
+}
+.perm-table th:first-child,
+.perm-table td:first-child {
+  width: 60%;
+  text-align: left;
+}
+.perm-table th:not(:first-child),
+.perm-table td:not(:first-child) {
+  width: 20%;
+  text-align: center;
+}
+.perm-table td:not(:first-child) {
+  padding-left: 4px;
+  padding-right: 4px;
+}
 
 /* 项目工时差异表列宽控制 */
 table.data.project-hours-diff {
   /* 表格最小宽度：保证 17 列都有合理宽度不被压扁；
-     宽屏时 width:100% 自然铺满，窄屏时保持 1400px 触发外层滚动 */
-  min-width: 1400px;
+     宽屏时 width:100% 自然铺满，窄屏时保持 1500px 触发外层滚动 */
+  min-width: 1410px;
 }
 table.data.project-hours-diff th,
 table.data.project-hours-diff td {
@@ -4868,9 +5018,10 @@ table.data.project-hours-diff .col-store { width: 90px; min-width: 90px; max-wid
 table.data.project-hours-diff .col-name { width: 120px; min-width: 120px; max-width: 180px; }
 table.data.project-hours-diff .col-status { width: 64px; min-width: 64px; }
 table.data.project-hours-diff .col-num { width: 44px; min-width: 44px; }
-table.data.project-hours-diff .col-workers { width: 180px; min-width: 180px; max-width: 240px; }
+table.data.project-hours-diff .col-outsourced { width: 72px; min-width: 72px; }
+table.data.project-hours-diff .col-workers { width: 130px; min-width: 130px; max-width: 180px; }
 table.data.project-hours-diff .col-auto { width: 120px; min-width: 120px; max-width: 180px; }
-table.data.project-hours-diff .col-notes { width: 160px; min-width: 160px; max-width: 260px; }
+table.data.project-hours-diff .col-notes { width: 180px; min-width: 180px; max-width: 260px; }
 
 .worker-chip {
   display: inline-flex;
@@ -4889,6 +5040,45 @@ table.data.project-hours-diff .col-notes { width: 160px; min-width: 160px; max-w
 .worker-chip.outsourced { background: #ede9fe; color: #7c3aed; }
 .worker-chip.auto { background: #fef3c7; color: #d97706; }
 .worker-chip b { font-weight: 600; }
+
+/* 项目工时差异表：施工人员工时、系统自动工时两列内部改为整齐纵列，
+   每个 chip 占一行，姓名左对齐、工时右对齐，看起来像一个小表格 */
+table.data.project-hours-diff td.col-workers.wrap,
+table.data.project-hours-diff td.col-auto.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: stretch;
+  vertical-align: top;
+  padding: 10px 8px;
+}
+table.data.project-hours-diff td.col-workers.wrap .worker-chip,
+table.data.project-hours-diff td.col-auto.wrap .worker-chip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 4px 8px;
+  box-sizing: border-box;
+}
+table.data.project-hours-diff td.col-workers.wrap .worker-chip {
+  padding: 3px 6px;
+}
+table.data.project-hours-diff td.col-workers.wrap .worker-chip b,
+table.data.project-hours-diff td.col-auto.wrap .worker-chip b {
+  min-width: 44px;
+  text-align: right;
+  background: rgba(255,255,255,0.55);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+}
+table.data.project-hours-diff td.col-workers.wrap .worker-chip b {
+  min-width: 36px;
+  padding: 1px 4px;
+  margin-left: 4px;
+}
 
 /* 内容列允许换行 */
 table.data.project-hours-diff td.wrap {
@@ -4926,9 +5116,22 @@ table.data.project-hours-diff td.wrap {
 
 .stats-summary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 12px;
   margin-bottom: 18px;
+}
+.stats-summary .stat-card {
+  padding: 12px 8px;
+  min-width: auto;
+  max-width: none;
+  flex: none;
+}
+.stats-summary .stat-card .num { font-size: 22px; }
+.stats-summary .stat-card .lbl {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* #statsTable 本身不滚动，避免上方工时日历/人员工时表跟着滚；
    只有项目工时差异表 .hours-diff-wrap 单独横向滚动 */
