@@ -6124,11 +6124,12 @@ table.data.project-hours-diff thead th {
     font-size: 14px;
   }
 
-  /* 激活时容器弹性增长，input 填满 100% 容器宽度 —— 浏览器自动按剩余空间分配，不会溢出 */
+  /* 激活时容器弹性增长，input 填满 100% 容器宽度；同时设硬上限防溢出 */
   .global-search.active {
     flex: 1 1 0;
     min-width: 0;
-    max-width: none;
+    /* 硬上限：预留 Logo(36) + 同步胶囊(~115) + 用户菜单(~32) + 各 flex 间隙(~12) + 边距，任何屏幕都不出界 */
+    max-width: calc(100vw - 230px);
   }
 
   .global-search.active .gs-input {
