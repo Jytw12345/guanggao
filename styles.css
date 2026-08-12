@@ -1380,9 +1380,10 @@ select.input {
   .card-grid { align-items: start; }
 }
 
-/* 桌面端：卡片设最小高度，避免同行矮卡过矮、参差明显（不强制等高，内容多仍自然撑高） */
+/* 桌面端：仅项目预约卡片设最小高度，避免同行矮卡过矮、参差明显；
+   施工人员、请假等轻量卡片按内容自适应，防止被硬撑出大量空白 */
 @media (min-width: 769px) {
-  .card-grid .card { min-height: 420px; }
+  #projectList.card-grid .card { min-height: 420px; }
 }
 
 /* ===== 项目卡片：整体升级 ===== */
@@ -4348,6 +4349,171 @@ body.modal-open {
     max-width: 470px;
   }
 }
+
+/* 改期信息弹窗：紧凑精致，居中展示原/现预约时间 */
+.modal:has(.reschedule-info) {
+  max-width: 340px;
+}
+.reschedule-info {
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.reschedule-info__item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 10px;
+  border-radius: 10px;
+  text-align: center;
+}
+.reschedule-info__item--old {
+  background: #f1f5f9;
+}
+.reschedule-info__item--new {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+.reschedule-info__label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+}
+.reschedule-info__time {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.reschedule-info__time--old {
+  color: #64748b;
+  text-decoration: line-through;
+  text-decoration-color: #94a3b8;
+}
+.reschedule-info__time--new {
+  color: var(--primary);
+}
+.reschedule-info__arrow {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--primary-light);
+  color: var(--primary);
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 700;
+}
+.reschedule-info__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  background: #f8fafc;
+  padding: 6px 12px;
+  border-radius: 20px;
+  margin-top: 4px;
+}
+.reschedule-info__meta b { color: #334155; font-weight: 600; }
+.reschedule-info__meta-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+@media (max-width: 420px) {
+  .modal:has(.reschedule-info) {
+    max-width: 92vw;
+  }
+  .reschedule-info__time {
+    font-size: 14px;
+  }
+}
+
+/* 通用键值信息弹窗（延期/暂停/超期/请假等） */
+.modal:has(.kv-info) {
+  max-width: 320px;
+  border-radius: 12px;
+}
+.modal:has(.kv-info) .modal-head {
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border-bottom: 1px solid #eef1f6;
+  padding: 11px 14px;
+}
+.modal:has(.kv-info) .modal-head h3 { font-size: 15px; }
+.modal:has(.kv-info) .modal-body { padding: 12px; }
+.kv-info {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kv-info__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #eef1f6;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+  position: relative;
+  overflow: hidden;
+}
+.kv-info__item::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: #cbd5e1;
+}
+.kv-info__item--highlight::before { background: var(--primary); }
+.kv-info__item--warn::before { background: #f97316; }
+.kv-info__icon {
+  flex: 0 0 auto;
+  width: 22px; height: 22px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  background: #f1f5f9;
+}
+.kv-info__item--highlight .kv-info__icon { background: #e0ecff; }
+.kv-info__item--warn .kv-info__icon { background: #ffedd5; }
+.kv-info__body { flex: 1; min-width: 0; padding-top: 0; }
+.kv-info__label {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+.kv-info__value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kv-info__item--highlight .kv-info__value { color: var(--primary); }
+.kv-info__item--warn .kv-info__value { color: #c2410c; }
+@media (max-width: 420px) {
+  .modal:has(.kv-info) {
+    max-width: 92vw;
+  }
+  .modal:has(.kv-info) .modal-body { padding: 12px; }
+  .kv-info__value {
+    font-size: 13px;
+  }
+}
+
 .modal-head {
   display: flex;
   justify-content: space-between;

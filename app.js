@@ -581,6 +581,228 @@ function appointmentLockReason(p) {
   return "";
 }
 
+/* 判断项目预约时间是否真正被改期（当前预约时间 ≠ 最初预约时间）。
+   仅用于 UI 展示：拖回原位或手动改回后不再显示「已改期」。 */
+function isProjectTimeModified(p) {
+  if (!p) return false;
+  if (p.status === STATUS.DELAYED) return false; // 延期状态走自己的「延期」标记
+  if (!p.originalAppointmentTime) return false;
+  const cur = new Date(p.appointmentTime || p.startTime || 0).getTime();
+  const orig = new Date(p.originalAppointmentTime).getTime();
+  return cur !== orig;
+}
+
+/* 点击「已改期」标记：弹出原预约时间 / 现预约时间对比 */
+function showRescheduleInfo(projectId) {
+  const p = getProject(projectId);
+  if (!p || !p.originalAppointmentTime) return;
+  const orig = fmtDateTime(p.originalAppointmentTime);
+  const cur = fmtDateTime(p.appointmentTime || p.startTime);
+  const latest = p.scheduleHistory && p.scheduleHistory.length > 0 ? p.scheduleHistory[p.scheduleHistory.length - 1] : null;
+  const operator = latest && latest.changed_by ? latest.changed_by : (p.createdBy || "未知");
+  const changedAt = latest && latest.changed_at ? fmtDateTime(latest.changed_at) : "";
+  const content = `
+    <div class="reschedule-info">
+      <div class="reschedule-info__item reschedule-info__item--old">
+        <span class="reschedule-info__label">原预约时间</span>
+        <span class="reschedule-info__time reschedule-info__time--old">${esc(orig)}</span>
+      </div>
+      <div class="reschedule-info__arrow">↓</div>
+      <div class="reschedule-info__item reschedule-info__item--new">
+        <span class="reschedule-info__label">现预约时间</span>
+        <span class="reschedule-info__time reschedule-info__time--new">${esc(cur)}</span>
+      </div>
+      ${changedAt ? `
+      <div class="reschedule-info__meta">
+        <span class="reschedule-info__meta-dot"></span>
+        由 <b>${esc(operator)}</b> 于 ${esc(changedAt)} 修改
+      </div>` : ""}
+    </div>`;
+  modal.open(svgCal(18) + " 改期信息", content);
+}
+
+/* 通用键值信息弹窗（延期/暂停等标记的详情复用） */
+function showKVModal(title, items) {
+  if (!items || items.length === 0) items = [{ label: "说明", value: "暂无详情", icon: "ℹ️" }];
+  const body = items.map(it => {
+    const icon = it.icon || (it.variant === "warn" ? "⚠️" : it.variant === "highlight" ? "📌" : "ℹ️");
+    return `
+    <div class="kv-info__item${it.variant ? " kv-info__item--" + it.variant : ""}">
+      <span class="kv-info__icon">${icon}</span>
+      <div class="kv-info__body">
+        <div class="kv-info__label">${esc(it.label)}</div>
+        <div class="kv-info__value">${it.html ? it.html : esc(it.value)}</div>
+      </div>
+    </div>`;
+  }).join("");
+  modal.open(svgCal(16) + " " + title, `<div class="kv-info">${body}</div>`);
+}
+
+/* 点击「已延期」状态胶囊：查看延期详情 */
+function showDelayInfo(projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const items = [];
+  if (p.delayReason) items.push({ label: "延期原因", value: p.delayReason, variant: "highlight", icon: "📝" });
+  if (p.appointmentTime) items.push({ label: "新预约时间", value: fmtDateTime(p.appointmentTime), icon: "🕒" });
+  if (p.originalAppointmentTime && p.originalAppointmentTime !== p.appointmentTime)
+    items.push({ label: "原预约时间", value: fmtDateTime(p.originalAppointmentTime), icon: "↩️" });
+  items.push({ label: "延期次数", value: String(p.delayCount || 0), icon: "🔢" });
+  showKVModal("延期信息", items);
+}
+
+/* 点击「已暂停」状态胶囊：查看暂停详情 */
+function showPauseInfo(projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const items = [];
+  if (p.pauseReason) items.push({ label: "暂停原因", value: p.pauseReason, variant: "highlight", icon: "📝" });
+  if (p.pausedAt) items.push({ label: "暂停时间", value: fmtDateTime(p.pausedAt), icon: "⏸️" });
+  const tooLong = getProjectPausedTooLongInfo(p);
+  if (tooLong) items.push({ label: "已暂停时长", value: tooLong.text, variant: "warn", icon: "⏳" });
+  items.push({ label: "暂停次数", value: String(p.pauseCount || 0), icon: "🔢" });
+  showKVModal("暂停信息", items);
+}
+
+/* 毫秒 → 人类友好时长（如 "3天4小时" / "2小时15分"） */
+function fmtDurationFromMs(ms) {
+  if (ms <= 0) return "0";
+  const totalMin = Math.floor(ms / 60000);
+  const d = Math.floor(totalMin / (60 * 24));
+  const h = Math.floor((totalMin % (60 * 24)) / 60);
+  const m = totalMin % 60;
+  if (d > 0) return h > 0 ? `${d}天${h}小时` : `${d}天`;
+  if (h > 0) return m > 0 ? `${h}小时${m}分` : `${h}小时`;
+  return `${m}分`;
+}
+
+/* 点击「🔴 超期」标记：查看逾期时长与原定完工时间 */
+function showOverdueInfo(projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const now = new Date();
+  const pEnd = new Date(p.endTime || p.appointmentTime);
+  const pStart = new Date(p.appointmentTime || p.startTime);
+  const overdueMs = now - pEnd;
+  const items = [
+    { label: "项目状态", value: p.status, variant: "warn", icon: "📋" },
+    { label: "原定开工时间", value: fmtDateTime(pStart), icon: "🚀" },
+    { label: "原定完工时间", value: fmtDateTime(pEnd), icon: "🏁" },
+    { label: "已超期", value: fmtDurationFromMs(overdueMs), variant: "warn", icon: "⏰" },
+  ];
+  showKVModal("超期信息", items);
+}
+
+/* 点击「⚠️ 人员请假/轮休」标记：查看冲突人员与假期详情 */
+function showLeaveConflictInfo(projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const pStart = new Date(p.appointmentTime || p.startTime);
+  const pEnd = new Date(p.endTime || p.appointmentTime);
+  const all = cache.leaveRecords.filter(r => {
+    if (r.status !== LEAVE_STATUS.APPROVED) return false;
+    return p.assignedWorkerIds && p.assignedWorkerIds.includes(r.workerId);
+  });
+  if (all.length === 0) {
+    showKVModal("人员请假/轮休", [{ label: "提示", value: "当前项目无施工人员请假/轮休记录", icon: "ℹ️" }]);
+    return;
+  }
+  const items = all.map(r => {
+    const typeLabel = LEAVE_TYPE_LABEL[r.leaveType] || "请假";
+    const range = `${r.startDate}${r.startType && r.startType !== "all" ? " " + r.startType : ""} ~ ${r.endDate}${r.endType && r.endType !== "all" ? " " + r.endType : ""}`;
+    const lines = [`📅 ${esc(range)}`];
+    if (r.reason) lines.push(`📝 ${esc(r.reason)}`);
+    const conflict = new Date(`${r.startDate}T${r.startTime || "08:00"}`) < pEnd && new Date(`${r.endDate}T${r.endTime || "18:00"}`) > pStart;
+    return {
+      label: `${esc(r.workerName || "未知")} · ${esc(typeLabel)}${conflict ? "（冲突）" : ""}`,
+      value: "",
+      icon: "👤",
+      html: lines.join("<br>"),
+    };
+  });
+  showKVModal("人员请假/轮休", items);
+}
+
+/* 点击「跨天 N 天」标记：查看每天施工时段 */
+function showCrossDayInfo(projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const segs = getBookedSegments(p);
+  if (!segs || segs.length === 0) {
+    showKVModal("跨天施工", [{ label: "提示", value: "暂无施工日程分段", icon: "ℹ️" }]);
+    return;
+  }
+  const items = segs.map((s, i) => {
+    const crossNight = s.endHM <= s.startHM; // 结束时刻早于开始时刻 → 跨午夜
+    return {
+      label: `第 ${i + 1} 天 · ${esc(s.date)}`,
+      value: "",
+      icon: "📅",
+      html: `🕐 ${esc(s.startHM)} ~ ${esc(s.endHM)}${crossNight ? "（跨夜）" : ""}`,
+    };
+  });
+  showKVModal(`跨天施工（共 ${segs.length} 天）`, items);
+}
+
+/* 点击「加班施工 / 施工超时」标记：查看超时/加班详情 */
+function showOvertimeInfo(projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const info = getProjectOvertimeInfo(p);
+  if (!info) {
+    showKVModal("施工加班/超时", [{ label: "提示", value: "当前不在施工超时/加班状态", icon: "ℹ️" }]);
+    return;
+  }
+  const items = [
+    { label: "项目状态", value: p.status, variant: "warn", icon: "📋" },
+  ];
+  const end = projectEnd(p);
+  if (end && !isNaN(end.getTime())) items.push({ label: "原预约结束时间", value: fmtDateTime(end), icon: "🏁" });
+  if (p.startedAt) items.push({ label: "实际开工时间", value: fmtDateTime(p.startedAt), icon: "🚀" });
+  items.push({ label: info.isAfterWork ? "已加班（下班后）" : "已施工超时", value: fmtDurationFromMs(info.overtimeMs || 0), variant: "warn", icon: info.isAfterWork ? "🌙" : "⏰" });
+  showKVModal("施工加班/超时", items);
+}
+
+/* 点击「🔄 返工 N 次」标记：查看返工历史 */
+function showReworkInfo(projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const logs = (p.actionLogs || []).filter(l => l && l.action === "rework_create");
+  const items = [];
+  if (p.reworkCount > 0) items.push({ label: "累计返工次数", value: String(p.reworkCount), variant: "highlight", icon: "🔢" });
+  if (logs.length === 0) {
+    items.push({ label: "提示", value: "暂无返工记录详情", icon: "ℹ️" });
+  } else {
+    logs.forEach((l, i) => {
+      const lines = [];
+      if (l.time) lines.push(`🕒 ${esc(fmtDateTime(l.time))}`);
+      if (l.operator) lines.push(`👤 ${esc(l.operator)}`);
+      if (l.description) lines.push(`📝 ${esc(l.description)}`);
+      items.push({ label: `第 ${i + 1} 次返工`, value: "", icon: "🔄", html: lines.join("<br>") });
+    });
+  }
+  showKVModal("返工记录", items);
+}
+
+/* 点击「🚨 超时未开工」标记：查看超时时长与原定开工时间 */
+function showOverdueNotStartedInfo(projectId) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const start = new Date(p.appointmentTime || p.startTime);
+  if (isNaN(start.getTime())) {
+    showKVModal("超时未开工", [{ label: "提示", value: "无预约开工时间", icon: "ℹ️" }]);
+    return;
+  }
+  const overdueMs = new Date() - start;
+  const items = [
+    { label: "项目状态", value: p.status, variant: "warn", icon: "📋" },
+    { label: "原定开工时间", value: fmtDateTime(start), icon: "🚀" },
+    { label: "已超时未开工", value: fmtDurationFromMs(overdueMs), variant: "warn", icon: "🚨" },
+    { label: "门店", value: storeName(p.storeId), icon: "🏪" },
+  ];
+  showKVModal("超时未开工", items);
+}
+
 function getProjectDisplayWorkers(p) {
   if (p.status === STATUS.BOOKED) {
     return (p.assignedWorkerIds || []).map((wid) => {
@@ -1497,7 +1719,7 @@ function buildStatusTimeCards(p) {
   };
 
   push("rec-timecard--blue", svgCal(13), "预约时间", p.appointmentTime ? fmtDateTime(p.appointmentTime) : "");
-  if (p.originalAppointmentTime) push("rec-timecard--violet", svgCal(13), "已改期·原预约", fmtDateTime(p.originalAppointmentTime));
+  if (isProjectTimeModified(p)) push("rec-timecard--violet", svgCal(13), "已改期·原预约", fmtDateTime(p.originalAppointmentTime));
   push("rec-timecard--blue", "🚀", "开工时间", p.startedAt ? fmtDateTime(p.startedAt) : "");
   if (p.status === STATUS.PAUSED) {
     const pauseTime = p.pausedAt || (() => {
@@ -3723,7 +3945,7 @@ function renderWorkerAssignmentsText(dateStr, workerId = null) {
       const endStr = evEnd ? `${String(evEnd.getHours()).padStart(2,"0")}:${String(evEnd.getMinutes()).padStart(2,"0")}` : "";
       const timeStr = evStart && evEnd ? `${startStr} ~ ${endStr}` : (evStart ? `从 ${startStr} 起` : "时间待定");
       const workType = (p.workContent && p.workContent.length) ? p.workContent.join("、") : "";
-      const overdueTag = isOverdueNotStarted(p) ? `<span class="badge overdue">🚨 超时未开工</span> ` : "";
+      const overdueTag = isOverdueNotStarted(p) ? `<span class="badge overdue" style="cursor:pointer" title="查看超时未开工详情" onclick="showOverdueNotStartedInfo('${esc(p.id)}')">🚨 超时未开工</span> ` : "";
       const forgottenInfo = getForgottenCompleteInfo(p);
       const forgottenTag = forgottenInfo ? `<span class="badge forgotten">${forgottenInfo.level === "overnight" ? "🌙 跨夜未完工" : "⚠️ " + forgottenInfo.text}</span> ` : "";
       const repairTag = isRepairTask ? `<span class="badge pending">🔧 维修</span> ` : "";
@@ -6334,7 +6556,7 @@ function renderProjects() {
     const pausedTooLongInfo = getProjectPausedTooLongInfo(p); // 已暂停超阈值，疑似忘记恢复施工
     const isPausedTooLong = !!pausedTooLongInfo;
     const isDelayed = p.status === STATUS.DELAYED;
-    const isRescheduled = !isDelayed && (!!p.originalAppointmentTime || p.timeModified); // 改过预约时间（持久化原值 / 会话内刚改）
+    const isRescheduled = isProjectTimeModified(p); // 当前预约时间确实不同于最初预约时间
     const isCrossDay = Array.isArray(p.workSegments) && p.workSegments.length > 1; // 跨天多段施工
     const workElapsedText = workingTooLong ? (() => {
       const h = (Date.now() - new Date(p.startedAt).getTime()) / 3600000;
@@ -6359,15 +6581,14 @@ function renderProjects() {
         <div class="card-title">
           <h3>${esc(p.name)}</h3>
           <div style="display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 50%;">
-            <span class="badge ${p.status}">${p.status}</span>
-            ${isCrossDay ? `<span class="badge crossday">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
+            ${isRescheduled ? `<span class="badge modified" style="cursor:pointer" title="查看改期信息" onclick="showRescheduleInfo('${esc(p.id)}')">${svgCal(12)} 已改期</span>` : ""}
+            ${isDelayed ? `<span class="badge ${p.status}" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status}" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}</span>` : `<span class="badge ${p.status}">${p.status}</span>`}
+            ${isCrossDay ? `<span class="badge crossday" style="cursor:pointer" title="查看跨天施工日程" onclick="showCrossDayInfo('${esc(p.id)}')">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
             ${workingTooLong ? `<span class="badge ${overnight ? "overdue" : "pending"}">${overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工"} ${workElapsedText}</span>` : ""}
-            ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
-            ${isPausedTooLong ? `<span class="badge overdue">⏸️ 暂停过久 已暂停 ${pausedTooLongInfo.text}</span>` : ""}
+            ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}" style="cursor:pointer" title="查看加班/超时详情" onclick="showOvertimeInfo('${esc(p.id)}')">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
             ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
-            ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
-            ${isRescheduled ? `<span class="badge modified">${svgCal(12)} 已改期</span>` : ""}
-            ${leaveConflicts.length > 0 ? `<span class="badge danger">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
+            ${isOverdue ? `<span class="badge overdue" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
+            ${leaveConflicts.length > 0 ? `<span class="badge danger" style="cursor:pointer" title="查看人员请假/轮休" onclick="showLeaveConflictInfo('${esc(p.id)}')">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
           </div>
         </div>
 
@@ -7047,6 +7268,19 @@ async function saveQuickEditProjectTime(id) {
     }
   }
 
+  // 改期留痕：预约时间真正变更时记录操作人
+  if (p.appointmentTime !== payload.appointmentTime) {
+    payload.scheduleHistory = [
+      ...(p.scheduleHistory || []),
+      {
+        original_time: p.appointmentTime,
+        changed_at: new Date().toISOString(),
+        reason: "快速编辑预约时间",
+        changed_by: currentUser && currentUser.name ? currentUser.name : "系统",
+      },
+    ];
+  }
+
   try {
     const saved = await repo.saveProject(payload, id);
     const savedId = (saved && saved.id) || id;
@@ -7220,6 +7454,19 @@ async function saveProject(id) {
       const msg = `${critical ? '⚠️ 工时严重异常' : '⚠️ 工时可能不合理'}：预约总工时 ${estimatedHours}h / ${workerCount}人 = 人均 ${perPersonHours.toFixed(1)}h，但施工窗口仅 ${totalBookedHours.toFixed(1)}h，${critical ? '远超' : '大于'}可用时间。建议增加人手、拆分多天或调整预约时间。是否仍要保存？`;
       if (!(await confirmDialog(msg, "工时异常确认"))) return;
     }
+  }
+
+  // 改期留痕：预约时间真正变更时记录操作人
+  if (id && preExisting && preExisting.appointmentTime !== payload.appointmentTime) {
+    payload.scheduleHistory = [
+      ...(preExisting.scheduleHistory || []),
+      {
+        original_time: preExisting.appointmentTime,
+        changed_at: new Date().toISOString(),
+        reason: "编辑项目预约时间",
+        changed_by: currentUser && currentUser.name ? currentUser.name : "系统",
+      },
+    ];
   }
 
   // 防重复提交：保存期间加锁，禁用按钮并显示“保存中...”，避免用户误以为卡住而重复点击导致重复保存
@@ -8034,7 +8281,7 @@ function renderConstruction() {
           <span class="proj-hero__name">${esc(p.name)}</span>
           <div class="proj-hero__badges">
             <span class="badge ${p.status}">${p.status}</span>
-            ${p.reworkCount > 0 ? `<span class="badge rework">🔄 返工 ${p.reworkCount} 次</span>` : ""}
+            ${p.reworkCount > 0 ? `<span class="badge rework" style="cursor:pointer" title="查看返工记录" onclick="showReworkInfo('${esc(p.id)}')">🔄 返工 ${p.reworkCount} 次</span>` : ""}
             ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
           </div>
         </div>
@@ -19062,11 +19309,11 @@ function renderTimelineInDetail() {
             <span class="timeline-task-name">${esc(p.name)}</span>
             <div class="timeline-task-badges">
               <span class="timeline-task-status status-${p.status}">${p.status}</span>
-              ${p.reworkCount > 0 ? `<span class="timeline-task-rework-badge">🔄 返工 ${p.reworkCount}</span>` : ""}
+              ${p.reworkCount > 0 ? `<span class="timeline-task-rework-badge" style="cursor:pointer" title="查看返工记录" onclick="showReworkInfo('${esc(p.id)}')">🔄 返工 ${p.reworkCount}</span>` : ""}
               ${(p.repairOrders || []).some(ro => ro && ro.status === "待维修") ? `<span class="timeline-task-repair-badge">🔧 维修</span>` : ""}
-              ${isOverdue ? `<span class="timeline-task-overdue-badge">🔴 超期</span>` : ""}
+              ${isOverdue ? `<span class="timeline-task-overdue-badge" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
               ${hasOutsourced(p) ? `<span class="timeline-task-outsourced-badge">🤝 外协</span>` : ""}
-              ${p.originalAppointmentTime || p.timeModified ? `<span class="timeline-task-modified-badge">${svgCal(12)} 已改期</span>` : ""}
+              ${isProjectTimeModified(p) ? `<span class="timeline-task-modified-badge" style="cursor:pointer" title="查看改期信息" onclick="showRescheduleInfo('${esc(p.id)}')">${svgCal(12)} 已改期</span>` : ""}
               ${isOvertime ? `<span class="timeline-task-overtime-badge">🌙 加班</span>` : ""}
               ${isCrossDay ? `<span class="timeline-task-crossday-badge">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
               ${conflicts >= 1 ? `<span class="timeline-task-conflict-badge">⚠ ${conflicts} 冲突</span>` : ""}
@@ -20016,13 +20263,26 @@ async function saveTimelineTaskTime(projectId, newStart, newEnd) {
     renderAll();
     return;
   }
-  
+
   const patch = {
     appointment_time: newStart.toISOString(),
     end_time: newEnd.toISOString(),
     original_appointment_time: p.originalAppointmentTime || p.appointmentTime,
   };
-  
+
+  const timeChanged = newStart.getTime() !== new Date(p.appointmentTime || 0).getTime();
+  if (timeChanged) {
+    patch.schedule_history = [
+      ...(p.scheduleHistory || []),
+      {
+        original_time: p.appointmentTime,
+        changed_at: new Date().toISOString(),
+        reason: "时间线拖动调整",
+        changed_by: currentUser && currentUser.name ? currentUser.name : "系统",
+      },
+    ];
+  }
+
   await repo.patchProject(projectId, patch);
   
   modifiedProjectIds.add(projectId);
