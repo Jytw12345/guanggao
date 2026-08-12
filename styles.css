@@ -13,6 +13,20 @@
   --info: #0891b2;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04);
 
+  /* 统一设计 token：圆角 / 阴影 / 间距（后续组件统一引用，避免 12/14/16px 混用） */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05), 0 2px 6px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 1px 3px rgba(15, 23, 42, 0.05), 0 4px 16px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.16);
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
   /* 施工记录折叠面板配色（提取自原内联样式，统一管理） */
   --rec-blue-bg: #eff6ff; --rec-blue-border: #3b82f6; --rec-blue-text: #1d4ed8; --rec-blue-label: #1d4ed8; --rec-blue-dash: #93c5fd;
   --rec-green-bg: #ecfdf5; --rec-green-border: #22c55e; --rec-green-text: #15803d; --rec-green-label: #166534; --rec-green-dash: #86efac;
@@ -24,6 +38,26 @@
   --tc-green-bg: #ecfdf5; --tc-green-label: #047857; --tc-green-value: #065f46;
   --tc-amber-bg: #fef3c7; --tc-amber-label: #b45309; --tc-amber-value: #92400e;
   --tc-indigo-bg: #e0e7ff; --tc-indigo-label: #6366f1; --tc-indigo-value: #4338ca;
+}
+
+/* 通用页头标题 + 空状态（统一各 tab 节奏，组件可复用） */
+.section-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: 0.2px;
+  margin: 0;
+}
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 28px 16px;
+  color: #94a3b8;
+  font-size: 13px;
+  text-align: center;
 }
 
 * { box-sizing: border-box; }
@@ -625,6 +659,30 @@ body {
   -ms-overflow-style: none;
 }
 .tabs::-webkit-scrollbar { display: none; }
+
+/* 业务类 tab 与管理类入口之间的视觉分隔 */
+.tab-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: linear-gradient(180deg, transparent, #d8dee9 40%, #d8dee9 60%, transparent);
+}
+/* 管理类入口：系统设置，做轻度区分（业务 tab 为纯文字胶囊，此处带浅底） */
+.tab-dropdown-toggle {
+  background: rgba(99, 102, 241, 0.08);
+  color: #4f46e5;
+  font-weight: 600;
+}
+.tab-dropdown-toggle:hover {
+  background: rgba(99, 102, 241, 0.14);
+  color: #4338ca;
+}
+.tab-dropdown.open .tab-dropdown-toggle {
+  background: linear-gradient(135deg, #6366f1, #3b82f6);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.28);
+}
 
 .tab-btn {
   background: none;
@@ -1442,11 +1500,9 @@ select.input {
 .card {
   background: #ffffff;
   border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 20px;
-  box-shadow:
-    0 1px 3px rgba(15, 23, 42, 0.04),
-    0 4px 16px rgba(15, 23, 42, 0.05);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-md);
   position: relative;
   overflow: hidden;
   transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease;
@@ -5349,7 +5405,7 @@ table.data.project-hours-diff thead th {
   justify-content: center;
   gap: 6px;
   background: rgba(255, 255, 255, 0.96);
-  color: #2f6fed;
+  color: #4f46e5;
   font-size: 12px;
   border-radius: 16px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
@@ -5363,7 +5419,7 @@ table.data.project-hours-diff thead th {
   width: 14px;
   height: 14px;
   border: 2px solid rgba(47, 111, 237, 0.25);
-  border-top-color: #2f6fed;
+  border-top-color: #4f46e5;
   border-radius: 50%;
   animation: ptr-spin 0.8s linear infinite;
   display: none;
@@ -9073,9 +9129,9 @@ table.data.project-hours-diff thead th {
   border: 1px solid #e8ebf0;
   border-radius: 16px;
   background: #ffffff;
-  padding: 13px 18px;
+  padding: 12px 16px;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 4px 16px rgba(15,23,42,.04);
+  box-shadow: var(--shadow-md);
   transition: box-shadow .2s ease, border-color .2s ease, transform .15s ease;
   overflow: hidden;
   -webkit-tap-highlight-color: transparent;
@@ -9083,7 +9139,7 @@ table.data.project-hours-diff thead th {
 }
 .veh-card::before {
   content: '';
-  position: absolute; left: 0; top: 15%; bottom: 15%;
+  position: absolute; left: 0; top: 12%; bottom: 12%;
   width: 4px; border-radius: 0 4px 4px 0;
   background: #22c55e;
   transition: background .2s ease;
@@ -9097,11 +9153,11 @@ table.data.project-hours-diff thead th {
   border-color: #93c5fd;
   box-shadow: 0 0 0 3px rgba(47,111,237,.12), 0 4px 16px rgba(15,23,42,.05);
 }
-.veh-card.active::before { background: #2f6fed; }
-.veh-card.busy { background: #fff8f1; }
+.veh-card.active::before { background: #4f46e5; }
+.veh-card.busy { background: linear-gradient(180deg, #fffaf5 0%, #fff 60%); }
 .veh-card.busy::before { background: #f97316; }
 .veh-card.busy.active {
-  background: #fff4ea;
+  background: linear-gradient(180deg, #fff7ed 0%, #fff 60%);
   border-color: #fdba74;
   box-shadow: 0 0 0 3px rgba(249,115,22,.14), 0 4px 16px rgba(15,23,42,.05);
 }
@@ -9125,66 +9181,77 @@ table.data.project-hours-diff thead th {
   white-space: nowrap; letter-spacing: -0.2px;
 }
 .veh-dash-plate {
-  font-size: 10px; letter-spacing: 1px; color: #fff;
-  background: linear-gradient(135deg, #3b82f6, #2f6fed);
-  padding: 3px 9px; border-radius: 7px; font-weight: 700;
+  font-size: 12.5px; letter-spacing: 1px; color: #1d4ed8;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  padding: 2.5px 9px; border-radius: 6px; font-weight: 600;
   white-space: nowrap;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.25), 0 2px 6px rgba(47,111,237,.25);
+  font-variant-numeric: tabular-nums;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: subpixel-antialiased;
+  box-shadow: 0 1px 2px rgba(29,78,216,.10);
 }
 .veh-card-state {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 600; color: #16a34a;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 700; color: #16a34a;
   white-space: nowrap; flex-shrink: 0;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  padding: 3px 9px; border-radius: 999px;
 }
 .veh-card-state-group {
   display: inline-flex; align-items: center; gap: 8px;
   flex-shrink: 0;
 }
 .veh-card-driver {
-  display: inline-flex; align-items: center; gap: 3px;
-  font-size: 12px; font-weight: 700; color: #c2410c;
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 700; color: #c2410c;
   background: linear-gradient(135deg, #fff7ed, #ffedd5);
   border: 1px solid #fed7aa;
-  padding: 3px 9px; border-radius: 8px;
+  padding: 3px 9px; border-radius: 999px;
   white-space: nowrap; line-height: 1.3;
-  box-shadow: 0 1px 3px rgba(234,88,12,.12);
 }
 .veh-card-state .dot {
-  width: 8px; height: 8px; border-radius: 50%;
+  width: 7px; height: 7px; border-radius: 50%;
   background: #22c55e;
+  box-shadow: 0 0 0 1.5px rgba(34,197,94,.25);
 }
-.veh-card.busy .veh-card-state { color: #ea580c; }
-.veh-card.busy .veh-card-state .dot { background: #f97316; }
+.veh-card.busy .veh-card-state { color: #ea580c; background: #fff7ed; border-color: #fed7aa; }
+.veh-card.busy .veh-card-state .dot { background: #f97316; box-shadow: 0 0 0 1.5px rgba(249,115,22,.25); }
 
 /* ── 主行：圆环 + 大数字里程 + 操作 ── */
 .veh-card-main {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   flex: 1 1 auto;
 }
 .veh-card-gauge {
   position: relative;
-  flex: 0 0 54px; width: 54px; height: 54px;
+  flex: 0 0 58px; width: 58px; height: 58px;
 }
-.veh-card-gauge .veh-gauge-svg { width: 54px; height: 54px; display: block; }
+.veh-card-gauge .veh-gauge-svg { width: 58px; height: 58px; display: block; }
 .veh-card-gauge .veh-gauge-readout {
   position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   pointer-events: none;
+  gap: 1px;
 }
 .veh-card-gauge .veh-gauge-km {
-  font-size: 14px; font-weight: 800; line-height: 1;
-  color: #334155; font-variant-numeric: tabular-nums; letter-spacing: -0.5px;
+  font-size: 16px; font-weight: 800; line-height: 1;
+  color: #334155; font-variant-numeric: tabular-nums; letter-spacing: -0.8px;
+}
+.veh-card-gauge .veh-gauge-km small {
+  font-size: 10px; font-weight: 700; margin-left: 1px;
 }
 .veh-card-gauge .veh-gauge-unit {
-  font-size: 9px; color: #94a3b8; margin-top: 1px;
+  font-size: 8.5px; color: #94a3b8; font-weight: 600; line-height: 1.1;
 }
 .veh-card.busy .veh-card-gauge .veh-gauge-km { color: #c2410c; }
 
 .veh-card-hero { flex: 1 1 auto; min-width: 0; }
 .veh-card-km {
-  font-size: 27px; font-weight: 800; color: #1f2937;
+  font-size: 28px; font-weight: 800; color: #1f2937;
   font-variant-numeric: tabular-nums; line-height: 1;
   letter-spacing: -0.8px;
 }
@@ -9239,7 +9306,7 @@ table.data.project-hours-diff thead th {
 }
 .veh-dash-cta {
   font-size: 12px; font-weight: 600;
-  color: var(--primary,#2f6fed);
+  color: var(--primary,#4f46e5);
   padding: 2px 8px; border-radius: 6px; white-space: nowrap; flex-shrink: 0;
   transition: background .18s ease;
 }
@@ -9667,7 +9734,7 @@ table.data.project-hours-diff thead th {
   margin-top: 8px;
   border: none;
   background: transparent;
-  color: var(--primary, #2f6fed);
+  color: var(--primary, #4f46e5);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -9698,15 +9765,22 @@ table.data.project-hours-diff thead th {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin: 18px 0 8px;
+  margin: 14px 0 8px;
   flex-wrap: wrap;
 }
-.veh-history-head .veh-history-title { margin: 0; }
-.veh-view-seg { padding: 0; gap: 0; }
+.veh-history-head .veh-history-title { margin: 0; font-size: 15px; font-weight: 700; color: #0f172a; letter-spacing: 0.2px; }
+.veh-view-seg { padding: 0; gap: 0; background: #f1f5f9; border-radius: 8px; padding: 2px; }
 .veh-view-seg .seg-btn {
-  padding: 6px 14px;
-  font-size: 13px;
-  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  border-color: transparent;
+  background: transparent;
+}
+.veh-view-seg .seg-btn.active {
+  background: #fff;
+  color: var(--primary, #2563eb);
+  box-shadow: 0 1px 3px rgba(15,23,42,.08);
 }
 
 /* 历史记录：筛选栏 + 导出 */
@@ -9716,7 +9790,7 @@ table.data.project-hours-diff thead th {
   flex-wrap: nowrap;
   gap: 8px;
   margin: 0 0 12px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: #f8fafc;
   border: 1px solid #e2e6ef;
   border-radius: 10px;
@@ -9731,39 +9805,43 @@ table.data.project-hours-diff thead th {
 .veh-filter__sel {
   flex: 0 0 auto;
   min-width: 0;
-  width: 120px;
-  padding: 6px 8px;
+  width: 110px;
+  padding: 5px 8px;
   font-size: 13px;
+  border-radius: 8px;
 }
 .veh-filter__sel--vehicle {
-  width: 190px; /* 车辆名 + 车牌号较长，适当加宽 */
+  width: 170px; /* 车辆名 + 车牌号较长，适当加宽 */
 }
 .veh-filter__dates {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   flex: 0 0 auto;
 }
 .veh-filter__date {
-  width: 118px;
-  padding: 6px 8px;
+  width: 112px;
+  padding: 5px 8px;
   font-size: 13px;
+  border-radius: 8px;
 }
-.veh-filter__sep { color: #64748b; font-size: 13px; }
+.veh-filter__sep { color: #64748b; font-size: 12px; }
 .veh-filter__actions {
   display: flex;
-  gap: 8px;
+  gap: 7px;
   justify-content: flex-end;
   flex: 0 0 auto;
   margin-left: auto;
 }
 .veh-filter__actions .btn.small {
   flex: 0 0 auto;
-  padding: 6px 16px;
+  padding: 5px 14px;
   text-align: center;
   justify-content: center;
+  border-radius: 8px;
+  font-size: 13px;
 }
-@media (max-width: 560px) {
+@media (max-width: 720px) {
   .veh-filter { flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
   .veh-filter__row { flex: 1 1 100%; flex-wrap: nowrap !important; }
   .veh-filter__sel { flex: 1 1 0%; width: auto; min-width: 0; }
@@ -10062,9 +10140,9 @@ table.data.project-hours-diff thead th {
 
 /* ===== 历史用车：紧凑卡片 ===== */
 #vehicleTripList.card-grid {
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   grid-auto-rows: auto;
-  gap: 14px;
+  gap: 12px;
 }
 .veh-trip {
   display: flex;
@@ -10074,12 +10152,12 @@ table.data.project-hours-diff thead th {
   border: 1px solid #e7ebf3;
   border-left: 3px solid #34d399;
   border-radius: 12px;
-  padding: 13px 15px;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  padding: 12px 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 .veh-trip:hover {
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.10);
+  box-shadow: 0 5px 16px rgba(15, 23, 42, 0.08);
   border-color: #cbd5e1;
   transform: translateY(-1px);
 }
@@ -10179,11 +10257,11 @@ table.data.project-hours-diff thead th {
 .veh-trip__hero {
   display: flex;
   align-items: stretch;
-  background: linear-gradient(135deg, #eef4ff 0%, #f3f0ff 100%);
+  background: linear-gradient(135deg, #f5f7ff 0%, #f8f6ff 100%);
   border: 1px solid #e4ebf8;
-  border-radius: 12px;
-  padding: 12px 14px;
-  margin-bottom: 12px;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
 }
 .veh-hero__item {
   flex: 1 1 0;
@@ -10192,7 +10270,7 @@ table.data.project-hours-diff thead th {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 7px;
+  gap: 5px;
 }
 .veh-hero__item--km { align-items: center; text-align: center; }
 .veh-hero__item--purpose { align-items: center; text-align: center; flex: 0 0 auto; min-width: 0; }
@@ -10200,10 +10278,10 @@ table.data.project-hours-diff thead th {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 800;
-  padding: 5px 14px;
-  border-radius: 9px;
+  padding: 4px 12px;
+  border-radius: 8px;
   white-space: nowrap;
   line-height: 1.2;
 }
@@ -10213,7 +10291,7 @@ table.data.project-hours-diff thead th {
 .veh-hero__purpose--deliver { color: #1d4ed8; background: #dbeafe; }
 .veh-hero__purpose--default { color: #475569; background: #eef2f7; }
 .veh-hero__label {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: #64748b;
   letter-spacing: 0.03em;
@@ -10221,16 +10299,16 @@ table.data.project-hours-diff thead th {
 .veh-hero__driver {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
 }
 .veh-hero__avatar {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   color: #fff;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -10238,21 +10316,21 @@ table.data.project-hours-diff thead th {
   flex-shrink: 0;
 }
 .veh-hero__driver b {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 800;
   color: #1e293b;
-  max-width: 180px;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .veh-hero__none {
-  font-size: 14px !important;
+  font-size: 13px !important;
   font-weight: 600 !important;
   color: #94a3b8 !important;
 }
 .veh-hero__km {
-  font-size: 27px;
+  font-size: 24px;
   font-weight: 800;
   color: #2563eb;
   line-height: 1;
@@ -10260,7 +10338,7 @@ table.data.project-hours-diff thead th {
 }
 .veh-hero__km i {
   font-style: normal;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   color: #93c5fd;
   margin-left: 3px;
@@ -10268,23 +10346,23 @@ table.data.project-hours-diff thead th {
 .veh-hero__divider {
   width: 1px;
   background: linear-gradient(180deg, transparent, #cdd8ec, transparent);
-  margin: 0 16px;
+  margin: 0 12px;
 }
 /* 时间-里程配对区 */
 .veh-trip__time-km {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin: 12px 0;
+  gap: 8px;
+  margin: 10px 0;
 }
 .veh-time-km__item {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   background: #f8fafc;
   border: 1px solid #eef2f7;
-  border-radius: 10px;
-  padding: 10px 12px;
+  border-radius: 9px;
+  padding: 8px 10px;
   min-width: 0;
 }
 .veh-time-km__row {
@@ -10312,19 +10390,19 @@ table.data.project-hours-diff thead th {
   flex: 1;
 }
 .veh-time-km__label {
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
   color: #94a3b8;
   line-height: 1.2;
 }
 .veh-time-km__date {
-  font-size: 12.5px;
+  font-size: 11.5px;
   font-weight: 700;
   color: #334155;
   line-height: 1.3;
 }
 .veh-time-km__time {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
   color: #0f172a;
   line-height: 1.2;
@@ -10333,15 +10411,15 @@ table.data.project-hours-diff thead th {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-top: 8px;
+  padding-top: 6px;
   border-top: 1px dashed #e2e8f0;
 }
 .veh-time-km__value span {
-  font-size: 10.5px;
+  font-size: 10px;
   color: #94a3b8;
 }
 .veh-time-km__value b {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
   color: #1e293b;
   font-variant-numeric: tabular-nums;
@@ -10414,17 +10492,20 @@ table.data.project-hours-diff thead th {
 .veh-trip__actions {
   display: flex;
   gap: 6px;
-  margin-top: auto;  /* 桌面端：推到底部，同行卡片按钮对齐 */
-  padding-top: 12px;  /* 与上方内容保持间距 */
+  margin-top: auto;
+  padding-top: 10px;
 }
 .veh-trip__actions .btn.small {
   flex: 1;
   text-align: center;
   justify-content: center;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 12px;
 }
 @media (max-width: 480px) {
   #vehicleTripList.card-grid { grid-template-columns: 1fr; }
-  .veh-trip__actions { margin-top: 12px; padding-top: 0; }  /* 移动端：自然高度，不强制对齐 */
+  .veh-trip__actions { margin-top: 10px; padding-top: 0; }
   .veh-trip__time-km { gap: 8px; }
   .veh-time-km__item { padding: 9px 10px; }
   .veh-time-km__value b { font-size: 14px; }
@@ -10442,12 +10523,59 @@ table.data.project-hours-diff thead th {
   background: #fafbff;
   padding: 14px 16px;
 }
-.veh-summary + .veh-summary {
-  margin-top: 16px;
-}
-.veh-sum-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.veh-sum-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
 .veh-sum-title { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .veh-month { width: auto; flex: 0 0 auto; }
+
+/* 合并后的车辆 + 人员双栏汇总 */
+.veh-sum-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.veh-sum-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+}
+.veh-sum-col__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 2px;
+}
+.veh-sum-col__icon {
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  background: #f1f5f9;
+  border-radius: 7px;
+  font-size: 13px;
+  line-height: 1;
+}
+.veh-sum-col__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+}
+.veh-sum-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 24px 12px;
+  background: #f8fafc;
+  border-radius: 10px;
+}
+@media (max-width: 768px) {
+  .veh-sum-cols { grid-template-columns: 1fr; gap: 12px; }
+}
 
 /* 汇总：简洁表格风格（无色块） */
 .veh-sum-table {
@@ -10534,36 +10662,52 @@ table.data.project-hours-diff thead th {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 12px;
-  margin: 12px 0;
+  margin: 0;
+}
+/* 合并面板内的单列紧凑排列 */
+.veh-sum-col .veh-sum-grid {
+  grid-template-columns: 1fr;
+  gap: 8px;
 }
 .veh-sum-card {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   gap: 10px;
   background: #fff;
   border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 12px 14px;
+  border-radius: 10px;
+  padding: 10px 12px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.veh-sum-col .veh-sum-card {
+  padding: 9px 11px;
+  gap: 8px;
 }
 .veh-sum-card__head {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
   min-width: 0;
+  max-width: 42%;
 }
 .veh-sum-card__icon {
-  font-size: 22px;
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  background: #eff6ff;
+  border-radius: 8px;
+  font-size: 15px;
   line-height: 1;
   flex-shrink: 0;
 }
 .veh-sum-card__avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   background: linear-gradient(135deg, #6366f1, #8b5cf6);
   color: #fff;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -10572,9 +10716,9 @@ table.data.project-hours-diff thead th {
 }
 .veh-sum-card__title {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
   min-width: 0;
 }
 .veh-sum-card__name {
@@ -10596,22 +10740,24 @@ table.data.project-hours-diff thead th {
   white-space: nowrap;
 }
 .veh-sum-card__body {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: auto;
+  min-width: 0;
 }
 .veh-sum-card__km {
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 800;
   color: #2563eb;
   line-height: 1;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
 }
 .veh-sum-card__km i {
   font-style: normal;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: #93c5fd;
   margin-left: 2px;
@@ -10619,7 +10765,7 @@ table.data.project-hours-diff thead th {
 .veh-sum-card__bar {
   flex: 1 1 auto;
   position: relative;
-  height: 10px;
+  height: 8px;
   background: #f1f5f9;
   border-radius: 999px;
   overflow: hidden;
@@ -10628,15 +10774,15 @@ table.data.project-hours-diff thead th {
 .veh-sum-card__bar-fill {
   position: absolute;
   left: 0; top: 0; bottom: 0;
-  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  background: linear-gradient(90deg, #4f46e5, #60a5fa);
   border-radius: 999px;
 }
 .veh-sum-card__pct {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   color: #475569;
   white-space: nowrap;
-  min-width: 42px;
+  min-width: 38px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -10645,15 +10791,15 @@ table.data.project-hours-diff thead th {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 8px 11px;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  font-size: 13px;
+  border-radius: 9px;
+  font-size: 12px;
   color: #475569;
 }
 .veh-sum-total b {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 800;
   color: #2563eb;
   margin-left: auto;
@@ -10664,14 +10810,21 @@ table.data.project-hours-diff thead th {
   .veh-card { padding: 12px 14px; border-radius: 14px; }
   .veh-card::before { width: 3px; }
   .veh-dash-name { font-size: 14.5px; }
-  .veh-dash-plate { font-size: 9px; padding: 2px 8px; }
+  .veh-dash-plate { font-size: 12px; letter-spacing: .8px; padding: 2.5px 7px; font-weight: 500; }
   .veh-card-main {
     gap: 10px;
     flex-wrap: nowrap;
   }
   .veh-card-gauge { flex: 0 0 46px; width: 46px; height: 46px; }
   .veh-card-gauge .veh-gauge-svg { width: 46px; height: 46px; }
-  .veh-card-gauge .veh-gauge-km { font-size: 12px; }
+  .veh-card-gauge .veh-gauge-readout {
+    flex-direction: column; gap: 1px;
+  }
+  .veh-card-gauge .veh-gauge-km { font-size: 13px; }
+  .veh-card-gauge .veh-gauge-km small { font-size: 8px; }
+  .veh-card-gauge .veh-gauge-unit {
+    flex-direction: row; font-size: 7px; color: #64748b; gap: 1px;
+  }
   .veh-card-hero { flex: 1 1 0; min-width: 0; }
   .veh-card-km { font-size: 20px; letter-spacing: -0.4px; }
   .veh-card-sub {
@@ -10697,11 +10850,22 @@ table.data.project-hours-diff thead th {
     background: rgba(234, 88, 12, 0.08);
   }
   .veh-summary { padding: 10px; }
-  .veh-sum-head { gap: 8px; }
+  .veh-sum-head { gap: 8px; margin-bottom: 10px; }
   .veh-sum-title { font-size: 14px; }
   .veh-month { width: 145px; min-width: 145px; padding-left: 8px; padding-right: 8px; }
-  .veh-sum-grid { grid-template-columns: 1fr; gap: 10px; }
-  .veh-sum-card { padding: 10px 12px; border-radius: 10px; }
+  .veh-sum-cols { gap: 10px; }
+  .veh-sum-col { padding: 10px; gap: 8px; }
+  .veh-sum-col__head { margin-bottom: 0; }
+  .veh-sum-grid { grid-template-columns: 1fr; gap: 8px; }
+  .veh-sum-card {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 10px 12px;
+    border-radius: 10px;
+    gap: 8px;
+  }
+  .veh-sum-card__head { max-width: none; }
+  .veh-sum-card__title { flex-direction: row; flex-wrap: wrap; }
   .veh-sum-card__km { font-size: 20px; }
   .veh-sum-total { flex-wrap: wrap; font-size: 12px; padding: 8px 10px; }
   .veh-sum-total b { font-size: 14px; margin-left: 0; }
@@ -11067,7 +11231,7 @@ table.data.project-hours-diff thead th {
 .rot-pick__item input {
   margin: 0;
   cursor: pointer;
-  accent-color: var(--primary, #2f6fed);
+  accent-color: var(--primary, #4f46e5);
   width: 16px;
   height: 16px;
   flex-shrink: 0;
@@ -11079,7 +11243,7 @@ table.data.project-hours-diff thead th {
 }
 .rot-pick__item:has(input:checked) {
   background: #eff6ff;
-  border-color: var(--primary, #2f6fed);
+  border-color: var(--primary, #4f46e5);
   color: #1d4ed8;
   font-weight: 600;
 }
@@ -11175,7 +11339,7 @@ table.data.project-hours-diff thead th {
 .rot-tab:hover { color: #334155; }
 .rot-tab.is-on {
   background: #fff;
-  color: var(--primary, #2f6fed);
+  color: var(--primary, #4f46e5);
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1);
 }
 .rot-range {
@@ -11306,7 +11470,7 @@ table.data.project-hours-diff thead th {
 .leave-hist-bar__all {
   border: none;
   background: transparent;
-  color: var(--primary, #2f6fed);
+  color: var(--primary, #4f46e5);
   padding: 0 2px;
   font-size: 12px;
   font-weight: 600;
@@ -11402,8 +11566,14 @@ table.data.project-hours-diff thead th {
 .leave-card__date svg {
   flex-shrink: 0;
 }
-.leave-card__detail {
+.leave-card__header-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.leave-card__detail {
   padding: 3px 8px;
   font-size: 11px;
   color: var(--muted);
@@ -11416,6 +11586,15 @@ table.data.project-hours-diff thead th {
 .leave-card__detail:hover {
   background: #f8fafc;
   color: var(--text);
+}
+.leave-card__detail--withdraw {
+  color: #b45309;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+.leave-card__detail--withdraw:hover {
+  background: #fef3c7;
+  color: #92400e;
 }
 .leave-card__tags {
   display: flex;
@@ -11544,4 +11723,125 @@ table.data.project-hours-diff thead th {
     padding: 3px 6px;
     font-size: 10px;
   }
+}
+
+/* ===== 请假详情弹窗：紧凑信息卡片 ===== */
+.modal:has(.leave-detail) { max-width: 460px; }
+.modal:has(.leave-detail) .modal-body { padding: 0; }
+
+.leave-detail {
+  padding: 20px 22px 18px;
+  color: var(--text, #1f2937);
+}
+
+/* 头部：头像 + 姓名/日期 + 状态 */
+.leave-detail__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.leave-detail__avatar {
+  width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; font-weight: 700; flex-shrink: 0;
+}
+.leave-detail__meta {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px;
+}
+.leave-detail__name {
+  font-size: 16px; font-weight: 700; color: #0f172a;
+  display: flex; align-items: center; gap: 8px;
+}
+.leave-detail__type {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+}
+.leave-detail__date {
+  font-size: 12px; color: var(--muted, #64748b);
+  display: flex; align-items: center; gap: 4px;
+}
+.leave-detail__date svg {
+  width: 14px; height: 14px; flex-shrink: 0;
+}
+.leave-detail__status {
+  flex-shrink: 0;
+  display: inline-flex; align-items: center;
+  padding: 4px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 700;
+}
+
+/* 主体：两列网格 */
+.leave-detail__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+  margin-top: 18px;
+}
+.leave-detail__item {
+  min-width: 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.leave-detail__item--full {
+  grid-column: 1 / -1;
+}
+.leave-detail__label {
+  font-size: 11px; font-weight: 600; color: var(--muted, #64748b);
+  line-height: 1.2;
+}
+.leave-detail__value {
+  font-size: 13px; font-weight: 500; color: #1f2937;
+  line-height: 1.4; word-break: break-word;
+}
+
+/* 原因块 */
+.leave-detail__reason {
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 13px; line-height: 1.5; color: #1f2937;
+}
+.leave-detail__reason--empty {
+  color: #94a3b8; font-style: italic;
+}
+
+/* 警示/成功块 */
+.leave-detail__alert {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px; border-radius: 8px;
+  font-size: 12px; line-height: 1.45;
+}
+.leave-detail__alert b {
+  display: flex; align-items: center; gap: 5px;
+  font-weight: 700;
+}
+.leave-detail__alert--danger {
+  background: #fef2f2; border: 1px solid #fecaca; color: #991b1b;
+}
+.leave-detail__alert--success {
+  background: #ecfdf5; border: 1px solid #86efac; color: #065f46;
+}
+
+/* 底部 */
+.leave-detail__footer {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px; padding-top: 14px;
+  border-top: 1px solid #f1f5f9;
+}
+.leave-detail__ops {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+
+@media (max-width: 560px) {
+  .modal:has(.leave-detail) { max-width: none; margin: 10px; }
+  .leave-detail { padding: 16px 14px 14px; }
+  .leave-detail__head { gap: 10px; }
+  .leave-detail__avatar { width: 34px; height: 34px; font-size: 13px; }
+  .leave-detail__name { font-size: 14px; }
+  .leave-detail__status { padding: 3px 8px; font-size: 11px; }
+  .leave-detail__grid { gap: 12px; margin-top: 14px; }
+  .leave-detail__value { font-size: 12px; }
+  .leave-detail__footer { margin-top: 14px; padding-top: 12px; }
 }

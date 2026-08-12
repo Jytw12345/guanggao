@@ -18395,10 +18395,23 @@ function renderLeaveStats(container, historyRecords, pendingRecords) {
   const rejectedCount = (historyRecords || []).filter(r => r.status === LEAVE_STATUS.REJECTED).length;
 
   const workerStats = cache.workers.map(w => {
-    // 轮休属于正常休息日，不计入个人「请假天数 / 请假次数」排行，与总请假天数口径一致
-    const workerLeaves = approvedRecords.filter(r => r.workerId === w.id && r.leaveType !== "rotational");
-    const workerDays = workerLeaves.reduce((sum, r) => sum + calculateLeaveDays(r.startDate, r.endDate, r.startType, r.endType), 0);
-    return { name: w.name, days: workerDays, count: workerLeaves.length };
+    // 人员排行统计「休息总天数」：请假 + 轮休都计入。
+    // 轮休属正常周末休息，用自然日计算；请假按工作日计算。
+    // 轮休若标记为补班（实际上班），或请假被某条补班关联抵消，则不计入休息。
+    const workerRecords = approvedRecords.filter(r => r.workerId === w.id);
+    let workerDays = 0, workerCount = 0;
+    workerRecords.forEach(r => {
+      if (r.leaveType === "rotational") {
+        if (r.workedMakeup) return; // 补班=实际上班，不计休息
+        workerDays += calculateCalendarDays(r.startDate, r.endDate, r.startType, r.endType);
+        workerCount++;
+      } else {
+        if (getMakeupForLeave(r.id)) return; // 被补班抵消，不计
+        workerDays += calculateLeaveDays(r.startDate, r.endDate, r.startType, r.endType);
+        workerCount++;
+      }
+    });
+    return { name: w.name, days: workerDays, count: workerCount };
   }).sort((a, b) => b.days - a.days);
   const rankedWorkers = workerStats.filter(w => w.days > 0);
   const hasZeroWorkers = workerStats.length > rankedWorkers.length;
@@ -18454,7 +18467,7 @@ function renderLeaveStats(container, historyRecords, pendingRecords) {
       </div>
 
       <div class="leave-stats-card leave-stats-card--compact">
-        <h3 class="leave-stats-card__title" style="font-size:13px;">🏆 人员排行</h3>
+        <h3 class="leave-stats-card__title" style="font-size:13px;">🏆 休息排行</h3>
         <div class="leave-rank-list">
           ${displayWorkers.map(w => `
             <div class="leave-rank-item ${w.days === 0 ? 'leave-rank-item--zero' : ''}">
@@ -18622,7 +18635,13 @@ function renderLeaveCard(record, showActions) {
             <div class="leave-card__name">${esc(record.workerName)}</div>
             <div class="leave-card__date">${svgCal(13)} ${formatLeaveDateRange(record)}</div>
           </div>
-          <button class="leave-card__detail" type="button" onclick="showLeaveDetail('${record.id}')" title="详情">详情</button>
+          <div class="leave-card__header-actions">
+            ${(record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id) ||
+              (record.status === LEAVE_STATUS.APPROVED && perm.approveLeave() && perm.withdrawLeave() && record.endDate >= todayStr()) ? `
+              <button class="leave-card__detail leave-card__detail--withdraw" type="button" onclick="withdrawLeave('${record.id}')">撤回</button>
+            ` : ""}
+            <button class="leave-card__detail" type="button" onclick="showLeaveDetail('${record.id}')" title="详情">详情</button>
+          </div>
         </div>
         <div class="leave-card__tags">
           <span class="leave-card__tag" style="background:${statusStyle.bg};color:${statusStyle.text};border-color:${statusStyle.border};">${statusLabel}</span>
@@ -18641,27 +18660,9 @@ function renderLeaveCard(record, showActions) {
             ${record.status === LEAVE_STATUS.PENDING && perm.rejectLeave() ? `
               <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
             ` : ""}
-            ${record.status === LEAVE_STATUS.APPROVED && perm.approveLeave() && perm.withdrawLeave() && record.endDate >= todayStr() ? `
-              <button class="btn small warning leave-card__btn" onclick="withdrawLeave('${record.id}')">撤回</button>
-            ` : ""}
             ${record.status === LEAVE_STATUS.REJECTED && perm.rejectLeave() && perm.deleteLeave() ? `
               <button class="btn small danger leave-card__btn" onclick="deleteLeaveRecord('${record.id}')">删除</button>
             ` : ""}
-          ` : ""}
-          ${record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id ? `
-            <button class="btn small warning leave-card__btn" onclick="withdrawLeave('${record.id}')">撤回</button>
-          ` : ""}
-          ${record.leaveType === "rotational" && perm.manageMakeup() ? `
-            ${isRotMakeup ? `
-              <button class="btn small leave-card__btn" onclick="toggleLeaveMakeup('${record.id}')">取消补班</button>
-              ${record.makeupLeaveId ? `
-                <button class="btn small leave-card__btn" onclick="clearMakeupLink('${record.id}')">取消关联</button>
-              ` : `
-                <button class="btn small warning leave-card__btn" onclick="openMakeupLink('${record.id}')">抵消请假</button>
-              `}
-            ` : `
-              <button class="btn small leave-card__btn" onclick="toggleLeaveMakeup('${record.id}')">标记补班</button>
-            `}
           ` : ""}
         </div>
       </div>
@@ -18796,70 +18797,101 @@ function showLeaveDetail(id) {
   
   const conflicts = checkLeaveProjectConflict(record.workerId, record.startDate, record.endDate);
   
+  const statusScheme = {
+    [LEAVE_STATUS.PENDING]: { bg: "#fffbeb", fg: "#b45309", border: "#fcd34d" },
+    [LEAVE_STATUS.APPROVED]: { bg: "#f0fdf4", fg: "#15803d", border: "#86efac" },
+    [LEAVE_STATUS.REJECTED]: { bg: "#fef2f2", fg: "#dc2626", border: "#fecaca" }
+  }[record.status] || { bg: "#f3f4f6", fg: "#374151", border: "#e5e7eb" };
+
+  const typeScheme = {
+    personal: { bg: "#fffbeb", fg: "#b45309", border: "#fcd34d" },
+    sick: { bg: "#fef2f2", fg: "#dc2626", border: "#fecaca" },
+    annual: { bg: "#f0fdf4", fg: "#15803d", border: "#86efac" },
+    comp: { bg: "#f5f3ff", fg: "#7c3aed", border: "#c4b5fd" },
+    rotational: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
+    other: { bg: "#f3f4f6", fg: "#374151", border: "#e5e7eb" }
+  }[record.leaveType] || { bg: "#f3f4f6", fg: "#374151", border: "#e5e7eb" };
+
+  const firstChar = esc((record.workerName || "").slice(0, 1));
+  const timeRange = `${esc(record.startDate)} ${formatLeaveTimeType(record.startType)} → ${esc(record.endDate)} ${formatLeaveTimeType(record.endType)}`;
+
   const modalContent = `
-    <div class="repair-form">
-      <div class="form-row">
-        <label>施工人员</label>
-        <div class="input" style="background:#f3f4f6;">${esc(record.workerName)}</div>
+    <div class="leave-detail">
+      <div class="leave-detail__head">
+        <div class="leave-detail__avatar" style="background:${typeScheme.bg};color:${typeScheme.fg};border:1px solid ${typeScheme.border};">${firstChar}</div>
+        <div class="leave-detail__meta">
+          <div class="leave-detail__name">${esc(record.workerName)} <span class="leave-detail__type" style="background:${typeScheme.bg};color:${typeScheme.fg};border:1px solid ${typeScheme.border};">${typeLabel}</span></div>
+          <div class="leave-detail__date">${svgCal(14)} ${timeRange}</div>
+        </div>
+        <span class="leave-detail__status" style="background:${statusScheme.bg};color:${statusScheme.fg};border:1px solid ${statusScheme.border};">${statusLabel}</span>
       </div>
-      <div class="form-row">
-        <label>请假类型</label>
-        <div class="input" style="background:#f3f4f6;">${typeLabel}</div>
+
+      <div class="leave-detail__grid">
+        <div class="leave-detail__item">
+          <div class="leave-detail__label">请假时间</div>
+          <div class="leave-detail__value">${timeRange}</div>
+        </div>
+        ${(record.startTime || record.endTime) ? `
+        <div class="leave-detail__item">
+          <div class="leave-detail__label">具体时间</div>
+          <div class="leave-detail__value">${esc(record.startTime || "")}${record.startTime && record.endTime ? " – " : ""}${esc(record.endTime || "")}</div>
+        </div>` : ""}
+        ${record.leaveType === "rotational" ? `
+        <div class="leave-detail__item">
+          <div class="leave-detail__label">补班状态</div>
+          <div class="leave-detail__value">${isRotMakeup ? "已补班（视为上班）" : "未补班（正常休息）"}${record.makeupLeaveId ? " · 已关联抵消" : ""}</div>
+        </div>` : ""}
+        ${record.reviewerName ? `
+        <div class="leave-detail__item">
+          <div class="leave-detail__label">审批人</div>
+          <div class="leave-detail__value">${esc(reviewerDisplayName)}</div>
+        </div>` : ""}
+        ${makeupOffset ? `
+        <div class="leave-detail__item leave-detail__item--full">
+          <div class="leave-detail__alert leave-detail__alert--success">
+            <b>✅ 已被补班抵消</b>
+            <span>由 ${esc(makeupOffset.workerName)} 的轮休（${esc(makeupOffset.startDate)}）上班抵消，不计入请假天数</span>
+          </div>
+        </div>` : ""}
+        ${conflicts.length > 0 ? `
+        <div class="leave-detail__item leave-detail__item--full">
+          <div class="leave-detail__alert leave-detail__alert--danger">
+            <b>⚠️ 项目排期冲突</b>
+            <span>${conflicts.map(p => `• ${esc(p.name)}`).join(" ")}</span>
+          </div>
+        </div>` : ""}
+        ${record.reviewNote ? `
+        <div class="leave-detail__item leave-detail__item--full">
+          <div class="leave-detail__label">审批意见</div>
+          <div class="leave-detail__reason">${esc(record.reviewNote)}</div>
+        </div>` : ""}
+        <div class="leave-detail__item leave-detail__item--full">
+          <div class="leave-detail__label">请假原因</div>
+          <div class="leave-detail__reason ${record.reason ? "" : "leave-detail__reason--empty"}">${esc(record.reason || "未填写")}</div>
+        </div>
       </div>
-      <div class="form-row">
-        <label>状态</label>
-        <div class="input" style="background:#f3f4f6;">${statusLabel}</div>
-      </div>
-      <div class="form-row">
-        <label>请假时间</label>
-        <div class="input" style="background:#f3f4f6;">${esc(record.startDate)} ${formatLeaveTimeType(record.startType)} → ${esc(record.endDate)} ${formatLeaveTimeType(record.endType)}</div>
-      </div>
-      ${record.startTime ? `
-      <div class="form-row">
-        <label>具体开始时间</label>
-        <div class="input" style="background:#f3f4f6;">${esc(record.startTime)}</div>
-      </div>` : ""}
-      ${record.endTime ? `
-      <div class="form-row">
-        <label>具体结束时间</label>
-        <div class="input" style="background:#f3f4f6;">${esc(record.endTime)}</div>
-      </div>` : ""}
-      <div class="form-row">
-        <label>请假原因</label>
-        <div class="input" style="background:#f3f4f6;min-height:60px;">${esc(record.reason || "未填写")}</div>
-      </div>
-      ${conflicts.length > 0 ? `
-      <div class="form-row" style="background:#fef2f2;border-left:3px solid #dc2626;padding:10px;border-radius:4px;">
-        <span style="font-weight:bold;color:#dc2626;">⚠️ 项目排期冲突：</span>
-        <div>${conflicts.map(p => `• ${esc(p.name)}`).join("<br/>")}</div>
-      </div>` : ""}
-      ${record.reviewNote ? `
-      <div class="form-row">
-        <label>审批意见</label>
-        <div class="input" style="background:#fef3c7;">${esc(record.reviewNote)}</div>
-      </div>` : ""}
-      ${record.reviewerName ? `
-      <div class="form-row">
-        <label>审批人</label>
-        <div class="input" style="background:#f3f4f6;">${esc(reviewerDisplayName)}</div>
-      </div>` : ""}
-      ${record.leaveType === "rotational" ? `
-      <div class="form-row">
-        <label>补班状态</label>
-        <div class="input" style="background:#f3f4f6;">${isRotMakeup ? "已补班（该轮休日视为实际上班）" : "未补班（正常休息）"}${record.makeupLeaveId ? "，已关联抵消一条请假" : ""}</div>
-      </div>` : ""}
-      ${makeupOffset ? `
-      <div class="form-row" style="background:#ecfdf5;border-left:3px solid #10b981;padding:10px;border-radius:4px;">
-        <span style="font-weight:bold;color:#047857;">✅ 已被补班抵消</span>
-        <div>由 ${esc(makeupOffset.workerName)} 的轮休（${esc(makeupOffset.startDate)}）上班抵消，不计入请假天数</div>
-      </div>` : ""}
-      <div class="form-actions">
+
+      <div class="leave-detail__footer">
+        ${record.leaveType === "rotational" && perm.manageMakeup() ? `
+        <div class="leave-detail__ops">
+          ${isRotMakeup ? `
+            <button class="btn small" onclick="toggleLeaveMakeup('${record.id}'); modal.close();">取消补班</button>
+            ${record.makeupLeaveId ? `
+              <button class="btn small" onclick="clearMakeupLink('${record.id}'); modal.close();">取消关联</button>
+            ` : `
+              <button class="btn small warning" onclick="openMakeupLink('${record.id}'); modal.close();">抵消请假</button>
+            `}
+          ` : `
+            <button class="btn small" onclick="toggleLeaveMakeup('${record.id}'); modal.close();">标记补班</button>
+          `}
+        </div>
+        ` : `<div></div>`}
         <button class="btn" onclick="modal.close()">关闭</button>
       </div>
     </div>
   `;
-  
-  modal.open(`${svgCal(18)} ${esc(record.workerName)} 的请假详情`, modalContent, { closeOnMask: true });
+
+  modal.open("请假详情", modalContent, { closeOnMask: true });
 }
 
 document.addEventListener("DOMContentLoaded", function() {
@@ -21263,7 +21295,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vbf33e1a6";
+  const APP_VERSION = "va01925ac";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -21724,7 +21756,6 @@ function isVehicleInUse(vid) {
 function renderVehicleTrips() {
   renderVehicleDashboards();
   renderVehicleSummary();
-  renderDriverSummary();
   populateVtFilters();
   renderVehicleHistory();
 }
@@ -21745,7 +21776,7 @@ function vehicleGaugeSvg(opts) {
   const [px, py] = pt(endAngle, R);
   const largeBg = SWEEP > 180 ? 1 : 0;
   const largeFg = (SWEEP * ratio) > 180 ? 1 : 0;
-  const color = opts.inUse ? "#f97316" : "#2f6fed";
+  const color = opts.inUse ? "#f97316" : "#4f46e5";
   return `
   <svg class="veh-gauge-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <path d="M ${f(bx)} ${f(by)} A ${R} ${R} 0 ${largeBg} 1 ${f(bex)} ${f(bey)}" fill="none" stroke="rgba(15,23,42,.08)" stroke-width="12" stroke-linecap="round"/>
@@ -21798,13 +21829,13 @@ function renderVehicleDashboards() {
         <div class="veh-card-gauge">
           ${vehicleGaugeSvg({ id: v.id, inUse, pct })}
           <div class="veh-gauge-readout">
-            <div class="veh-gauge-km">${pct}</div>
-            <div class="veh-gauge-unit">月</div>
+            <div class="veh-gauge-km">${pct}<small>%</small></div>
+            <div class="veh-gauge-unit">目标</div>
           </div>
         </div>
         <div class="veh-card-hero">
           <div class="veh-card-km">${Number(km).toLocaleString()}</div>
-          <div class="veh-card-sub">km 当前 · 本月 <b>${Number(monthKm).toLocaleString()}</b> / ${VEHICLE_MONTH_TARGET}</div>
+          <div class="veh-card-sub">当前表显 · 本月 ${Number(monthKm).toLocaleString()} / ${VEHICLE_MONTH_TARGET.toLocaleString()} km</div>
         </div>
         <div class="veh-card-actions">
           ${fuelBadge}
@@ -22326,12 +22357,12 @@ function renderVehicleSummary() {
       .reduce((s, t) => s + (Number(t.mileage) || 0), 0);
     return { ...v, sum: Math.round(sum * 10) / 10 };
   });
-  const total = Math.round(perVeh.reduce((s, x) => s + x.sum, 0) * 10) / 10;
+  const vehTotal = Math.round(perVeh.reduce((s, x) => s + x.sum, 0) * 10) / 10;
   const days = new Set(list.map((t) =>
     t.date || (t.createdAt ? String(t.createdAt).slice(0, 10) : "")).filter(Boolean)).size;
 
   const vehicleCards = perVeh.map((x) => {
-    const pct = total > 0 ? ((x.sum / total) * 100).toFixed(1) : "0.0";
+    const pct = vehTotal > 0 ? ((x.sum / vehTotal) * 100).toFixed(1) : "0.0";
     return `<div class="veh-sum-card">
       <div class="veh-sum-card__head">
         <span class="veh-sum-card__icon">🚚</span>
@@ -22348,16 +22379,29 @@ function renderVehicleSummary() {
     </div>`;
   }).join("");
 
+  const driverHtml = renderDriverSummaryHtml(mk);
+
   wrap.innerHTML = `
     <div class="veh-sum-head">
       <div class="veh-sum-title">📊 ${label} 里程汇总</div>
       <input type="month" class="input veh-month" id="vtMonthPicker" value="${mk}" onchange="onVtMonthChange()" />
     </div>
-    <div class="veh-sum-grid">${vehicleCards}</div>
-    <div class="veh-sum-total">
-      <span>合计</span>
-      <b>${total.toLocaleString()} km</b>
-      <span>共 ${list.length} 条记录 · 出勤 ${days} 天</span>
+    <div class="veh-sum-cols">
+      <div class="veh-sum-col">
+        <div class="veh-sum-col__head">
+          <span class="veh-sum-col__icon">🚚</span>
+          <span class="veh-sum-col__title">车辆排行</span>
+        </div>
+        <div class="veh-sum-grid">${vehicleCards}</div>
+        <div class="veh-sum-total">
+          <span>合计</span>
+          <b>${vehTotal.toLocaleString()} km</b>
+          <span>共 ${list.length} 条记录 · 出勤 ${days} 天</span>
+        </div>
+      </div>
+      <div class="veh-sum-col">
+        ${driverHtml}
+      </div>
     </div>
   `;
 }
@@ -22366,21 +22410,15 @@ function onVtMonthChange() {
   const el = document.getElementById("vtMonthPicker");
   window._vtMonth = el ? el.value : "";
   renderVehicleSummary();
-  renderDriverSummary();
 }
 
-/* 按月 / 按人员（司机）汇总里程 */
-function renderDriverSummary() {
-  const wrap = document.getElementById("driverSummary");
-  if (!wrap) return;
+/* 按月 / 按人员（司机）汇总里程：返回 HTML 片段，嵌入车辆汇总面板 */
+function renderDriverSummaryHtml(mk) {
   const cur = new Date();
   const curKey = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`;
-  const mk = window._vtMonth || curKey;
-  const [yy, mm] = mk.split("-");
-  const label = `${yy}年${Number(mm)}月`;
+  const monthKey = mk || curKey;
 
-  const list = (cache.vehicleTrips || []).filter((t) => monthKeyOf(t) === mk);
-  // 按司机（人员）聚合里程
+  const list = (cache.vehicleTrips || []).filter((t) => monthKeyOf(t) === monthKey);
   const map = new Map();
   list.forEach((t) => {
     const name = (t.driverName && t.driverName.trim()) || "未记录司机";
@@ -22392,6 +22430,15 @@ function renderDriverSummary() {
     .sort((a, b) => b.sum - a.sum);
   const total = Math.round(perDriver.reduce((s, x) => s + x.sum, 0) * 10) / 10;
   const allEmpty = perDriver.length === 0;
+
+  if (allEmpty) {
+    return `
+      <div class="veh-sum-col__head">
+        <span class="veh-sum-col__icon">👤</span>
+        <span class="veh-sum-col__title">人员排行</span>
+      </div>
+      <div class="empty veh-sum-empty">该月暂无人员里程记录。</div>`;
+  }
 
   const driverCards = perDriver.map((x) => {
     const pct = total > 0 ? ((x.sum / total) * 100).toFixed(1) : "0.0";
@@ -22411,19 +22458,17 @@ function renderDriverSummary() {
     </div>`;
   }).join("");
 
-  wrap.innerHTML = `
-    <div class="veh-sum-head">
-      <div class="veh-sum-title">👤 ${label} 人员里程汇总</div>
+  return `
+    <div class="veh-sum-col__head">
+      <span class="veh-sum-col__icon">👤</span>
+      <span class="veh-sum-col__title">人员排行</span>
     </div>
-    ${allEmpty
-      ? `<div class="empty" style="padding:10px 12px;">该月暂无用车记录。</div>`
-      : `<div class="veh-sum-grid">${driverCards}</div>
-         <div class="veh-sum-total">
-           <span>合计</span>
-           <b>${total.toLocaleString()} km</b>
-           <span>共 ${perDriver.length} 名人员有里程记录</span>
-         </div>`}
-  `;
+    <div class="veh-sum-grid">${driverCards}</div>
+    <div class="veh-sum-total">
+      <span>合计</span>
+      <b>${total.toLocaleString()} km</b>
+      <span>共 ${perDriver.length} 名人员有里程记录</span>
+    </div>`;
 }
 
 function loadCustomDrivers() {
