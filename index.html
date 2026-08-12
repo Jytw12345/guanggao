@@ -32,74 +32,89 @@
       <button class="menu-toggle" id="menuToggle" aria-label="菜单">☰</button>
       <span class="logo">🏗️</span>
       <h1>广告施工预约</h1>
+      <nav class="tabs">
+        <button class="tab-btn active" data-tab="projects"><span class="tab-ico">📋</span>项目预约</button>
+        <button class="tab-btn" data-tab="calendar"><span class="tab-ico">📅</span>预约日历</button>
+        <button class="tab-btn" data-tab="construction"><span class="tab-ico">🏗️</span>施工管理</button>
+        <button class="tab-btn" data-tab="vehicleTrips"><span class="tab-ico">🚚</span>车辆里程</button>
+        <button class="tab-btn" data-tab="internalTasks"><span class="tab-ico">✅</span>内部任务</button>
+        <button class="tab-btn" data-tab="workers"><span class="tab-ico">👷</span>施工人员</button>
+        <button class="tab-btn" data-tab="schedules"><span class="tab-ico">🗓️</span>个人日程</button>
+        <button class="tab-btn" data-tab="leaves"><span class="tab-ico">🏖️</span>休假管理</button>
+        <button class="tab-btn" data-tab="stats"><span class="tab-ico">⏱️</span>工时统计</button>
+        <button class="tab-btn" data-tab="storeStats"><span class="tab-ico">🏪</span>店面统计</button>
+        <span class="tab-sep" aria-hidden="true"></span>
+        <div class="tab-dropdown">
+          <button class="tab-btn tab-dropdown-toggle" data-dropdown="settings" type="button" aria-haspopup="true" aria-expanded="false">🛡️ 系统设置 <span class="tab-caret">▾</span></button>
+          <div class="tab-dropdown-menu">
+            <div class="tab-menu-head">
+              <span class="tab-menu-head__title">⚙️ 管理面板</span>
+              <span class="tab-menu-head__sub">以下为管理员专属功能</span>
+            </div>
+            <button class="tab-sub" data-tab="accounts" type="button"><span class="ts-ico">👤</span><span class="ts-label">账号管理</span><span class="ts-arrow">›</span></button>
+            <button class="tab-sub" data-tab="rolePerms" type="button"><span class="ts-ico">🔐</span><span class="ts-label">角色权限</span><span class="ts-arrow">›</span></button>
+            <button class="tab-sub" data-tab="stores" type="button"><span class="ts-ico">🏪</span><span class="ts-label">门店管理</span><span class="ts-arrow">›</span></button>
+            <button class="tab-sub" data-action="reminderSettings" type="button"><span class="ts-ico">⏰</span><span class="ts-label">提醒设置</span><span class="ts-arrow">›</span></button>
+          </div>
+        </div>
+        <span class="tab-indicator" aria-hidden="true"></span>
+      </nav>
       <div class="header-right">
         <div class="mobile-sync-time" id="mobileSyncTime" title="上次同步时间"></div>
         <button id="btnFullRefresh" class="sync-full-refresh" hidden onclick="forceFullRefresh()" title="从服务器全量刷新（绕过本地缓存，确保历史数据最新）">↻</button>
-        <div class="global-search">
-          <input type="text" id="globalSearch" placeholder="🔍 搜索项目、员工、门店..." />
+        <div class="global-search" id="globalSearchWrap">
+          <button type="button" class="gs-toggle" id="gsToggle" aria-label="搜索" title="搜索" onclick="toggleGlobalSearch()">🔍</button>
+          <input type="text" id="globalSearch" class="gs-input" placeholder="搜索项目 / 员工 / 门店..." />
           <div id="globalSearchResults" class="search-results"></div>
         </div>
-        <span id="syncStatus" class="sync-status" title="同步状态">● 本地模式</span>
-        <button id="btnHelp" class="btn small" onclick="showHelp()">📖 帮助</button>
+        <span id="syncStatus" class="sync-status" title="本地模式">💻</span>
         <button id="userMenu" class="user-menu-btn hidden" aria-label="用户菜单">👤</button>
-        <span id="userInfo" class="user-info hidden"></span>
-        <span id="roleInfo" class="role-info hidden"></span>
-        <button id="btnExport" class="btn small" onclick="showExportMenu()">📥 导出数据</button>
-        <button id="btnLogout" class="btn small hidden">登出</button>
       </div>
       <div id="userDropdown" class="user-dropdown hidden">
-        <div class="dropdown-item">
-          <span class="dropdown-label">账号</span>
-          <span id="dropdownEmail" class="dropdown-value"></span>
+        <div class="ud-header">
+          <div class="ud-avatar">👤</div>
+          <div class="ud-meta">
+            <div class="ud-name" id="dropdownName"></div>
+            <div class="ud-role" id="dropdownRoleBadge"></div>
+          </div>
         </div>
-        <div class="dropdown-item">
-          <span class="dropdown-label">角色</span>
-          <span id="dropdownRole" class="dropdown-value"></span>
+        <div class="ud-section" id="udExportSection">
+          <div class="ud-section-title">数据工具</div>
+          <div class="dropdown-item ud-item" data-cap="import_data" onclick="showImportModal()">
+            <span class="dropdown-btn-icon">📥</span><span class="dropdown-btn-text">导入数据</span>
+          </div>
+          <div class="dropdown-item ud-item" data-cap="export_projects" onclick="exportProjects()">
+            <span class="dropdown-btn-icon">📋</span><span class="dropdown-btn-text">导出项目数据</span>
+          </div>
+          <div class="dropdown-item ud-item" data-cap="export_worklogs" onclick="exportWorkLogs()">
+            <span class="dropdown-btn-icon">📝</span><span class="dropdown-btn-text">导出工时记录</span>
+          </div>
+          <div class="dropdown-item ud-item" data-cap="export_leaves" onclick="exportLeaveRecords()">
+            <span class="dropdown-btn-icon">🏥</span><span class="dropdown-btn-text">导出休假记录</span>
+          </div>
+          <div class="dropdown-item ud-item" data-cap="export_workers" onclick="exportWorkers()">
+            <span class="dropdown-btn-icon">👷</span><span class="dropdown-btn-text">导出施工人员</span>
+          </div>
+          <div class="dropdown-item ud-item" data-cap="export_stores" onclick="exportStores()">
+            <span class="dropdown-btn-icon">🏪</span><span class="dropdown-btn-text">导出门店数据</span>
+          </div>
+          <div class="dropdown-item ud-item" data-cap="view_operation_logs" onclick="showOperationLogs()">
+            <span class="dropdown-btn-icon">📋</span><span class="dropdown-btn-text">操作日志</span>
+          </div>
+          <div class="dropdown-item ud-item" data-cap="export_all" onclick="exportAllData()">
+            <span class="dropdown-btn-icon">📦</span><span class="dropdown-btn-text">导出全部数据</span>
+          </div>
         </div>
         <div class="dropdown-divider"></div>
-        <button class="dropdown-item dropdown-btn dropdown-btn-danger" id="btnLogoutMenu"><span class="dropdown-btn-icon">🚪</span><span class="dropdown-btn-text">登出</span></button>
-      </div>
-      <div id="exportMenu" class="user-dropdown hidden">
-        <div class="dropdown-item" onclick="showImportModal()">📥 导入数据</div>
+        <div class="dropdown-item ud-item" onclick="showHelp()">
+          <span class="dropdown-btn-icon">📖</span><span class="dropdown-btn-text">使用帮助</span>
+        </div>
         <div class="dropdown-divider"></div>
-        <div class="dropdown-item" onclick="exportProjects()">📋 导出项目数据</div>
-        <div class="dropdown-item" onclick="exportWorkLogs()">📝 导出工时记录</div>
-        <div class="dropdown-item" onclick="exportLeaveRecords()">🏥 导出休假记录</div>
-        <div class="dropdown-item" onclick="exportWorkers()">👷 导出施工人员</div>
-        <div class="dropdown-item" onclick="exportStores()">🏪 导出门店数据</div>
-        <div class="dropdown-divider"></div>
-        <div class="dropdown-item" onclick="showOperationLogs()">📝 操作日志</div>
-        <div class="dropdown-divider"></div>
-        <div class="dropdown-item" onclick="exportAllData()">📦 导出全部数据</div>
+        <button class="dropdown-item dropdown-btn dropdown-btn-danger" id="btnLogoutMenu">
+          <span class="dropdown-btn-icon">🚪</span><span class="dropdown-btn-text">登出</span>
+        </button>
       </div>
     </div>
-    <nav class="tabs">
-      <button class="tab-btn active" data-tab="projects">项目预约</button>
-      <button class="tab-btn" data-tab="calendar">预约日历</button>
-      <button class="tab-btn" data-tab="construction">施工管理</button>
-      <button class="tab-btn" data-tab="vehicleTrips">车辆里程</button>
-      <button class="tab-btn" data-tab="internalTasks">内部任务</button>
-      <button class="tab-btn" data-tab="workers">施工人员</button>
-      <button class="tab-btn" data-tab="schedules">个人日程</button>
-      <button class="tab-btn" data-tab="leaves">休假管理</button>
-      <button class="tab-btn" data-tab="stats">工时统计</button>
-      <button class="tab-btn" data-tab="storeStats">店面统计</button>
-      <button class="tab-btn" data-tab="outsourced">外协人员</button>
-      <span class="tab-sep" aria-hidden="true"></span>
-      <div class="tab-dropdown">
-        <button class="tab-btn tab-dropdown-toggle" data-dropdown="settings" type="button" aria-haspopup="true" aria-expanded="false">🛡️ 系统设置 <span class="tab-caret">▾</span></button>
-        <div class="tab-dropdown-menu">
-          <div class="tab-menu-head">
-            <span class="tab-menu-head__title">⚙️ 管理面板</span>
-            <span class="tab-menu-head__sub">以下为管理员专属功能</span>
-          </div>
-          <button class="tab-sub" data-tab="accounts" type="button"><span class="ts-ico">👤</span><span class="ts-label">账号管理</span><span class="ts-arrow">›</span></button>
-          <button class="tab-sub" data-tab="rolePerms" type="button"><span class="ts-ico">🔐</span><span class="ts-label">角色权限</span><span class="ts-arrow">›</span></button>
-          <button class="tab-sub" data-tab="stores" type="button"><span class="ts-ico">🏪</span><span class="ts-label">门店管理</span><span class="ts-arrow">›</span></button>
-          <button class="tab-sub" data-action="reminderSettings" type="button"><span class="ts-ico">⏰</span><span class="ts-label">提醒设置</span><span class="ts-arrow">›</span></button>
-        </div>
-      </div>
-    </nav>
   </header>
 
   <nav class="bottom-nav">
@@ -327,23 +342,23 @@
       <div id="storeStatsTable"></div>
     </section>
 
-    <!-- 施工人员 -->
+    <!-- 施工人员（含外协人员区块） -->
     <section id="workers" class="tab-panel">
       <div class="section-head">
         <h2>施工人员</h2>
         <button class="btn primary" id="btnNewWorker">+ 添加人员</button>
       </div>
       <div id="workerList"></div>
-    </section>
 
-    <!-- 外协人员管理 -->
-    <section id="outsourced" class="tab-panel">
-      <div class="section-head">
-        <h2>外协人员管理</h2>
-        <button class="btn primary" id="btnNewOutsourced">+ 添加外协人员</button>
+      <!-- 外协人员管理：合并入施工人员页面，节省顶部导航空间 -->
+      <div id="outsourcedBlock" class="sub-block">
+        <div class="section-head">
+          <h2>外协人员</h2>
+          <button class="btn primary" id="btnNewOutsourced">+ 添加外协人员</button>
+        </div>
+        <p class="hint">管理常用外协人员列表，在添加工时表单中可以直接选择，无需每次手动输入。</p>
+        <div id="outsourcedWorkerList" class="card-grid"></div>
       </div>
-      <p class="hint">管理常用外协人员列表，在添加工时表单中可以直接选择，无需每次手动输入。</p>
-      <div id="outsourcedWorkerList" class="card-grid"></div>
     </section>
 
     <!-- 门店管理（总经理） -->

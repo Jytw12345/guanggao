@@ -3662,7 +3662,19 @@ function setSyncStatus(cls, text) {
   const el = document.getElementById("syncStatus");
   if (el) {
     el.className = "sync-status " + (cls || "");
-    el.textContent = text;
+    const t = (text || "").replace(/^●\s*/, "");
+    el.title = t || "同步状态";
+    let icon = "●";
+    if (/同步中|连接中/.test(t)) {
+      icon = '<span class="sync-spin">↻</span>';
+    } else if (/已同步|同步完成|完成/.test(t)) {
+      icon = "✓";
+    } else if (/离线|失败|异常|待授权|不稳定|重试中/.test(t)) {
+      icon = "⚠";
+    } else if (/本地模式/.test(t)) {
+      icon = "💻";
+    }
+    el.innerHTML = icon;
   }
   // 注意：移动端同步胶囊（#mobileSyncTime）的「同步中 / 同步完成」不再由本函数驱动，
   // 否则任何带「同步中 / 连接中」字样的在线状态都会误触发同步动画（导致启动时重复出现）。
@@ -4533,7 +4545,7 @@ function renderOutsourcedWorkers() {
   if (!list) return;
   
   if (cache.outsourcedWorkers.length === 0) {
-    list.innerHTML = `<div class="empty">暂无外协人员，点击右上角「添加外协人员」创建。</div>`;
+    list.innerHTML = `<div class="empty">暂无外协人员，点击下方「+ 添加外协人员」创建。</div>`;
     return;
   }
   
@@ -4551,7 +4563,7 @@ function renderOutsourcedWorkers() {
         ${perm.manageOutsourced() ? `<button class="btn small" onclick="editOutsourcedWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteOutsourcedWorker('${w.id}')">删除</button>` : ""}
       </div>
     </div>`).join("");
-  initCustomSelects(document.getElementById("outsourced"));
+  initCustomSelects(document.getElementById("outsourcedBlock"));
 }
 
 function outsourcedWorkerForm(w = {}) {
@@ -16818,9 +16830,27 @@ const modal = {
 /* 全局搜索功能 */
 let globalSearchTimer = null;
 
+function toggleGlobalSearch() {
+  const wrap = document.getElementById("globalSearchWrap");
+  const input = document.getElementById("globalSearch");
+  if (!wrap || !input) return;
+  wrap.classList.add("active");
+  input.focus();
+}
+
+function closeGlobalSearch() {
+  const wrap = document.getElementById("globalSearchWrap");
+  const input = document.getElementById("globalSearch");
+  const results = document.getElementById("globalSearchResults");
+  if (wrap) wrap.classList.remove("active");
+  if (results) results.classList.remove("show");
+  if (input) input.blur();
+}
+
 function initGlobalSearch() {
   const input = document.getElementById("globalSearch");
   const results = document.getElementById("globalSearchResults");
+  const wrap = document.getElementById("globalSearchWrap");
   
   if (!input || !results) return;
   
@@ -16843,10 +16873,15 @@ function initGlobalSearch() {
       performSearch(this.value.trim().toLowerCase());
     }
   });
+
+  input.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") closeGlobalSearch();
+  });
   
   document.addEventListener("click", function(e) {
-    if (!input.contains(e.target) && !results.contains(e.target)) {
+    if (!input.contains(e.target) && !results.contains(e.target) && !(wrap && wrap.contains(e.target))) {
       results.classList.remove("show");
+      if (!input.value.trim() && wrap) wrap.classList.remove("active");
     }
   });
 }
@@ -16921,7 +16956,7 @@ function performSearch(query) {
 
 function searchNavigateToProject(id) {
   document.getElementById("globalSearch").value = "";
-  document.getElementById("globalSearchResults").classList.remove("show");
+  closeGlobalSearch();
   // 全局搜索是「跳转/定位」：直接打开该项目详情（施工视图），并清空项目列表残留筛选
   const ps = document.getElementById("projectSearch");
   if (ps && ps.value) ps.value = "";
@@ -16931,13 +16966,13 @@ function searchNavigateToProject(id) {
 function searchNavigateToWorker(id) {
   switchTab("workers");
   document.getElementById("globalSearch").value = "";
-  document.getElementById("globalSearchResults").classList.remove("show");
+  closeGlobalSearch();
 }
 
 function searchNavigateToStore(id) {
   switchTab("stores");
   document.getElementById("globalSearch").value = "";
-  document.getElementById("globalSearchResults").classList.remove("show");
+  closeGlobalSearch();
 }
 
 document.addEventListener("DOMContentLoaded", initGlobalSearch);
@@ -17161,20 +17196,14 @@ async function clearOperationLogs() {
   showOperationLogs();
 }
 
-/* 数据导出功能 */
+/* 数据导出功能（导出入口已合并到用户菜单，保留函数名便于旧调用兼容） */
 function showExportMenu() {
-  if (!perm.exportData()) {
-    toast("权限不足");
-    return;
-  }
-  const menu = document.getElementById("exportMenu");
-  if (menu) {
-    menu.classList.toggle("hidden");
-  }
+  const menu = document.getElementById("userDropdown");
+  if (menu) menu.classList.toggle("hidden");
 }
 
 function hideExportMenu() {
-  const menu = document.getElementById("exportMenu");
+  const menu = document.getElementById("userDropdown");
   if (menu) menu.classList.add("hidden");
 }
 
@@ -17310,14 +17339,6 @@ function exportAllData() {
   setTimeout(() => exportStores(), 2000);
   hideExportMenu();
 }
-
-document.addEventListener("click", function(e) {
-  const exportBtn = document.getElementById("btnExport");
-  const exportMenu = document.getElementById("exportMenu");
-  if (exportMenu && exportBtn && !exportBtn.contains(e.target) && !exportMenu.contains(e.target)) {
-    exportMenu.classList.add("hidden");
-  }
-});
 
 function parseCSV(csvText) {
   const lines = csvText.split("\n").filter(l => l.trim());
@@ -17612,8 +17633,7 @@ function renderMine() {
 
   // 功能中心菜单项（业务类入口，根据权限过滤；系统管理类见下方「系统管理」分组）
   const featureItems = [
-    { tab: "workers", icon: "👷", label: "施工人员", color: "#eff6ff", show: perm.viewWorker() },
-    { tab: "outsourced", icon: "🤝", label: "外协人员", color: "#f5f3ff", show: perm.manageOutsourced() },
+    { tab: "workers", icon: "👷", label: "施工人员（含外协）", color: "#eff6ff", show: perm.viewWorker() || perm.manageOutsourced() },
     { tab: "leaves", icon: "🏥", label: "休假管理", color: "#fff7ed", badge: pendingLeaveCount, show: !isStoreManager() || !myStore() },
     { tab: "schedules", icon: svgCal(18), label: "个人日程", color: "#fef3c7", show: perm.viewSchedule() },
     { tab: "stores", icon: "🏪", label: "门店管理", color: "#f0fdf4", show: perm.manageStores() },
@@ -17807,7 +17827,31 @@ function switchTab(name) {
 
   /* 记住当前所在界面：浏览器原生下拉刷新=整页reload，刷新后据此恢复，避免跳回第一屏 */
   try { sessionStorage.setItem("activeTab", name); } catch (_) {}
+
+  /* 更新顶部导航滑动指示条 */
+  requestAnimationFrame(updateTabIndicator);
 }
+
+/* 顶部导航激活条：根据当前 .tab-btn.active 的位置移动底部滑动指示条 */
+function updateTabIndicator() {
+  const tabs = document.querySelector(".tabs");
+  const ind = tabs && tabs.querySelector(".tab-indicator");
+  if (!tabs || !ind) return;
+  const active = tabs.querySelector(".tab-btn.active");
+  if (!active) { ind.style.width = "0px"; return; }
+  ind.style.left = active.offsetLeft + "px";
+  ind.style.width = active.offsetWidth + "px";
+}
+
+function updateTabScrollHint() {
+  const tabs = document.querySelector(".tabs");
+  if (!tabs) return;
+  const canScroll = tabs.scrollWidth > tabs.clientWidth + 1 &&
+    tabs.scrollLeft < tabs.scrollWidth - tabs.clientWidth - 1;
+  tabs.classList.toggle("can-scroll", canScroll);
+}
+window.addEventListener("resize", () => { updateTabIndicator(); updateTabScrollHint(); });
+window.addEventListener("load", () => { updateTabIndicator(); updateTabScrollHint(); });
 
 let ptrRefreshing = false;
 
@@ -17834,7 +17878,7 @@ function initPullToRefresh() {
      等静态界面无刷新意义，均不触发，避免无意义刷新。 */
   const PTR_DATA_TABS = new Set([
     "projects", "calendar", "construction", "vehicleTrips", "internalTasks",
-    "workers", "schedules", "leaves", "stats", "storeStats", "outsourced"
+    "workers", "schedules", "leaves", "stats", "storeStats"
   ]);
   function ptrEnabledForCurrentTab() {
     if (MODE !== "cloud") return false;
@@ -18021,9 +18065,10 @@ async function forceFullRefresh() {
   }
 }
 
-/* 头部角色标签 */
+/* 头部角色标签（已迁移到用户下拉菜单，此处保留空函数避免旧调用报错） */
 function renderRoleInfo() {
   const el = document.getElementById("roleInfo");
+  if (!el) return;
   if (MODE !== "cloud") { el.classList.add("hidden"); return; }
   const role = myRole();
   let text;
@@ -18038,6 +18083,29 @@ function renderRoleInfo() {
 }
 
 /* 根据当前角色显隐 Tab 与操作按钮 */
+/* 根据当前用户权限刷新顶部用户下拉菜单中的数据工具项可见性 */
+function updateUserDropdownVisibility() {
+  const section = document.getElementById("udExportSection");
+  if (!section) return;
+  const capMap = {
+    import_data: () => perm.importData(),
+    export_projects: () => perm.exportProjects() || perm.exportAll(),
+    export_worklogs: () => perm.exportWorkLogs() || perm.exportAll(),
+    export_leaves: () => perm.exportLeaves() || perm.exportAll(),
+    export_workers: () => perm.exportWorkers() || perm.exportAll(),
+    export_stores: () => perm.exportStores() || perm.exportAll(),
+    view_operation_logs: () => perm.viewOperationLogs(),
+    export_all: () => perm.exportAll(),
+  };
+  let anyVisible = false;
+  section.querySelectorAll("[data-cap]").forEach((item) => {
+    const visible = capMap[item.dataset.cap] ? capMap[item.dataset.cap]() : false;
+    item.classList.toggle("hidden", !visible);
+    if (visible) anyVisible = true;
+  });
+  section.classList.toggle("hidden", !anyVisible);
+}
+
 function applyPermissions() {
   const role = myRole();
   const tabVisible = {
@@ -18093,6 +18161,8 @@ function applyPermissions() {
   setHidden("statsPeriod", !perm.viewGlobalStats() && myStore());
   setHidden("statsWorker", !perm.viewGlobalStats() && myStore());
   setHidden("statsStatus", !perm.viewGlobalStats() && myStore());
+
+  updateUserDropdownVisibility();
 
   const bottomNavVisible = {
     projects: role != null,
@@ -18166,8 +18236,7 @@ function renderActiveTabOnly() {
     case "stats": renderStats(); break;
     case "internalTasks": initInternalTasks(); break;
     case "storeStats": renderStoreStats(); break;
-    case "workers": renderWorkers(); break;
-    case "outsourced": renderOutsourcedWorkers(); break;
+    case "workers": renderWorkers(); renderOutsourcedWorkers(); break;
     case "stores": renderStores(); break;
     case "accounts": renderAccounts(); break;
     case "rolePerms": renderRolePermissions(); break;
@@ -20514,7 +20583,6 @@ async function startCloudSession() {
     currentUser = data.session.user;
     document.getElementById("authScreen").classList.add("hidden");
 
-    document.getElementById("btnLogout").classList.remove("hidden");
     document.getElementById("userMenu").classList.remove("hidden");
     setSyncStatus("online", "● 连接中…");
     showSyncing(); // 移动端：登录后开始首次同步，顶部显示「同步中…」（只此一次）
@@ -20523,16 +20591,11 @@ async function startCloudSession() {
     const { data: prof } = await sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
     currentProfile = { id: (prof && prof.id) || currentUser.id, role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null, adminPasswordHash: (prof && prof.admin_password_hash) || null };
 
-    const userInfo = document.getElementById("userInfo");
-    userInfo.textContent = currentProfile.name || currentUser.email;
-    userInfo.classList.remove("hidden");
+    const displayName = currentProfile.name || currentUser.email;
+    const roleLabel = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
 
-    document.getElementById("dropdownEmail").textContent = currentProfile.name || currentUser.email;
-    document.getElementById("dropdownRole").textContent = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
-
-    if (currentProfile.role !== ROLE.MANAGER) {
-      document.getElementById("btnExport").classList.add("hidden");
-    }
+    document.getElementById("dropdownName").textContent = displayName;
+    document.getElementById("dropdownRoleBadge").textContent = roleLabel;
 
     // 用 onclick 赋值（幂等）替代 addEventListener，避免重复登录时监听器累积
     document.getElementById("btnLogoutMenu").onclick = () => {
@@ -20706,6 +20769,9 @@ function bindEvents() {
     });
   }
 
+  const tabsEl = document.querySelector(".tabs");
+  if (tabsEl) tabsEl.addEventListener("scroll", updateTabScrollHint);
+
   document.querySelectorAll(".tab-btn").forEach((b) => {
     // 下拉父按钮（系统设置等）不触发 switchTab，单独处理
     if (b.dataset.dropdown) return;
@@ -20862,7 +20928,6 @@ function bindEvents() {
 
   document.getElementById("btnLogin").addEventListener("click", doLogin);
   document.getElementById("btnSignup").addEventListener("click", doSignup);
-  document.getElementById("btnLogout").addEventListener("click", doLogout);
   document.getElementById("btnLogout2").addEventListener("click", doLogout);
 
   document.getElementById("userMenu").addEventListener("click", (e) => {
@@ -21295,7 +21360,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va01925ac";
+  const APP_VERSION = "vfdbac3d4";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
