@@ -85,10 +85,10 @@ body {
 .brand {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 4px;
+  padding: 10px 14px;
   width: 100%;
-  max-width: 1400px;
+  max-width: 1440px;
   margin-left: auto;
   margin-right: auto;
   box-sizing: border-box;
@@ -147,14 +147,22 @@ body {
   position: relative;
   display: flex;
   align-items: center;
+  justify-content: flex-end; /* 搜索框向右锚定，激活时向左展开，图标随框左缘平滑移动 */
+  margin-left: auto;         /* 控件常驻右上角 */
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 .gs-toggle {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
   border: none;
   border-radius: 999px;
@@ -162,33 +170,47 @@ body {
   color: #64748b;
   font-size: 15px;
   cursor: pointer;
-  transition: all .18s ease;
+  z-index: 2;
+  transition: background .18s ease, color .18s ease;
 }
 
 .gs-toggle:hover {
-  background: #e2e8f0;
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.global-search.active .gs-toggle {
+  background: transparent;
+  color: #94a3b8;
+}
+
+.global-search.active .gs-toggle:hover {
+  background: transparent;
   color: #4f46e5;
 }
 
 .gs-input {
-  width: 0;
+  width: 100%;
+  max-width: 0;
   margin-left: 0;
-  padding: 0;
+  padding: 7px 14px 7px 34px;
   border: 1.5px solid transparent;
-  border-radius: 10px;
+  border-radius: 999px;
   font-size: 13px;
   outline: none;
   background: #f1f5f9;
+  color: #1e293b;
   opacity: 0;
   box-sizing: border-box;
-  transition: width .25s ease, margin .25s ease, padding .25s ease, opacity .2s ease, border-color .2s ease, box-shadow .2s ease;
+  pointer-events: none;
+  transition: max-width .3s cubic-bezier(.4, 0, .2, 1), opacity .2s ease,
+              border-color .2s ease, background .2s ease, box-shadow .2s ease;
 }
 
 .global-search.active .gs-input {
-  width: 220px;
-  margin-left: 6px;
-  padding: 6px 12px;
+  max-width: 240px;
   opacity: 1;
+  pointer-events: auto;
   border-color: #e2e8f0;
 }
 
@@ -815,7 +837,7 @@ body {
 /* 桌面端：底部下划线标签导航 */
 .tabs {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   padding: 0 2px;
   flex: 1 1 auto;
   min-width: 0;
@@ -885,8 +907,8 @@ body {
   background: none;
   border: none;
   border-bottom: none;
-  padding: 6px 10px;
-  font-size: 12.5px;
+  padding: 6px 9px;
+  font-size: 13.5px;
   cursor: pointer;
   color: #64748b;
   border-radius: 999px;
@@ -6088,27 +6110,37 @@ table.data.project-hours-diff thead th {
     padding: 0 10px;
   }
 
+  /* 移动端：折叠时固定大小；激活时变为弹性元素填满剩余空间，自适应任何屏幕宽度 */
   .global-search {
     flex: 0 0 auto;
+    transition: flex-basis .3s cubic-bezier(.4, 0, .2, 1), max-width .3s cubic-bezier(.4, 0, .2, 1);
+    max-width: 28px; /* 折叠态：仅容纳图标 */
+    overflow: hidden;
   }
 
   .gs-toggle {
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     font-size: 14px;
   }
 
+  /* 激活时容器弹性增长，input 填满 100% 容器宽度 —— 浏览器自动按剩余空间分配，不会溢出 */
+  .global-search.active {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+  }
+
   .global-search.active .gs-input {
-    width: min(66vw, 260px);
-    margin-left: 6px;
-    padding: 0 10px;
-    font-size: 12px;
-    height: 32px;
+    width: 100%;
+    max-width: none; /* 由父容器 flex 分配决定实际宽度 */
+    padding: 7px 14px 7px 32px;
+    font-size: 13px;
   }
 
   .search-results {
-    left: 0;
-    right: auto;
+    right: 0;
+    left: auto;
     width: min(360px, calc(100vw - 24px));
     max-width: none;
   }
@@ -11082,9 +11114,9 @@ table.data.project-hours-diff thead th {
   .veh-card-km { font-size: 20px; letter-spacing: -0.4px; }
   .veh-card-sub {
     font-size: 10.5px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    word-break: break-all;
+    line-height: 1.35;
   }
   .veh-card-actions {
     flex: 0 0 auto;

@@ -3417,7 +3417,7 @@ function subscribeRealtime() {
     if (status === "SUBSCRIBED") {
       realtimeRetryCount = 0;
       if (realtimeRetryTimer) { clearTimeout(realtimeRetryTimer); realtimeRetryTimer = null; }
-      setSyncStatus("online", "● 实时同步中");
+      setSyncStatus("online", "✓ 实时在线");
       recordSyncTime();
     } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
       setSyncStatus("offline", "● 同步连接异常，重连中…");
@@ -4368,7 +4368,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     const extra = rest ? "" : (lr.reason ? ` · ${esc(lr.reason)}` : "");
     return `<div class="tl-day-off__row">
       <span>${esc(w ? w.name : lr.workerName || "未知")} · ${formatLeaveTime(lr)}${extra}</span>
-      <button class="btn small danger tl-day-off__del" onclick="deleteLeaveRecord('${lr.id}')">删除</button>
+      ${canDeleteLeaveRecord(lr) ? `<button class="btn small danger tl-day-off__del" onclick="deleteLeaveRecord('${lr.id}')">删除</button>` : ""}
     </div>`;
   };
   let leaveSection = "";
@@ -4541,11 +4541,27 @@ async function deleteWorker(id) {
  * 外协人员管理模块
  * ============================================================ */
 function renderOutsourcedWorkers() {
+  const block = document.getElementById("outsourcedBlock");
   const list = document.getElementById("outsourcedWorkerList");
-  if (!list) return;
-  
+  if (!block || !list) return;
+
+  /* 动态渲染「+ 添加外协人员」按钮到 section-head，与权限判断同源 */
+  const head = block.querySelector(".section-head");
+  if (head) {
+    const existingBtn = head.querySelector("#btnNewOutsourced");
+    if (existingBtn) existingBtn.remove();
+    if (perm.manageOutsourced()) {
+      const btn = document.createElement("button");
+      btn.className = "btn primary";
+      btn.id = "btnNewOutsourced";
+      btn.textContent = "+ 添加外协人员";
+      btn.onclick = () => newOutsourcedWorker();
+      head.appendChild(btn);
+    }
+  }
+
   if (cache.outsourcedWorkers.length === 0) {
-    list.innerHTML = `<div class="empty">暂无外协人员，点击下方「+ 添加外协人员」创建。</div>`;
+    list.innerHTML = `<div class="empty">暂无外协人员，点击上方「+ 添加外协人员」创建。</div>`;
     return;
   }
   
@@ -4563,7 +4579,7 @@ function renderOutsourcedWorkers() {
         ${perm.manageOutsourced() ? `<button class="btn small" onclick="editOutsourcedWorker('${w.id}')">编辑</button><button class="btn small danger" onclick="deleteOutsourcedWorker('${w.id}')">删除</button>` : ""}
       </div>
     </div>`).join("");
-  initCustomSelects(document.getElementById("outsourcedBlock"));
+  initCustomSelects(block);
 }
 
 function outsourcedWorkerForm(w = {}) {
@@ -6069,9 +6085,35 @@ async function submitBatchRotational() {
   }
 }
 
+/* 某条休假/休息记录的「当天」是否已过（含之前所有日期）：endDate 或 startDate 早于今天。
+   用于轮休删除限制：已过的休息记录不可删，未执行（当天或未来）的可删。 */
+function isLeaveDayPassed(record) {
+  if (!record) return false;
+  const day = record.endDate || record.startDate || "";
+  return day !== "" && day < todayStr();
+}
+
+/* 统一的「能否删除某条休假记录」判断，UI 与删除动作共用，避免两套规则不一致。
+   休假/休息记录均不随便删：
+   - 轮休 / 轮休补班（leaveType === "rotational"）：未执行（当天或未来）可删；
+     已过当天（历史休息记录）不可删，更正请走「批量轮休设置」重新生成。
+   - 真实请假（非轮休）：仅「已拒绝(REJECTED)」状态允许删除；
+   - 已批准(APPROVED) / 待审批(PENDING) 的真实请假不可直接删除（PENDING 走撤回流程）。 */
+function canDeleteLeaveRecord(record) {
+  if (!record) return false;
+  if (!perm.deleteLeave()) return false;
+  if (record.leaveType === "rotational") return !isLeaveDayPassed(record); // 未过当天可删，已过不可删
+  return record.status === LEAVE_STATUS.REJECTED;
+}
+
 async function deleteLeaveRecord(id) {
   try {
     if (!perm.deleteLeave()) { toast("权限不足：无法删除休假记录"); return; }
+    const target = getLeaveRecord(id);
+    if (target && !canDeleteLeaveRecord(target)) {
+      toast("该休假记录不可删除（已批准的请假不可直接删除，待审批的可撤回）");
+      return;
+    }
     if (!(await confirmDialog("确定删除该休假记录？", "删除休假记录"))) return;
     await repo.deleteLeaveRecord(id);
     renderAll();
@@ -16834,8 +16876,13 @@ function toggleGlobalSearch() {
   const wrap = document.getElementById("globalSearchWrap");
   const input = document.getElementById("globalSearch");
   if (!wrap || !input) return;
-  wrap.classList.add("active");
-  input.focus();
+  if (wrap.classList.contains("active")) {
+    closeGlobalSearch();
+  } else {
+    wrap.classList.add("active");
+    input.focus();
+    input.select();
+  }
 }
 
 function closeGlobalSearch() {
@@ -17633,7 +17680,7 @@ function renderMine() {
 
   // 功能中心菜单项（业务类入口，根据权限过滤；系统管理类见下方「系统管理」分组）
   const featureItems = [
-    { tab: "workers", icon: "👷", label: "施工人员（含外协）", color: "#eff6ff", show: perm.viewWorker() || perm.manageOutsourced() },
+    { tab: "workers", icon: "👷", label: "施工人员", color: "#eff6ff", show: perm.viewWorker() || perm.manageOutsourced() },
     { tab: "leaves", icon: "🏥", label: "休假管理", color: "#fff7ed", badge: pendingLeaveCount, show: !isStoreManager() || !myStore() },
     { tab: "schedules", icon: svgCal(18), label: "个人日程", color: "#fef3c7", show: perm.viewSchedule() },
     { tab: "stores", icon: "🏪", label: "门店管理", color: "#f0fdf4", show: perm.manageStores() },
@@ -18114,7 +18161,7 @@ function applyPermissions() {
     construction: role != null,
     stats: perm.viewStats(),
     storeStats: perm.viewStoreStats(),
-    workers: perm.viewWorker(),
+    workers: perm.viewWorker() || perm.manageOutsourced(),
     outsourced: perm.manageOutsourced(),
     leaves: role != null,
     schedules: perm.viewSchedule(),
@@ -18151,7 +18198,6 @@ function applyPermissions() {
   };
   setHidden("btnNewProject", !perm.createProject());
   setHidden("btnNewWorker", !perm.addWorker());
-  setHidden("btnNewOutsourced", !perm.manageOutsourced());
   setHidden("btnNewStore", !perm.manageStores());
   setHidden("btnWageConfig", !perm.manageWageConfig());
   setHidden("btnNewSchedule", !perm.addSchedule());
@@ -18170,7 +18216,7 @@ function applyPermissions() {
     construction: role != null,
     vehicleTrips: perm.viewVehicle(),
     internalTasks: perm.viewTask(),
-    workers: perm.viewWorker() && role != null,
+    workers: (perm.viewWorker() || perm.manageOutsourced()) && role != null,
     mine: role != null,
   };
   document.querySelectorAll(".bottom-nav-item").forEach((b) => {
@@ -18729,7 +18775,7 @@ function renderLeaveCard(record, showActions) {
             ${record.status === LEAVE_STATUS.PENDING && perm.rejectLeave() ? `
               <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
             ` : ""}
-            ${record.status === LEAVE_STATUS.REJECTED && perm.rejectLeave() && perm.deleteLeave() ? `
+            ${canDeleteLeaveRecord(record) ? `
               <button class="btn small danger leave-card__btn" onclick="deleteLeaveRecord('${record.id}')">删除</button>
             ` : ""}
           ` : ""}
@@ -20887,7 +20933,6 @@ function bindEvents() {
   });
 
   document.getElementById("btnNewWorker").addEventListener("click", newWorker);
-  document.getElementById("btnNewOutsourced").addEventListener("click", newOutsourcedWorker);
   document.getElementById("btnNewProject").addEventListener("click", newProject);
   document.getElementById("btnNewStore").addEventListener("click", newStore);
   document.getElementById("projectSearch").addEventListener("input", renderProjects);
@@ -21360,7 +21405,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vfdbac3d4";
+  const APP_VERSION = "v71306793";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -21900,7 +21945,7 @@ function renderVehicleDashboards() {
         </div>
         <div class="veh-card-hero">
           <div class="veh-card-km">${Number(km).toLocaleString()}</div>
-          <div class="veh-card-sub">当前表显 · 本月 ${Number(monthKm).toLocaleString()} / ${VEHICLE_MONTH_TARGET.toLocaleString()} km</div>
+          <div class="veh-card-sub">表显 · 本月 ${Number(monthKm).toLocaleString()} / ${VEHICLE_MONTH_TARGET.toLocaleString()} km</div>
         </div>
         <div class="veh-card-actions">
           ${fuelBadge}
