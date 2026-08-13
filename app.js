@@ -557,7 +557,7 @@ const perm = {
   addVehicleTrip: () => can(CAP.VEHICLE_TRIP_ADD),
   deleteVehicleTrip: () => can(CAP.VEHICLE_TRIP_DELETE),
   doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE) || can(CAP.CONSTRUCTION_LOG_WORK) || can(CAP.CONSTRUCTION_LOG_OUTSOURCED)),
-  manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT) || can(CAP.LEAVE_VIEW_ALL),
+  manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT),
   manageMakeup: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_BATCH_ROTATIONAL),
   viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
 };
@@ -1834,42 +1834,43 @@ function calcWorkerRealtimeHours(p, workerId, periods) {
 }
 
 /* 收集项目全生命周期各状态时间节点，统一在施工记录中展示。
-   确保预约/开工/暂停/延期/完工/验收/审核/取消 的时间都被完整记录与呈现。 */
+   以「小卡片」形式呈现，标签用完整写法，时间显示完整日期时间，便于一目了然。 */
 function buildStatusTimeCards(p) {
-  const cards = [];
-  const push = (cls, icon, label, value) => {
-    if (!value) return;
-    cards.push(`<div class="rec-timecard ${cls}">
-      <div class="rec-timecard__label">${icon} ${label}</div>
-      <div class="rec-timecard__value">${esc(value)}</div>
-    </div>`);
-  };
+  const fmtFull = (v) => { if (!v) return ""; const d = new Date(v); if (isNaN(d.getTime())) return v; const p2 = (n) => String(n).padStart(2,"0"); return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`; };
 
-  push("rec-timecard--blue", svgCal(13), "预约时间", p.appointmentTime ? fmtDateTime(p.appointmentTime) : "");
-  if (isProjectTimeModified(p)) push("rec-timecard--violet", svgCal(13), "已改期·原预约", fmtDateTime(p.originalAppointmentTime));
-  push("rec-timecard--blue", "🚀", "开工时间", p.startedAt ? fmtDateTime(p.startedAt) : "");
+  const nodes = [];
+  const add = (icon, label, value, variant) => { if (value) nodes.push({ icon, label, value, variant }); };
+
+  if (p.appointmentTime) add("📅", "预约时间", fmtFull(p.appointmentTime), "blue");
+  if (isProjectTimeModified(p)) add("📋", "改期前", fmtFull(p.originalAppointmentTime), "gray");
+  /* 开工时间用 originalStartedAt（首次开工），避免暂停/恢复后 startedAt 被重置为恢复时间，
+     导致时间线出现「开工晚于暂停」的错乱顺序。 */
+  const startedAt = p.originalStartedAt || p.startedAt;
+  add("🚀", "开工时间", startedAt ? fmtFull(startedAt) : "", "cyan");
+
   if (p.status === STATUS.PAUSED) {
-    const pauseTime = p.pausedAt || (() => {
-      const h = p.pauseHistory || [];
-      return h.length > 0 ? h[h.length - 1].pauseAt : null;
-    })();
-    if (pauseTime) push("rec-timecard--amber", "⏸️", "暂停时间", fmtDateTime(pauseTime));
+    const pauseTime = p.pausedAt || (() => { const h = p.pauseHistory || []; return h.length > 0 ? h[h.length - 1].pauseAt : null; })();
+    if (pauseTime) add("⏸", "暂停时间", fmtFull(pauseTime), "amber");
   }
   if ((p.delayHistory || []).length > 0) {
     const lastDelay = p.delayHistory[p.delayHistory.length - 1];
-    push("rec-timecard--amber", "⚠️", "延期时间", fmtDateTime(lastDelay.time));
+    add("⚠", "延期时间", fmtFull(lastDelay.time), "amber");
   }
-  push("rec-timecard--green", "✅", "完工时间", p.finishedAt ? fmtDateTime(p.finishedAt) : "");
-  if (p.acceptance && p.acceptance.acceptedAt) {
-    push("rec-timecard--indigo", "🤝", "验收时间", fmtDate(p.acceptance.acceptedAt));
-  }
-  push("rec-timecard--indigo", "🔍", "审核时间", p.reviewedAt ? fmtDateTime(p.reviewedAt) : "");
-  if (p.status === STATUS.CANCELLED && p.cancelledAt) {
-    push("rec-timecard--amber", "✖️", "取消时间", fmtDateTime(p.cancelledAt));
-  }
+  add("✅", "完工时间", p.finishedAt ? fmtFull(p.finishedAt) : "", "green");
+  if (p.acceptance && p.acceptance.acceptedAt) add("🤝", "验收时间", fmtFull(p.acceptance.acceptedAt), "purple");
+  if (p.reviewedAt) add("✓", "审核时间", fmtFull(p.reviewedAt), "indigo");
+  if (p.status === STATUS.CANCELLED && p.cancelledAt) add("✖", "取消时间", fmtFull(p.cancelledAt), "gray");
 
-  if (cards.length === 0) return "";
-  return `<div class="rec-timecards">${cards.join("")}</div>`;
+  if (nodes.length === 0) return "";
+  return nodes.map((n) =>
+    `<div class="rec-node rec-node--${n.variant}">
+      <span class="rec-node__icon">${n.icon}</span>
+      <span class="rec-node__body">
+        <span class="rec-node__label">${esc(n.label)}</span>
+        <span class="rec-node__value">${esc(n.value)}</span>
+      </span>
+    </div>`
+  ).join("");
 }
 
 /* 项目工时差异的展示标签（含颜色），未登记实际工时时给出提示。
@@ -5399,6 +5400,7 @@ function openLeaveForm(workerId) {
   if (workerId && !w) return;
   const today = dateKey(new Date());
   const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return dateKey(d); })();
+  const dayAfter = (() => { const d = new Date(); d.setDate(d.getDate() + 2); return dateKey(d); })();
   const workerSelect = w ? "" : `
     <select class="input" id="leaveWorkerSelect" required>
       <option value="">请选择施工人员</option>
@@ -5432,19 +5434,17 @@ function openLeaveForm(workerId) {
       <div class="form-row">
         <label>快捷选择</label>
         <div class="quick-time-select">
-          <button class="btn small" onclick="setLeaveQuickTime('${today}', '08:00', '${today}', '18:00')">今天全天</button>
-          <button class="btn small" onclick="setLeaveQuickTime('${today}', '08:00', '${today}', '12:00')">今天上午</button>
-          <button class="btn small" onclick="setLeaveQuickTime('${today}', '13:00', '${today}', '18:00')">今天下午</button>
-          <button class="btn small" onclick="setLeaveQuickTime('${today}', '08:00', '${tomorrow}', '18:00')">2天</button>
-          <button class="btn small" onclick="setLeaveQuickTime('${today}', '08:00', '${today}', '10:00')">2小时</button>
-          <button class="btn small" onclick="setLeaveQuickTime('${today}', '14:00', '${today}', '18:00')">半天</button>
+          <button class="btn small" onclick="setLeaveQuickTime('${tomorrow}', '08:00', '${tomorrow}', '18:00')">明天1天</button>
+          <button class="btn small" onclick="setLeaveQuickTime('${tomorrow}', '08:00', '${dayAfter}', '18:00')">明后2天</button>
+          <button class="btn small" onclick="setLeaveQuickTime('${tomorrow}', '08:00', '${tomorrow}', '12:00')">明天上午</button>
+          <button class="btn small" onclick="setLeaveQuickTime('${tomorrow}', '13:00', '${tomorrow}', '18:00')">明天下午</button>
         </div>
       </div>
       
       <div class="form-row leave-datetime-block">
         <label>${svgCal(14)} 开始时间 *</label>
         <div class="leave-datetime-row">
-          <input class="input" type="date" id="leaveStartDate" value="${today}" min="${today}" />
+          <input class="input" type="date" id="leaveStartDate" value="${tomorrow}" min="${today}" />
           <input class="input" type="time" id="leaveStartTime" value="08:00" />
         </div>
       </div>
@@ -5665,12 +5665,7 @@ function isHoliday(dateStr) {
 }
 
 function isWorkDay(dateStr) {
-  const date = new Date(dateStr);
-  const dayOfWeek = date.getDay();
-  if (dayOfWeek === 0 || dayOfWeek === 6) {
-    const holiday = cache.holidays.find(h => h.date === dateStr);
-    return holiday && holiday.is_workday;
-  }
+  /* 周末也算工时，仅排除法定节假日/调休 */
   return !isHoliday(dateStr);
 }
 
@@ -5806,9 +5801,10 @@ function updateLeaveDuration() {
   }
   
   totalHours = Math.round(totalHours * 10) / 10;
-  
-  const days = Math.floor(totalHours / 8);
-  const remainingHours = totalHours % 8;
+
+  const HOURS_PER_DAY = 10; /* 工作时间 08:00-18:00 = 10 小时 */
+  const days = Math.floor(totalHours / HOURS_PER_DAY);
+  const remainingHours = Math.round((totalHours % HOURS_PER_DAY) * 10) / 10;
   
   let durationText = "";
   if (days > 0) durationText += `${days} 天 `;
@@ -8728,35 +8724,43 @@ function renderConstruction() {
     ${(p.appointmentTime || p.startedAt || p.finishedAt || p.workSessions.length > 0 || p.pauseCount > 0 || p.reviewedAt || p.pauseHistory.length > 0 || p.delayHistory.length > 0 || (p.acceptance && p.acceptance.acceptedAt) || p.workerChangeHistory.length > 0 || p.actionLogs.length > 0 || p.cancelledAt) ? `
     <div class="detail-block">
       <h3>📝 施工记录</h3>
-      <div class="rec-timecards">
+      <div class="rec-timeline">
         ${buildStatusTimeCards(p)}
-        ${p.startedAt ? `<div class="rec-timecard rec-timecard--indigo">
-          <div class="rec-timecard__label">⏱️ 工时时长</div>
-          <div class="rec-timecard__value">${(() => {
-            const projectEndTime = getProjectEffectiveEndTime(p);
-            let totalHours = 0;
-            const workWids = new Set([...(p.assignedWorkerIds || [])]);
-            (p.workerChangeHistory || []).forEach(ch => { if (ch.workerId) workWids.add(ch.workerId); });
-            workWids.forEach(wid => {
-        const periods = buildWorkerPeriods(p, wid);
-        periods.filter(pr => !pr.end).forEach(pr => {
-          const start = new Date(pr.start);
-          const end = pr.end ? new Date(pr.end) : projectEndTime;
-                let dur = (end - start) / (1000 * 60 * 60);
-                (p.pauseHistory || []).forEach(ph => {
-                  if (ph.pauseAt && ph.resumedAt) {
-                    const ps = new Date(ph.pauseAt);
-                    const pe = new Date(ph.resumedAt);
-                    const os = ps > start ? ps : start;
-                    const oe = pe < end ? pe : end;
-                    if (oe > os) dur -= (oe - os) / (1000 * 60 * 60);
-                  }
+        ${p.startedAt ? `<div class="rec-node rec-node--violet">
+          <span class="rec-node__icon">⏱</span>
+          <span class="rec-node__body">
+            <span class="rec-node__label">工时时长</span>
+            <span class="rec-node__value">${(() => {
+              const projectEndTime = getProjectEffectiveEndTime(p);
+              let totalHours = 0;
+              const workWids = new Set([...(p.assignedWorkerIds || [])]);
+              (p.workerChangeHistory || []).forEach(ch => { if (ch.workerId) workWids.add(ch.workerId); });
+              workWids.forEach(wid => {
+                const periods = buildWorkerPeriods(p, wid);
+                periods.forEach(pr => {
+                  const start = new Date(pr.start);
+                  const end = pr.end ? new Date(pr.end) : projectEndTime;
+                  let dur = (end - start) / (1000 * 60 * 60);
+                  (p.pauseHistory || []).forEach(ph => {
+                    if (ph.pauseAt && ph.resumedAt) {
+                      const ps = new Date(ph.pauseAt);
+                      const pe = new Date(ph.resumedAt);
+                      const os = ps > start ? ps : start;
+                      const oe = pe < end ? pe : end;
+                      if (oe > os) dur -= (oe - os) / (1000 * 60 * 60);
+                    }
+                  });
+                  totalHours += dur;
                 });
-                totalHours += dur;
               });
-            });
-            return Math.round(totalHours * 10) / 10;
-          })().toFixed(1)} 小时</div>
+              const totalMins = Math.round(totalHours * 60);
+              const hours = Math.floor(totalMins / 60);
+              const mins = totalMins % 60;
+              if (hours > 0 && mins > 0) return `${hours}小时${mins}分钟`;
+              if (hours > 0) return `${hours}小时`;
+              return `${mins}分钟`;
+            })()}</span>
+          </span>
         </div>` : ""}
       </div>
       
@@ -9296,6 +9300,13 @@ function formatLeaveTime(lr) {
   } else if (lr.endType) {
     const typeLabels = { all: "", morning: "上午", afternoon: "下午", custom: "" };
     endPart += ` ${typeLabels[lr.endType] || ""}`;
+  }
+  if (lr.startDate === lr.endDate && lr.startType === lr.endType && !lr.startTime && !lr.endTime) {
+    return startPart.trim();
+  }
+  if (lr.startDate === lr.endDate && lr.startType === lr.endType) {
+    // 同一天同类型但有精确时间，只显示一次日期+时间范围
+    return `${startPart.trim()} ~ ${(lr.endTime || "").trim() || formatLeaveTimeType(lr.endType)}`;
   }
   return `${startPart} ~ ${endPart}`;
 }
@@ -14975,13 +14986,18 @@ function updateInternalTaskBadge() {
 
 /* 内存缓存 + 云端同步（云端模式逐条 upsert 到 Supabase；本地模式写 localStorage 兜底）。
    删除：本地移除但云端仍存在的记录，补删云端，保证多端一致。fire-and-forget，不阻塞 UI。 */
-function saveInternalTasks(tasks) {
+async function saveInternalTasks(tasks) {
   const prev = cache.internalTasks || [];
   const nextIds = new Set(tasks.map((t) => t.id));
   cache.internalTasks = tasks;
   if (MODE === "cloud") {
-    tasks.forEach((t) => { repo.saveInternalTask(t).catch((e) => console.warn("内部任务同步失败:", e && e.message)); });
-    prev.forEach((t) => { if (!nextIds.has(t.id)) repo.deleteInternalTask(t.id).catch((e) => console.warn("内部任务删除同步失败:", e && e.message)); });
+    try {
+      await Promise.all(tasks.map((t) => repo.saveInternalTask(t)));
+      await Promise.all(prev.filter((t) => !nextIds.has(t.id)).map((t) => repo.deleteInternalTask(t.id)));
+    } catch (e) {
+      console.error("同步内部任务失败:", e);
+      toast("云端同步失败，请稍后刷新");
+    }
   } else {
     lsSet("internalTasks", tasks);
   }
@@ -14997,11 +15013,7 @@ async function addInternalTask(task) {
   };
   const tasks = getInternalTasks();
   tasks.push(full);
-  saveInternalTasks(tasks);
-  if (MODE === "cloud") {
-    try { await repo.saveInternalTask(full); }
-    catch (e) { console.error("同步内部任务失败:", e); toast("云端同步失败，请稍后刷新"); }
-  }
+  await saveInternalTasks(tasks);
   return full;
 }
 
@@ -15010,11 +15022,7 @@ async function updateInternalTask(id, updates) {
   const idx = tasks.findIndex(t => t.id === id);
   if (idx !== -1) {
     tasks[idx] = { ...tasks[idx], ...updates };
-    saveInternalTasks(tasks);
-    if (MODE === "cloud") {
-      try { await repo.saveInternalTask(tasks[idx]); }
-      catch (e) { console.error("同步内部任务失败:", e); toast("云端同步失败，请稍后刷新"); }
-    }
+    await saveInternalTasks(tasks);
   }
 }
 
@@ -15025,11 +15033,7 @@ async function deleteInternalTask(id) {
   }
   if (!(await confirmDialog("确定删除这条内部任务记录？", "删除记录"))) return;
   const tasks = getInternalTasks().filter(t => t.id !== id);
-  saveInternalTasks(tasks);
-  if (MODE === "cloud") {
-    try { await repo.deleteInternalTask(id); }
-    catch (e) { console.error("删除内部任务同步失败:", e); toast("云端同步失败，请稍后刷新"); }
-  }
+  await saveInternalTasks(tasks);
   toast("已删除");
   renderInternalTasks();
 }
@@ -16707,6 +16711,7 @@ function renderStoreStats() {
               <td class="ss-store">
                 <span class="ss-rank ${i === 0 ? 'ss-rank--top' : ''}">${i + 1}</span>
                 <span class="ss-store-name">${esc(r.name)}</span>
+                ${r.id && r.count > 0 ? `<button class="btn btn-small" style="margin-left:6px;padding:1px 6px;font-size:10px" onclick="showStoreProjects('${r.id}', '${esc(r.name)}')">查看</button>` : ""}
               </td>
               <td class="ss-num"><b>${r.count}</b></td>
               <td class="ss-dist">${distBar(r)}</td>
@@ -16756,6 +16761,62 @@ function exportStoreStats() {
 /* ============================================================
  * 门店管理（总经理）
  * ============================================================ */
+
+/* 查看门店关联的预约项目列表 */
+function showStoreProjects(storeId, storeName) {
+  const projs = cache.projects.filter((p) => p.storeId === storeId);
+  if (projs.length === 0) {
+    toast("该门店暂无关联项目");
+    return;
+  }
+  /* 按状态排序：活跃 > 等待 > 终态 */
+  const statusOrder = { "进行中": 0, "施工中": 0, "预约中": 1, "待施工": 1, "已暂停": 2, "暂停": 2, "已延期": 3, "已完工": 4, "已完成": 4, "已验收": 5, "已审核": 6, "已取消": 7 };
+  projs.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
+
+  const rows = projs.map((p) => {
+    const st = p.status || "—";
+    /* 状态颜色：覆盖全部状态，避免走默认红色 */
+    const sc = st === "进行中" || st === "施工中" ? "#dbeafe;color:#1d4ed8" :
+              st === "预约中" || st === "待施工" ? "#eef6ff;color:#1d4ed8" :
+              st === "已完工" ? "#dcfce7;color:#166534" :
+              st === "已完成" ? "#dcfce7;color:#166534" :
+              st === "已验收" ? "#f5f3ff;color:#5b21b6" :
+              st === "已审核" ? "#ecfeff;color:#155e75" :
+              st === "已暂停" || st === "暂停" ? "#fef3c7;color:#92400e" :
+              st === "已延期" ? "#fef2f2;color:#991b1b" :
+              st === "已取消" ? "#f1f5f9;color:#64748b" :
+              "#f1f5f9;color:#64748b";
+    const h = hoursDiff(p);
+    const fmtH = (v) => v > 0 ? Math.round(v * 10) / 10 + "h" : "";
+    const hoursText = h.hasActual ? fmtH(h.act) : (h.est > 0 ? fmtH(h.est) + "(预)" : "—");
+    /* 日期格式化：ISO → MM-DD（仅日期） */
+    const fmtDate = (s) => { if (!s) return ""; try { const d = new Date(s); if (isNaN(d.getTime())) return s; const m = String(d.getMonth()+1).padStart(2,"0"); const dd = String(d.getDate()).padStart(2,"0"); return `${m}-${dd}`; } catch(e) { return s; } };
+    const dStart = fmtDate(p.startDate || p.appointmentTime || "");
+    const dEnd = fmtDate(p.endDate);
+    return `<tr>
+      <td><a href="javascript:void(0)" onclick="modal.close(); openProjectFromCard('${p.id}')" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(p.name || "未命名")}</a></td>
+      <td>${esc(p.clientName || "—")}</td>
+      <td><span style="display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:600;background:${sc};white-space:nowrap">${esc(st)}</span></td>
+      <td style="white-space:nowrap">${esc(dStart)}${dEnd ? `<br><small style="color:#94a3b8">${esc(dEnd)}</small>` : ""}</td>
+      <td style="text-align:right;white-space:nowrap;font-weight:500;color:#334155">${hoursText}</td>
+    </tr>`;
+  }).join("");
+
+  const content = `
+    <div style="padding:4px 0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span style="font-size:13px;color:#64748b"><b style="color:#1f2937">${esc(storeName)}</b> · 共 ${projs.length} 个项目</span>
+      </div>
+      <div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:8px">
+        <table class="data" style="margin:0;font-size:12px">
+          <thead><tr><th>项目名称</th><th>客户</th><th>状态</th><th>日期</th><th style="text-align:right">工时</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+  modal.open(`${storeName} — 关联项目`, content, { closeOnMask: true });
+}
+
 function renderStores() {
   const list = document.getElementById("storeList");
   if (!list) return;
@@ -16764,12 +16825,14 @@ function renderStores() {
     return;
   }
   list.innerHTML = cache.stores.map((s) => {
-    const projCount = cache.projects.filter((p) => p.storeId === s.id).length;
+    const projs = cache.projects.filter((p) => p.storeId === s.id);
+    const projCount = projs.length;
     return `
       <div class="card">
         <div class="card-title"><h3>${esc(s.name)}</h3></div>
         <div class="card-row"><span>关联预约</span><b>${projCount} 个</b></div>
         <div class="card-actions">
+          ${projCount > 0 ? `<button class="btn small" onclick="showStoreProjects('${s.id}', '${esc(s.name)}')">查看项目</button>` : ""}
           <button class="btn small" onclick="editStore('${s.id}')">编辑</button>
           <button class="btn small danger" onclick="removeStore('${s.id}')">删除</button>
         </div>
@@ -19187,6 +19250,9 @@ function renderLeaveCard(record, showActions) {
     `;
   }
 
+  const isWithdrawable = (record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id) ||
+    (record.status === LEAVE_STATUS.APPROVED && perm.approveLeave() && perm.withdrawLeave() && record.endDate >= todayStr());
+
   const avatarChar = esc((record.workerName || "?").charAt(0));
 
   return `
@@ -19200,10 +19266,7 @@ function renderLeaveCard(record, showActions) {
             <div class="leave-card__date">${svgCal(13)} ${formatLeaveDateRange(record)}</div>
           </div>
           <div class="leave-card__header-actions">
-            ${(record.status === LEAVE_STATUS.PENDING && record.workerId === currentProfile.id) ||
-              (record.status === LEAVE_STATUS.APPROVED && perm.approveLeave() && perm.withdrawLeave() && record.endDate >= todayStr()) ? `
-              <button class="leave-card__detail leave-card__detail--withdraw" type="button" onclick="withdrawLeave('${record.id}')">撤回</button>
-            ` : ""}
+            ${canDeleteLeaveRecord(record) ? `<button class="leave-card__del" type="button" onclick="deleteLeaveRecord('${record.id}')" title="删除">删除</button>` : ""}
             <button class="leave-card__detail" type="button" onclick="showLeaveDetail('${record.id}')" title="详情">详情</button>
           </div>
         </div>
@@ -19214,6 +19277,7 @@ function renderLeaveCard(record, showActions) {
           ${isRotMakeup ? `<span class="leave-card__tag leave-card__tag--makeup">🛠 已补班${record.makeupLeaveId ? "·已抵扣" : ""}</span>` : ""}
           ${makeupOffset ? `<span class="leave-card__tag leave-card__tag--offset">✅ 已补班抵扣</span>` : ""}
           ${conflicts.length > 0 ? `<span class="leave-card__tag leave-card__tag--warn">⚠ ${conflicts.length}冲突</span>` : ""}
+          ${isWithdrawable ? `<button class="leave-card__withdraw-btn" type="button" onclick="withdrawLeave('${record.id}')">撤回</button>` : ""}
         </div>
         ${conflictInfo}
         <div class="card-actions leave-card__actions">
@@ -19224,10 +19288,8 @@ function renderLeaveCard(record, showActions) {
             ${record.status === LEAVE_STATUS.PENDING && perm.rejectLeave() ? `
               <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
             ` : ""}
-            ${canDeleteLeaveRecord(record) ? `
-              <button class="btn small danger leave-card__btn" onclick="deleteLeaveRecord('${record.id}')">删除</button>
-            ` : ""}
           ` : ""}
+          ${canDeleteLeaveRecord(record) ? `<button class="leave-card__del leave-card__del--mobile" type="button" onclick="deleteLeaveRecord('${record.id}')" title="删除">删除</button>` : ""}
         </div>
       </div>
     </div>
@@ -19377,7 +19439,9 @@ function showLeaveDetail(id) {
   }[record.leaveType] || { bg: "#f3f4f6", fg: "#374151", border: "#e5e7eb" };
 
   const firstChar = esc((record.workerName || "").slice(0, 1));
-  const timeRange = `${esc(record.startDate)} ${formatLeaveTimeType(record.startType)} → ${esc(record.endDate)} ${formatLeaveTimeType(record.endType)}`;
+  const timeRange = (record.startDate === record.endDate && record.startType === record.endType)
+    ? `${esc(record.startDate)} ${formatLeaveTimeType(record.startType)}`
+    : `${esc(record.startDate)} ${formatLeaveTimeType(record.startType)} → ${esc(record.endDate)} ${formatLeaveTimeType(record.endType)}`;
 
   const modalContent = `
     <div class="leave-detail">
@@ -19391,10 +19455,6 @@ function showLeaveDetail(id) {
       </div>
 
       <div class="leave-detail__grid">
-        <div class="leave-detail__item">
-          <div class="leave-detail__label">请假时间</div>
-          <div class="leave-detail__value">${timeRange}</div>
-        </div>
         ${(record.startTime || record.endTime) ? `
         <div class="leave-detail__item">
           <div class="leave-detail__label">具体时间</div>
@@ -19430,7 +19490,7 @@ function showLeaveDetail(id) {
           <div class="leave-detail__reason">${esc(record.reviewNote)}</div>
         </div>` : ""}
         <div class="leave-detail__item leave-detail__item--full">
-          <div class="leave-detail__label">请假原因</div>
+          <div class="leave-detail__label">休假原因</div>
           <div class="leave-detail__reason ${record.reason ? "" : "leave-detail__reason--empty"}">${esc(record.reason || "未填写")}</div>
         </div>
       </div>
@@ -19455,7 +19515,7 @@ function showLeaveDetail(id) {
     </div>
   `;
 
-  modal.open("请假详情", modalContent, { closeOnMask: true });
+  modal.open("休假详情", modalContent, { closeOnMask: false });
 }
 
 document.addEventListener("DOMContentLoaded", function() {
@@ -21425,6 +21485,15 @@ function bindEvents() {
     if (modalCloseOnMask && maskMouseDown && e.target.id === "modal") modal.close();
     maskMouseDown = false;
   });
+  // 触屏设备支持：touchstart/touchend 实现点遮罩关闭
+  let maskTouchStart = false;
+  modalMask.addEventListener("touchstart", (e) => {
+    maskTouchStart = e.target.id === "modal";
+  }, { passive: true });
+  modalMask.addEventListener("touchend", (e) => {
+    if (modalCloseOnMask && maskTouchStart && e.target.id === "modal") modal.close();
+    maskTouchStart = false;
+  });
 
   document.getElementById("btnNewWorker").addEventListener("click", newWorker);
   document.getElementById("btnNewProject").addEventListener("click", newProject);
@@ -21930,7 +21999,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v36943f94";
+  const APP_VERSION = "vbbd19350";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

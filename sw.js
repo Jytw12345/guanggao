@@ -3,8 +3,8 @@
 // - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
 //   用户点「立即更新」或下次打开即生效。
 // 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
-const CACHE = "ad-install-v36943f94";
-const VERSION = "v36943f94";
+const CACHE = "ad-install-vbbd19350";
+const VERSION = "vbbd19350";
 
 const ASSETS = [
   "./",

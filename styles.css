@@ -38,6 +38,11 @@
   --tc-green-bg: #ecfdf5; --tc-green-label: #047857; --tc-green-value: #065f46;
   --tc-amber-bg: #fef3c7; --tc-amber-label: #b45309; --tc-amber-value: #92400e;
   --tc-indigo-bg: #e0e7ff; --tc-indigo-label: #6366f1; --tc-indigo-value: #4338ca;
+  --tc-red-bg: #fef2f2; --tc-red-label: #b91c1c; --tc-red-value: #991b1b;
+  --tc-purple-bg: #f5f3ff; --tc-purple-label: #7c3aed; --tc-purple-value: #5b21b6;
+  --tc-cyan-bg: #ecfeff; --tc-cyan-label: #0e7490; --tc-cyan-value: #155e75;
+  --tc-gray-bg: #f9fafb; --tc-gray-label: #4b5563; --tc-gray-value: #374151;
+  --tc-violet-bg: #ede9fe; --tc-violet-label: #7c3aed; --tc-violet-value: #5b21b6;
 }
 
 /* 通用页头标题 + 空状态（统一各 tab 节奏，组件可复用） */
@@ -5211,26 +5216,112 @@ body.modal-open {
   color: #b03340;
 }
 
-/* ===== 施工记录：时间节点卡片 ===== */
-.rec-timecards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 16px; }
-.rec-timecard { border-radius: 8px; padding: 10px; }
-.rec-timecard__label { font-size: 11px; margin-bottom: 2px; }
-.rec-timecard__value { font-size: 14px; font-weight: 600; }
-.rec-timecard--blue { background: var(--tc-blue-bg); }
-.rec-timecard--blue .rec-timecard__label { color: var(--tc-blue-label); }
-.rec-timecard--blue .rec-timecard__value { color: var(--tc-blue-value); }
-.rec-timecard--green { background: var(--tc-green-bg); }
-.rec-timecard--green .rec-timecard__label { color: var(--tc-green-label); }
-.rec-timecard--green .rec-timecard__value { color: var(--tc-green-value); }
-.rec-timecard--amber { background: var(--tc-amber-bg); }
-.rec-timecard--amber .rec-timecard__label { color: var(--tc-amber-label); }
-.rec-timecard--amber .rec-timecard__value { color: var(--tc-amber-value); }
-.rec-timecard--indigo { background: var(--tc-indigo-bg); }
-.rec-timecard--indigo .rec-timecard__label { color: var(--tc-indigo-label); }
-.rec-timecard--indigo .rec-timecard__value { color: var(--tc-indigo-value); }
-.rec-timecard--violet { background: #faf5ff; border-left: 3px solid #7c3aed; }
-.rec-timecard--violet .rec-timecard__label { color: #7c3aed; }
-.rec-timecard--violet .rec-timecard__value { color: #6d28d9; }
+/* ===== 施工记录：时间节点小卡片 ===== */
+.rec-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  padding: 2px 0 14px;
+}
+.rec-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  font-size: 12px;
+  line-height: 1.25;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.rec-node:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+.rec-node__icon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 11px;
+  background: rgba(0,0,0,0.04);
+}
+.rec-node__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+.rec-node__label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1.2;
+}
+.rec-node__value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+/* 节点主题色 */
+.rec-node--blue   { background: var(--tc-blue-bg);   border-color: rgba(59,130,246,0.25); }
+.rec-node--blue .rec-node__icon   { background: rgba(59,130,246,0.12); }
+.rec-node--blue .rec-node__label  { color: var(--tc-blue-label); }
+.rec-node--blue .rec-node__value  { color: var(--tc-blue-value); }
+
+.rec-node--green  { background: var(--tc-green-bg);  border-color: rgba(34,197,94,0.25); }
+.rec-node--green .rec-node__icon  { background: rgba(34,197,94,0.12); }
+.rec-node--green .rec-node__label { color: var(--tc-green-label); }
+.rec-node--green .rec-node__value { color: var(--tc-green-value); }
+
+.rec-node--amber  { background: var(--tc-amber-bg);  border-color: rgba(245,158,11,0.25); }
+.rec-node--amber .rec-node__icon  { background: rgba(245,158,11,0.12); }
+.rec-node--amber .rec-node__label { color: var(--tc-amber-label); }
+.rec-node--amber .rec-node__value { color: var(--tc-amber-value); }
+
+.rec-node--indigo { background: var(--tc-indigo-bg); border-color: rgba(99,102,241,0.25); }
+.rec-node--indigo .rec-node__icon { background: rgba(99,102,241,0.12); }
+.rec-node--indigo .rec-node__label{ color: var(--tc-indigo-label); }
+.rec-node--indigo .rec-node__value{ color: var(--tc-indigo-value); }
+
+.rec-node--red    { background: var(--tc-red-bg);    border-color: rgba(239,68,68,0.25); }
+.rec-node--red .rec-node__icon    { background: rgba(239,68,68,0.12); }
+.rec-node--red .rec-node__label   { color: var(--tc-red-label); }
+.rec-node--red .rec-node__value   { color: var(--tc-red-value); }
+
+.rec-node--purple { background: var(--tc-purple-bg); border-color: rgba(139,92,246,0.25); }
+.rec-node--purple .rec-node__icon { background: rgba(139,92,246,0.12); }
+.rec-node--purple .rec-node__label{ color: var(--tc-purple-label); }
+.rec-node--purple .rec-node__value{ color: var(--tc-purple-value); }
+
+.rec-node--cyan   { background: var(--tc-cyan-bg);   border-color: rgba(6,182,212,0.25); }
+.rec-node--cyan .rec-node__icon   { background: rgba(6,182,212,0.12); }
+.rec-node--cyan .rec-node__label  { color: var(--tc-cyan-label); }
+.rec-node--cyan .rec-node__value  { color: var(--tc-cyan-value); }
+
+.rec-node--violet {
+  background: var(--tc-violet-bg);
+  border-color: rgba(139,92,246,0.25);
+  border-left: 3px solid #8b5cf6;
+  padding-left: 7px;
+}
+.rec-node--violet .rec-node__icon { background: rgba(139,92,246,0.14); }
+.rec-node--violet .rec-node__label{ color: var(--tc-violet-label); }
+.rec-node--violet .rec-node__value{ color: var(--tc-violet-value); font-weight: 700; }
+
+.rec-node--gray   { background: var(--tc-gray-bg);   border-color: rgba(107,114,128,0.25); }
+.rec-node--gray .rec-node__icon   { background: rgba(107,114,128,0.12); }
+.rec-node--gray .rec-node__label  { color: var(--tc-gray-label); }
+.rec-node--gray .rec-node__value  { color: var(--tc-gray-value); }
 
 /* ===== 施工记录：折叠面板 ===== */
 .rec-details { border-radius: 8px; padding: 0 12px; margin-bottom: 12px; border-left: 4px solid; }
@@ -6748,9 +6839,12 @@ table.data.project-hours-diff thead th {
 
   /* 移动端：施工记录折叠面板触摸友好 */
   .rec-details > summary { padding: 12px 0; font-size: 14px; }
-  .rec-timecards { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-  .rec-timecard { padding: 8px; }
-  .rec-timecard__value { font-size: 13px; }
+  .rec-timeline { gap: 8px; padding: 2px 0 12px; }
+  .rec-node { padding: 6px 10px; gap: 7px; }
+  .rec-node--violet { padding-left: 7px; }
+  .rec-node__icon { width: 24px; height: 24px; font-size: 11px; }
+  .rec-node__label { font-size: 10px; }
+  .rec-node__value { font-size: 12px; }
 
   table.data {
     font-size: 12px;
@@ -11969,6 +12063,7 @@ table.data.project-hours-diff thead th {
   background: var(--leave-side-color, var(--primary));
 }
 .leave-card__main {
+  position: relative;
   flex: 1;
   padding: 10px 12px;
   min-width: 0;
@@ -12018,6 +12113,7 @@ table.data.project-hours-diff thead th {
 .leave-card__header-actions {
   margin-left: auto;
   display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
@@ -12036,14 +12132,68 @@ table.data.project-hours-diff thead th {
   background: #f8fafc;
   color: var(--text);
 }
-.leave-card__detail--withdraw {
-  color: #b45309;
-  border-color: #fcd34d;
-  background: #fffbeb;
+/* 删除按钮（桌面：平时隐藏，hover 卡片才在头部显示；仅有权限者渲染） */
+.leave-card__del {
+  display: none;
+  padding: 2px 9px;
+  font-size: 11px;
+  line-height: 1.3;
+  border-radius: 4px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #dc2626;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.leave-card__detail--withdraw:hover {
+.leave-card__del:hover {
+  background: #dc2626;
+  color: #fff;
+  border-color: #dc2626;
+}
+.leave-card:hover .leave-card__del:not(.leave-card__del--mobile) {
+  display: inline-flex;
+}
+/* 手机端专用删除按钮：绝对定位在卡片右下角，不占流式空间，桌面端隐藏 */
+.leave-card__del--mobile {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  padding: 1px 7px;
+  font-size: 10px;
+  border-radius: 3px;
+  opacity: 0.75;
+  display: none !important;
+}
+/* 触屏设备无 hover：头部删除隐藏，右下角常显 */
+@media (hover: none) {
+  .leave-card__header-actions .leave-card__del {
+    display: none !important;
+  }
+  .leave-card__del--mobile {
+    display: inline-flex !important;
+  }
+}
+/* 撤回按钮：位于标签行（1天那行）末尾，靠右对齐 */
+.leave-card__withdraw-btn {
+  margin-left: auto;
+  align-self: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.3;
+  border-radius: 4px;
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  color: #b45309;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.leave-card__withdraw-btn:hover {
   background: #fef3c7;
   color: #92400e;
+  border-color: #fbbf24;
 }
 .leave-card__tags {
   display: flex;
@@ -12105,6 +12255,8 @@ table.data.project-hours-diff thead th {
 .leave-card__actions {
   margin-top: 8px;
   gap: 5px;
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
 }
 .leave-card__actions .btn.small {
@@ -12157,6 +12309,22 @@ table.data.project-hours-diff thead th {
   .leave-card__tag { padding: 1px 5px; font-size: 9px; }
   .leave-card__detail { padding: 2px 6px; font-size: 10px; }
   .leave-card__btn { padding: 2px 5px !important; font-size: 10px !important; }
+  /* 删除按钮：移动端改为紧凑行内文字按钮，不占整行 */
+  .leave-card__actions { display: flex; align-items: center; justify-content: flex-end; margin-top: 6px; }
+  .leave-card__actions .btn.small.danger.leave-card__btn {
+    padding: 1px 7px !important;
+    font-size: 10px !important;
+    border-radius: 4px;
+    background: transparent;
+    border-color: #fca5a5;
+    color: #dc2626;
+  }
+  /* 撤回按钮：移动端更紧凑 */
+  .leave-card__withdraw-btn {
+    padding: 1px 7px !important;
+    font-size: 10px !important;
+    border-radius: 4px;
+  }
 }
 @media (max-width: 420px) {
   .leave-card__main { padding: 7px 8px; }
@@ -12167,14 +12335,22 @@ table.data.project-hours-diff thead th {
   .leave-card__tags { gap: 2px; margin-top: 6px; }
   .leave-card__tag { padding: 1px 4px; font-size: 8px; }
   .leave-card__detail { padding: 1px 5px; font-size: 9px; border-radius: 4px; }
-  .leave-card__actions { margin-top: 6px; }
+  .leave-card__actions { margin-top: 4px; }
   .leave-card__actions .btn.small {
     padding: 3px 6px;
     font-size: 10px;
   }
+  .leave-card__actions .btn.small.danger.leave-card__btn {
+    padding: 1px 5px !important;
+    font-size: 9px !important;
+  }
+  .leave-card__withdraw-btn {
+    padding: 1px 5px !important;
+    font-size: 9px !important;
+  }
 }
 
-/* ===== 请假详情弹窗：紧凑信息卡片 ===== */
+/* ===== 休假详情弹窗：紧凑信息卡片 ===== */
 .modal:has(.leave-detail) { max-width: 460px; }
 .modal:has(.leave-detail) .modal-body { padding: 0; }
 
@@ -12188,14 +12364,16 @@ table.data.project-hours-diff thead th {
   display: flex;
   align-items: center;
   gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #f1f5f9;
 }
 .leave-detail__avatar {
-  width: 40px; height: 40px; border-radius: 50%;
+  width: 42px; height: 42px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 15px; font-weight: 700; flex-shrink: 0;
+  font-size: 16px; font-weight: 700; flex-shrink: 0;
 }
 .leave-detail__meta {
-  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px;
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px;
 }
 .leave-detail__name {
   font-size: 16px; font-weight: 700; color: #0f172a;
@@ -12203,12 +12381,12 @@ table.data.project-hours-diff thead th {
 }
 .leave-detail__type {
   display: inline-flex; align-items: center;
-  padding: 2px 8px; border-radius: 999px;
+  padding: 2px 9px; border-radius: 999px;
   font-size: 11px; font-weight: 600;
 }
 .leave-detail__date {
-  font-size: 12px; color: var(--muted, #64748b);
-  display: flex; align-items: center; gap: 4px;
+  font-size: 12.5px; color: var(--muted, #64748b);
+  display: flex; align-items: center; gap: 5px;
 }
 .leave-detail__date svg {
   width: 14px; height: 14px; flex-shrink: 0;
@@ -12216,7 +12394,7 @@ table.data.project-hours-diff thead th {
 .leave-detail__status {
   flex-shrink: 0;
   display: inline-flex; align-items: center;
-  padding: 4px 10px; border-radius: 999px;
+  padding: 5px 11px; border-radius: 999px;
   font-size: 12px; font-weight: 700;
 }
 
@@ -12224,32 +12402,38 @@ table.data.project-hours-diff thead th {
 .leave-detail__grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 14px;
-  margin-top: 18px;
+  gap: 10px;
+  margin-top: 16px;
 }
 .leave-detail__item {
   min-width: 0;
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 10px 12px;
+  background: #fafbfc;
+  border: 1px solid #f0f2f5;
+  border-radius: 10px;
 }
 .leave-detail__item--full {
   grid-column: 1 / -1;
 }
 .leave-detail__label {
-  font-size: 11px; font-weight: 600; color: var(--muted, #64748b);
-  line-height: 1.2;
+  font-size: 11px; font-weight: 600; color: #94a3b8;
+  line-height: 1.3;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
 }
 .leave-detail__value {
-  font-size: 13px; font-weight: 500; color: #1f2937;
+  font-size: 13.5px; font-weight: 600; color: #1e293b;
   line-height: 1.4; word-break: break-word;
 }
 
 /* 原因块 */
 .leave-detail__reason {
-  padding: 10px 12px;
-  background: #f8fafc;
+  padding: 11px 13px;
+  background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  font-size: 13px; line-height: 1.5; color: #1f2937;
+  font-size: 13.5px; line-height: 1.55; color: #334155;
 }
 .leave-detail__reason--empty {
   color: #94a3b8; font-style: italic;
@@ -12257,9 +12441,9 @@ table.data.project-hours-diff thead th {
 
 /* 警示/成功块 */
 .leave-detail__alert {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 10px 12px; border-radius: 8px;
-  font-size: 12px; line-height: 1.45;
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 11px 13px; border-radius: 10px;
+  font-size: 12.5px; line-height: 1.45;
 }
 .leave-detail__alert b {
   display: flex; align-items: center; gap: 5px;
@@ -12286,11 +12470,12 @@ table.data.project-hours-diff thead th {
 @media (max-width: 560px) {
   .modal:has(.leave-detail) { max-width: none; margin: 10px; }
   .leave-detail { padding: 16px 14px 14px; }
-  .leave-detail__head { gap: 10px; }
-  .leave-detail__avatar { width: 34px; height: 34px; font-size: 13px; }
-  .leave-detail__name { font-size: 14px; }
-  .leave-detail__status { padding: 3px 8px; font-size: 11px; }
-  .leave-detail__grid { gap: 12px; margin-top: 14px; }
-  .leave-detail__value { font-size: 12px; }
+  .leave-detail__head { gap: 10px; padding-bottom: 12px; }
+  .leave-detail__avatar { width: 36px; height: 36px; font-size: 14px; }
+  .leave-detail__name { font-size: 15px; }
+  .leave-detail__status { padding: 4px 9px; font-size: 11px; }
+  .leave-detail__grid { gap: 8px; margin-top: 14px; }
+  .leave-detail__item { padding: 8px 10px; }
+  .leave-detail__value { font-size: 12.5px; }
   .leave-detail__footer { margin-top: 14px; padding-top: 12px; }
 }
