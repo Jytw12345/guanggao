@@ -242,7 +242,6 @@ const CAP = {
   VIEW_STATS_GLOBAL: "view_stats_global",
   VIEW_STATS_STORE: "view_stats_store",
   MANAGE_STORES: "manage_stores",
-  MANAGE_ACCOUNTS: "manage_accounts",
   MANAGE_OUTSOURCED: "manage_outsourced",
   REPAIR_CREATE: "repair_create",
   REPAIR_COMPLETE: "repair_complete",
@@ -317,7 +316,6 @@ const CAP_LABEL = {
   view_stats_global: "查看全局工时统计",
   view_stats_store: "查看本门店统计",
   manage_stores: "管理门店",
-  manage_accounts: "管理账户",
   manage_outsourced: "管理外协人员",
   project_edit_appointment_own: "修改自己项目预约时间",
   project_edit_appointment_all: "修改所有项目预约时间",
@@ -365,7 +363,7 @@ const CAP_GROUPS = [
   { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_complete","rework_project"] },
   { label: "数据统计", caps: ["view_stats_global","view_stats_store"] },
   { label: "数据工具", caps: ["export_projects","export_worklogs","export_leaves","export_workers","export_stores","export_all","import_data","view_operation_logs"] },
-  { label: "系统管理", caps: ["manage_stores","manage_accounts","manage_wage_config"] },
+  { label: "系统管理", caps: ["manage_stores","manage_wage_config"] },
   { label: "个人日程", caps: ["schedule_view","schedule_view_all","schedule_add","schedule_edit_own","schedule_edit_all","schedule_delete_own","schedule_delete_all"] },
   { label: "内部任务", caps: ["task_view","task_add","task_start","task_complete","task_delete","task_verify","internal_work_log"] },
   { label: "车辆里程", caps: ["vehicle_view","vehicle_trip_add","vehicle_trip_delete"] },
@@ -386,7 +384,7 @@ const DEFAULT_ROLE_PERMS = {
     leave_delete: true, leave_withdraw: true, leave_batch_rotational: true,
     review_project: true, unreview_project: true, accept_project: false,
     view_stats_global: false, view_stats_store: true,
-    manage_stores: false, manage_accounts: false, manage_wage_config: false,
+    manage_stores: false, manage_wage_config: false,
     manage_outsourced: true,
     project_edit_appointment_own: true, project_edit_appointment_all: true, project_edit_hours_own: true, project_edit_hours_all: true,
     project_edit_worklog_own: true, project_edit_worklog_all: true,
@@ -411,7 +409,7 @@ const DEFAULT_ROLE_PERMS = {
     leave_delete: false, leave_withdraw: false, leave_batch_rotational: false,
     review_project: false, unreview_project: false, accept_project: false,
     view_stats_global: false, view_stats_store: false,
-    manage_stores: false, manage_accounts: false, manage_wage_config: false,
+    manage_stores: false, manage_wage_config: false,
     repair_create: false, repair_complete: true, rework_project: false,
     manage_outsourced: false,
     project_edit_appointment_own: false, project_edit_appointment_all: false, project_edit_hours_own: false, project_edit_hours_all: false,
@@ -491,7 +489,7 @@ const perm = {
   viewGlobalStats: () => can(CAP.VIEW_STATS_GLOBAL),
   viewStoreStats: () => can(CAP.VIEW_STATS_STORE),
   manageStores: () => can(CAP.MANAGE_STORES),
-  manageAccounts: () => isManager() || can(CAP.MANAGE_ACCOUNTS),
+  manageAccounts: () => isManager(),
   manageOutsourced: () => can(CAP.MANAGE_OUTSOURCED),
   exportData: () => can(CAP.EXPORT_PROJECTS) || can(CAP.EXPORT_WORKLOGS) || can(CAP.EXPORT_LEAVES) || can(CAP.EXPORT_WORKERS) || can(CAP.EXPORT_STORES) || can(CAP.EXPORT_ALL) || can(CAP.IMPORT_DATA) || can(CAP.VIEW_OPERATION_LOGS),
   createRepair: () => can(CAP.REPAIR_CREATE),
@@ -21999,7 +21997,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vbbd19350";
+  const APP_VERSION = "v94d0654f";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
