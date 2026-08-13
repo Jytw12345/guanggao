@@ -1836,11 +1836,50 @@ select.input {
   color: #0f172a;
   word-break: break-word;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   overflow-wrap: anywhere;
 }
 
 .card-title .badge { white-space: nowrap; }
+
+/* 标题行右侧（响应式：平时并排、超长堆叠）
+   - 空间够（短名）：状态胶囊在右、chips 紧贴其左，同行并排
+   - 空间窄（超长名）：状态胶囊留在右上、chips 自动换到下一行右对齐
+   实现：row-reverse + flex-wrap + status order:0 / chips order:1
+   （DOM 仍是 chips→status，靠 order 让 status 排到 flow 首位；row-reverse 下
+   首位在右，故 status 永远贴右；空间不够时排在后面的 chips 自然折到下一行） */
+.card-title__right {
+  display: flex;
+  flex-direction: row-reverse;
+  flex-wrap: wrap;
+  justify-content: flex-start;   /* row-reverse 下 flex-start = 贴右 */
+  align-items: flex-start;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.card-title__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: flex-start;
+  justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
+  order: 1;                      /* 排在 status 之后 */
+}
+.card-title__chips > * { flex-shrink: 0; }
+/* chips 紧凑化：比全局 .badge 更小、更紧，减少与项目名的横向争夺 */
+.card-title__chips .badge {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  line-height: 1.45;
+}
+.card-title__right > .card-title__status,
+.card-title__right > .badge:last-child {
+  order: 0;                      /* flow 首位 → 窄时留在第一行右上 */
+  flex: 0 0 auto;
+}
 
 
 

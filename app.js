@@ -1874,7 +1874,9 @@ function buildStatusTimeCards(p) {
 function diffLabel(project, clickable = false) {
   const { diff, hasActual } = hoursDiff(project);
   if (!hasActual) {
-    if (clickable && perm.logWorkHours(project) && [STATUS.WORKING, STATUS.PAUSED].includes(project.status)) {
+    // 仅「疑似虚假施工」（开工超 24h 仍无实际工时）才出可点按钮，提示补登；
+    // 正常施工/暂停未登记只显静态灰字，不再每个施工中项目都挂个按钮
+    if (clickable && perm.logWorkHours(project) && [STATUS.WORKING, STATUS.PAUSED].includes(project.status) && isFakeWorking(project)) {
       return `<a href="javascript:void(0)" class="diff-empty-btn" onclick="gotoConstructionWorklog('${esc(project.id)}')" title="点击快捷登记实际工时">未登记 · 点击登记</a>`;
     }
     return `<span style="color:var(--muted)">未登记实际工时</span>`;
@@ -6822,17 +6824,19 @@ function renderProjects() {
         <div class="card-status-bar"></div>
         <div class="card-title">
           <h3>${esc(p.name)}</h3>
-          <div style="display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 50%;">
-            ${isRescheduled ? `<span class="badge modified" style="cursor:pointer" title="查看改期信息" onclick="showRescheduleInfo('${esc(p.id)}')">${svgCal(12)} 已改期</span>` : ""}
-            ${projectDelayChipHtml(p)}
-            ${projectHistoryChipsHtml(p)}
-            ${isOverdue ? `<span class="badge overdue" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
+          <div class="card-title__right">
+            <div class="card-title__chips">
+              ${isRescheduled ? `<span class="badge modified" style="cursor:pointer" title="查看改期信息" onclick="showRescheduleInfo('${esc(p.id)}')">${svgCal(12)} 已改期</span>` : ""}
+              ${projectDelayChipHtml(p)}
+              ${projectHistoryChipsHtml(p)}
+              ${isOverdue ? `<span class="badge overdue" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
+              ${isCrossDay ? `<span class="badge crossday" style="cursor:pointer" title="查看跨天施工日程" onclick="showCrossDayInfo('${esc(p.id)}')">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
+              ${workingTooLong ? `<span class="badge ${isFakeWorking(p) ? "fake-working" : (overnight ? "overdue" : "pending")}" data-elapsed-marker data-elapsed-prefix="${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")}" data-project-id="${esc(p.id)}">${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")} ${workElapsedText}</span>` : ""}
+              ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}" style="cursor:pointer" title="查看加班/超时详情" onclick="showOvertimeInfo('${esc(p.id)}')">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
+              ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
+              ${leaveConflicts.length > 0 ? `<span class="badge danger" style="cursor:pointer" title="查看人员请假/轮休" onclick="showLeaveConflictInfo('${esc(p.id)}')">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
+            </div>
             ${isDelayed ? `<span class="badge ${p.status}" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status}" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}</span>` : `<span class="badge ${p.status}">${p.status}</span>`}
-            ${isCrossDay ? `<span class="badge crossday" style="cursor:pointer" title="查看跨天施工日程" onclick="showCrossDayInfo('${esc(p.id)}')">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
-            ${workingTooLong ? `<span class="badge ${isFakeWorking(p) ? "fake-working" : (overnight ? "overdue" : "pending")}" data-elapsed-marker data-elapsed-prefix="${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")}" data-project-id="${esc(p.id)}">${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")} ${workElapsedText}</span>` : ""}
-            ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}" style="cursor:pointer" title="查看加班/超时详情" onclick="showOvertimeInfo('${esc(p.id)}')">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
-            ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
-            ${leaveConflicts.length > 0 ? `<span class="badge danger" style="cursor:pointer" title="查看人员请假/轮休" onclick="showLeaveConflictInfo('${esc(p.id)}')">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
           </div>
         </div>
 
@@ -13258,21 +13262,23 @@ function openCompleteProjectForm(id) {
           note: l.note || ""
         }));
       } else {
-        let autoHours = workerAutoHours[w.id] || 0;
-        if (!isAssigned) {
-          const loggedHours = (p.workLogs || []).filter(l => l.workerId === w.id).reduce((s, l) => s + (Number(l.hours) || 0), 0);
-          if (loggedHours > 0) autoHours = loggedHours;
-        }
+        const autoHours = workerAutoHours[w.id] || 0;
         const workerLoggedHours = (p.workLogs || []).filter(l => l.workerId === w.id).reduce((s, l) => s + (Number(l.hours) || 0), 0);
-        let segHours;
-        let segNote;
-        // 已暂停/已延期 + 该工人已有工时记录 且 已结清（覆盖 autoHours）：不预填，避免重复记入完工工时
-        if (projectAlreadySettled && workerLoggedHours > 0 && workerLoggedHours >= autoHours - 0.1) {
-          segHours = "";
+        let segHours = "";
+        let segNote = "";
+        if (!isAssigned) {
+          // 已移除人员：其历史工时已记入 workLogs，本次完工不应再自动新增，避免重复记入
+          segNote = "（已移除，历史工时已记录，无需重复填写）";
+        } else if (projectAlreadySettled && workerLoggedHours > 0 && workerLoggedHours >= autoHours - 0.1) {
+          // 已暂停/已延期且已结清：不预填，避免重复记入完工工时
           segNote = `✅ 已结清 ${workerLoggedHours.toFixed(1)}h（上次暂停），本次完工不自动填`;
+        } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled) {
+          // 正常完工：按实际施工时长自动填入；不足 0.1h 不预填，避免填入无意义小数（如开工即完工的 0.1）
+          segHours = autoHours.toFixed(1);
+          segNote = "系统自动计算";
         } else {
-          segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
-          segNote = autoHours > 0 ? "系统自动计算" : "";
+          // 其余边界（疑似忘点完工 / 跨天提前 / 极短施工）：留空，提示手动填写真实工时
+          segNote = forgottenInfo ? "⚠️请填真实工时" : "（请手动填写实际工时）";
         }
         segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
       }
@@ -13286,10 +13292,10 @@ function openCompleteProjectForm(id) {
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
             <span style="min-width:80px;font-weight:500;flex-shrink:0;color:${isAssigned ? "#1f2937" : "#9ca3af"};">👷 ${esc(w.name)}${!isAssigned ? ` <span style="font-size:11px;color:#d1d5db;">(已移除)</span>` : ""}</span>
             <button type="button" class="btn small" onclick="addWorkerSeg(${idx},'w')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
-            ${(forgottenInfo || crossDayEarlyInfo || projectAlreadySettled) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'w')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
+            ${(forgottenInfo || crossDayEarlyInfo || projectAlreadySettled || !isAssigned) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'w')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
           </div>
           <div class="worker-alloc-panel" id="walloc_${idx}" style="display:none; margin-bottom:8px;">
-            ${workerAllocPanelHtml("walloc" + idx, idx, "w", w.name, (forgottenInfo || crossDayEarlyInfo || projectAlreadySettled) ? 0 : (workerAutoHours[w.id] || 0))}
+            ${workerAllocPanelHtml("walloc" + idx, idx, "w", w.name, (forgottenInfo || crossDayEarlyInfo || projectAlreadySettled || !isAssigned) ? 0 : (workerAutoHours[w.id] || 0))}
           </div>
           <div class="worker-segs" id="wsegs_${idx}">
             ${segs.map(s => workerSegRowHtml(s)).join("")}
@@ -13319,14 +13325,16 @@ function openCompleteProjectForm(id) {
       } else {
         const autoHours = window._completeWorkerAutoHours[workerId] || 0;
         const oLoggedHours = (p.workLogs || []).filter(l => l.workerId === workerId).reduce((s, l) => s + (Number(l.hours) || 0), 0);
-        let segHours;
-        let segNote;
+        let segHours = "";
+        let segNote = "";
         if (projectAlreadySettled && oLoggedHours > 0 && oLoggedHours >= autoHours - 0.1) {
           segHours = "";
           segNote = `✅ 已结清 ${oLoggedHours.toFixed(1)}h（上次暂停），本次完工不自动填`;
+        } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled) {
+          segHours = autoHours.toFixed(1);
+          segNote = "系统自动计算";
         } else {
-          segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
-          segNote = autoHours > 0 ? "系统自动计算" : "";
+          segNote = forgottenInfo ? "⚠️请填真实工时" : "（请手动填写实际工时）";
         }
         segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
       }
@@ -21872,7 +21880,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v4d64e3bb";
+  const APP_VERSION = "v4fa2720d";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
