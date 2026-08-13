@@ -10301,12 +10301,12 @@ function delayProject(id) {
       <input type="date" id="delayDate" value="${defaultDate}" class="input" min="${dateKey(now)}">
     </div>
     <div class="form-row">
-      <label><span style="color:#2563eb;">⏰</span> 新预约时间（开始）</label>
-      <select id="delayTime" class="input">${times}</select>
-    </div>
-    <div class="form-row">
-      <label><span style="color:#059669;">🏁</span> 新预约结束时间 <span style="font-size:11px;color:#9ca3af;font-weight:normal;">（按剩余时长自动算出，可手调）</span></label>
-      <input type="datetime-local" id="delayEndTime" class="input" step="600">
+      <label><span style="color:#2563eb;">⏰</span> 新预约时间 <span style="font-size:11px;color:#9ca3af;font-weight:normal;">（开始 → 结束，结束 ≤ 开始则视为次日凌晨）</span></label>
+      <div class="delay-time-row">
+        <select id="delayTime" class="input">${times}</select>
+        <div class="delay-time-arrow">→</div>
+        <input type="time" id="delayEndTime" class="input" step="600">
+      </div>
       <div id="delayDurationHint" style="font-size:11px;color:#6b7280;margin-top:4px;line-height:1.5;"></div>
     </div>
   `;
@@ -10315,10 +10315,10 @@ function delayProject(id) {
     confirmText: "确认延期",
     cancelText: "取消",
     onOpen: () => {
-      // 自动重算结束时间：根据 剩余工时/人数 推出持续时长，叠加到新开始时间上
-      function fmtPad(n) { return String(n).padStart(2, "0"); }
-      function toLocalInput(d) {
-        return `${d.getFullYear()}-${fmtPad(d.getMonth() + 1)}-${fmtPad(d.getDate())}T${fmtPad(d.getHours())}:${fmtPad(d.getMinutes())}`;
+      /* 自动重算结束时间：根据 剩余工时/人数 推出持续时长，叠加到新开始时间上；
+         结束只用 HH:MM（time-only），由 onConfirm 按"开始当天或次日"推完整日期。 */
+      function toTimeInput(d) {
+        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
       }
       function recomputeEndTime() {
         const dateStr = document.getElementById("delayDate").value;
@@ -10326,23 +10326,25 @@ function delayProject(id) {
         const hint = document.getElementById("delayDurationHint");
         const endInput = document.getElementById("delayEndTime");
         if (!dateStr || !timeStr) return;
-        const newStart = buildLocalDateTime(dateStr, timeStr);
+        const newStart = new Date(buildLocalDateTime(dateStr, timeStr));
+        let durHours = 0;
+        let hintTxt = "";
         if (remainingHours > 0) {
-          const end = new Date(new Date(newStart).getTime() + remainingDurationHours * 60 * 60 * 1000);
-          endInput.value = toLocalInput(end);
-          const durTxt = remainingDurationHours >= 1
-            ? `${Math.floor(remainingDurationHours)}小时${Math.round((remainingDurationHours % 1) * 60)}分钟`
-            : `${Math.round(remainingDurationHours * 60)}分钟`;
-          hint.innerHTML = `📐 剩余施工 <b>${remainingHours.toFixed(1)}h</b> ÷ ${workerCount} 人 = 持续 <b>${durTxt}</b>（自动算出，可手调）`;
+          durHours = remainingDurationHours;
+          const durTxt = durHours >= 1
+            ? `${Math.floor(durHours)}小时${Math.round((durHours % 1) * 60)}分钟`
+            : `${Math.round(durHours * 60)}分钟`;
+          hintTxt = `📐 剩余施工 <b>${remainingHours.toFixed(1)}h</b> ÷ ${workerCount} 人 = 持续 <b>${durTxt}</b>（自动算出，可手调）`;
         } else if (p.endTime && p.appointmentTime) {
-          const origDur = new Date(p.endTime).getTime() - new Date(p.appointmentTime).getTime();
-          const end = new Date(new Date(newStart).getTime() + origDur);
-          endInput.value = toLocalInput(end);
-          hint.innerHTML = `📐 项目无剩余工时数据，按原预约时长自动算出结束时间（可手调）`;
+          durHours = (new Date(p.endTime).getTime() - new Date(p.appointmentTime).getTime()) / (1000 * 60 * 60);
+          hintTxt = `📐 项目无剩余工时数据，按原预约时长自动算出结束时间（可手调）`;
         } else {
-          endInput.value = toLocalInput(new Date(new Date(newStart).getTime() + 4 * 60 * 60 * 1000));
-          hint.innerHTML = `📐 无法估算剩余时长，结束时间默认为开始 +4 小时（请手调）`;
+          durHours = 4;
+          hintTxt = `📐 无法估算剩余时长，结束时间默认为开始 +4 小时（请手调）`;
         }
+        const end = new Date(newStart.getTime() + durHours * 60 * 60 * 1000);
+        endInput.value = toTimeInput(end);
+        hint.innerHTML = hintTxt;
       }
       document.getElementById("delayDate").addEventListener("change", recomputeEndTime);
       document.getElementById("delayTime").addEventListener("change", recomputeEndTime);
@@ -10368,21 +10370,29 @@ function delayProject(id) {
         return false;
       }
 
-      const newAppointmentTime = buildLocalDateTime(newDate, newTime);
-      const newEndDate = new Date(endTimeStr);
+      const newAppointmentTime = new Date(buildLocalDateTime(newDate, newTime));
       // 允许"当前时间"作为起点（容忍 1 分钟时钟偏差）
       if (newAppointmentTime.getTime() < Date.now() - 60 * 1000) {
         toast("新预约开始时间不能早于当前时间");
         return false;
       }
-      if (newEndDate.getTime() <= newAppointmentTime.getTime()) {
-        toast("结束时间必须晚于开始时间");
-        return false;
-      }
 
-      let newEndTime = newEndDate.toISOString();
+      // 结束只有 HH:MM（type=time）：先按开始那天组装；若 ≤ 开始则顺延到次日
+      let newEndTime = "";
+      if (endTimeStr) {
+        const [eh, em] = endTimeStr.split(":").map(Number);
+        if (isNaN(eh) || isNaN(em)) {
+          toast("结束时间格式不正确");
+          return false;
+        }
+        const endCand = new Date(newAppointmentTime);
+        endCand.setHours(eh, em, 0, 0);
+        if (endCand.getTime() <= newAppointmentTime.getTime()) {
+          endCand.setDate(endCand.getDate() + 1);
+        }
+        newEndTime = endCand.toISOString();
+      }
       // 结束时间已由用户手调或在 onOpen 中按剩余工时自动算出，直接保留用户值
-      // 若用户清空了结束时间输入框且后端兜底逻辑仍需要，再回退到自动计算
       if (!newEndTime) {
         const estimatedHours = p.estimatedHours || 0;
         // 预计总工时是"人·小时"，实际日历时长需按施工人数分摊
@@ -13185,8 +13195,9 @@ function openCompleteProjectForm(id) {
     });
     window._completeWorkerAutoHours = allAutoHours;
     
-    // 疑似忘点完工 / 跨天提前完工：系统自动估算的工时不可靠，禁止用滑块自动分配，只能逐人手动填写
-    if (!forgottenInfo && !crossDayEarlyInfo) {
+    // 疑似忘点完工 / 跨天提前完工 / 已暂停或已延期完工：系统自动估算的工时不可靠，禁止用滑块自动分配，只能逐人手动填写
+    const projectAlreadySettled = (p.status === STATUS.PAUSED || p.status === STATUS.DELAYED) && !!p.startedAt;
+    if (!forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled) {
       const defaultAlloc = [0, 0, 80, 20];
       const sliderRows = WORK_TYPES.map((t, i) => {
         const isFixed = i === 3; // 路程备料固定占 20%
@@ -13226,13 +13237,13 @@ function openCompleteProjectForm(id) {
       <span style="font-size:12px;color:#6b7280;">根据实际工作时间填写</span>
     </div>`;
     
-    const hintUnreliable = forgottenInfo || crossDayEarlyInfo;
+    const hintUnreliable = forgottenInfo || crossDayEarlyInfo || projectAlreadySettled;
     form += `<div class="form-row" style="grid-column:1/-1;background:${hintUnreliable ? '#fef2f2' : '#f0fdf4'};padding:10px;border-radius:6px;border-left:4px solid ${hintUnreliable ? '#dc2626' : '#22c55e'};margin-bottom:8px;">
       <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:12px;">
         <div><span style="color:#6b7280;">${hintUnreliable ? '系统估算总时长（不可靠）' : '总工作时长'}：</span><span style="font-weight:600;color:${hintUnreliable ? '#b91c1c' : '#15803d'};">${totalAutoHours.toFixed(1)} 小时</span>${hintUnreliable ? ' <span style="font-size:11px;color:#dc2626;">⚠️请逐人手动填写</span>' : ''}</div>
         <div><span style="color:#6b7280;">施工人数：</span><span style="font-weight:600;color:${hintUnreliable ? '#b91c1c' : '#15803d'};">${workers.length} 人</span></div>
       </div>
-      <div style="margin-top:4px;font-size:11px;color:${hintUnreliable ? '#b91c1c' : '#86efac'};">${hintUnreliable ? '⚠️ 系统估算可能包含非实际施工时段，不等于真实工时，请逐人手动填写' : '💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整'}</div>
+      <div style="margin-top:4px;font-size:11px;color:${hintUnreliable ? '#b91c1c' : '#86efac'};">${hintUnreliable ? (forgottenInfo ? '⚠️ 系统估算可能包含非实际施工时段，不等于真实工时，请逐人手动填写' : (projectAlreadySettled ? '⚠️ 项目处于已暂停/已延期状态，上次暂停时已结算过工时，估算可能不准确，请逐人手动填写。若今天的工时已结清，请保持空行即可' : '⚠️ 跨天项目尚未到预约结束日，请逐人手动填写真实工时')) : '💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整'}</div>
     </div>`;
     
     workers.forEach((w, idx) => {
@@ -13252,8 +13263,17 @@ function openCompleteProjectForm(id) {
           const loggedHours = (p.workLogs || []).filter(l => l.workerId === w.id).reduce((s, l) => s + (Number(l.hours) || 0), 0);
           if (loggedHours > 0) autoHours = loggedHours;
         }
-        let segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
-        let segNote = autoHours > 0 ? "系统自动计算" : "";
+        const workerLoggedHours = (p.workLogs || []).filter(l => l.workerId === w.id).reduce((s, l) => s + (Number(l.hours) || 0), 0);
+        let segHours;
+        let segNote;
+        // 已暂停/已延期 + 该工人已有工时记录 且 已结清（覆盖 autoHours）：不预填，避免重复记入完工工时
+        if (projectAlreadySettled && workerLoggedHours > 0 && workerLoggedHours >= autoHours - 0.1) {
+          segHours = "";
+          segNote = `✅ 已结清 ${workerLoggedHours.toFixed(1)}h（上次暂停），本次完工不自动填`;
+        } else {
+          segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
+          segNote = autoHours > 0 ? "系统自动计算" : "";
+        }
         segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
       }
       // 疑似忘点完工：系统内任何工时（含当日已登记记录、自动估算）均可能包含空闲/过夜时间，不可靠，强制清空并要求逐人手动填写真实工时
@@ -13266,10 +13286,10 @@ function openCompleteProjectForm(id) {
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
             <span style="min-width:80px;font-weight:500;flex-shrink:0;color:${isAssigned ? "#1f2937" : "#9ca3af"};">👷 ${esc(w.name)}${!isAssigned ? ` <span style="font-size:11px;color:#d1d5db;">(已移除)</span>` : ""}</span>
             <button type="button" class="btn small" onclick="addWorkerSeg(${idx},'w')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
-            ${(forgottenInfo || crossDayEarlyInfo) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'w')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
+            ${(forgottenInfo || crossDayEarlyInfo || projectAlreadySettled) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'w')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
           </div>
           <div class="worker-alloc-panel" id="walloc_${idx}" style="display:none; margin-bottom:8px;">
-            ${workerAllocPanelHtml("walloc" + idx, idx, "w", w.name, (forgottenInfo || crossDayEarlyInfo) ? 0 : (workerAutoHours[w.id] || 0))}
+            ${workerAllocPanelHtml("walloc" + idx, idx, "w", w.name, (forgottenInfo || crossDayEarlyInfo || projectAlreadySettled) ? 0 : (workerAutoHours[w.id] || 0))}
           </div>
           <div class="worker-segs" id="wsegs_${idx}">
             ${segs.map(s => workerSegRowHtml(s)).join("")}
@@ -13298,8 +13318,16 @@ function openCompleteProjectForm(id) {
         }));
       } else {
         const autoHours = window._completeWorkerAutoHours[workerId] || 0;
-        let segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
-        let segNote = autoHours > 0 ? "系统自动计算" : "";
+        const oLoggedHours = (p.workLogs || []).filter(l => l.workerId === workerId).reduce((s, l) => s + (Number(l.hours) || 0), 0);
+        let segHours;
+        let segNote;
+        if (projectAlreadySettled && oLoggedHours > 0 && oLoggedHours >= autoHours - 0.1) {
+          segHours = "";
+          segNote = `✅ 已结清 ${oLoggedHours.toFixed(1)}h（上次暂停），本次完工不自动填`;
+        } else {
+          segHours = autoHours > 0 ? autoHours.toFixed(1) : "";
+          segNote = autoHours > 0 ? "系统自动计算" : "";
+        }
         segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
       }
       // 疑似忘点完工：系统内任何工时（含当日已登记记录、自动估算）均可能包含空闲/过夜时间，不可靠，强制清空并要求逐人手动填写真实工时
@@ -13312,10 +13340,10 @@ function openCompleteProjectForm(id) {
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
             <span style="min-width:80px;font-weight:500;flex-shrink:0;color:#8b5cf6;">👤 ${esc(name)}（外协）</span>
             <button type="button" class="btn small" onclick="addWorkerSeg(${idx},'o')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
-            ${(forgottenInfo || crossDayEarlyInfo) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'o')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
+            ${(forgottenInfo || crossDayEarlyInfo || projectAlreadySettled) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'o')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
           </div>
           <div class="worker-alloc-panel" id="oalloc_${idx}" style="display:none; margin-bottom:8px;">
-            ${workerAllocPanelHtml("oalloc" + idx, idx, "o", name, (forgottenInfo || crossDayEarlyInfo) ? 0 : (window._completeWorkerAutoHours[workerId] || 0))}
+            ${workerAllocPanelHtml("oalloc" + idx, idx, "o", name, (forgottenInfo || crossDayEarlyInfo || projectAlreadySettled) ? 0 : (window._completeWorkerAutoHours[workerId] || 0))}
           </div>
           <div class="worker-segs" id="osegs_${idx}">
             ${segs.map(s => workerSegRowHtml(s)).join("")}
@@ -21844,7 +21872,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vff5ee787";
+  const APP_VERSION = "v4d64e3bb";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
