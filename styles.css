@@ -1515,11 +1515,11 @@ body.narrow-view .container {
 .psi-booked { color: #2563eb; border-color: #bfdbfe; background: #eff6ff; }
 .psi-booked:hover, .psi-booked.active { background: #dbeafe; }
 
-.psi-working { color: #059669; border-color: #a7f3d0; background: #ecfdf5; }
-.psi-working:hover, .psi-working.active { background: #d1fae5; }
+.psi-working { color: #d97706; border-color: #fde68a; background: #fffbeb; }
+.psi-working:hover, .psi-working.active { background: #fef3c7; }
 
-.psi-paused { color: #d97706; border-color: #fde68a; background: #fffbeb; }
-.psi-paused:hover, .psi-paused.active { background: #fef3c7; }
+.psi-paused { color: #ea580c; border-color: #fed7aa; background: #fff7ed; }
+.psi-paused:hover, .psi-paused.active { background: #ffedd5; }
 
 .psi-delayed { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
 .psi-delayed:hover, .psi-delayed.active { background: #fee2e2; }
@@ -1774,8 +1774,8 @@ select.input {
 .card[data-status="已验收"]   .card-status-bar { background: linear-gradient(180deg, #10b981, #34d399); }
 .card[data-status="已审核"]   .card-status-bar { background: linear-gradient(180deg, #0891b2, #22d3ee); }
 .card[data-status="已暂停"]   .card-status-bar { background: linear-gradient(180deg, #ea580c, #fb923c); }
-.card[data-status="已延期"]   .card-status-bar,
-.card[data-status="已取消"]   .card-status-bar { background: linear-gradient(180deg, #dc2626, #f87171); }
+.card[data-status="已延期"]   .card-status-bar { background: linear-gradient(180deg, #dc2626, #f87171); }
+.card[data-status="已取消"]   .card-status-bar { background: linear-gradient(180deg, #6b7280, #9ca3af); }
 
 .card-overdue {
   border-color: #f87171 !important;
@@ -2474,6 +2474,7 @@ select.input {
 .card-timeline__dot--blue { background: #3b82f6; box-shadow: 0 0 6px rgba(59,130,246,0.4); }
 .card-timeline__dot--green { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.4); }
 .card-timeline__dot--gray { background: #9ca3af; }
+.card-timeline__dot--orange { background: #f59e0b; box-shadow: 0 0 6px rgba(245,158,11,0.4); }
 
 .card-row--warn {
   background: #fef2f2 !important;
@@ -2507,6 +2508,16 @@ select.input {
 .badge.crossday { background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe; }
 .badge.forgotten { background: #fff7ed; color: #c2410c; border: 1px solid #fb923c; animation: pulseAmber 1.5s infinite; }
 .badge.warn { background: #fffbeb; color: #b45309; border: 1px solid #fcd34d; animation: pulseAmber 1.5s infinite; }
+/* 虚假施工：连续施工>24h 工时数据失真——solid 红 + 白字 + 红光晕脉冲（比 overdue 更醒目） */
+.badge.fake-working { background: #dc2626; color: #fff; border: 1.5px solid #7f1d1d; font-weight: 700; letter-spacing: 0.02em; animation: pulseFake 1.2s infinite; }
+@keyframes pulseFake { 0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.55); } 50% { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); } }
+/* 历程摘要：暂停次数+时长 / 延期次数（信息性，不闪烁） */
+.badge.history-pause { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; opacity: 0.88; }
+.badge.history-delay { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; opacity: 0.88; }
+/* 「未登记实际工时」快捷登记按钮：橙色，点击直达工时表单 */
+.diff-empty-btn { color: #c2410c; font-weight: 600; font-size: 11px; padding: 1px 8px; border-radius: 8px; background: #fff7ed; border: 1px solid #fb923c; text-decoration: none; display: inline-block; vertical-align: middle; transition: background .15s, box-shadow .15s; }
+.diff-empty-btn:hover { background: #ffedd5; box-shadow: 0 0 0 2px rgba(251, 146, 60, 0.25); }
+.diff-empty-btn:active { background: #fed7aa; }
 
 /* 返工记录区（项目详情页）：列出每次返工与「计入工资」开关 */
 .rework-cycles {
@@ -7784,7 +7795,7 @@ table.data.project-hours-diff thead th {
 .dot.reviewed { background: #0e7490; }
 .dot.paused { background: #ea580c; }
 .dot.delayed { background: #dc2626; }
-.dot.cancelled { background: #ef4444; }
+.dot.cancelled { background: #6b7280; }
 .dot.repair { background: #f59e0b; }
 
 .cal-day-detail { margin-top: 18px; }
@@ -8197,8 +8208,8 @@ table.data.project-hours-diff thead th {
   border-color: #7c3aed;
 }
 .timeline-task-cancelled {
-  background: #fee2e2;
-  border-color: #ef4444;
+  background: #f9fafb;
+  border-color: #9ca3af;
   opacity: 0.7;
 }
 .timeline-task-outsourced {
@@ -8275,26 +8286,34 @@ table.data.project-hours-diff thead th {
 
 .timeline-task-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 3px;
   gap: 4px;
   width: 100%;
 }
 
-.timeline-task-badges {
+/* chips 容器：name 与 status 之间的剩余空间，chips 紧贴 status 左边；卡片窄时
+   允许 chips 换行到第 2 行（仍紧贴 status 上方），单个 chip 永远保持自然宽度不被压缩 */
+.timeline-task-chips {
+  flex: 0 1 auto;
   display: flex;
   flex-wrap: wrap;
   gap: 2px;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.timeline-task-chips > * {
   flex-shrink: 0;
-  max-width: 60%;
 }
 
 .timeline-task-name {
   font-size: 11px;
   font-weight: 600;
   color: var(--text);
-  flex: 1;
+  flex: 1 1 auto;
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -8312,7 +8331,8 @@ table.data.project-hours-diff thead th {
   border-radius: 999px;
   background: var(--muted);
   color: #fff;
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 /* 日历时间线项目状态彩色标签（与 .badge 状态标签配色保持一致） */
 .timeline-task-status.status-预约中 { background: #eef6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
@@ -8813,7 +8833,7 @@ table.data.project-hours-diff thead th {
     padding: 2px 4px;
   }
 
-  .timeline-task-badges {
+  .timeline-task-chips {
     gap: 2px;
   }
 
