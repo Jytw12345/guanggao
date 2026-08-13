@@ -6237,6 +6237,11 @@ table.data.project-hours-diff thead th {
     -webkit-overflow-scrolling: touch;
   }
 
+  #storeStatsTable {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
   #projects .toolbar {
     gap: 10px;
     flex-direction: column;
