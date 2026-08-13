@@ -1787,6 +1787,12 @@ select.input {
   background: linear-gradient(135deg, #fff5f5 0%, #fee2e2 100%) !important;
   box-shadow: 0 0 0 1px #dc2626, 0 4px 14px rgba(220, 38, 38, 0.18) !important;
 }
+/* 已暂停超时专属橙色色阶：与「跨天未完工/超期」红色做强度区分 */
+.card-overdue--paused {
+  border-color: #fb923c !important;
+  background: linear-gradient(135deg, #fff 0%, #fff7ed 100%) !important;
+  box-shadow: 0 0 0 1px #fb923c, 0 3px 10px rgba(234, 88, 12, 0.14) !important;
+}
 .card-overdue::before {
   content: "";
   position: absolute;
@@ -2291,6 +2297,17 @@ select.input {
   background: #fff7ed;
   color: #c2410c;
   border: 1px solid #fed7aa;
+}
+.card-reason.paused .card-reason__time {
+  font-size: 11px;
+  color: #9a3412;
+  opacity: 0.85;
+  font-weight: 500;
+  word-break: break-all;
+}
+.card-reason.paused .card-reason__time::before {
+  content: " · ";
+  opacity: 0.6;
 }
 .card-reason.delayed {
   background: #fef2f2;
@@ -10263,6 +10280,25 @@ table.data.project-hours-diff thead th {
 }
 .veh-list__km i { font-style: normal; font-size: 10.5px; font-weight: 600; color: #94a3b8; margin-left: 2px; }
 .veh-list__km-line { display: inline-flex; align-items: baseline; gap: 2px; }
+/* 列表视图：里程旁的空心红圆图标（与卡片视图风格统一） */
+.veh-list__fake {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  width: 18px;
+  height: 18px;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  color: #1f2937;
+  background: #fff;
+  border: 1.5px solid #dc2626;
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
+  vertical-align: -3px;
+  cursor: help;
+}
 .veh-list__label { display: none; color: #94a3b8; font-size: 12px; font-weight: 400; }
 .veh-list__fuel {
   font-size: 10.5px;
@@ -10450,6 +10486,53 @@ table.data.project-hours-diff thead th {
 .veh-trip--open {
   border-left-color: #f59e0b;
   background: linear-gradient(180deg, #fffdf6 0%, #fff 45%);
+}
+/* 疑似虚假里程：用外发光阴影做轻量警示，不改卡片主边框/背景，
+   避免覆盖"已还车"的绿色左边框（已还车状态视觉传达不受影响） */
+.veh-trip--fake {
+  box-shadow:
+    0 0 0 1px rgba(239, 68, 68, 0.28),
+    0 0 6px rgba(239, 68, 68, 0.18),
+    0 1px 2px rgba(15, 23, 42, 0.04);
+}
+/* 红色印章挂到卡片顶部外侧作为斜挂徽章：与右上角"已还车"标签
+   完全错位，不再挤压"已还车"位置/样式 */
+.veh-trip__fake-stamp {
+  position: absolute;
+  top: -10px;
+  right: 14px;
+  z-index: 3;
+  transform: rotate(6deg);
+  pointer-events: auto;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #dc2626;
+  border: 2px solid #dc2626;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 1px 3px rgba(220, 38, 38, 0.18);
+  white-space: nowrap;
+}
+/* 行驶里程旁的空心红圆图标（透明底 + 红描边 + 红 ⚠，轻量警示不抢数字视觉） */
+.veh-fake-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  width: 22px;
+  height: 22px;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1;
+  color: #1f2937;
+  background: #fff;
+  border: 2px solid #dc2626;
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.45);
+  vertical-align: -4px;
+  cursor: help;
 }
 .veh-trip__top {
   display: flex;

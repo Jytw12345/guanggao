@@ -1904,6 +1904,24 @@ async function loadAutoReviewSetting() {
   }
 }
 
+/* 云端模式下从 app_settings 拉取全局「用车记录虚假里程阈值（km/h）」。本地模式不调用。 */
+async function loadFakeMileageKmhSetting() {
+  if (MODE !== "cloud" || !sb) return;
+  try {
+    const { data, error } = await sb
+      .from("app_settings")
+      .select("value")
+      .eq("key", "fake_mileage_kmh")
+      .maybeSingle();
+    if (!error && data && data.value != null) {
+      const v = Number(data.value);
+      if (v > 0) VEHICLE_FAKE_MILEAGE_KMH = v;
+    }
+  } catch (e) {
+    console.warn("[app] 读取虚假里程阈值失败，使用默认值：", e);
+  }
+}
+
 const mapProject = (r) => ({
   id: r.id,
   name: r.name,
@@ -6497,6 +6515,11 @@ function getProjectPausedTooLongInfo(p) {
   const text = d > 0 ? (rem > 0 ? `${d}天${rem}小时` : `${d}天`) : `${Math.round(hours)}小时`;
   return { ms, hours, text };
 }
+/* 暂停超时：返回与「暂停于 yyyy-mm-dd hh:mm」同款小字（走 .card-reason__time 样式，无胶囊） */
+function pausedTooLongTimeHtml(p) {
+  const info = getProjectPausedTooLongInfo(p);
+  return info ? `<small class="card-reason__time">已暂停 ${esc(info.text)}</small>` : "";
+}
 
 // 从项目列表卡片进入施工管理：若疑似忘点完工，先提示并可一键标记完工。
 async function openProjectFromCard(id) {
@@ -6663,7 +6686,7 @@ function renderProjects() {
     });
     
     return `
-      <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed || isPausedTooLong) ? "card-overdue" + ((overnight || isAfterWork || isPausedTooLong) ? " card-overdue--overnight" : "") : ""}" data-status="${esc(p.status)}">
+      <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed) ? "card-overdue" + ((overnight || isAfterWork) ? " card-overdue--overnight" : "") : ""}${isPausedTooLong ? " card-overdue--paused" : ""}" data-status="${esc(p.status)}">
         <div class="card-status-bar"></div>
         <div class="card-title">
           <h3>${esc(p.name)}</h3>
@@ -6680,7 +6703,7 @@ function renderProjects() {
         </div>
 
         <!-- 暂停/延期/取消原因 -->
-        ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}</div>` : ""}
+        ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}${p.pausedAt ? `<small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${pausedTooLongTimeHtml(p)}</div>` : ""}
         ${p.delayReason ? `<div class="card-reason delayed">🕒 延期原因：${esc(p.delayReason)}</div>` : ""}
         ${p.status === STATUS.CANCELLED && p.cancelReason ? `<div class="card-reason cancelled">✕ 取消原因：${esc(p.cancelReason)}</div>` : ""}
 
@@ -8381,7 +8404,7 @@ function renderConstruction() {
           ${p.phone ? `<span>电话</span><b><a href="javascript:void(0)" data-tel="${esc(p.phone)}" onclick="callPhone(event)">${esc(p.phone)}</a></b>` : ""}
           <span>地址</span><b>${esc(p.address || "—")}</b>
         </div>
-        ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}</div>` : ""}
+        ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}${p.pausedAt ? `<small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${pausedTooLongTimeHtml(p)}</div>` : ""}
         ${p.delayReason ? `<div class="card-reason delayed">🕒 延期原因：${esc(p.delayReason)}</div>` : ""}
         ${renderProjectContentPreview(p)}
         ${p.estimatedHours > 0 ? `
@@ -12291,6 +12314,8 @@ function generateWorkerScheduleDescription(dateStr = null) {
               ${p.startedAt ? `<div class="detail-row"><span class="detail-label">🚀 开工时间</span><span class="detail-value">${fmtDateTime(p.startedAt)}</span></div>` : ''}
               ${p.finishedAt ? `<div class="detail-row"><span class="detail-label">🏁 完成时间</span><span class="detail-value">${fmtDateTime(p.finishedAt)}</span></div>` : ''}
               ${p.pauseReason ? `<div class="detail-row"><span class="detail-label">⏸ 暂停原因</span><span class="detail-value" style="color:#f59e0b;">${esc(p.pauseReason)}</span></div>` : ''}
+              ${p.pausedAt ? `<div class="detail-row"><span class="detail-label">⏸ 暂停时间</span><span class="detail-value">${esc(fmtDateTime(p.pausedAt))}</span></div>` : ''}
+              ${(() => { const info = getProjectPausedTooLongInfo(p); return info ? `<div class="detail-row"><span class="detail-label">⏸ 已暂停</span><span class="detail-value" style="font-weight:600;">${esc(info.text)}</span></div>` : ''; })()}
               ${p.delayReason ? `<div class="detail-row"><span class="detail-label">⏰ 延期原因</span><span class="detail-value" style="color:#f59e0b;">${esc(p.delayReason)}</span></div>` : ''}
             </div>
             ${workLogEntries.length > 0 ? `
@@ -14106,6 +14131,11 @@ function openReminderSettingsModal() {
           <input type="number" id="autoReviewHoursInput" value="${AUTO_REVIEW_AFTER_ACCEPT_HOURS}" class="input" min="0" max="8760" placeholder="0" style="font-size:14px;padding:8px 10px;width:100%;box-sizing:border-box;" />
           <span style="color:#999;font-size:11px;">填 0 关闭。验收满该时长后系统自动审核；需有审核权限的账号保持页面打开才会执行（如 72 = 验收满 3 天自动审核）。</span>
         </div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:14px;border-top:1px solid #eee;padding-top:14px;">
+          <label style="font-weight:bold;font-size:13px;">🚗 用车记录虚假里程阈值（km/h）</label>
+          <input type="number" id="fakeMileageKmhInput" value="${VEHICLE_FAKE_MILEAGE_KMH}" class="input" min="1" max="200" placeholder="50" style="font-size:14px;padding:8px 10px;width:100%;box-sizing:border-box;" />
+          <span style="color:#999;font-size:11px;">还车后按「挂钟时间」算平均车速，超过该值即标记「疑似虚假里程」（如 1 小时 50km = 50km/h 刚好触发）。建议 40–60，范围 1–200。调小更严格、调大更宽松。</span>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closeReminderSettingsModal()">取消</button>
@@ -14131,6 +14161,11 @@ function saveReminderSettings() {
   if (!ar || ar < 0) ar = 0;
   if (ar > 8760) ar = 8760;
   AUTO_REVIEW_AFTER_ACCEPT_HOURS = ar;
+  // 用车记录虚假里程阈值（km/h）：1–200，默认 50
+  let fk = Number(document.getElementById("fakeMileageKmhInput").value);
+  if (!fk || fk < 1) fk = 50;
+  if (fk > 200) fk = 200;
+  VEHICLE_FAKE_MILEAGE_KMH = fk;
   closeReminderSettingsModal();
   if (MODE === "cloud" && sb) {
     // 全局部署：写入 app_settings，对全员立即生效（其他已登录成员需刷新后套用）
@@ -14170,12 +14205,33 @@ function saveReminderSettings() {
       }
       toast(ar > 0 ? ("已开启：验收满 " + ar + " 小时自动审核") : "已关闭：验收后自动审核");
     });
+    // 用车记录虚假里程阈值（km/h）：全局部署，全员共享
+    sb.from("app_settings").upsert(
+      {
+        key: "fake_mileage_kmh",
+        value: fk,
+        updated_at: new Date().toISOString(),
+        updated_by: currentUser ? currentUser.id : null,
+      },
+      { onConflict: "key" }
+    ).then(({ error }) => {
+      if (error) {
+        console.error("[app] 保存虚假里程阈值失败：", error);
+        lsSet("fakeMileageKmh", fk);
+        toast("虚假里程阈值已保存到本机（云端同步失败）");
+        return;
+      }
+      toast("虚假里程阈值已设为 " + fk + " km/h，全员生效");
+      if (typeof renderVehicleTrips === "function") renderVehicleTrips();
+    });
   } else {
     // 本地单机模式：降级写入 localStorage，仅本机生效
     lsSet("workTimeoutHours", v);
     lsSet("autoReviewAfterAcceptHours", ar);
-    toast("提醒设置已保存（连续施工超过 " + v + " 小时将提醒；验收后自动审核" + (ar > 0 ? "：" + ar + " 小时" : "：关闭") + "）");
+    lsSet("fakeMileageKmh", fk);
+    toast("提醒设置已保存（连续施工超过 " + v + " 小时将提醒；验收后自动审核" + (ar > 0 ? "：" + ar + " 小时" : "：关闭") + "；虚假里程阈值 " + fk + " km/h）");
     if (typeof renderProjects === "function") renderProjects();
+    if (typeof renderVehicleTrips === "function") renderVehicleTrips();
   }
 }
 
@@ -18052,6 +18108,7 @@ async function doPullRefresh() {
     const synced = await repo.loadAll();
     await loadWorkTimeoutSetting();
     await loadAutoReviewSetting();
+    await loadFakeMileageKmhSetting();
     renderActiveTabOnly(); // 仅重绘当前可见 Tab，不重绘全部
     return synced;
   })();
@@ -18095,6 +18152,7 @@ async function forceFullRefresh() {
     const ok = await repo.loadAll(true);
     await loadWorkTimeoutSetting();
     await loadAutoReviewSetting();
+    await loadFakeMileageKmhSetting();
     renderActiveTabOnly(); // 仅重绘当前可见 Tab，与下拉刷新一致
     if (ok) {
       recordSyncTime();
@@ -20672,6 +20730,7 @@ async function startCloudSession() {
     const synced = await repo.loadAll();
     await loadWorkTimeoutSetting(); // 拉取全局部署的「连续施工超时阈值」（多人统一标准）
     await loadAutoReviewSetting(); // 拉取全局部署的「验收后自动审核（小时）」
+    await loadFakeMileageKmhSetting(); // 拉取全局部署的「用车记录虚假里程阈值（km/h）」
     if (!hydrated) {
       // 首次无缓存：此时才有数据可渲染
       renderRoleInfo();
@@ -21405,7 +21464,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v17c59285";
+  const APP_VERSION = "v63d28c4b";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -21822,6 +21881,30 @@ const VEHICLES = [
 /* 仪表盘指针满偏对应的月度里程（km）：达到该值指针指向最大值 */
 const VEHICLE_MONTH_TARGET = 2000;
 
+/* 虚假里程判定：用车记录按「挂钟时间」算出的平均车速超过该阈值（km/h）即疑似虚假。
+   仅对「已还车」且里程/时间齐全的记录生效；未还车、缺时间或里程为 0 不判定。
+   默认 50（用户要求：一小时超过 50 公里即判为虚假）。可由总经理在「提醒设置」中调整。
+   云端模式：全局部署于 app_settings 表（全员共享）；本地模式：降级 localStorage（仅本机）。 */
+let VEHICLE_FAKE_MILEAGE_KMH = (() => { try { const v = Number(localStorage.getItem("fakeMileageKmh")); return v > 0 ? v : 50; } catch (_) { return 50; } })();
+
+/* 返回某条用车记录按挂钟时间算出的平均车速（km/h）；无法计算（未还车/缺时间/里程为0）返回 null */
+function getTripMileageSpeedKmh(trip) {
+  const mileage = Number(trip.mileage) || (Number(trip.endKm) - Number(trip.startKm));
+  if (!trip.outTime || !trip.backTime || !(mileage > 0)) return null;
+  const out = new Date(trip.outTime).getTime();
+  const back = new Date(trip.backTime).getTime();
+  const hours = (back - out) / 3600000;
+  if (!(hours > 0)) return null;
+  return mileage / hours;
+}
+
+/* 是否疑似虚假里程：仅已还车、时间里程齐全、且平均车速超过阈值 */
+function isFakeMileageTrip(trip) {
+  const kmh = getTripMileageSpeedKmh(trip);
+  if (kmh == null) return false;
+  return kmh > VEHICLE_FAKE_MILEAGE_KMH;
+}
+
 /* 某车指定月份的「已还车」里程合计（用于仪表盘指针角度） */
 function getVehicleMonthKm(vid, monthKey) {
   return (cache.vehicleTrips || [])
@@ -22234,6 +22317,7 @@ async function exportVehicleTrips() {
     { header: "返回时间", key: "backTime", width: 20 },
     { header: "备注", key: "note", width: 24 },
     { header: "状态", key: "status", width: 10 },
+    { header: "虚假里程", key: "fakeMileage", width: 22 },
   ];
   ws.getRow(1).font = { bold: true };
   ws.getRow(1).alignment = { vertical: "middle" };
@@ -22241,7 +22325,10 @@ async function exportVehicleTrips() {
     const open = !t.backTime;
     const mileage = Number(t.mileage) || (Number(t.endKm) - Number(t.startKm));
     const proj = t.projectId ? getProject(t.projectId) : null;
-    ws.addRow({
+    const isFake = isFakeMileageTrip(t);
+    const kmh = getTripMileageSpeedKmh(t);
+    const fakeText = isFake && kmh != null ? `⚠ 是（约 ${Math.round(kmh)} km/h）` : "";
+    const row = ws.addRow({
       vehicle: t.vehicleName || "",
       plate: t.vehiclePlate || "",
       type: t.type || "送货",
@@ -22256,7 +22343,14 @@ async function exportVehicleTrips() {
       backTime: t.backTime ? fmtDateTime(t.backTime) : "",
       note: t.note || "",
       status: open ? "未还车" : "已还车",
+      fakeMileage: fakeText,
     });
+    if (isFake) {
+      const cell = row.getCell("fakeMileage");
+      cell.font = { color: { argb: "FFB91C1C" }, bold: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEF2F2" } };
+      cell.alignment = { vertical: "middle", horizontal: "left" };
+    }
   });
   try {
     const buf = await wb.xlsx.writeBuffer();
@@ -22290,8 +22384,14 @@ function vehicleHistoryCardHtml(trips) {
     const typeKey = t.type === "接货" ? "pickup" : (t.type === "安装" ? "install" : (t.type === "业务" ? "biz" : (t.type === "送货" ? "deliver" : "default")));
     const proj = t.projectId ? getProject(t.projectId) : null;
     const projName = proj ? proj.name : (t.projectName || "");
+    const fake = isFakeMileageTrip(t);
+    const kmh = getTripMileageSpeedKmh(t);
+    const fakeTitle = fake
+      ? `疑似虚假里程：挂钟平均车速约 ${Number(kmh).toFixed(0)} km/h（阈值 ${VEHICLE_FAKE_MILEAGE_KMH} km/h），里程与时间明显不匹配，请核对`
+      : "";
     return `
-    <div class="veh-trip${open ? " veh-trip--open" : ""}">
+    <div class="veh-trip${open ? " veh-trip--open" : ""}${fake ? " veh-trip--fake" : ""}">
+      ${fake ? `<div class="veh-trip__fake-stamp" title="${esc(fakeTitle)}">疑似虚假里程</div>` : ""}
       <div class="veh-trip__top">
         <div class="veh-trip__veh">
           <span class="veh-trip__icon">${icon}</span>
@@ -22323,7 +22423,7 @@ function vehicleHistoryCardHtml(trips) {
         <div class="veh-hero__divider"></div>
         <div class="veh-hero__item veh-hero__item--km">
           <span class="veh-hero__label">🛣 行驶里程</span>
-          <span class="veh-hero__km">${open || mileage == null || isNaN(mileage) ? "—" : Number(mileage).toLocaleString() + "<i>km</i>"}</span>
+          <span class="veh-hero__km">${open || mileage == null || isNaN(mileage) ? "—" : Number(mileage).toLocaleString() + "<i>km</i>"}${fake ? `<span class="veh-fake-badge" title="${esc(fakeTitle)}" aria-label="${esc(fakeTitle)}">⚠</span>` : ""}</span>
         </div>
       </div>
 
@@ -22402,7 +22502,7 @@ function vehicleHistoryListHtml(trips) {
     const backText = t.backTime ? `${fmtDateShort(t.backTime)} ${fmtTime(t.backTime)}` : (open ? "未还车" : "—");
     const kmHtml = open
       ? `<span class="veh-list__status">未还车</span>`
-      : `<span class="veh-list__km-line"><span class="veh-list__label">里程：</span><span class="veh-list__km">${Number(mileage || 0).toLocaleString()}<i>km</i></span></span>`;
+      : `<span class="veh-list__km-line"><span class="veh-list__label">里程：</span><span class="veh-list__km">${Number(mileage || 0).toLocaleString()}<i>km</i></span></span>${isFakeMileageTrip(t) ? `<span class="veh-list__fake" title="疑似虚假里程：挂钟平均车速过高（> ${VEHICLE_FAKE_MILEAGE_KMH} km/h），里程与时间不匹配" aria-label="疑似虚假里程">⚠</span>` : ""}`;
     const fuelHtml = open || t.fuelLevel == null
       ? ""
       : `<span class="veh-list__fuel veh-list__fuel--header" title="还车时剩余油量">⛽ ${Number(t.fuelLevel)}%</span>`;
