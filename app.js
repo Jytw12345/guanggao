@@ -10245,24 +10245,48 @@ function delayProject(id) {
   }
   
   const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowDate = dateKey(tomorrow);
-  
+  // 默认日期：今天（如果还能安排施工）或明天（已过 22:00）；开始时间 = 下一个 10 分钟整点
+  let defaultDate = dateKey(now);
+  let h = now.getHours();
+  let m = Math.ceil(now.getMinutes() / 10) * 10;
+  if (m >= 60) { m -= 60; h = (h + 1) % 24; }
+  let defaultTime = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  if (h >= 22) {
+    const tomorrowD = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    defaultDate = dateKey(tomorrowD);
+    defaultTime = "08:00";
+  }
+
   const originalTime = p.appointmentTime ? new Date(p.appointmentTime) : null;
   const originalDateStr = originalTime ? dateKey(originalTime) : "";
   const originalTimeStr = originalTime ? `${String(originalTime.getHours()).padStart(2, '0')}:${String(originalTime.getMinutes()).padStart(2, '0')}` : "";
-  
+
   let times = "";
   for (let h = 7; h <= 21; h++) {
     for (let m = 0; m < 60; m += 10) {
       const t = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-      const selected = t === "08:00" ? " selected" : "";
+      const selected = t === defaultTime ? " selected" : "";
       times += `<option value="${t}"${selected}>${t}</option>`;
     }
   }
   times += '<option value="22:00">22:00</option>';
-  
+
+  /* 剩余施工时长 → 估算自动结束时间（页面打开时就计算一次，开始时间改变会重算） */
+  function computeDelayRemainingHours(pp) {
+    const est = Number(pp.estimatedHours) || 0;
+    if (!pp.startedAt) return est;
+    const startMs = new Date(pp.startedAt).getTime();
+    let endMs = Date.now();
+    if (pp.status === STATUS.PAUSED && pp.pausedAt) endMs = new Date(pp.pausedAt).getTime();
+    const accumulated = Number(pp.accumulatedWorkHours) || 0;
+    const current = Math.max(0, (endMs - startMs) / (1000 * 60 * 60));
+    const worked = Math.max(0, accumulated + current);
+    return Math.max(0, est - worked);
+  }
+  const remainingHours = computeDelayRemainingHours(p);
+  const workerCount = p.workerCount || (p.assignedWorkerIds && p.assignedWorkerIds.length) || 1;
+  const remainingDurationHours = remainingHours > 0 ? (remainingHours / workerCount) : 0;
+
   const form = `
     <div class="form-row">
       <label><span style="color:#ef4444;">⚠️</span> 原预约时间</label>
@@ -10274,70 +10298,124 @@ function delayProject(id) {
     </div>
     <div class="form-row">
       <label><span style="color:#2563eb;">${svgCal(14)}</span> 新预约日期</label>
-      <input type="date" id="delayDate" value="${tomorrowDate}" class="input" min="${tomorrowDate}">
+      <input type="date" id="delayDate" value="${defaultDate}" class="input" min="${dateKey(now)}">
     </div>
     <div class="form-row">
-      <label><span style="color:#2563eb;">⏰</span> 新预约时间</label>
+      <label><span style="color:#2563eb;">⏰</span> 新预约时间（开始）</label>
       <select id="delayTime" class="input">${times}</select>
+    </div>
+    <div class="form-row">
+      <label><span style="color:#059669;">🏁</span> 新预约结束时间 <span style="font-size:11px;color:#9ca3af;font-weight:normal;">（按剩余时长自动算出，可手调）</span></label>
+      <input type="datetime-local" id="delayEndTime" class="input" step="600">
+      <div id="delayDurationHint" style="font-size:11px;color:#6b7280;margin-top:4px;line-height:1.5;"></div>
     </div>
   `;
   
   modal.open("项目延期", form, {
     confirmText: "确认延期",
     cancelText: "取消",
+    onOpen: () => {
+      // 自动重算结束时间：根据 剩余工时/人数 推出持续时长，叠加到新开始时间上
+      function fmtPad(n) { return String(n).padStart(2, "0"); }
+      function toLocalInput(d) {
+        return `${d.getFullYear()}-${fmtPad(d.getMonth() + 1)}-${fmtPad(d.getDate())}T${fmtPad(d.getHours())}:${fmtPad(d.getMinutes())}`;
+      }
+      function recomputeEndTime() {
+        const dateStr = document.getElementById("delayDate").value;
+        const timeStr = document.getElementById("delayTime").value;
+        const hint = document.getElementById("delayDurationHint");
+        const endInput = document.getElementById("delayEndTime");
+        if (!dateStr || !timeStr) return;
+        const newStart = buildLocalDateTime(dateStr, timeStr);
+        if (remainingHours > 0) {
+          const end = new Date(new Date(newStart).getTime() + remainingDurationHours * 60 * 60 * 1000);
+          endInput.value = toLocalInput(end);
+          const durTxt = remainingDurationHours >= 1
+            ? `${Math.floor(remainingDurationHours)}小时${Math.round((remainingDurationHours % 1) * 60)}分钟`
+            : `${Math.round(remainingDurationHours * 60)}分钟`;
+          hint.innerHTML = `📐 剩余施工 <b>${remainingHours.toFixed(1)}h</b> ÷ ${workerCount} 人 = 持续 <b>${durTxt}</b>（自动算出，可手调）`;
+        } else if (p.endTime && p.appointmentTime) {
+          const origDur = new Date(p.endTime).getTime() - new Date(p.appointmentTime).getTime();
+          const end = new Date(new Date(newStart).getTime() + origDur);
+          endInput.value = toLocalInput(end);
+          hint.innerHTML = `📐 项目无剩余工时数据，按原预约时长自动算出结束时间（可手调）`;
+        } else {
+          endInput.value = toLocalInput(new Date(new Date(newStart).getTime() + 4 * 60 * 60 * 1000));
+          hint.innerHTML = `📐 无法估算剩余时长，结束时间默认为开始 +4 小时（请手调）`;
+        }
+      }
+      document.getElementById("delayDate").addEventListener("change", recomputeEndTime);
+      document.getElementById("delayTime").addEventListener("change", recomputeEndTime);
+      recomputeEndTime();
+    },
     onConfirm: async () => {
       try {
       const reason = document.getElementById("delayReason").value.trim();
       const newDate = document.getElementById("delayDate").value;
       const newTime = document.getElementById("delayTime").value;
-      
+      const endTimeStr = document.getElementById("delayEndTime").value;
+
       if (!reason) {
         toast("请填写延期原因");
         return false;
       }
       if (!newDate || !newTime) {
-        toast("请选择新预约时间");
+        toast("请选择新预约开始时间");
         return false;
       }
-      
+      if (!endTimeStr) {
+        toast("请填写结束时间");
+        return false;
+      }
+
       const newAppointmentTime = buildLocalDateTime(newDate, newTime);
-      if (new Date(newAppointmentTime) <= new Date()) {
-        toast("新预约时间必须晚于当前时间");
+      const newEndDate = new Date(endTimeStr);
+      // 允许"当前时间"作为起点（容忍 1 分钟时钟偏差）
+      if (newAppointmentTime.getTime() < Date.now() - 60 * 1000) {
+        toast("新预约开始时间不能早于当前时间");
         return false;
       }
-      
-      let newEndTime = "";
-      const estimatedHours = p.estimatedHours || 0;
-      // 预计总工时是"人·小时"，实际日历时长需按施工人数分摊
-      const workerCount = p.workerCount || (p.assignedWorkerIds && p.assignedWorkerIds.length) || 1;
-      if (estimatedHours > 0) {
-        let remainingHours = estimatedHours;
-        
-        if (p.startedAt) {
-          const started = new Date(p.startedAt);
-          let endTime = new Date();
-          
-          if (p.status === STATUS.PAUSED && (p.pausedAt)) {
-            endTime = new Date(p.pausedAt);
+      if (newEndDate.getTime() <= newAppointmentTime.getTime()) {
+        toast("结束时间必须晚于开始时间");
+        return false;
+      }
+
+      let newEndTime = newEndDate.toISOString();
+      // 结束时间已由用户手调或在 onOpen 中按剩余工时自动算出，直接保留用户值
+      // 若用户清空了结束时间输入框且后端兜底逻辑仍需要，再回退到自动计算
+      if (!newEndTime) {
+        const estimatedHours = p.estimatedHours || 0;
+        // 预计总工时是"人·小时"，实际日历时长需按施工人数分摊
+        const workerCount = p.workerCount || (p.assignedWorkerIds && p.assignedWorkerIds.length) || 1;
+        if (estimatedHours > 0) {
+          let remainingHours = estimatedHours;
+
+          if (p.startedAt) {
+            const started = new Date(p.startedAt);
+            let endTime = new Date();
+
+            if (p.status === STATUS.PAUSED && (p.pausedAt)) {
+              endTime = new Date(p.pausedAt);
+            }
+
+            const accumulatedWorkHours = p.accumulatedWorkHours || 0;
+            const currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
+            const actualWorkedHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
+            remainingHours = Math.max(0, estimatedHours - actualWorkedHours);
           }
-          
-          const accumulatedWorkHours = p.accumulatedWorkHours || 0;
-          const currentWorkDuration = (endTime - started) / (1000 * 60 * 60);
-          const actualWorkedHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
-          remainingHours = Math.max(0, estimatedHours - actualWorkedHours);
+
+          const newStart = new Date(newAppointmentTime);
+          // 将剩余"人·小时"折算为日历小时
+          const durationHours = remainingHours / workerCount;
+          const newEnd = new Date(newStart.getTime() + durationHours * 60 * 60 * 1000);
+          newEndTime = newEnd.toISOString();
+        } else if (p.endTime) {
+          const originalStart = new Date(p.appointmentTime);
+          const originalEnd = new Date(p.endTime);
+          const durationMs = originalEnd.getTime() - originalStart.getTime();
+          const newEnd = new Date(new Date(newAppointmentTime).getTime() + durationMs);
+          newEndTime = newEnd.toISOString();
         }
-        
-        const newStart = new Date(newAppointmentTime);
-        // 将剩余"人·小时"折算为日历小时
-        const durationHours = remainingHours / workerCount;
-        const newEnd = new Date(newStart.getTime() + durationHours * 60 * 60 * 1000);
-        newEndTime = newEnd.toISOString();
-      } else if (p.endTime) {
-        const originalStart = new Date(p.appointmentTime);
-        const originalEnd = new Date(p.endTime);
-        const durationMs = originalEnd.getTime() - originalStart.getTime();
-        const newEnd = new Date(new Date(newAppointmentTime).getTime() + durationMs);
-        newEndTime = newEnd.toISOString();
       }
       
       const existingHistory = p.scheduleHistory || [];
@@ -10364,7 +10442,7 @@ function delayProject(id) {
       actionLogs.push({
         time: new Date().toISOString(),
         action: "delay",
-        description: `项目延期，新预约时间：${newDate} ${newTime}，原因：${reason}`,
+        description: `项目延期，新预约时间：${newDate} ${newTime}${newEndTime ? " ~ " + new Date(newEndTime).toISOString().slice(0,16).replace("T"," ") : ""}，原因：${reason}`,
         operator: currentProfile.name || currentUser?.email || "系统",
         operatorRole: currentProfile.role
       });
@@ -17134,6 +17212,9 @@ const modal = {
     document.body.classList.add("modal-open");
     document.documentElement.classList.add("modal-open");
     initCustomSelects(document.getElementById("modalBody"));
+    if (typeof options.onOpen === "function") {
+      try { options.onOpen(); } catch (e) { console.warn("modal.onOpen failed:", e); }
+    }
   },
   close() {
     document.getElementById("modal").classList.add("hidden");
@@ -21763,7 +21844,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v89297714";
+  const APP_VERSION = "vff5ee787";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
