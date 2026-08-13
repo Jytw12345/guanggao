@@ -1808,8 +1808,11 @@ function calcWorkerRealtimeHours(p, workerId, periods) {
   const projectEndTime = getProjectEffectiveEndTime(p);
   
   return periods.reduce((sum, pr) => {
+    /* 只统计仍在场（未结算/未关闭）的时段。已结算段（pr.end 存在，由暂停/延期/移除的
+       unassign 关闭）已在当时落袋为 workLog，若再次计入会造成重复工时。 */
+    if (pr.end) return sum;
     const start = new Date(pr.start);
-    const end = pr.end ? new Date(pr.end) : projectEndTime;
+    const end = projectEndTime;
     let duration = (end - start) / (1000 * 60 * 60);
     
     if (p.pauseHistory && p.pauseHistory.length > 0) {
@@ -8735,10 +8738,10 @@ function renderConstruction() {
             const workWids = new Set([...(p.assignedWorkerIds || [])]);
             (p.workerChangeHistory || []).forEach(ch => { if (ch.workerId) workWids.add(ch.workerId); });
             workWids.forEach(wid => {
-              const periods = buildWorkerPeriods(p, wid);
-              periods.forEach(pr => {
-                const start = new Date(pr.start);
-                const end = pr.end ? new Date(pr.end) : projectEndTime;
+        const periods = buildWorkerPeriods(p, wid);
+        periods.filter(pr => !pr.end).forEach(pr => {
+          const start = new Date(pr.start);
+          const end = pr.end ? new Date(pr.end) : projectEndTime;
                 let dur = (end - start) / (1000 * 60 * 60);
                 (p.pauseHistory || []).forEach(ph => {
                   if (ph.pauseAt && ph.resumedAt) {
@@ -9555,9 +9558,10 @@ async function saveOutsourcedWorkers(pid, names) {
       });
       for (const name of removed) {
         const wid = "outsourced:" + name;
-        workerChangeHistory.push({ time: nowStr, action: "unassign", workerId: wid, workerName: name, isOutsourced: true });
+        // 先按"未移除"状态算工时（open-only），再记录 unassign，避免 unassign 已关闭时段导致算成 0
         const periods = buildWorkerPeriods(p, wid);
         const autoHours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
+        workerChangeHistory.push({ time: nowStr, action: "unassign", workerId: wid, workerName: name, isOutsourced: true });
         if (autoHours > 0) {
           const workLog = {
             id: 'log_' + Date.now() + '_out_' + name,
@@ -9671,11 +9675,11 @@ async function removeOutsourcedWorker(pid, name) {
     const workerChangeHistory = [...(p.workerChangeHistory || [])];
     const actionLogs = [...(p.actionLogs || [])];
     let didAuto = false, autoHours = 0;
-    /* 施工中移除：按真实在场时段自动记工时 */
+    /* 施工中移除：按真实在场时段自动记工时（先算后记录 unassign，避免已关闭时段算成 0） */
     if (p.status === STATUS.WORKING && p.startedAt) {
-      workerChangeHistory.push({ time: nowStr, action: "unassign", workerId: wid, workerName: name.trim(), isOutsourced: true });
       const periods = buildWorkerPeriods(p, wid);
       autoHours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
+      workerChangeHistory.push({ time: nowStr, action: "unassign", workerId: wid, workerName: name.trim(), isOutsourced: true });
       if (autoHours > 0) {
         const workLog = {
           id: 'log_' + Date.now() + '_out_' + name.trim(),
@@ -9792,10 +9796,17 @@ async function unassignWorker(pid, wid) {
   }
 }
 
-/* 暂停前给当前在场人员结算工时：把本次施工段的工时落袋为安，
-   并在 workerChangeHistory 中追加 unassign，恢复时再重新 assign 即可继续计时 */
-async function settleWorkerHoursBeforePause(p, untilTime) {
-  if (!p || !p.startedAt || !(p.assignedWorkerIds || []).length) {
+/* 结算当前在场人员工时（暂停/延期通用）：把"仍在场(未关闭)时段"的工时落袋为 workLog，
+   并在 workerChangeHistory 追加 unassign（恢复/移除时不再重复计时）。
+   内部指派人员(assignedWorkerIds)与外协(outsourcedWorkers)一并结算。 */
+async function settleCurrentWorkers(p, untilTime, reason) {
+  const label = reason === "pause_settle" ? "暂停结算" : "延期结算";
+  if (!p || !p.startedAt) {
+    return { workerChangeHistory: p?.workerChangeHistory || [], actionLogs: p?.actionLogs || [], settled: [] };
+  }
+  const hasAssigned = (p.assignedWorkerIds || []).length > 0;
+  const hasOutsourced = !!(p.outsourcedWorkers || "").trim();
+  if (!hasAssigned && !hasOutsourced) {
     return { workerChangeHistory: p?.workerChangeHistory || [], actionLogs: p?.actionLogs || [], settled: [] };
   }
   const nowStr = new Date(untilTime).toISOString();
@@ -9803,49 +9814,60 @@ async function settleWorkerHoursBeforePause(p, untilTime) {
   const actionLogs = [...(p.actionLogs || [])];
   const settled = [];
 
-  for (const wid of (p.assignedWorkerIds || [])) {
-    const worker = getWorker(wid);
-    const workerName = worker ? worker.name : "未知";
-    const periods = buildWorkerPeriods(p, wid);
-    const autoHours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
+  const list = [];
+  (p.assignedWorkerIds || []).forEach((wid) => {
+    const w = getWorker(wid);
+    list.push({ wid, name: w ? w.name : "未知", phone: w ? w.phone : "", outsourced: false });
+  });
+  (p.outsourcedWorkers || "").split(",").map((n) => n.trim()).filter((n) => n).forEach((name) => {
+    list.push({ wid: "outsourced:" + name, name, phone: "", outsourced: true });
+  });
+
+  for (const item of list) {
+    const periods = buildWorkerPeriods(p, item.wid);
+    if (!periods.length || periods.every((pr) => pr.end)) continue; // 无在场时段或已结算
+    const autoHours = Math.round(calcWorkerRealtimeHours(p, item.wid, periods) * 10) / 10;
     if (autoHours > 0) {
-      const periodDesc = periods
-        .map((pr) => `${fmtTime(pr.start)}-${fmtTime(pr.end || nowStr)}`)
-        .join("、");
+      const periodDesc = periods.filter((pr) => !pr.end).map((pr) => `${fmtTime(pr.start)}-${fmtTime(pr.end || nowStr)}`).join("、");
       const log = {
-        id: 'log_' + Date.now() + '_' + wid,
+        id: 'log_' + Date.now() + '_' + item.wid,
         projectId: p.id,
-        workerId: wid,
-        workerName,
+        workerId: item.wid,
+        workerName: item.name,
         hours: autoHours,
         date: dateKey(nowStr),
-        note: `系统自动计算·暂停结算 ${periodDesc} · 共${autoHours}h`,
+        note: `系统自动计算·${label} ${periodDesc} · 共${autoHours}h`,
         level: "中级",
         workType: "",
-        isOutsourced: false,
+        isOutsourced: item.outsourced,
         createdAt: nowStr
       };
       await repo.addWorkLog(p.id, log);
-      settled.push({ workerName, hours: autoHours });
+      settled.push({ workerName: item.name, hours: autoHours });
       workerChangeHistory.push({
         time: nowStr,
         action: "unassign",
-        workerId: wid,
-        workerName,
-        workerPhone: worker ? worker.phone : "",
+        workerId: item.wid,
+        workerName: item.name,
+        workerPhone: item.phone,
         autoHours,
-        reason: "pause_settle"
+        reason
       });
       actionLogs.push({
         time: nowStr,
-        action: "pause_settle",
-        description: `暂停结算：${workerName}，自动记录工时 ${autoHours} 小时`,
+        action: reason,
+        description: `${label}：${item.name}，自动记录工时 ${autoHours} 小时`,
         operator: currentProfile.name || currentUser?.email || "系统",
         operatorRole: currentProfile.role
       });
     }
   }
   return { workerChangeHistory, actionLogs, settled };
+}
+
+/* 暂停前给当前在场人员(内部+外协)结算工时 */
+async function settleWorkerHoursBeforePause(p, untilTime) {
+  return settleCurrentWorkers(p, untilTime, "pause_settle");
 }
 
 /* 状态流转权限守卫：按目标状态映射到对应权限点（深度防御，UI 仍为主门控）。
@@ -10212,7 +10234,18 @@ async function resumeProject(id) {
       operator: currentProfile.name || currentUser?.email || "系统",
       operatorRole: currentProfile.role
     });
-    
+
+    /* 恢复即重新给在场人员开施工段：否则 buildWorkerPeriods 会因 startedAt 被重置而把
+       恢复后的在场时段 clamp 成 0，导致"恢复后继续施工"的工时全部丢失。
+       历史已结算段（暂停/延期时的 unassign）保持关闭，不会被重复计入（calcWorkerRealtimeHours 只统计未关闭段）。 */
+    const workerChangeHistory = [...(p.workerChangeHistory || [])];
+    (p.assignedWorkerIds || []).forEach((wid) => {
+      workerChangeHistory.push({ time: now, action: "assign", workerId: wid, workerName: (getWorker(wid) || {}).name || "未知", isOutsourced: false });
+    });
+    (p.outsourcedWorkers || "").split(",").map((n) => n.trim()).filter((n) => n).forEach((name) => {
+      workerChangeHistory.push({ time: now, action: "assign", workerId: "outsourced:" + name, workerName: name, isOutsourced: true });
+    });
+
     const patch = {
       status: STATUS.WORKING,
       startedAt: now,
@@ -10220,6 +10253,7 @@ async function resumeProject(id) {
       pauseReason: null,
       resumedAt: now,
       pauseHistory: pauseHistory,
+      workerChangeHistory: workerChangeHistory,
       actionLogs: actionLogs
     };
     
@@ -10460,6 +10494,17 @@ function delayProject(id) {
         operator: currentProfile.name || currentUser?.email || "系统",
         operatorRole: currentProfile.role
       });
+
+      /* 若已开工（施工中/已暂停），延期前先把当前在场工时落袋：否则延期→到点自动转正(BOOKED)
+         会清空 startedAt，且恢复施工会重置 startedAt，导致延期前已干的工时既没结算又被 clamp 掉而丢失。 */
+      let workerChangeHistory = [...(p.workerChangeHistory || [])];
+      if (p.startedAt && [STATUS.WORKING, STATUS.PAUSED].includes(p.status)) {
+        const settleRes = await settleCurrentWorkers(p, new Date().toISOString(), "delay_settle");
+        if (settleRes.settled.length) {
+          workerChangeHistory = settleRes.workerChangeHistory;
+          actionLogs = settleRes.actionLogs;
+        }
+      }
       
       const patch = {
         status: STATUS.DELAYED,
@@ -10469,6 +10514,7 @@ function delayProject(id) {
         delayCount: delayCount,
         scheduleHistory: scheduleHistory,
         delayHistory: delayHistory,
+        workerChangeHistory: workerChangeHistory,
         actionLogs: actionLogs
       };
       
@@ -13041,6 +13087,10 @@ function openCompleteProjectForm(id) {
     </div>`;
   }
 
+  // 极短施工：开工到完工 < SHORT_WORK_WARN_MINUTES 分钟，疑似未实际施工/仅登记工时。
+  // 与上方橙色警告保持一致——这类情况系统估算不可靠，禁止自动填，改逐人手动。
+  const shortWorkWarning = shortWorkMinutes !== null && shortWorkMinutes < SHORT_WORK_WARN_MINUTES;
+
   form += `<div class="form-row" style="grid-column:1/-1;background:#f0f9ff;padding:12px;border-radius:8px;margin-bottom:8px;">
     <div style="display:flex;justify-content:space-between;gap:16px;">
       <div>
@@ -13201,7 +13251,7 @@ function openCompleteProjectForm(id) {
     
     // 疑似忘点完工 / 跨天提前完工 / 已暂停或已延期完工：系统自动估算的工时不可靠，禁止用滑块自动分配，只能逐人手动填写
     const projectAlreadySettled = (p.status === STATUS.PAUSED || p.status === STATUS.DELAYED) && !!p.startedAt;
-    if (!forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled) {
+    if (!forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled && !shortWorkWarning) {
       const defaultAlloc = [0, 0, 80, 20];
       const sliderRows = WORK_TYPES.map((t, i) => {
         const isFixed = i === 3; // 路程备料固定占 20%
@@ -13241,13 +13291,13 @@ function openCompleteProjectForm(id) {
       <span style="font-size:12px;color:#6b7280;">根据实际工作时间填写</span>
     </div>`;
     
-    const hintUnreliable = forgottenInfo || crossDayEarlyInfo || projectAlreadySettled;
+    const hintUnreliable = forgottenInfo || crossDayEarlyInfo || projectAlreadySettled || shortWorkWarning;
     form += `<div class="form-row" style="grid-column:1/-1;background:${hintUnreliable ? '#fef2f2' : '#f0fdf4'};padding:10px;border-radius:6px;border-left:4px solid ${hintUnreliable ? '#dc2626' : '#22c55e'};margin-bottom:8px;">
       <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:12px;">
         <div><span style="color:#6b7280;">${hintUnreliable ? '系统估算总时长（不可靠）' : '总工作时长'}：</span><span style="font-weight:600;color:${hintUnreliable ? '#b91c1c' : '#15803d'};">${totalAutoHours.toFixed(1)} 小时</span>${hintUnreliable ? ' <span style="font-size:11px;color:#dc2626;">⚠️请逐人手动填写</span>' : ''}</div>
         <div><span style="color:#6b7280;">施工人数：</span><span style="font-weight:600;color:${hintUnreliable ? '#b91c1c' : '#15803d'};">${workers.length} 人</span></div>
       </div>
-      <div style="margin-top:4px;font-size:11px;color:${hintUnreliable ? '#b91c1c' : '#86efac'};">${hintUnreliable ? (forgottenInfo ? '⚠️ 系统估算可能包含非实际施工时段，不等于真实工时，请逐人手动填写' : (projectAlreadySettled ? '⚠️ 项目处于已暂停/已延期状态，上次暂停时已结算过工时，估算可能不准确，请逐人手动填写。若今天的工时已结清，请保持空行即可' : '⚠️ 跨天项目尚未到预约结束日，请逐人手动填写真实工时')) : '💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整'}</div>
+      <div style="margin-top:4px;font-size:11px;color:${hintUnreliable ? '#b91c1c' : '#86efac'};">${hintUnreliable ? (forgottenInfo ? '⚠️ 系统估算可能包含非实际施工时段，不等于真实工时，请逐人手动填写' : (projectAlreadySettled ? '⚠️ 项目处于已暂停/已延期状态，上次暂停时已结算过工时，估算可能不准确，请逐人手动填写。若今天的工时已结清，请保持空行即可' : (shortWorkWarning ? '⚠️ 施工时长过短（疑似未实际施工/仅登记工时），系统估算不可靠，请逐人手动填写真实工时' : '⚠️ 跨天项目尚未到预约结束日，请逐人手动填写真实工时'))) : '💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整'}</div>
     </div>`;
     
     workers.forEach((w, idx) => {
@@ -13272,8 +13322,8 @@ function openCompleteProjectForm(id) {
         } else if (projectAlreadySettled && workerLoggedHours > 0 && workerLoggedHours >= autoHours - 0.1) {
           // 已暂停/已延期且已结清：不预填，避免重复记入完工工时
           segNote = `✅ 已结清 ${workerLoggedHours.toFixed(1)}h（上次暂停），本次完工不自动填`;
-        } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled) {
-          // 正常完工：按实际施工时长自动填入；不足 0.1h 不预填，避免填入无意义小数（如开工即完工的 0.1）
+        } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled && !shortWorkWarning) {
+          // 正常完工：按实际施工时长自动填入；不足 0.1h 或极短施工(shortWorkWarning) 不预填，避免填入无意义/不可靠小数
           segHours = autoHours.toFixed(1);
           segNote = "系统自动计算";
         } else {
@@ -13330,7 +13380,7 @@ function openCompleteProjectForm(id) {
         if (projectAlreadySettled && oLoggedHours > 0 && oLoggedHours >= autoHours - 0.1) {
           segHours = "";
           segNote = `✅ 已结清 ${oLoggedHours.toFixed(1)}h（上次暂停），本次完工不自动填`;
-        } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled) {
+        } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled && !shortWorkWarning) {
           segHours = autoHours.toFixed(1);
           segNote = "系统自动计算";
         } else {
@@ -21880,7 +21930,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v4fa2720d";
+  const APP_VERSION = "v36943f94";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
