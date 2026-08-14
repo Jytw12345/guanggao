@@ -8852,6 +8852,15 @@ table.data.project-hours-diff thead th {
   z-index: 5;
 }
 
+/* 跨午夜夜间施工条：深蓝夜间色 + 白字，便于在全天轴上一眼识别 */
+.timeline-task-night {
+  background: #1e3a8a !important;
+  border-color: #1e40af !important;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18), 0 2px 8px rgba(30,58,138,0.35);
+}
+.timeline-task-night .timeline-task-name,
+.timeline-task-night .timeline-task-body { color: #e0e7ff !important; }
+
 .timeline-task:hover {
   box-shadow: 0 4px 12px rgba(47, 110, 237, 0.25);
   transform: translateY(-2px);

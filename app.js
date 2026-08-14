@@ -1019,19 +1019,33 @@ function buildLocalDateTime(dateStr, timeStr) {
   return `${dateStr}T${timeStr}${localTzOffset()}`;
 }
 
+/* 给 buildLocalDateTime 生成的本地时间串加/减 N 天，返回同格式字符串。 */
+function addLocalDateTimeDays(localDateTimeStr, days) {
+  if (!localDateTimeStr) return "";
+  const d = new Date(localDateTimeStr);
+  if (isNaN(d)) return "";
+  d.setDate(d.getDate() + days);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}${localTzOffset()}`;
+}
+
 function generateTimeOptions(selectedValue = "08:00", minTime = null) {
   const options = [];
-  const now = new Date();
-  let started = false;
+  const all = [];
   for (let h = 0; h < 24; h++) {
     for (let m = 0; m < 60; m += 10) {
-      const time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-      /* 有最小时间限制时，更早的选项禁用 */
-      if (minTime && time < minTime) {
-        options.push(`<option value="${time}" disabled style="color:#ccc;">${time}</option>`);
-      } else {
-        options.push(`<option value="${time}"${time === selectedValue ? " selected" : ""}>${time}</option>`);
-      }
+      all.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+    }
+  }
+  /* 选中值若不在 10 分钟刻度中（如历史数据 09:35），补一项以免被重置为 00:00 */
+  if (selectedValue && !all.includes(selectedValue)) all.push(selectedValue);
+  all.sort();
+  for (const time of all) {
+    /* 有最小时间限制时，更早的选项禁用 */
+    if (minTime && time < minTime) {
+      options.push(`<option value="${time}" disabled style="color:#ccc;">${time}</option>`);
+    } else {
+      options.push(`<option value="${time}"${time === selectedValue ? " selected" : ""}>${time}</option>`);
     }
   }
   return options.join("");
@@ -1143,8 +1157,9 @@ function getBookedSegments(p) {
     for (const s of p.workSegments) {
       if (!s || !s.date || !s.start || !s.end) continue;
       const st = new Date(`${s.date}T${s.start}`);
-      const en = new Date(`${s.date}T${s.end}`);
-      if (isNaN(st) || isNaN(en) || en <= st) continue;
+      let en = new Date(`${s.date}T${s.end}`);
+      if (isNaN(st) || isNaN(en)) continue;
+      if (en <= st) en = new Date(en.getTime() + 24 * 3600 * 1000); // 跨午夜：结束时间顺延至次日
       out.push({ date: s.date, start: st, end: en, startHM: s.start, endHM: s.end });
     }
     if (out.length) return out;
@@ -1152,6 +1167,37 @@ function getBookedSegments(p) {
   const s = projectStart(p), e = projectEnd(p);
   if (s && e && e > s) return [{ date: dateKey(s), start: s, end: e, startHM: hmOf(s), endHM: hmOf(e) }];
   return [];
+}
+
+/* 时间线按视图日把项目施工时段拆成可绘制的条（处理跨午夜）。
+   返回 [{startMin,endMin,night,tag}]，startMin/endMin 为从 0:00 起的分钟数，落在 [0,1440]。
+   - 普通段：startMin~endMin，无 tag
+   - 跨夜前半（视图日开工、次日收尾）：startMin~1440，tag '→次日'
+   - 跨夜后半（前一日开工、视图日收尾）：0~endMin，tag '前夜' */
+function getTimelineBarsForDate(p, dateStr) {
+  const segs = getBookedSegments(p);
+  const bars = [];
+  if (!segs.length) return bars;
+  const vd = new Date(dateStr + "T00:00:00");
+  const vdNext = new Date(vd.getTime() + 86400000);
+  for (const s of segs) {
+    const segStart = new Date(s.start);
+    const segEnd = new Date(s.end);
+    const bs = segStart < vd ? vd : segStart;
+    const be = segEnd > vdNext ? vdNext : segEnd;
+    if (be <= bs) continue;
+    const startMin = Math.round((bs - vd) / 60000);
+    const endMin = Math.round((be - vd) / 60000);
+    const isHead = segStart >= vd && segStart < vdNext && segEnd > vdNext;
+    const isTail = segStart < vd && segEnd > vd && segEnd <= vdNext;
+    bars.push({
+      startMin,
+      endMin,
+      night: isHead || isTail,
+      tag: isHead ? "→次日" : (isTail ? "前夜" : "")
+    });
+  }
+  return bars;
 }
 
 /* 取项目在指定日期 ds 的施工时段（用于时间线按天裁剪 / 日历按天显示）。
@@ -1285,7 +1331,8 @@ function refreshProjectQuickTimeMin() {
   const pTimeMin = isToday ? currentRoundedUpTime() : null;
   disablePastTimeOptions(startEl, pTimeMin);
 
-  const pEndMin = isToday ? laterTime(currentRoundedUpTime(), startTime) : startTime;
+  /* 结束时间不强制 ≥ 开始：结束 ≤ 开始 视为次日凌晨（夜间跨天施工）。故结束时间最小可选值放开。 */
+  const pEndMin = null;
   disablePastTimeOptions(document.getElementById("pEnd"), pEndMin, { inclusive: true, autoBump: true });
 
   const list = document.getElementById("segExtraList");
@@ -1298,7 +1345,7 @@ function refreshProjectQuickTimeMin() {
       const segStartMin = segIsToday ? currentRoundedUpTime() : null;
       disablePastTimeOptions(segStartEl, segStartMin);
       const segStartTime = segStartEl ? segStartEl.value : "08:00";
-      const segEndMin = segIsToday ? laterTime(currentRoundedUpTime(), segStartTime) : segStartTime;
+      const segEndMin = null;
       disablePastTimeOptions(segEndEl, segEndMin, { inclusive: true, autoBump: true });
     });
   }
@@ -1453,13 +1500,26 @@ function updateSpanHint() {
   let totalMins = 0;
   const days = new Set();
   let bad = false;
+  let mainOvernight = false;
   for (const s of segs) {
     const st = new Date(`${s.date}T${s.start}`);
-    const en = new Date(`${s.date}T${s.end}`);
-    if (isNaN(st) || isNaN(en) || en <= st) { bad = true; continue; }
-    totalMins += Math.round((en - st) / 60000);
+    const enRaw = new Date(`${s.date}T${s.end}`);
+    if (isNaN(st) || isNaN(enRaw) || enRaw <= st) {
+      /* 结束 ≤ 开始：小于开始=次日凌晨(合法跨天夜间施工)；等于开始=非法(零时长) */
+      if (enRaw < st) {
+        const en = new Date(enRaw.getTime() + 24 * 3600 * 1000);
+        totalMins += Math.round((en - st) / 60000);
+        days.add(s.date);
+        if (s === segs[0]) mainOvernight = true;
+        continue;
+      }
+      bad = true; continue;
+    }
+    totalMins += Math.round((enRaw - st) / 60000);
     days.add(s.date);
   }
+  const endHint = document.getElementById("pEndNextDayHint");
+  if (endHint) endHint.style.display = mainOvernight ? "inline" : "none";
 
   if (bad) {
     durationCard.style.opacity = "1";
@@ -4350,9 +4410,10 @@ function renderWorkerAssignmentsText(dateStr, workerId = null) {
       const isRepairTask = !!repairRo;
       const evStart = isRepairTask ? new Date(repairRo.appointmentTime) : projectStart(p);
       const evEnd = isRepairTask ? new Date(new Date(repairRo.appointmentTime).getTime() + 2 * 60 * 60 * 1000) : projectEnd(p);
+      const isOvernight = evStart && evEnd && evEnd < evStart; // 跨夜：结束早于开始（次日凌晨）
       const startStr = evStart ? `${String(evStart.getHours()).padStart(2,"0")}:${String(evStart.getMinutes()).padStart(2,"0")}` : "待定";
       const endStr = evEnd ? `${String(evEnd.getHours()).padStart(2,"0")}:${String(evEnd.getMinutes()).padStart(2,"0")}` : "";
-      const timeStr = evStart && evEnd ? `${startStr} ~ ${endStr}` : (evStart ? `从 ${startStr} 起` : "时间待定");
+      const timeStr = evStart && evEnd ? `${startStr} ~ ${endStr}${isOvernight ? "（次日）" : ""}` : (evStart ? `从 ${startStr} 起` : "时间待定");
       const workType = (p.workContent && p.workContent.length) ? p.workContent.join("、") : "";
       const overdueTag = isOverdueNotStarted(p) ? `<span class="badge overdue" style="cursor:pointer" title="查看超时未开工详情" onclick="showOverdueNotStartedInfo('${esc(p.id)}')">🚨 超时未开工</span> ` : "";
       const forgottenInfo = getForgottenCompleteInfo(p);
@@ -4468,9 +4529,10 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   const items = cache.projects.filter(p => {
     if (!p.assignedWorkerIds || p.assignedWorkerIds.length === 0) return false;
     if (isCompleted(p)) return false;
-    const start = projectStart(p);
-    if (!start) return false;
-    return fmtDate(start) === dateStr;
+    const segs = getBookedSegments(p);
+    if (!segs.length) return false;
+    // 跨午夜施工：开工日（含）与收尾日（次日凌晨）都显示，使 22:00→次日03:00 在两天车道各画一段
+    return segs.some(s => s.date === dateStr || dateKey(s.end) === dateStr);
   });
   
   const internalTasks = getInternalTasks().filter(t => {
@@ -4483,22 +4545,23 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   }
   
   const workers = workerId ? [getWorker(workerId)].filter(Boolean) : cache.workers;
-  const totalHours = 16;
+  const TL_START = 0, TL_END = 24; // 全天轴（含夜间施工 0:00–24:00）
+  const totalHours = TL_END - TL_START;
   const listEl = document.getElementById('workerList');
   const scheduleEl = document.getElementById('workerScheduleView');
   const containerEl = listEl || scheduleEl;
   const containerWidth = containerEl 
     ? Math.max(800, containerEl.clientWidth - 32)
     : Math.max(800, window.innerWidth - 64);
-  const hourWidth = Math.max(50, containerWidth / totalHours);
-  const totalWidth = containerWidth;
-  
+  const hourWidth = Math.max(38, containerWidth / totalHours);
+  const totalWidth = totalHours * hourWidth;
+
   const hourMarks = [];
-  for (let h = 6; h <= 22; h++) {
-    hourMarks.push(`<div class="tl-hour-mark ${h >= 8 && h <= 18 ? 'work' : 'overtime'}" style="left:${(h - 6) * hourWidth}px;">${h}:00</div>`);
+  for (let h = TL_START; h <= TL_END; h++) {
+    hourMarks.push(`<div class="tl-hour-mark ${h >= 8 && h <= 18 ? 'work' : 'overtime'}" style="left:${(h - TL_START) * hourWidth}px;">${h === 24 ? '24:00' : h + ':00'}</div>`);
   }
-  
-  const workBgLeft = (8 - 6) * hourWidth;
+
+  const workBgLeft = (8 - TL_START) * hourWidth;
   const workBgWidth = (18 - 8) * hourWidth;
   
   let lanesHtml = "";
@@ -4533,14 +4596,14 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
         leaveLeft = 0;
         leaveWidth = totalWidth;
       } else if (lr.startType === "morning") {
-        leaveLeft = (8 - 6) * hourWidth;
+        leaveLeft = (8 - TL_START) * hourWidth;
         leaveWidth = 4 * hourWidth;
       } else if (lr.startType === "afternoon") {
-        leaveLeft = (13 - 6) * hourWidth;
+        leaveLeft = (13 - TL_START) * hourWidth;
         leaveWidth = 5 * hourWidth;
       } else if (lr.startTime) {
         const [sh, sm] = lr.startTime.split(":").map(Number);
-        leaveLeft = ((sh + sm / 60) - 6) * hourWidth;
+        leaveLeft = ((sh + sm / 60) - TL_START) * hourWidth;
         if (lr.endTime) {
           const [eh, em] = lr.endTime.split(":").map(Number);
           leaveWidth = ((eh + em / 60) - (sh + sm / 60)) * hourWidth;
@@ -4558,7 +4621,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       let sLeft = 0, sWidth = 0;
       if (s.startTime) {
         const [sh, sm] = s.startTime.split(":").map(Number);
-        sLeft = ((sh + sm / 60) - 6) * hourWidth;
+        sLeft = ((sh + sm / 60) - TL_START) * hourWidth;
         if (s.endTime) {
           const [eh, em] = s.endTime.split(":").map(Number);
           sWidth = ((eh + em / 60) - (sh + sm / 60)) * hourWidth;
@@ -4575,16 +4638,11 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     
     let tasksHtml = "";
     workerProjects.forEach(p => {
-      const start = projectStart(p);
-      const end = projectEnd(p) || new Date((start || new Date()).getTime() + (p.estimatedHours || 2) * 3600000);
-      
-      if (!start) return;
-      
-      const startMinutes = (start.getHours() - 6) * 60 + start.getMinutes();
-      const endMinutes = (end.getHours() - 6) * 60 + end.getMinutes();
-      const left = (startMinutes / 60) * hourWidth;
-      const width = ((endMinutes - startMinutes) / 60) * hourWidth;
-      
+      const bars = getTimelineBarsForDate(p, dateStr);
+      if (!bars.length) return;
+      const pad = (n) => String(n).padStart(2, "0");
+      const hm = (mins) => `${pad(Math.floor(mins / 60))}:${pad(mins % 60)}`;
+
       let statusClass, statusIcon;
       if (p.status === STATUS.BOOKED) { statusClass = "booked"; statusIcon = svgCal(11); }
       else if (p.status === STATUS.WORKING) { statusClass = "working"; statusIcon = "🔨"; }
@@ -4595,24 +4653,28 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       else if (p.status === STATUS.REVIEWED) { statusClass = "reviewed"; statusIcon = "✅"; }
       else if (p.status === STATUS.CANCELLED) { statusClass = "cancelled"; statusIcon = "❌"; }
       else { statusClass = ""; statusIcon = ""; }
-      
-      const pad = (n) => String(n).padStart(2, "0");
-      const timeStr = `${pad(start.getHours())}:${pad(start.getMinutes())} ~ ${pad(end.getHours())}:${pad(end.getMinutes())}`;
 
       // 工时可行性提示：人均预约工时显著超过当天可用施工窗口时高亮（跨天按当天分段判定）
       const feas = checkProjectHourFeasibility(p, dateStr);
       const feasClass = !feas.ok ? (feas.level === "critical" ? " timeline-task-infeasible-critical" : " timeline-task-infeasible-warn") : "";
       const feasNote = !feas.ok ? ` · <span style="color:${feas.level === "critical" ? "#dc2626" : "#f59e0b"};font-weight:600;white-space:nowrap;">⚠ 工时异常</span>` : "";
 
-      tasksHtml += `
-        <div class="timeline-task timeline-task-${statusClass}${feasClass}" style="left:${left}px; width:${width}px; height:48px;">
-          <div class="timeline-task-header">
-            <span class="timeline-task-name" style="font-size:11px;">${statusIcon} ${esc(p.name)}</span>
-          </div>
-          <div class="timeline-task-body" style="font-size:9px;">
-            ${esc(storeName(p.storeId))} · ${timeStr} · 需${p.workerCount || 1}人 · 本人工时${fmtHours((Number(p.estimatedHours) || 0) / Math.max(1, (p.assignedWorkerIds || []).length))}h${feasNote}
-          </div>
-        </div>`;
+      bars.forEach(bar => {
+        const left = (bar.startMin / 60) * hourWidth;
+        const safeWidth = Math.max(10, ((bar.endMin - bar.startMin) / 60) * hourWidth);
+        const timeStr = `${hm(bar.startMin)} ~ ${hm(bar.endMin)}${bar.tag ? " " + bar.tag : ""}`;
+        const nightCls = bar.night ? " timeline-task-night" : "";
+        const namePrefix = bar.night ? "🌙 " : "";
+        tasksHtml += `
+          <div class="timeline-task timeline-task-${statusClass}${feasClass}${nightCls}" title="${esc(timeStr)}" style="left:${left}px; width:${safeWidth}px; height:48px;">
+            <div class="timeline-task-header">
+              <span class="timeline-task-name" style="font-size:11px;">${statusIcon} ${namePrefix}${esc(p.name)}</span>
+            </div>
+            <div class="timeline-task-body" style="font-size:9px;">
+              ${esc(storeName(p.storeId))} · ${timeStr} · 需${p.workerCount || 1}人 · 本人工时${fmtHours((Number(p.estimatedHours) || 0) / Math.max(1, (p.assignedWorkerIds || []).length))}h${feasNote}
+            </div>
+          </div>`;
+      });
     });
     
     workerSchedules.forEach(s => {
@@ -4638,8 +4700,8 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
         sEnd.setHours(18, 0, 0, 0);
       }
       
-      const startMinutes = (sStart.getHours() - 6) * 60 + sStart.getMinutes();
-      const endMinutes = (sEnd.getHours() - 6) * 60 + sEnd.getMinutes();
+      const startMinutes = (sStart.getHours() - TL_START) * 60 + sStart.getMinutes();
+      const endMinutes = (sEnd.getHours() - TL_START) * 60 + sEnd.getMinutes();
       const left = (startMinutes / 60) * hourWidth;
       const width = ((endMinutes - startMinutes) / 60) * hourWidth;
       
@@ -4668,21 +4730,26 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
       
       const [sh, sm] = displayStartTime.split(":").map(Number);
       const [eh, em] = displayEndTime.split(":").map(Number);
-      
-      const startMinutes = (sh - 6) * 60 + sm;
-      const endMinutes = (eh - 6) * 60 + em;
+
+      const overnight = eh < sh || (eh === sh && em < sm); // 跨夜：结束早于开始
+      const effEndH = overnight ? 24 : eh;
+      const effEndM = overnight ? 0 : em;
+      const startMinutes = sh * 60 + sm;
+      const endMinutes = effEndH * 60 + effEndM;
       const left = (startMinutes / 60) * hourWidth;
-      const width = ((endMinutes - startMinutes) / 60) * hourWidth;
-      
+      const width = Math.max(10, ((endMinutes - startMinutes) / 60) * hourWidth);
+
       const statusIcon = t.status === TASK_STATUS.IN_PROGRESS ? '🔨' : '📋';
       const statusColor = t.status === TASK_STATUS.IN_PROGRESS ? '#f59e0b' : '#8b5cf6';
       const pad = (n) => String(n).padStart(2, "0");
-      const timeStr = `${pad(sh)}:${pad(sm)} ~ ${pad(eh)}:${pad(em)}`;
+      const timeStr = `${pad(sh)}:${pad(sm)} ~ ${pad(eh)}:${pad(em)}${overnight ? " (次日)" : ""}`;
+      const nightCls = overnight ? " timeline-task-night" : "";
+      const namePrefix = overnight ? "🌙 " : "";
       
       tasksHtml += `
-        <div class="timeline-task" style="left:${left}px; width:${width}px; height:48px; background:${statusColor}20; border-left:3px solid ${statusColor};">
+        <div class="timeline-task${nightCls}" style="left:${left}px; width:${width}px; height:48px; background:${statusColor}20; border-left:3px solid ${statusColor};">
           <div class="timeline-task-header">
-            <span class="timeline-task-name" style="font-size:11px;">${statusIcon} ${esc(t.name)}</span>
+            <span class="timeline-task-name" style="font-size:11px;">${statusIcon} ${namePrefix}${esc(t.name)}</span>
           </div>
           <div class="timeline-task-body" style="font-size:9px;">
             ${esc(t.workType)} · ${timeStr} · 预计${t.estHours}h
@@ -4766,7 +4833,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
 
   return `
     ${overloadBanner}
-    <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">绿色区域为工作时间(8:00-18:00)，橙色区域为加班时间</div>
+    <div style="font-size:12px; color:var(--muted); margin-bottom:8px;">绿色区域为工作时间(8:00-18:00)，橙色区域为加班时间；🌙 深蓝条为跨夜夜间施工（如 22:00→次日03:00，在开工日与收尾日各画一段）</div>
     <div class="tl-wrapper" style="width:100%;">
       <div class="timeline-horizontal" style="width:100%; min-width:${totalWidth + 60}px;">
         <div class="tl-axis" style="width:100%; margin-left:60px;">${hourMarks.join("")}</div>
@@ -7555,33 +7622,14 @@ function projectForm(p = {}) {
         <div style="display:flex;align-items:center;gap:6px;width:100%;">
           <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
           <select class="input" id="pTime" onchange="onStartTimeChange()" style="flex:1;max-width:90px;" ${apptDisabled ? "disabled" : ""}>
-            ${(() => {
-              const times = [];
-              for (let h = 5; h <= 21; h++) {
-                for (let m = 0; m < 60; m += 10) {
-                  times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-                }
-              }
-              times.push('22:00');
-              const curTime = p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '08:00';
-              return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
-            })()}
+            ${generateTimeOptions(p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '08:00')}
           </select>
           <span style="font-size:14px;color:#94a3b8;flex-shrink:0;">→</span>
           <span style="font-size:11px;color:#64748b;flex-shrink:0;">结束</span>
           <select class="input" id="pEnd" onchange="onStartTimeChange()" style="flex:1;max-width:90px;" ${apptDisabled ? "disabled" : ""}>
-            ${(() => {
-              const times = [];
-              for (let h = 5; h <= 21; h++) {
-                for (let m = 0; m < 60; m += 10) {
-                  times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-                }
-              }
-              times.push('22:00');
-              const curTime = p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '10:00';
-              return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
-            })()}
+            ${generateTimeOptions(p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '10:00')}
           </select>
+          <span id="pEndNextDayHint" style="display:none;font-size:11px;color:#0891b2;flex-shrink:0;margin-left:4px;">(次日)</span>
         </div>
       </div>
     </div>
@@ -7760,8 +7808,9 @@ function quickEditProjectTimeForm(p = {}) {
     }
     const [h, m] = startTimeStr.split(":").map(Number);
     let endH = h + 2;
-    if (endH > 22) endH = 22;
-    return `${String(endH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    let endM = m;
+    if (endH >= 24) { endH = 23; endM = 50; }
+    return `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
   })();
   const endDate = p.endTime ? new Date(p.endTime) : new Date();
   const sameDay = dateKey(startDate) === dateKey(endDate);
@@ -7778,33 +7827,14 @@ function quickEditProjectTimeForm(p = {}) {
       <div style="display:flex;align-items:center;gap:6px;width:100%;">
         <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
         <select class="input" id="pTime" onchange="onStartTimeChange()" style="flex:1;max-width:110px;">
-          ${(() => {
-            const times = [];
-            for (let h = 5; h <= 21; h++) {
-              for (let m = 0; m < 60; m += 10) {
-                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-              }
-            }
-            times.push('22:00');
-            const curTime = startTimeStr;
-            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
-          })()}
+          ${generateTimeOptions(startTimeStr)}
         </select>
         <span style="font-size:14px;color:#94a3b8;flex-shrink:0;">→</span>
         <span style="font-size:11px;color:#64748b;flex-shrink:0;">结束</span>
         <select class="input" id="pEnd" onchange="onStartTimeChange()" style="flex:1;max-width:110px;">
-          ${(() => {
-            const times = [];
-            for (let h = 5; h <= 21; h++) {
-              for (let m = 0; m < 60; m += 10) {
-                times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-              }
-            }
-            times.push('22:00');
-            const curTime = defaultEndTimeStr;
-            return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
-          })()}
+          ${generateTimeOptions(defaultEndTimeStr)}
         </select>
+        <span id="pEndNextDayHint" style="display:none;font-size:11px;color:#0891b2;flex-shrink:0;margin-left:4px;">(次日)</span>
       </div>
     </div>
     <div id="segExtraList">
@@ -7898,16 +7928,20 @@ async function saveQuickEditProjectTime(id) {
     for (const s of segs) {
       const st = new Date(`${s.date}T${s.start}`);
       const en = new Date(`${s.date}T${s.end}`);
-      if (isNaN(st) || isNaN(en) || en <= st) { toast("每段结束时间需晚于开始时间"); return; }
+      if (isNaN(st) || isNaN(en)) { toast("预约时间格式有误"); return; }
+      if (s.end === s.start) { toast("每段结束时间需晚于开始时间"); return; }
+      /* en < st 视为次日凌晨(跨天夜间施工)，合法 */
     }
     const firstSeg = segs[0];
     const lastSeg = segs[segs.length - 1];
     fullTime = buildLocalDateTime(firstSeg.date, firstSeg.start);
     fullEnd = buildLocalDateTime(lastSeg.date, lastSeg.end);
+    if (lastSeg.end < lastSeg.start) fullEnd = addLocalDateTimeDays(fullEnd, 1); // 末段跨天→结束算次日
     let tb = 0;
     for (const s of segs) {
       const st = new Date(`${s.date}T${s.start}`);
-      const en = new Date(`${s.date}T${s.end}`);
+      let en = new Date(`${s.date}T${s.end}`);
+      if (en < st) en = new Date(en.getTime() + 24 * 3600 * 1000); // 跨天次日
       tb += (en - st) / (1000 * 60 * 60);
     }
     totalBookedHours = Math.round(tb * 10) / 10;
@@ -7922,7 +7956,8 @@ async function saveQuickEditProjectTime(id) {
 
     fullTime = buildLocalDateTime(date, time);
     fullEnd = buildLocalDateTime(date, end);
-    if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
+    if (end === time) { toast("结束时间需晚于开始时间"); return; }
+    if (end < time) fullEnd = addLocalDateTimeDays(fullEnd, 1); // 跨天夜间施工：结束算次日
     totalBookedHours = (new Date(fullEnd) - new Date(fullTime)) / (1000 * 60 * 60);
   }
 
@@ -8025,24 +8060,28 @@ async function saveProject(id) {
   if (!time) { toast("请选择开始时间"); return; }
   if (!end) { toast("请选择结束时间"); return; }
 
-  // 跨天施工：收集所有分段（第1天 + 额外天），每段结束需晚于开始
+  // 跨天施工：收集所有分段（第1天 + 额外天）。结束 ≤ 开始 视为次日凌晨(合法跨天夜间施工)，相等=非法
   const segs = readAllSegments();
   if (!segs.length) { toast("请填写预约时间"); return; }
   for (const s of segs) {
     const st = new Date(`${s.date}T${s.start}`);
     const en = new Date(`${s.date}T${s.end}`);
-    if (isNaN(st) || isNaN(en) || en <= st) { toast("每段结束时间需晚于开始时间"); return; }
+    if (isNaN(st) || isNaN(en)) { toast("预约时间格式有误"); return; }
+    if (en === st) { toast("每段结束时间需晚于开始时间"); return; }
+    /* en < st 视为次日凌晨(跨天夜间施工)，合法；en > st 正常 */
   }
   const firstSeg = segs[0];
   const lastSeg = segs[segs.length - 1];
   const fullTime = buildLocalDateTime(firstSeg.date, firstSeg.start);
-  const fullEnd = buildLocalDateTime(lastSeg.date, lastSeg.end);
+  let fullEnd = buildLocalDateTime(lastSeg.date, lastSeg.end);
+  if (lastSeg.end < lastSeg.start) fullEnd = addLocalDateTimeDays(fullEnd, 1); // 末段跨天→结束算次日
 
   // 总预约施工时长（各段之和，跨天按真实施工工时计）
   let totalBookedHours = 0;
   for (const s of segs) {
     const st = new Date(`${s.date}T${s.start}`);
-    const en = new Date(`${s.date}T${s.end}`);
+    let en = new Date(`${s.date}T${s.end}`);
+    if (en < st) en = new Date(en.getTime() + 24 * 3600 * 1000); // 跨天次日
     totalBookedHours += (en - st) / (1000 * 60 * 60);
   }
   totalBookedHours = Math.round(totalBookedHours * 10) / 10;
@@ -8261,7 +8300,7 @@ function openRepairOrderForm(projectId) {
   const defaultTime = `${String(tomorrow.getHours()).padStart(2, '0')}:${String(tomorrow.getMinutes()).padStart(2, '0')}`;
   
   const times = [];
-  for (let h = 8; h <= 22; h++) {
+  for (let h = 0; h < 24; h++) {
     for (let m = 0; m < 60; m += 20) {
       times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
     }
@@ -8495,7 +8534,7 @@ function openRepairReschedule(projectId, repairId) {
   const dateVal = dateKey(cur);
   const timeVal = `${String(cur.getHours()).padStart(2, "0")}:${String(cur.getMinutes()).padStart(2, "0")}`;
   const times = [];
-  for (let h = 8; h <= 22; h++) for (let m = 0; m < 60; m += 20) times.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+  for (let h = 0; h < 24; h++) for (let m = 0; m < 60; m += 20) times.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
   const form = `
     <div class="repair-form">
       <div class="form-row" style="display:flex;gap:8px;align-items:center;">
@@ -10759,14 +10798,13 @@ function delayProject(id) {
   const originalTimeStr = originalTime ? `${String(originalTime.getHours()).padStart(2, '0')}:${String(originalTime.getMinutes()).padStart(2, '0')}` : "";
 
   let times = "";
-  for (let h = 7; h <= 21; h++) {
+  for (let h = 0; h < 24; h++) {
     for (let m = 0; m < 60; m += 10) {
       const t = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
       const selected = t === defaultTime ? " selected" : "";
       times += `<option value="${t}"${selected}>${t}</option>`;
     }
   }
-  times += '<option value="22:00">22:00</option>';
 
   /* 剩余施工时长 → 估算自动结束时间（页面打开时就计算一次，开始时间改变会重算） */
   function computeDelayRemainingHours(pp) {
@@ -11175,12 +11213,7 @@ function reworkProjectForm(id) {
     cache.stores.map((s) => `<option value="${s.id}" ${s.id === selectedStore ? "selected" : ""}>${esc(s.name)}</option>`).join("");
   const startDate = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d; })();
   const assignedNames = (p.assignedWorkerIds || []).map(wid => { const w = getWorker(wid); return w ? w.name : null; }).filter(Boolean);
-  const timeOpts = (def) => {
-    const times = [];
-    for (let h = 5; h <= 21; h++) for (let m = 0; m < 60; m += 10) times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-    times.push('22:00');
-    return times.map(t => `<option value="${t}" ${t === def ? 'selected' : ''}>${t}</option>`).join('');
-  };
+  const timeOpts = (def) => generateTimeOptions(def);
   return `
     <div id="rwModeHint" style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:8px 10px;font-size:12px;color:#9a3412;margin-bottom:10px;">
       🔄 基于「${esc(p.name)}」生成一条<strong>独立的新返工预约</strong>。原项目保持「${esc(p.status)}」不变。
@@ -12986,7 +13019,9 @@ function generateWorkerScheduleDescription(dateStr = null) {
       } else {
         const startTime = pStart ? `${String(pStart.getHours()).padStart(2, "0")}:${String(pStart.getMinutes()).padStart(2, "0")}` : "08:00";
         const endTime = pEnd ? `${String(pEnd.getHours()).padStart(2, "0")}:${String(pEnd.getMinutes()).padStart(2, "0")}` : "12:00";
-        trackTimeText = `${startTime} ~ ${endTime}`;
+        // 跨夜单段：结束日期晚于开始日期（如 22:00 开工、次日 03:00 收尾）
+        const isOvernightTrack = pStart && pEnd && pEnd.getDate() !== pStart.getDate();
+        trackTimeText = `${isOvernightTrack ? "🌙 " : ""}${startTime} ~ ${endTime}${isOvernightTrack ? "（次日）" : ""}`;
       }
       
       let statusText = p.status;
@@ -23150,7 +23185,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v422c2056";
+  const APP_VERSION = "v2cf4ce82";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
