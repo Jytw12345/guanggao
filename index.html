@@ -333,6 +333,7 @@
           <option value="仓库工作">仓库工作</option>
           <option value="送货">送货</option>
           <option value="外出安装">外出安装</option>
+          <option value="看现场量尺寸">看现场量尺寸</option>
           <option value="其他">其他</option>
         </select>
         <select id="internalTaskDateFilter" class="input" onchange="renderInternalTasks()">
@@ -340,6 +341,23 @@
           <option value="7days">最近 7 天</option>
           <option value="all">全部任务</option>
         </select>
+        <input id="internalTaskSearch" class="input" placeholder="搜索名称/客户/人员" oninput="renderInternalTasks()" style="min-width:140px;" />
+        <select id="internalTaskSort" class="input" onchange="renderInternalTasks()">
+          <option value="status">按状态排序</option>
+          <option value="date">按日期排序</option>
+          <option value="worker">按人员排序</option>
+        </select>
+        <button class="btn" id="btnBatchInternalTask">批量</button>
+        <button class="btn" id="btnExportInternalTasks">导出</button>
+      </div>
+      <div id="internalTaskBatchBar" class="it-batch-bar" style="display:none;">
+        <label class="it-batch-all"><input type="checkbox" id="batchSelectAll" onchange="toggleBatchSelectAll(this.checked)" /> 全选</label>
+        <span class="it-batch-count">已选 <b id="batchCount">0</b> 条</span>
+        <div class="it-batch-actions">
+          <button class="btn primary" id="btnBatchComplete" onclick="batchCompleteSelected()">批量完成</button>
+          <button class="btn primary" id="btnBatchVerify" onclick="batchVerifySelected()">批量审核</button>
+          <button class="btn" onclick="toggleBatchMode()">退出</button>
+        </div>
       </div>
       <div id="internalTaskList" class="card-grid"></div>
     </section>

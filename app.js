@@ -546,8 +546,8 @@ const perm = {
   deleteSchedule: (s) => can(CAP.SCHEDULE_DELETE_ALL) || (can(CAP.SCHEDULE_DELETE_OWN) && s && s.workerId === currentProfile.id),
   viewTask: () => can(CAP.TASK_VIEW),
   addTask: () => can(CAP.TASK_ADD),
-  startTask: (t) => can(CAP.TASK_START) && (isManager() || !t || !t.workerId || t.workerId === currentProfile.id),
-  completeTask: (t) => can(CAP.TASK_COMPLETE) && (isManager() || !t || !t.workerId || t.workerId === currentProfile.id),
+  startTask: (t) => can(CAP.TASK_START) && (isManager() || !t || !t.workerId || taskHasWorker(t, currentProfile.id)),
+  completeTask: (t) => can(CAP.TASK_COMPLETE) && (isManager() || !t || !t.workerId || taskHasWorker(t, currentProfile.id)),
   deleteTask: () => can(CAP.TASK_DELETE),
   verifyTask: () => can(CAP.TASK_VERIFY),
   internalWorkLog: () => can(CAP.INTERNAL_WORK_LOG),
@@ -1241,6 +1241,80 @@ function fmtTimeRange(p) {
 }
 
 /* 日期变化时自动设置时间 */
+function currentRoundedUpTime() {
+  const now = new Date();
+  let h = now.getHours();
+  let m = Math.ceil(now.getMinutes() / 10) * 10;
+  if (m >= 60) { m = 0; h = (h + 1) % 24; }
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/* 把时间下拉里早于 minTime 的选项禁用；
+   - minTime 传 null 表示全部解禁（用于日期切到明天以后）
+   - inclusive=true 时「等于 minTime」也禁用（用于结束时间必须严格晚于开始时间）
+   - autoBump=true 时，当前值被禁用后自动跳到第一个可用选项 */
+function disablePastTimeOptions(sel, minTime, { inclusive = false, autoBump = false } = {}) {
+  if (!sel) return;
+  const shouldDisable = (v) => minTime && (inclusive ? v <= minTime : v < minTime);
+  Array.from(sel.options).forEach(opt => {
+    if (shouldDisable(opt.value)) { opt.disabled = true; opt.style.color = '#ccc'; }
+    else { opt.disabled = false; opt.style.color = ''; }
+  });
+  if (shouldDisable(sel.value)) {
+    if (autoBump) {
+      const next = Array.from(sel.options).find(opt => !opt.disabled);
+      sel.value = next ? next.value : minTime;
+    } else {
+      sel.value = minTime;
+    }
+  }
+}
+
+/* 快速修改施工安排：
+   - 当预约日期为今天时，禁用开始/结束时间里早于现在的时段；
+   - 结束时间还必须严格晚于开始时间（同段内）；
+   - 切到非今天日期时，统一把之前禁用的选项重新启用 */
+function refreshProjectQuickTimeMin() {
+  const dateEl = document.getElementById("pDate");
+  if (!dateEl) return;
+  const todayStr = dateKey(new Date());
+  const isToday = dateEl.value === todayStr;
+  const startEl = document.getElementById("pTime");
+  const startTime = startEl ? startEl.value : "08:00";
+
+  const pTimeMin = isToday ? currentRoundedUpTime() : null;
+  disablePastTimeOptions(startEl, pTimeMin);
+
+  const pEndMin = isToday ? laterTime(currentRoundedUpTime(), startTime) : startTime;
+  disablePastTimeOptions(document.getElementById("pEnd"), pEndMin, { inclusive: true, autoBump: true });
+
+  const list = document.getElementById("segExtraList");
+  if (list) {
+    list.querySelectorAll(".seg-row").forEach(row => {
+      const dEl = row.querySelector(".segDate");
+      const segIsToday = dEl && dEl.value === todayStr;
+      const segStartEl = row.querySelector(".segStart");
+      const segEndEl = row.querySelector(".segEnd");
+      const segStartMin = segIsToday ? currentRoundedUpTime() : null;
+      disablePastTimeOptions(segStartEl, segStartMin);
+      const segStartTime = segStartEl ? segStartEl.value : "08:00";
+      const segEndMin = segIsToday ? laterTime(currentRoundedUpTime(), segStartTime) : segStartTime;
+      disablePastTimeOptions(segEndEl, segEndMin, { inclusive: true, autoBump: true });
+    });
+  }
+}
+
+/* 开始时间变化时：同步刷新结束时间的最小可选值 */
+function onStartTimeChange() {
+  refreshProjectQuickTimeMin();
+  updateSpanHint();
+}
+
+/* 返回两个 HH:mm 中较晚者 */
+function laterTime(a, b) {
+  return a > b ? a : b;
+}
+
 function onDateChange() {
   const dateEl = document.getElementById("pDate");
   const timeEl = document.getElementById("pTime");
@@ -1275,6 +1349,7 @@ function onDateChange() {
     endEl.value = endTime;
   }
   
+  refreshProjectQuickTimeMin();
   updateSpanHint();
 }
 
@@ -1289,14 +1364,14 @@ function segRowHtml(labelNo, date, start, end, disabled) {
     <div class="seg-row" data-uid="${uid}">
       <div class="seg-date-line">
         <span class="seg-label">第${labelNo}天</span>
-        <input class="input segDate" type="date" value="${date || ""}" onchange="updateSpanHint()" ${dis} />
+        <input class="input segDate" type="date" value="${date || ""}" onchange="onStartTimeChange()" ${dis} />
       </div>
       <div class="seg-time-line">
         <span class="seg-txt">开始</span>
-        <select class="input segStart" onchange="updateSpanHint()" ${dis}>${generateTimeOptions(start)}</select>
+        <select class="input segStart" onchange="onStartTimeChange()" ${dis}>${generateTimeOptions(start)}</select>
         <span class="seg-arrow">→</span>
         <span class="seg-txt">结束</span>
-        <select class="input segEnd" onchange="updateSpanHint()" ${dis}>${generateTimeOptions(end)}</select>
+        <select class="input segEnd" onchange="onStartTimeChange()" ${dis}>${generateTimeOptions(end)}</select>
         <button type="button" class="btn small seg-del" onclick="removeSegDay('${uid}')" ${dis}>✕</button>
       </div>
     </div>`;
@@ -1430,7 +1505,7 @@ function updateSpanHint() {
   if (estHours > 0 && totalMins > 0) {
     const hoursPerPerson = totalMins / 60;
     const suggested = Math.max(1, Math.ceil(estHours / hoursPerPerson));
-    suggestWorkers.innerHTML = `<span style="color:#2563eb;">${suggested}人</span> <span style="font-size:11px;color:#64748b;">(总工时÷时长)</span>`;
+    suggestWorkers.innerHTML = `<span style="color:#2563eb;">${suggested}人</span>`;
   } else {
     suggestWorkers.textContent = "--";
   }
@@ -2342,6 +2417,74 @@ const internalTaskToRow = (t) => ({
   updated_at: new Date().toISOString(),
 });
 
+/* 内部任务支持多人员：worker_id / worker_name 以逗号分隔存储，旧单值兼容 */
+function getTaskWorkerIds(t) {
+  if (!t || !t.workerId) return [];
+  return String(t.workerId).split(",").map(s => s.trim()).filter(Boolean);
+}
+function getTaskWorkerNames(t) {
+  if (!t || !t.workerName) return [];
+  return String(t.workerName).split(",").map(s => s.trim()).filter(Boolean);
+}
+function taskHasWorker(t, wid) {
+  return getTaskWorkerIds(t).includes(wid);
+}
+function taskWorkerNamesText(t) {
+  return getTaskWorkerNames(t).join("、") || "未分配";
+}
+
+/* 内部任务卡片：人员头像/色板辅助 */
+const IT_AVATAR_PALETTE = [
+  ['#e0e7ff','#4338ca'], ['#fce7f3','#be185d'], ['#dcfce7','#15803d'],
+  ['#fef3c7','#b45309'], ['#e0f2fe','#0369a1'], ['#f3e8ff','#7e22ce'],
+  ['#fee2e2','#b91c1c'], ['#ccfbf1','#0f766e'], ['#ffedd5','#c2410c'],
+  ['#f1f5f9','#475569']
+];
+function getInitials(name) {
+  if (!name) return '?';
+  const s = String(name).trim();
+  if (s.length <= 2) return s;
+  return s.slice(-2);
+}
+function getWorkerAvatarColor(seed) {
+  let h = 0;
+  const str = String(seed || '');
+  for (let i = 0; i < str.length; i++) h = (h << 5) - h + str.charCodeAt(i);
+  const idx = Math.abs(h) % IT_AVATAR_PALETTE.length;
+  return IT_AVATAR_PALETTE[idx];
+}
+function renderWorkerAvatars(t, opts = {}) {
+  const ids = getTaskWorkerIds(t);
+  const names = getTaskWorkerNames(t);
+  if (!names.length) {
+    return `<span class="it-avatar it-avatar--empty" title="未分配人员">?</span>`;
+  }
+  const max = opts.max || 5;
+  const visible = names.slice(0, max);
+  const extra = names.length - max;
+  let html = '<span class="it-avatar-group">';
+  visible.forEach((n, i) => {
+    const [bg, color] = getWorkerAvatarColor(ids[i] || n);
+    html += `<span class="it-avatar" style="background:${bg};color:${color}" title="${esc(n)}">${esc(getInitials(n))}</span>`;
+  });
+  if (extra > 0) {
+    html += `<span class="it-avatar it-avatar--more" title="还有 ${extra} 人">+${extra}</span>`;
+  }
+  html += '</span>';
+  return html;
+}
+function workTypeIcon(workType) {
+  const map = {
+    '外出安装': `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 21v-6h6v6"/></svg>`,
+    '看现场量尺寸': `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 22l20-20M7 5v5M17 15h5M7 2h5M2 17v5"/></svg>`,
+    '维修': `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
+    '培训': `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>`,
+    '会议': `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+    '备货': `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>`
+  };
+  return map[workType] || `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>`;
+}
+
 /* ============================================================
  * 数据仓储层（统一接口，内部按 MODE 分流）
  * 上层业务只调用 repo.xxx，不关心存在哪
@@ -2769,7 +2912,7 @@ const repo = {
     const row = internalTaskToRow(task);
     if (MODE === "cloud") {
       const { error } = await sb.from("internal_tasks").upsert(row);
-      if (error) return fail(error);
+      if (error) { fail(error); return error; }
     } else {
       const idx = cache.internalTasks.findIndex((t) => t.id === row.id);
       if (idx >= 0) cache.internalTasks[idx] = { ...cache.internalTasks[idx], ...task };
@@ -2780,7 +2923,7 @@ const repo = {
   async deleteInternalTask(id) {
     if (MODE === "cloud") {
       const { error } = await sb.from("internal_tasks").delete().eq("id", id);
-      if (error) return fail(error);
+      if (error) { fail(error); return error; }
     } else {
       cache.internalTasks = cache.internalTasks.filter((t) => t.id !== id);
       saveLocal();
@@ -3884,10 +4027,11 @@ function setSyncStatus(cls, text) {
     el.title = title + " · 点击立即同步";
     let icon = "●";
     if (/同步中|连接中/.test(t)) {
-      icon = '<span class="sync-spin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><circle cx="12" cy="12" r="10" stroke-dasharray="42 20"/></svg></span>';
-    } else if (/已同步|同步完成|完成/.test(t)) {
-      // 同步完成：实心静止圆环（区别于动画中的缺口旋转圆环）
-      icon = '<span class="sync-static"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/></svg></span>';
+      // 同步中：圆环旋转 + 中心绿点快闪（仅绿点闪）
+      icon = '<span class="sync-spin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><circle cx="12" cy="12" r="10" stroke-dasharray="42 20"/></svg><span class="sync-dot sync-dot--fast"></span></span>';
+    } else if (/已同步|同步完成|完成/.test(t) || cls === 'online') {
+      // 同步完成 / 实时在线：实心静止圆环 + 中心绿点呼吸闪（默认 .sync-dot 带呼吸动画）
+      icon = '<span class="sync-static"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/></svg><span class="sync-dot"></span></span>';
     } else if (/离线|失败|异常|待授权|不稳定|重试中/.test(t)) {
       icon = "⚠";
     } else if (/本地模式/.test(t)) {
@@ -4037,8 +4181,8 @@ function renderWorkerOverdueSection(workerId = null) {
   // ② 内部任务
   cache.internalTasks.forEach(t => {
     if (t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED) return;
-    if (workerId && t.workerId !== workerId) return;
-    if (!workerId && !t.workerId) return;
+    if (workerId && !taskHasWorker(t, workerId)) return;
+    if (!workerId && !getTaskWorkerIds(t).length) return;
     const d = t.date || "";
     if (t.status === TASK_STATUS.PENDING) {
       if (d && d < today) {
@@ -4046,7 +4190,7 @@ function renderWorkerOverdueSection(workerId = null) {
           level: 2, badgeCls: "overdue", badge: "⏰ 内部任务逾期未开始",
           title: t.name, sub: `应 ${d} 开始`,
           goto: "switchTab('internalTasks')",
-          wNames: workerId ? [] : [t.workerName].filter(Boolean)
+          wNames: workerId ? [] : getTaskWorkerNames(t)
         });
       }
     } else if (t.status === TASK_STATUS.IN_PROGRESS) {
@@ -4056,7 +4200,7 @@ function renderWorkerOverdueSection(workerId = null) {
           level: 1, badgeCls: "forgotten", badge: "⚠️ 内部任务未完工",
           title: t.name, sub: `已进行 ${hrs} 小时`,
           goto: "switchTab('internalTasks')",
-          wNames: workerId ? [] : [t.workerName].filter(Boolean)
+          wNames: workerId ? [] : getTaskWorkerNames(t)
         });
       }
     }
@@ -4124,7 +4268,7 @@ function renderWorkerOverdueSection(workerId = null) {
     }
     if (!conflictName) {
       for (const t of cache.internalTasks) {
-        if (t.workerId !== wid || t.date !== day) continue;
+        if (!taskHasWorker(t, wid) || t.date !== day) continue;
         if (t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED) continue;
         if (!t.scheduledStartTime || !t.scheduledEndTime) continue;
         const tS = parseHM(t.scheduledStartTime), tE = parseHM(t.scheduledEndTime);
@@ -4516,7 +4660,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
         </div>`;
     });
     
-    const workerInternalTasks = internalTasks.filter(t => t.workerId === w.id);
+    const workerInternalTasks = internalTasks.filter(t => taskHasWorker(t, w.id));
     workerInternalTasks.forEach(t => {
       const displayStartTime = t.scheduledStartTime || t.actualStartTime;
       const displayEndTime = t.scheduledEndTime || t.actualEndTime;
@@ -4948,6 +5092,18 @@ function renderScheduleCalendar() {
     schedulesByDate[s.startDate].push(s);
   });
 
+  // 内部任务按日期聚合（与门店预约并列显示在月视图）。状态为「已审核」的不显示；
+  // 无「查看全员日程」权限时只看自己的任务（与日程条目可见性一致）。
+  const internalTasksByDate = {};
+  getInternalTasks().forEach(function(t) {
+    if (t.status === TASK_STATUS.VERIFIED) return;
+    const wids = getTaskWorkerIds(t);
+    if (!wids.length || !t.date) return;
+    if (!perm.viewScheduleAll() && !taskHasWorker(t, currentProfile.id)) return;
+    if (!internalTasksByDate[t.date]) internalTasksByDate[t.date] = [];
+    internalTasksByDate[t.date].push(t);
+  });
+
   // 按天统计每位施工人员的累计工时（项目按实际分配人数分摊 + 内部任务），用于工时预警。
   // 注意：当天请假的人不计入「工时预警」参考范围，预警只参考实际上班的人。
   const dayLoadMap = {};
@@ -4984,9 +5140,12 @@ function renderScheduleCalendar() {
   });
   getInternalTasks().forEach(function(t) {
     if (t.status === TASK_STATUS.VERIFIED) return;
-    if (!t.workerId || !t.date) return;
-    if (getWorkerAvailableHours(t.workerId, t.date) <= 0) return; // 全天请假不计入
-    addLoad(t.date, t.workerId, Number(t.estHours) || 0);
+    const wids = getTaskWorkerIds(t);
+    if (!wids.length || !t.date) return;
+    wids.forEach(function(wid) {
+      if (getWorkerAvailableHours(wid, t.date) <= 0) return; // 全天请假不计入
+      addLoad(t.date, wid, Number(t.estHours) || 0);
+    });
   });
 
   const monthNames = ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"];
@@ -5001,25 +5160,46 @@ function renderScheduleCalendar() {
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = dateKey(new Date(y, m, d));
     const daySchedules = schedulesByDate[dateStr] || [];
+    const dayInternal = internalTasksByDate[dateStr] || [];
     const isToday = dateStr === todayKey;
     const isSelected = dateStr === selectedStr;
     const isWeekend = new Date(y, m, d).getDay() === 0 || new Date(y, m, d).getDay() === 6;
     const isHolidayDate = isHoliday(dateStr);
     const maxShow = 3;
-    const showSchedules = daySchedules.slice(0, maxShow);
-    const itemsHtml = showSchedules.map(function(s) {
-      const color = SCHEDULE_TYPE_COLOR[s.type] || "#6b7280";
-      const timeStr = s.startTime ? s.startTime : "全天";
-      const label = SCHEDULE_TYPE_LABEL[s.type] || s.type;
-      const worker = getWorker(s.workerId);
-      const workerName = worker ? worker.name : "";
-      const surname = workerName ? workerName.charAt(0) : "";
+    // 合并当天「门店预约 + 内部任务」，统一截取前 maxShow 条显示
+    const combined = [];
+    daySchedules.forEach(function(s) { combined.push({ kind: "sched", s: s }); });
+    dayInternal.forEach(function(t) { combined.push({ kind: "task", t: t }); });
+    const showItems = combined.slice(0, maxShow);
+    const itemsHtml = showItems.map(function(it) {
+      if (it.kind === "sched") {
+        const s = it.s;
+        const color = SCHEDULE_TYPE_COLOR[s.type] || "#6b7280";
+        const timeStr = s.startTime ? s.startTime : "全天";
+        const label = SCHEDULE_TYPE_LABEL[s.type] || s.type;
+        const worker = getWorker(s.workerId);
+        const workerName = worker ? worker.name : "";
+        const surname = workerName ? workerName.charAt(0) : "";
+        return '<div class="sched-cal-item-wrap">' +
+          (surname ? '<span class="sched-cal-item-user" style="background:' + color + '">' + esc(surname) + '</span>' : '') +
+          '<div class="sched-cal-item" style="background:' + color + '" title="' + esc(s.title) + '（' + label + '）' + (workerName ? ' - ' + esc(workerName) : '') + '">' +
+          timeStr + ' ' + esc(s.title) + '</div></div>';
+      }
+      const t = it.t;
+      const color = "#8b5cf6";
+      const timeStr = t.scheduledStartTime ? t.scheduledStartTime : "待安排";
+      const wNames = getTaskWorkerNames(t);
+      const firstName = wNames[0] || "";
+      const surname = firstName ? firstName.charAt(0) : "内";
+      const multiTag = wNames.length > 1 ? '+' + (wNames.length - 1) : "";
+      const title = esc(t.name) + "（内部任务·" + esc(t.workType) + "）" + (wNames.length ? " - " + esc(wNames.join("、")) : "");
       return '<div class="sched-cal-item-wrap">' +
-        (surname ? '<span class="sched-cal-item-user" style="background:' + color + '">' + esc(surname) + '</span>' : '') +
-        '<div class="sched-cal-item" style="background:' + color + '" title="' + esc(s.title) + '（' + label + '）' + (workerName ? ' - ' + esc(workerName) : '') + '">' +
-        timeStr + ' ' + esc(s.title) + '</div></div>';
+        '<span class="sched-cal-item-user" style="background:' + color + '">' + esc(surname) + (multiTag ? '<sup style="font-size:9px;margin-left:-1px;">' + esc(multiTag) + '</sup>' : '') + '</span>' +
+        '<div class="sched-cal-item" style="background:' + color + '" title="' + title + '">' +
+        timeStr + ' ' + esc(t.name) + '</div></div>';
     }).join("");
-    const moreLabel = daySchedules.length > maxShow ? '<div class="sched-cal-more-text">+' + (daySchedules.length - maxShow) + '更多</div>' : "";
+    const totalItems = combined.length;
+    const moreLabel = totalItems > maxShow ? '<div class="sched-cal-more-text">+' + (totalItems - maxShow) + '更多</div>' : "";
 
     // 工时预警：当天有施工人员累计工时超过其「可用工时」（已扣除请假；标准 8h，满勤容忍到 10h）
     const load = dayLoadMap[dateStr] || {};
@@ -5033,11 +5213,11 @@ function renderScheduleCalendar() {
     const hasOverload = overloaded.length > 0;
     const overloadTitle = hasOverload ? ' title="工时偏多：' + esc(overloadNames) + ' 超过当天可用工时（满勤容忍至 ' + DAILY_WORK_HOURS_WARN + 'h/人/天）"' : "";
 
-    const cls = "sched-cal-cell" + (isToday ? " today" : "") + (isSelected ? " selected" : "") + (isWeekend ? " weekend" : "") + (isHolidayDate ? " holiday" : "") + (daySchedules.length > 0 ? " has" : "") + (hasOverload ? " overload" : "");
+    const cls = "sched-cal-cell" + (isToday ? " today" : "") + (isSelected ? " selected" : "") + (isWeekend ? " weekend" : "") + (isHolidayDate ? " holiday" : "") + (totalItems > 0 ? " has" : "") + (hasOverload ? " overload" : "");
     cells += '<div class="' + cls + '"' + overloadTitle + ' onclick="selectScheduleDate(\'' + dateStr + '\')">' +
       '<span class="sched-cal-day">' + d + '</span>' +
       (hasOverload ? '<span class="sched-cal-overload" title="' + esc(overloadNames) + ' 超过当天可用工时（满勤容忍至 ' + DAILY_WORK_HOURS_WARN + 'h）">' + overloaded.length + '</span>' : '') +
-      (daySchedules.length > 0 ? '<div class="sched-cal-items">' + itemsHtml + moreLabel + '</div>' : '') +
+      (totalItems > 0 ? '<div class="sched-cal-items">' + itemsHtml + moreLabel + '</div>' : '') +
       (perm.addSchedule() ? '<span class="sched-cal-plus" onclick="event.stopPropagation();newWorkerScheduleForDate(\'' + dateStr + '\')">+</span>' : '') +
       '</div>';
   }
@@ -5100,13 +5280,21 @@ function renderScheduleList() {
   const dateLabel = `${mm}月${dd}日`;
   const weekdayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
+  const dayInternalTasks = getInternalTasks().filter(t => {
+    if (t.status === TASK_STATUS.VERIFIED) return false;
+    if (t.date !== selectedStr) return false;
+    if (!perm.viewScheduleAll() && !taskHasWorker(t, currentProfile.id)) return false;
+    return true;
+  });
+  const totalCount = daySchedules.length + dayInternalTasks.length;
+
   let html = `<div class="sched-list-header">
     <span class="sched-list-date">📋 ${dateLabel} ${weekdayNames[dateObj.getDay()]}</span>
-    <span class="sched-list-count">${daySchedules.length} 项日程</span>
+    <span class="sched-list-count">${totalCount} 项${dayInternalTasks.length ? `（含 ${dayInternalTasks.length} 项内部任务）` : ''}</span>
     ${perm.addSchedule() ? `<button class="btn small primary" onclick="newWorkerScheduleForDate('${selectedStr}')">+ 添加</button>` : ''}
   </div>`;
 
-  if (daySchedules.length === 0) {
+  if (totalCount === 0) {
     html += `<div class="sched-empty">当天暂无日程，点击「+ 添加」创建</div>`;
   } else {
     daySchedules.sort((a, b) => (a.startTime || "00:00").localeCompare(b.startTime || "00:00"));
@@ -5134,6 +5322,31 @@ function renderScheduleList() {
           ${perm.deleteSchedule(s) ? `<button class="sched-item-del" onclick="deleteWorkerSchedule('${s.id}')">✕</button>` : ''}
         </div>`;
     });
+    if (dayInternalTasks.length) {
+      html += `<div class="sched-list-sep">内部任务</div>`;
+      dayInternalTasks.forEach(t => {
+        const wNames = getTaskWorkerNames(t);
+        const wLabel = wNames.length ? wNames.join("、") : "未分配";
+        const timeStr = t.scheduledStartTime && t.scheduledEndTime
+          ? `${t.scheduledStartTime}~${t.scheduledEndTime}`
+          : t.scheduledStartTime
+          ? `${t.scheduledStartTime}起`
+          : "待安排时间";
+        const statusText = { pending: '待开始', in_progress: '进行中', completed: '待审核', verified: '已审核' }[t.status] || t.status;
+        html += `
+          <div class="sched-item it-sched-item" style="border-left-color:#8b5cf6;">
+            <div class="sched-item-time">${timeStr}</div>
+            <div class="sched-item-body" onclick="openEditInternalTaskModal('${t.id}')">
+              <div class="sched-item-title">${esc(t.name)}</div>
+              <div class="sched-item-meta">
+                <span class="sched-item-type" style="color:#8b5cf6;">内部任务·${esc(t.workType)}</span>
+                <span>${esc(wLabel)}</span>
+                <span class="sched-item-desc">${esc(statusText)}</span>
+              </div>
+            </div>
+          </div>`;
+      });
+    }
     html += `</div>`;
   }
 
@@ -6548,8 +6761,8 @@ function setPTimeRange(type) {
       const endM = String(m).padStart(2, "0");
       setSelect(endSel, `${endH}:${endM}`);
     } else {
-      setSelect(timeSel, "09:00");
-      setSelect(endSel, "11:00");
+      setSelect(timeSel, "08:00");
+      setSelect(endSel, "10:00");
     }
   }
 
@@ -7341,7 +7554,7 @@ function projectForm(p = {}) {
         </div>
         <div style="display:flex;align-items:center;gap:6px;width:100%;">
           <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
-          <select class="input" id="pTime" onchange="updateSpanHint()" style="flex:1;max-width:90px;" ${apptDisabled ? "disabled" : ""}>
+          <select class="input" id="pTime" onchange="onStartTimeChange()" style="flex:1;max-width:90px;" ${apptDisabled ? "disabled" : ""}>
             ${(() => {
               const times = [];
               for (let h = 5; h <= 21; h++) {
@@ -7350,13 +7563,13 @@ function projectForm(p = {}) {
                 }
               }
               times.push('22:00');
-              const curTime = p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '09:00';
+              const curTime = p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '08:00';
               return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
             })()}
           </select>
           <span style="font-size:14px;color:#94a3b8;flex-shrink:0;">→</span>
           <span style="font-size:11px;color:#64748b;flex-shrink:0;">结束</span>
-          <select class="input" id="pEnd" onchange="updateSpanHint()" style="flex:1;max-width:90px;" ${apptDisabled ? "disabled" : ""}>
+          <select class="input" id="pEnd" onchange="onStartTimeChange()" style="flex:1;max-width:90px;" ${apptDisabled ? "disabled" : ""}>
             ${(() => {
               const times = [];
               for (let h = 5; h <= 21; h++) {
@@ -7365,7 +7578,7 @@ function projectForm(p = {}) {
                 }
               }
               times.push('22:00');
-              const curTime = p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '12:00';
+              const curTime = p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '10:00';
               return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
             })()}
           </select>
@@ -7510,12 +7723,12 @@ function switchAssignType(btn) {
 function newProject() { 
   window._estDirty = false;
   modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED })); 
-  setTimeout(updateSpanHint, 100); 
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); }, 100); 
 }
 function editProject(id) { 
   window._estDirty = false;
   modal.open("编辑项目", projectForm(getProject(id))); 
-  setTimeout(updateSpanHint, 100); 
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); }, 100); 
 }
 
 /* 快速修改项目预约时间/工时/人数 */
@@ -7537,6 +7750,19 @@ function quickEditProjectTimeForm(p = {}) {
   const apptDisabled = locked || !perm.editAppointment(p);
   const hoursDisabled = locked || !perm.editHours(p);
   const startDate = p.appointmentTime ? new Date(p.appointmentTime) : new Date();
+  const startTimeStr = p.appointmentTime
+    ? `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}`
+    : "08:00";
+  const defaultEndTimeStr = (() => {
+    if (p.endTime) {
+      const d = new Date(p.endTime);
+      return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    }
+    const [h, m] = startTimeStr.split(":").map(Number);
+    let endH = h + 2;
+    if (endH > 22) endH = 22;
+    return `${String(endH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  })();
   const endDate = p.endTime ? new Date(p.endTime) : new Date();
   const sameDay = dateKey(startDate) === dateKey(endDate);
   return `
@@ -7544,14 +7770,14 @@ function quickEditProjectTimeForm(p = {}) {
       <label><span style="color:var(--warn)">${svgCal(14)}</span> 施工日期</label>
       <div style="display:flex;align-items:center;gap:6px;width:100%;">
         ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-label" id="segFirstDayLabel">第1天</span>' : '<span class="seg-label" id="segFirstDayLabel" style="display:none;">第1天</span>'}
-        <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" style="flex:1;" />
+        <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" min="${todayStr()}" onchange="onDateChange()" style="flex:1;" />
       </div>
     </div>
     <div class="form-row">
       <label>施工时间段</label>
       <div style="display:flex;align-items:center;gap:6px;width:100%;">
         <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
-        <select class="input" id="pTime" onchange="updateSpanHint()" style="flex:1;max-width:110px;">
+        <select class="input" id="pTime" onchange="onStartTimeChange()" style="flex:1;max-width:110px;">
           ${(() => {
             const times = [];
             for (let h = 5; h <= 21; h++) {
@@ -7560,13 +7786,13 @@ function quickEditProjectTimeForm(p = {}) {
               }
             }
             times.push('22:00');
-            const curTime = p.appointmentTime ? `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}` : '09:00';
+            const curTime = startTimeStr;
             return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
           })()}
         </select>
         <span style="font-size:14px;color:#94a3b8;flex-shrink:0;">→</span>
         <span style="font-size:11px;color:#64748b;flex-shrink:0;">结束</span>
-        <select class="input" id="pEnd" onchange="updateSpanHint()" style="flex:1;max-width:110px;">
+        <select class="input" id="pEnd" onchange="onStartTimeChange()" style="flex:1;max-width:110px;">
           ${(() => {
             const times = [];
             for (let h = 5; h <= 21; h++) {
@@ -7575,7 +7801,7 @@ function quickEditProjectTimeForm(p = {}) {
               }
             }
             times.push('22:00');
-            const curTime = p.endTime ? `${String(endDate.getHours()).padStart(2, '0')}:${String(endDate.getMinutes()).padStart(2, '0')}` : '12:00';
+            const curTime = defaultEndTimeStr;
             return times.map(t => `<option value="${t}" ${t === curTime ? 'selected' : ''}>${t}</option>`).join('');
           })()}
         </select>
@@ -7652,7 +7878,7 @@ function quickEditProjectTime(id) {
   }
   window._estDirty = false;
   modal.open("快速修改施工安排", quickEditProjectTimeForm(p));
-  setTimeout(updateSpanHint, 100);
+  setTimeout(() => { updateSpanHint(); refreshProjectQuickTimeMin(); }, 100);
 }
 
 async function saveQuickEditProjectTime(id) {
@@ -7698,6 +7924,12 @@ async function saveQuickEditProjectTime(id) {
     fullEnd = buildLocalDateTime(date, end);
     if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
     totalBookedHours = (new Date(fullEnd) - new Date(fullTime)) / (1000 * 60 * 60);
+  }
+
+  /* 施工开始时间不能早于当前时间：只能往现在及之后改，不能往前改（仅当允许修改预约时间时校验） */
+  if (perm.editAppointment(p) && fullTime && new Date(fullTime) < new Date()) {
+    toast("施工开始时间不能早于当前时间，请选择现在或之后的时间");
+    return;
   }
 
   const workerCountInput = document.getElementById("pWorkers").value;
@@ -9483,7 +9715,7 @@ function getWorkerDailyHours(dateStr, workerId) {
   });
   getInternalTasks().forEach((t) => {
     if (t.status === TASK_STATUS.VERIFIED) return;
-    if (t.workerId !== workerId) return;
+    if (!taskHasWorker(t, workerId)) return;
     if (t.date !== dateStr) return;
     total += Number(t.estHours) || 0;
   });
@@ -10046,6 +10278,71 @@ function optimisticApplyAndSync(id, patch, toastMsg) {
     .catch((e) => console.warn("[sync] 状态变更后台同步失败：", e));
 }
 
+/**
+ * 查找即将开工项目的施工人员是否在「其它正在施工」的项目中。
+ * 仅统计 status===WORKING 的项目；已暂停(PAUSED)/已延期(DELAYED)不计冲突（人员未实际占用，可并行开工）。
+ */
+function findWorkerActiveProjectConflicts(project) {
+  const myWorkers = project.assignedWorkerIds || [];
+  if (!myWorkers.length) return [];
+  const conflicts = [];
+  (cache.projects || []).forEach(other => {
+    if (other.id === project.id) return;
+    if (other.status !== STATUS.WORKING) return; // 仅「正在施工」算冲突
+    const shared = (other.assignedWorkerIds || []).filter(wid => myWorkers.includes(wid));
+    if (shared.length) {
+      const names = shared.map(wid => (getWorker(wid) && getWorker(wid).name) || wid);
+      conflicts.push({ project: other, workerIds: shared, workers: names });
+    }
+  });
+  return conflicts;
+}
+
+/* 开工人员冲突：三选项弹窗。
+   resolveWorkerConflict 由弹窗内按钮调用，close 时若未选则视为取消。
+   返回值：'remove' 把冲突工人从之前项目移除后开工 | 'proceed' 仍同时开工 | 'cancel' 取消 */
+let _workerConflictResolver = null;
+function resolveWorkerConflict(choice) {
+  const r = _workerConflictResolver;
+  _workerConflictResolver = null;
+  modal.close();
+  if (r) r(choice);
+}
+
+function showWorkerConflictDialog(conflicts, projectName) {
+  return new Promise((resolve) => {
+    _workerConflictResolver = resolve;
+    const list = conflicts.map(c =>
+      `<li style="margin:4px 0;"><b>${esc(c.project.name)}</b> — ${esc(c.workers.join("、"))}</li>`
+    ).join("");
+    const html = `
+      <p style="margin:0 0 8px;color:#374151;">以下施工人员正在其它项目中施工中。你要在 <b>${esc(projectName)}</b> 开工，如何处理该工人？</p>
+      <ul style="margin:0 0 14px;padding-left:18px;color:#b45309;font-size:13px;">${list}</ul>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button class="btn primary" onclick="resolveWorkerConflict('remove')">把该工人从之前项目移除后开工</button>
+        <button class="btn" onclick="resolveWorkerConflict('proceed')">仍要同时开工（两项目都保留）</button>
+        <button class="btn" onclick="resolveWorkerConflict('cancel')" style="color:#9ca3af;">取消</button>
+      </div>
+    `;
+    modal.open("人员施工冲突", html, { hideFooter: true, closeOnMask: false });
+  });
+}
+
+/* 把冲突工人从「之前项目」移除（只动该工人，项目本身保持施工中，不误伤其他工人） */
+async function removeConflictingWorkersFromPrevProjects(conflicts, myWorkerIds) {
+  for (const c of conflicts) {
+    const prev = c.project;
+    const shared = (c.workerIds || []).filter(wid => myWorkerIds.includes(wid));
+    if (!shared.length) continue;
+    const prevIds = prev.assignedWorkerIds || [];
+    const newIds = prevIds.filter(wid => !shared.includes(wid));
+    const newNames = (prev.assignedWorkerNames || []).filter((nm, i) => !shared.includes(prevIds[i]));
+    await repo.patchProject(prev.id, { assignedWorkerIds: newIds, assignedWorkerNames: newNames });
+    optimisticApplyAndSync(prev.id, { assignedWorkerIds: newIds, assignedWorkerNames: newNames }, "");
+  }
+  toast("已将冲突工人从之前项目移除");
+}
+
 async function updateProjectStatus(id, newStatus) {
   const lockKey = `updateProjectStatus:${id}`;
   if (!lockAction(lockKey)) { toast("操作处理中，请勿重复点击"); return; }
@@ -10087,6 +10384,20 @@ async function updateProjectStatus(id, newStatus) {
       toast("请先分配安装人员后再开始施工");
       renderConstruction();
       return;
+    }
+    /* 人员施工冲突：某参与人员已在其它「正在施工」的项目中，开工前给出提示（暂停/延期项目不计冲突） */
+    const conflicts = findWorkerActiveProjectConflicts(p);
+    if (conflicts.length) {
+      const choice = await showWorkerConflictDialog(conflicts, p.name);
+      if (choice === 'cancel' || !choice) {
+        renderConstruction();
+        return;
+      }
+      if (choice === 'remove') {
+        /* 只把冲突工人从之前项目移除，之前项目保持施工中，不影响其他工人；之后继续在当前项目开工 */
+        await removeConflictingWorkersFromPrevProjects(conflicts, p.assignedWorkerIds || []);
+      }
+      /* choice === 'proceed'：两项目都保留该工人，仍同时开工 */
     }
   }
   
@@ -11079,7 +11390,7 @@ function rwUpdateHint() {
   if (estHours > 0) {
     const hoursPerPerson = mins / 60;
     const suggested = Math.max(1, Math.ceil(estHours / hoursPerPerson));
-    suggestWorkers.innerHTML = `<span style="color:#2563eb;">${suggested}人</span> <span style="font-size:11px;color:#64748b;">(总工时÷时长)</span>`;
+    suggestWorkers.innerHTML = `<span style="color:#2563eb;">${suggested}人</span>`;
   } else {
     suggestWorkers.innerHTML = `<span style="font-size:11px;color:#64748b;">填写总工时后估算</span>`;
   }
@@ -12073,6 +12384,20 @@ function generateWorkerScheduleDescription(dateStr = null) {
   }
   
   const workersWithProjects = Object.keys(workerSchedule).filter(wid => workerSchedule[wid].length > 0);
+
+  // 当天内部任务按人员聚合（与项目并列显示在「人员安排」区）
+  const internalTasksByWorker = {};
+  getInternalTasks().forEach(t => {
+    if (t.status === TASK_STATUS.VERIFIED) return;
+    if (t.date !== dateStrFormatted) return;
+    const wids = getTaskWorkerIds(t);
+    if (!wids.length) return;
+    wids.forEach(wid => {
+      if (!internalTasksByWorker[wid]) internalTasksByWorker[wid] = [];
+      internalTasksByWorker[wid].push(t);
+    });
+  });
+  const allScheduleWids = Array.from(new Set([...workersWithProjects, ...Object.keys(internalTasksByWorker)]));
   
   const allWorkerIds = new Set();
   allTodayProjects.forEach(p => {
@@ -12322,12 +12647,12 @@ function generateWorkerScheduleDescription(dateStr = null) {
 
     description += `</div>`;
     description += `<div class="sched-zone person">`;
-    workersWithProjects.forEach(wid => {
+    allScheduleWids.forEach(wid => {
       const worker = getWorker(wid);
       const name = worker ? worker.name : "未知人员";
-      const projects = workerSchedule[wid];
+      const projects = workerSchedule[wid] || [];
       const workerSchedules = cache.workerSchedules.filter(s => s.workerId === wid && s.startDate === dateStr);
-      const itemCount = projects.length + workerSchedules.length;
+      const itemCount = projects.length + (internalTasksByWorker[wid] || []).length + workerSchedules.length;
 
       // 默认折叠；若卡片对应的工人名与当前登录身份名一致，则自动展开（只看自己的安排）
       const isSelf = currentUserName && name === currentUserName;
@@ -12453,7 +12778,13 @@ function generateWorkerScheduleDescription(dateStr = null) {
       
         description += `<div class="schedule-task">${taskDesc}</div>`;
       });
-    
+
+      (internalTasksByWorker[wid] || []).forEach(t => {
+        const statusText = { pending: '待开始', in_progress: '进行中', completed: '待审核', verified: '已审核' }[t.status] || t.status;
+        const timeStr = (t.scheduledStartTime || '') + (t.scheduledEndTime ? '~' + t.scheduledEndTime : '');
+        description += `<div class="schedule-task it-task-line">📋 <strong>${esc(t.name)}</strong>（内部任务·${esc(t.workType)}·${esc(statusText)}）${timeStr ? '，' + esc(timeStr) : ''}${t.estHours ? '，预计' + t.estHours + 'h' : ''}</div>`;
+      });
+
       const estHours = getWorkerDailyHours(dateStrFormatted, wid);
       const threshold = getWorkerWarnThreshold(dateStrFormatted, wid);
       if (isFinite(threshold) && estHours > threshold) {
@@ -14942,6 +15273,7 @@ function showInternalWorkLogModal() {
               <option value="仓库工作">仓库工作</option>
               <option value="送货">送货</option>
               <option value="外出安装">外出安装</option>
+              <option value="看现场量尺寸">看现场量尺寸</option>
               <option value="其他">其他</option>
             </select>
           </div>
@@ -15093,14 +15425,15 @@ function updateLeavesTabBadge() {
     : 0;
 
   document.querySelectorAll('[data-tab="leaves"]').forEach((btn) => {
-    btn.style.position = 'relative';
-    const existing = btn.querySelector('.badge-count');
+    const ico = btn.querySelector('.tab-ico');
+    const container = ico || btn;
+    const existing = container.querySelector('.badge-count');
     if (existing) existing.remove();
     if (count > 0) {
       const badge = document.createElement('span');
       badge.className = 'badge-count';
       badge.textContent = count > 99 ? '99+' : String(count);
-      btn.appendChild(badge);
+      container.appendChild(badge);
     }
   });
 }
@@ -15110,19 +15443,20 @@ function updateInternalTaskBadge() {
   const pendingCount = tasks.filter(t => t.status === TASK_STATUS.PENDING).length;
   const needVerifyCount = tasks.filter(t => t.status === TASK_STATUS.COMPLETED).length;
   const totalCount = pendingCount + needVerifyCount;
-  
+
   document.querySelectorAll('[data-tab="internalTasks"]').forEach(btn => {
-    btn.style.position = 'relative';
-    const existingBadge = btn.querySelector('.badge-count');
+    const ico = btn.querySelector('.tab-ico');
+    const container = ico || btn;
+    const existingBadge = container.querySelector('.badge-count');
     if (existingBadge) {
       existingBadge.remove();
     }
-    
+
     if (totalCount > 0) {
       const badge = document.createElement('span');
       badge.className = 'badge-count';
       badge.textContent = totalCount > 99 ? '99+' : totalCount;
-      btn.appendChild(badge);
+      container.appendChild(badge);
     }
   });
   updateLeavesTabBadge();
@@ -15155,18 +15489,29 @@ async function addInternalTask(task) {
     status: TASK_STATUS.PENDING,
     createdAt: new Date().toISOString()
   };
-  const tasks = getInternalTasks();
-  tasks.push(full);
-  await saveInternalTasks(tasks);
+  // 单条保存：仅 upsert 这一行，不再整表重写
+  cache.internalTasks.push(full);
+  const err = await repo.saveInternalTask(full);
+  if (err) {
+    // 云端失败回滚内存，避免内存与云端不一致
+    cache.internalTasks = cache.internalTasks.filter(t => t.id !== full.id);
+    renderInternalTasks();
+    updateInternalTaskBadge();
+  }
   return full;
 }
 
 async function updateInternalTask(id, updates) {
-  const tasks = getInternalTasks();
-  const idx = tasks.findIndex(t => t.id === id);
-  if (idx !== -1) {
-    tasks[idx] = { ...tasks[idx], ...updates };
-    await saveInternalTasks(tasks);
+  const idx = cache.internalTasks.findIndex(t => t.id === id);
+  if (idx === -1) return;
+  const prev = cache.internalTasks[idx];
+  const updated = { ...prev, ...updates };
+  cache.internalTasks[idx] = updated;
+  const err = await repo.saveInternalTask(updated);
+  if (err) {
+    cache.internalTasks[idx] = prev; // 云端失败回滚内存
+    renderInternalTasks();
+    updateInternalTaskBadge();
   }
 }
 
@@ -15176,10 +15521,18 @@ async function deleteInternalTask(id) {
     return;
   }
   if (!(await confirmDialog("确定删除这条内部任务记录？", "删除记录"))) return;
-  const tasks = getInternalTasks().filter(t => t.id !== id);
-  await saveInternalTasks(tasks);
+  const idx = cache.internalTasks.findIndex(t => t.id === id);
+  if (idx === -1) return;
+  const prev = cache.internalTasks[idx];
+  cache.internalTasks.splice(idx, 1);
+  const err = await repo.deleteInternalTask(id);
+  if (err) {
+    cache.internalTasks.push(prev); // 云端失败回滚内存
+    renderInternalTasks();
+  }
   toast("已删除");
   renderInternalTasks();
+  updateInternalTaskBadge();
 }
 
 /** 获取当前时间向上取整到10分钟的字符串，用于开始时间最小值 */
@@ -15195,6 +15548,15 @@ function getTodayMinTime() {
 function getDefaultStartTime() {
   const min = getTodayMinTime();
   return min > "08:00" ? min : "08:00";
+}
+
+/** 判断「任务日期 + 开始时间」是否早于当前时刻（用于施工时间不能早于现在） */
+function isScheduledStartInPast(dateStr, startTime) {
+  if (!dateStr) return false;
+  const [h, m] = (startTime || "00:00").split(":").map(Number);
+  const dt = new Date(`${dateStr}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`);
+  if (isNaN(dt.getTime())) return false;
+  return dt.getTime() < Date.now();
 }
 
 /** 根据任务日期刷新开始/结束时间选项 */
@@ -15234,7 +15596,11 @@ function showNewInternalTaskModal() {
   if (!perm.addTask()) { toast("无「下达内部任务」权限"); return; }
   closeNewInternalTaskModal();
   
-  const workerOptions = cache.workers.map(w => `<option value="${w.id}" data-name="${esc(w.name)}">${esc(w.name)}</option>`).join("");
+  const workerChips = cache.workers.map(w => `
+    <label class="it-worker-chip">
+      <input type="checkbox" value="${w.id}" data-name="${escAttr(w.name)}" onchange="updateNewTaskWorkerSummary()">
+      <span>${esc(w.name)}</span>
+    </label>`).join("");
   
   const popup = document.createElement("div");
   popup.id = "newInternalTaskModal";
@@ -15285,6 +15651,7 @@ function showNewInternalTaskModal() {
               <option value="仓库工作">仓库工作</option>
               <option value="送货">送货</option>
               <option value="外出安装">外出安装</option>
+              <option value="看现场量尺寸">看现场量尺寸</option>
               <option value="其他">其他</option>
             </select>
           </div>
@@ -15301,16 +15668,16 @@ function showNewInternalTaskModal() {
         
         <div style="margin-bottom:10px;">
           <label style="font-size:12px;font-weight:600;color:#333;">分配人员 <span style="color:#e53e3e;">*</span></label>
-          <select class="input" id="newTaskWorker" onchange="updateNewTaskWorkerName()" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
-            <option value="">请选择人员</option>
-            ${workerOptions}
-          </select>
+          <div class="it-worker-multi" id="newTaskWorkerList" style="margin-top:4px;">
+            ${workerChips}
+          </div>
+          <div class="it-worker-summary" id="newTaskWorkerSummary">未选择人员</div>
         </div>
         
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
           <div>
             <label style="font-size:12px;font-weight:600;color:#333;">任务日期 <span style="color:#e53e3e;">*</span></label>
-            <input class="input" type="date" id="newTaskDate" value="${todayStr()}" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="refreshTaskTimeOptions()" />
+            <input class="input" type="date" id="newTaskDate" value="${todayStr()}" min="${todayStr()}" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="refreshTaskTimeOptions()" />
           </div>
           <div>
             <label style="font-size:12px;font-weight:600;color:#333;">开始时间 <span style="color:#e53e3e;">*</span></label>
@@ -15341,14 +15708,31 @@ function showNewInternalTaskModal() {
     </div>`;
   document.body.appendChild(popup);
   initCustomSelects(popup);
+  updateNewTaskWorkerSummary();
   onTaskTimeChange();
 }
 
-function updateNewTaskWorkerName() {
-  const select = document.getElementById("newTaskWorker");
-  const option = select.options[select.selectedIndex];
-  if (option) {
-    select.setAttribute("data-name", option.getAttribute("data-name") || option.text);
+function getSelectedNewTaskWorkers() {
+  const container = document.getElementById("newTaskWorkerList");
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(cb => ({
+    id: cb.value,
+    name: cb.getAttribute("data-name") || cb.nextElementSibling?.textContent || cb.value
+  }));
+}
+
+function updateNewTaskWorkerSummary() {
+  const container = document.getElementById("newTaskWorkerList");
+  if (container) {
+    container.querySelectorAll(".it-worker-chip").forEach(label => {
+      const cb = label.querySelector('input[type="checkbox"]');
+      label.classList.toggle("checked", cb && cb.checked);
+    });
+  }
+  const selected = getSelectedNewTaskWorkers();
+  const summary = document.getElementById("newTaskWorkerSummary");
+  if (summary) {
+    summary.textContent = selected.length ? `已选 ${selected.length} 人：${selected.map(w => w.name).join("、")}` : "未选择人员";
   }
 }
 
@@ -15398,14 +15782,132 @@ function onTaskTimeChange() {
   if (hintEl) hintEl.style.display = (endEl.value && startEl.value && endEl.value < startEl.value) ? "inline" : "none";
 }
 
-function saveNewInternalTask() {
+/* ════════════ 内部任务：人员冲突检测 ════════════
+ * 保存前对每位被分配人员检查：请假 / 项目施工 / 个人日程 / 其他内部任务 时段冲突，以及当天工时超载。
+ * 仅提示、不硬拦截（用户可确认后强制保存）。 */
+
+/* 时间段重叠判断：支持跨天（结束 ≤ 开始 视为次日）。任一侧时间缺失返回 null（无法判定，调用方保守处理）。 */
+function _timeIntervals(s, e) {
+  const a = parseHM(s), b = parseHM(e);
+  if (a == null || b == null) return null;
+  if (b > a) return [[a, b]];
+  if (b === a) return [[a, a + 1]];
+  return [[a, 24 * 60], [0, b]]; // 跨天
+}
+function timeOverlap(s1, e1, s2, e2) {
+  const i1 = _timeIntervals(s1, e1), i2 = _timeIntervals(s2, e2);
+  if (!i1 || !i2) return null;
+  return i1.some(([a1, b1]) => i2.some(([a2, b2]) => a1 < b2 && a2 < b1));
+}
+
+/* 计算某工人某天加上本次任务后的预计累计工时（排除 excludeId 当前任务的旧工时） */
+function workerProjectedHours(date, wid, excludeId, newEst, newWorkerIds) {
+  let h = getWorkerDailyHours(date, wid);
+  const cur = getInternalTasks().find(t => t.id === excludeId);
+  if (cur && taskHasWorker(cur, wid) && cur.status !== TASK_STATUS.VERIFIED) {
+    h -= Number(cur.estHours) || 0;
+  }
+  if (newWorkerIds.includes(wid)) h += Number(newEst) || 0;
+  return h;
+}
+
+/* 请假类型中文 */
+function _leaveTypeLabel(lr) {
+  return ({ all: "全天", morning: "上午", afternoon: "下午", custom: "自定义" })[lr.startType] || "请假";
+}
+
+/* 检测草稿任务在每位分配人员身上的冲突。返回 [{worker, type, detail}] 数组。 */
+function detectInternalTaskConflicts(draft, excludeId, workerIds) {
+  const conflicts = [];
+  const date = draft.date;
+  const ts = draft.scheduledStartTime, te = draft.scheduledEndTime;
+  workerIds.forEach(wid => {
+    const w = getWorker(wid);
+    const wname = w ? w.name : wid;
+
+    // 1) 请假冲突
+    const leave = isWorkerOnLeave(wid, date);
+    if (leave && isLeaveConflict(leave, ts, te)) {
+      conflicts.push({ worker: wname, type: "请假", detail: `${_leaveTypeLabel(leave)} ${formatLeaveTime(leave)}` });
+    }
+
+    // 2) 项目施工冲突
+    getWorkerAssignmentsOnDate(wid, date).forEach(p => {
+      const ps = projectStart(p), pe = projectEnd(p);
+      const pst = ps ? hmOf(ps) : null, pet = pe ? hmOf(pe) : null;
+      const ov = (pst && pet) ? timeOverlap(ts, te, pst, pet) : null;
+      if (ov === null || ov) {
+        conflicts.push({ worker: wname, type: "项目施工", detail: `${p.name}${pst ? " " + pst + (pet ? "~" + pet : "起") : ""}` });
+      }
+    });
+
+    // 3) 个人日程冲突
+    cache.workerSchedules.filter(s => s.workerId === wid && s.startDate === date).forEach(s => {
+      const ov = timeOverlap(ts, te, s.startTime, s.endTime);
+      if (ov === null || ov) {
+        conflicts.push({ worker: wname, type: "个人日程", detail: `${s.title || "日程"} ${s.startTime || ""}${s.endTime ? "~" + s.endTime : ""}` });
+      }
+    });
+
+    // 4) 其他内部任务冲突
+    getInternalTasks().filter(t => t.id !== excludeId && t.status !== TASK_STATUS.VERIFIED && taskHasWorker(t, wid) && t.date === date).forEach(t => {
+      const ov = timeOverlap(ts, te, t.scheduledStartTime, t.scheduledEndTime);
+      if (ov === null || ov) {
+        conflicts.push({ worker: wname, type: "内部任务", detail: `${t.name} ${t.scheduledStartTime || ""}${t.scheduledEndTime ? "~" + t.scheduledEndTime : ""}` });
+      }
+    });
+
+    // 5) 工时超载
+    const projected = workerProjectedHours(date, wid, excludeId, draft.estHours, workerIds);
+    const thr = getWorkerWarnThreshold(date, wid);
+    if (isFinite(thr) && projected > thr) {
+      conflicts.push({ worker: wname, type: "工时超载", detail: `当天累计约 ${projected.toFixed(1)}h（阈值 ${thr}h）` });
+    }
+  });
+  return conflicts;
+}
+
+/* 冲突提示弹窗：仅提示，确认后仍可保存 */
+function showTaskConflictModal(conflicts, onConfirm) {
+  const mask = document.createElement("div");
+  mask.className = "modal-mask";
+  mask.id = "taskConflictModalMask";
+  const itemsHtml = conflicts.map(c =>
+    `<li><span class="it-conflict-type">${esc(c.type)}</span><b>${esc(c.worker)}</b>：${esc(c.detail)}</li>`
+  ).join("");
+  mask.innerHTML = `<div class="modal" style="max-width:400px;">
+    <div class="modal-head"><h3>⚠️ 检测到 ${conflicts.length} 项人员冲突</h3></div>
+    <div class="modal-body">
+      <p style="margin:0 0 8px;color:#6b7280;font-size:13px;">以下人员在该时段可能已有安排，确认仍要保存吗？</p>
+      <ul class="it-conflict-list">${itemsHtml}</ul>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeTaskConflictModal(this)">返回修改</button>
+      <button class="btn primary" onclick="confirmTaskConflictModal(this)">仍要保存</button>
+    </div>
+  </div>`;
+  mask._onConfirm = onConfirm;
+  document.body.appendChild(mask);
+}
+function closeTaskConflictModal(btn) {
+  const mask = btn.closest(".modal-mask");
+  if (mask) mask.remove();
+}
+function confirmTaskConflictModal(btn) {
+  const mask = btn.closest(".modal-mask");
+  const cb = mask && mask._onConfirm;
+  if (mask) mask.remove();
+  if (cb) cb();
+}
+
+async function saveNewInternalTask() {
   if (!perm.addTask()) { toast("无权限下达内部任务"); return; }
   const name = document.getElementById("newTaskName").value.trim();
   const workType = document.getElementById("newTaskType").value;
   const level = document.getElementById("newTaskLevel").value;
-  const workerId = document.getElementById("newTaskWorker").value;
-  const workerName = document.getElementById("newTaskWorker").getAttribute("data-name") || 
-                     document.getElementById("newTaskWorker").options[document.getElementById("newTaskWorker").selectedIndex]?.text || "";
+  const selectedWorkers = getSelectedNewTaskWorkers();
+  const workerId = selectedWorkers.map(w => w.id).join(",");
+  const workerName = selectedWorkers.map(w => w.name).join(",");
   const date = document.getElementById("newTaskDate").value;
   const scheduledStartTime = document.getElementById("newTaskStartTime").value;
   const scheduledEndTime = document.getElementById("newTaskEndTime").value;
@@ -15417,34 +15919,49 @@ function saveNewInternalTask() {
   const address = document.getElementById("newTaskAddress").value.trim();
 
   if (!name) { toast("请输入任务名称"); return; }
-  if (!workerId) { toast("请选择分配人员"); return; }
+  if (!selectedWorkers.length) { toast("请选择分配人员"); return; }
   if (!date) { toast("请选择任务日期"); return; }
   if (!scheduledStartTime) { toast("请选择开始时间"); return; }
   if (!scheduledEndTime) { toast("请选择结束时间"); return; }
   if (!estHours || estHours <= 0) { toast("请输入预计工时"); return; }
+  if (isScheduledStartInPast(date, scheduledStartTime)) {
+    toast("施工开始时间不能早于当前时间，请选择现在或之后的时间");
+    return;
+  }
 
+  const draft = { name, workType, level, date, scheduledStartTime, scheduledEndTime, estHours, note, customerName, contactName, contactPhone, address };
+  const workerIds = selectedWorkers.map(w => w.id);
+  const conflicts = detectInternalTaskConflicts(draft, null, workerIds);
+  if (conflicts.length) {
+    showTaskConflictModal(conflicts, () => doSaveNewInternalTask({ ...draft, workerId, workerName }));
+    return;
+  }
+  doSaveNewInternalTask({ ...draft, workerId, workerName });
+}
+
+function doSaveNewInternalTask(d) {
   // 选填的客户信息也写入客户历史，供预约任务/后续下达自动补全
-  if (customerName) {
-    try { upsertCustomer(customerName, contactPhone, address); } catch (e) { /* 不影响下达 */ }
+  if (d.customerName) {
+    try { upsertCustomer(d.customerName, d.contactPhone, d.address); } catch (e) { /* 不影响下达 */ }
   }
 
   addInternalTask({
-    name,
-    workType,
-    level,
-    workerId,
-    workerName,
-    date,
-    scheduledStartTime,
-    scheduledEndTime,
-    estHours,
-    note,
-    customerName,
-    contactName,
-    contactPhone,
-    address
+    name: d.name,
+    workType: d.workType,
+    level: d.level,
+    workerId: d.workerId,
+    workerName: d.workerName,
+    date: d.date,
+    scheduledStartTime: d.scheduledStartTime,
+    scheduledEndTime: d.scheduledEndTime,
+    estHours: d.estHours,
+    note: d.note,
+    customerName: d.customerName,
+    contactName: d.contactName,
+    contactPhone: d.contactPhone,
+    address: d.address
   });
-  
+
   toast("任务已下达");
   closeNewInternalTaskModal();
   renderInternalTasks();
@@ -15464,34 +15981,33 @@ function startInternalTask(id) {
   updateInternalTaskBadge();
 }
 
-function completeInternalTask(id) {
-  const tasks = getInternalTasks();
-  const task = tasks.find(t => t.id === id);
-  if (!task) return;
-  if (!perm.completeTask(task)) { toast("无「完成内部任务」权限"); return; }
-  
-  const actualEndTime = new Date().toLocaleTimeString('zh-CN', {hour: '2-digit', minute:'2-digit'});
+/* 完成任务核心逻辑（按钮与批量共用）：按开始时间戳算实际工时，无开始时间戳则记 0 */
+async function completeInternalTaskCore(id) {
+  const task = getInternalTasks().find(t => t.id === id);
+  if (!task) return false;
+  const actualEndTime = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   const endTimestamp = Date.now();
-  
   let actualHours = 0;
   if (task.startTimestamp) {
     const diffMs = endTimestamp - task.startTimestamp;
-    actualHours = (diffMs / (1000 * 60 * 60)).toFixed(1);
+    actualHours = Math.round((diffMs / 3600000) * 10) / 10;
+    if (actualHours < 0) actualHours = 0; // 防御：开始时间戳异常
   }
-  
-  let finalHours = Number(actualHours);
-  if (isNaN(finalHours)) {
-    finalHours = task.estHours;
-  }
-  
   updateInternalTask(id, {
     status: TASK_STATUS.COMPLETED,
     actualEndTime,
     endTimestamp,
-    actualHours: finalHours,
-    calculatedHours: Number(actualHours)
+    actualHours,
+    calculatedHours: actualHours
   });
-  
+  return true;
+}
+
+function completeInternalTask(id) {
+  const task = getInternalTasks().find(t => t.id === id);
+  if (!task) return;
+  if (!perm.completeTask(task)) { toast("无「完成内部任务」权限"); return; }
+  completeInternalTaskCore(id);
   toast("任务已完成，等待审核");
   renderInternalTasks();
   updateInternalTaskBadge();
@@ -15573,6 +16089,404 @@ function closeVerifyModal() {
   if (mask) mask.remove();
 }
 
+/* 属性值转义（用于 input value="..." 等属性上下文） */
+function escAttr(s) {
+  return (s == null ? "" : String(s))
+    .replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* ════════════ 内部任务：批量操作 ════════════ */
+function onBatchCheck(id, checked) {
+  if (checked) batchSelected.add(id); else batchSelected.delete(id);
+  renderInternalTaskBatchBar();
+}
+
+function toggleBatchMode() {
+  batchMode = !batchMode;
+  if (!batchMode) batchSelected.clear();
+  const btn = document.getElementById("btnBatchInternalTask");
+  if (btn) btn.classList.toggle("active", batchMode);
+  renderInternalTasks();
+}
+
+function toggleBatchSelectAll(checked) {
+  const ids = getFilteredInternalTasks().map(t => t.id);
+  if (checked) ids.forEach(id => batchSelected.add(id));
+  else batchSelected.clear();
+  renderInternalTasks();
+}
+
+function renderInternalTaskBatchBar() {
+  const bar = document.getElementById("internalTaskBatchBar");
+  if (!bar) return;
+  if (!batchMode) { bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  const countEl = bar.querySelector("#batchCount");
+  if (countEl) countEl.textContent = batchSelected.size;
+  const completeBtn = bar.querySelector("#btnBatchComplete");
+  const verifyBtn = bar.querySelector("#btnBatchVerify");
+  if (completeBtn) completeBtn.disabled = batchSelected.size === 0 || !perm.completeTask({});
+  if (verifyBtn) verifyBtn.disabled = batchSelected.size === 0 || !perm.verifyTask();
+}
+
+async function batchCompleteSelected() {
+  if (!perm.completeTask({})) { toast("无「完成内部任务」权限"); return; }
+  const ids = [...batchSelected];
+  let n = 0;
+  for (const id of ids) {
+    const t = getInternalTasks().find(x => x.id === id);
+    if (t && t.status === TASK_STATUS.IN_PROGRESS) { await completeInternalTaskCore(id); n++; }
+  }
+  batchSelected.clear();
+  renderInternalTasks();
+  updateInternalTaskBadge();
+  toast(`已批量完成 ${n} 条任务`);
+}
+
+async function batchVerifySelected() {
+  if (!perm.verifyTask()) { toast("无「审核内部任务」权限"); return; }
+  const ids = [...batchSelected];
+  let n = 0;
+  for (const id of ids) {
+    const t = getInternalTasks().find(x => x.id === id);
+    if (!t || t.status !== TASK_STATUS.COMPLETED) continue;
+    const def = (t.calculatedHours != null && t.calculatedHours !== undefined)
+      ? Number(t.calculatedHours)
+      : (Number(t.actualHours) || Number(t.estHours) || 0);
+    await verifyInternalTaskCommit(id, def, "");
+    n++;
+  }
+  batchSelected.clear();
+  renderInternalTasks();
+  renderStats();
+  updateInternalTaskBadge();
+  toast(`已批量审核 ${n} 条任务`);
+}
+
+/* ════════════ 内部任务：编辑 ════════════ */
+function openEditInternalTaskModal(id) {
+  if (!perm.addTask()) { toast("无「编辑内部任务」权限"); return; }
+  const task = getInternalTasks().find(t => t.id === id);
+  if (!task) return;
+  closeEditInternalTaskModal();
+
+  const taskWids = getTaskWorkerIds(task);
+  const workerChips = cache.workers.map(w => {
+    const checked = taskWids.includes(w.id) ? "checked" : "";
+    return `
+    <label class="it-worker-chip">
+      <input type="checkbox" value="${w.id}" data-name="${escAttr(w.name)}" ${checked} onchange="updateEditTaskWorkerSummary()">
+      <span>${esc(w.name)}</span>
+    </label>`;
+  }).join("");
+
+  const popup = document.createElement("div");
+  popup.id = "editInternalTaskModal";
+  popup.className = "modal-mask";
+  popup.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:420px;width:95%;max-height:90vh;overflow:hidden;">
+      <div class="modal-head">
+        <h3>✏️ 编辑内部任务</h3>
+        <button class="modal-close" onclick="closeEditInternalTaskModal()">×</button>
+      </div>
+      <div class="modal-body" style="padding:12px;overflow-y:auto;max-height:calc(90vh - 60px);">
+        <input type="hidden" id="editTaskId" value="${escAttr(id)}" />
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">任务名称 <span style="color:#e53e3e;">*</span></label>
+          <input class="input" id="editTaskName" value="${escAttr(task.name)}" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">工作类型</label>
+            <select class="input" id="editTaskType" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
+              ${["仓库工作","送货","外出安装","看现场量尺寸","其他"].map(v => `<option value="${v}" ${v === task.workType ? 'selected' : ''}>${v}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">工时等级</label>
+            <select class="input" id="editTaskLevel" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">
+              ${["初级","中级","高级","特级"].map(v => `<option value="${v}" ${v === task.level ? 'selected' : ''}>${v}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">分配人员 <span style="color:#e53e3e;">*</span></label>
+          <div class="it-worker-multi" id="editTaskWorkerList" style="margin-top:4px;">
+            ${workerChips}
+          </div>
+          <div class="it-worker-summary" id="editTaskWorkerSummary">未选择人员</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">任务日期 <span style="color:#e53e3e;">*</span></label>
+            <input class="input" type="date" id="editTaskDate" value="${escAttr(task.date)}" min="${todayStr()}" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="refreshEditTaskTimeOptions()" />
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">开始时间 <span style="color:#e53e3e;">*</span></label>
+            <select class="input" id="editTaskStartTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="refreshEditTaskEndTimeMin()">
+              ${generateTimeOptions(
+                (task.date === todayStr() && (task.scheduledStartTime || "08:00") < getTodayMinTime())
+                  ? getDefaultStartTime()
+                  : (task.scheduledStartTime || "08:00"),
+                task.date === todayStr() ? getTodayMinTime() : null
+              )}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#333;">结束时间 <span style="color:#e53e3e;">*</span> <span id="editTaskEndNextDayHint" style="display:none;font-size:10px;color:#0891b2;">(次日)</span></label>
+            <select class="input" id="editTaskEndTime" style="width:100%;margin-top:4px;padding:4px 6px;font-size:12px;" onchange="onEditTaskTimeChange()">
+              ${generateTimeOptions(task.scheduledEndTime || "10:00")}
+            </select>
+          </div>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">预计工时(小时) <span style="color:#e53e3e;">*</span></label>
+          <input class="input" type="number" min="0" step="0.1" id="editTaskEstHours" value="${escAttr(task.estHours)}" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+        </div>
+        <div style="margin-bottom:12px;">
+          <label style="font-size:12px;font-weight:600;color:#333;">任务备注</label>
+          <textarea class="input" id="editTaskNote" rows="2" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;">${esc(task.note)}</textarea>
+        </div>
+        <div style="margin-bottom:12px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+          <div style="font-size:12px;font-weight:600;color:#0891b2;margin-bottom:8px;">📇 客户信息（选填）</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div>
+              <label style="font-size:12px;font-weight:600;color:#333;">客户名称</label>
+              <input class="input" id="editTaskCustomer" value="${escAttr(task.customerName)}" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+            </div>
+            <div>
+              <label style="font-size:12px;font-weight:600;color:#333;">联系人</label>
+              <input class="input" id="editTaskContact" value="${escAttr(task.contactName)}" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+            </div>
+            <div>
+              <label style="font-size:12px;font-weight:600;color:#333;">联系电话</label>
+              <input class="input" id="editTaskPhone" value="${escAttr(task.contactPhone)}" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+            </div>
+            <div>
+              <label style="font-size:12px;font-weight:600;color:#333;">安装地址</label>
+              <input class="input" id="editTaskAddress" value="${escAttr(task.address)}" style="width:100%;margin-top:4px;padding:6px 8px;font-size:13px;" />
+            </div>
+          </div>
+        </div>
+        <button class="btn primary" onclick="saveEditInternalTask()" style="width:100%;padding:8px;font-size:14px;">保存修改</button>
+      </div>
+    </div>`;
+  document.body.appendChild(popup);
+  initCustomSelects(popup);
+  updateEditTaskWorkerSummary();
+  onEditTaskTimeChange();
+}
+
+function closeEditInternalTaskModal() {
+  const mask = document.getElementById("editInternalTaskModal");
+  if (mask) mask.remove();
+}
+
+function getSelectedEditTaskWorkers() {
+  const container = document.getElementById("editTaskWorkerList");
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(cb => ({
+    id: cb.value,
+    name: cb.getAttribute("data-name") || cb.nextElementSibling?.textContent || cb.value
+  }));
+}
+
+function updateEditTaskWorkerSummary() {
+  const container = document.getElementById("editTaskWorkerList");
+  if (container) {
+    container.querySelectorAll(".it-worker-chip").forEach(label => {
+      const cb = label.querySelector('input[type="checkbox"]');
+      label.classList.toggle("checked", cb && cb.checked);
+    });
+  }
+  const selected = getSelectedEditTaskWorkers();
+  const summary = document.getElementById("editTaskWorkerSummary");
+  if (summary) {
+    summary.textContent = selected.length ? `已选 ${selected.length} 人：${selected.map(w => w.name).join("、")}` : "未选择人员";
+  }
+}
+
+function refreshEditTaskTimeOptions() {
+  const dateEl = document.getElementById("editTaskDate");
+  const startEl = document.getElementById("editTaskStartTime");
+  const endEl = document.getElementById("editTaskEndTime");
+  if (!dateEl || !startEl || !endEl) return;
+  const isToday = dateEl.value === todayStr();
+  const minTime = isToday ? getTodayMinTime() : null;
+  const curStart = startEl.value;
+  startEl.innerHTML = generateTimeOptions((isToday && curStart < (minTime || "")) ? getDefaultStartTime() : (curStart || "08:00"), minTime);
+  refreshEditTaskEndTimeMin();
+}
+
+function refreshEditTaskEndTimeMin() {
+  const startEl = document.getElementById("editTaskStartTime");
+  const endEl = document.getElementById("editTaskEndTime");
+  if (!startEl || !endEl) return;
+  const curEnd = endEl.value || "10:00";
+  endEl.innerHTML = generateTimeOptions(curEnd, null);
+  onEditTaskTimeChange();
+}
+
+function onEditTaskTimeChange() {
+  const startEl = document.getElementById("editTaskStartTime");
+  const endEl = document.getElementById("editTaskEndTime");
+  const estEl = document.getElementById("editTaskEstHours");
+  const hintEl = document.getElementById("editTaskEndNextDayHint");
+  if (!startEl || !endEl || !estEl) return;
+  const est = computeEstHours(startEl.value, endEl.value);
+  if (est > 0) estEl.value = est;
+  if (hintEl) hintEl.style.display = (endEl.value && startEl.value && endEl.value < startEl.value) ? "inline" : "none";
+}
+
+function saveEditInternalTask() {
+  if (!perm.addTask()) { toast("无权限编辑内部任务"); return; }
+  const id = document.getElementById("editTaskId").value;
+  const existing = getInternalTasks().find(t => t.id === id);
+  const name = document.getElementById("editTaskName").value.trim();
+  const workType = document.getElementById("editTaskType").value;
+  const level = document.getElementById("editTaskLevel").value;
+  const selectedWorkers = getSelectedEditTaskWorkers();
+  const workerId = selectedWorkers.map(w => w.id).join(",");
+  const workerName = selectedWorkers.map(w => w.name).join(",");
+  const date = document.getElementById("editTaskDate").value;
+  const scheduledStartTime = document.getElementById("editTaskStartTime").value;
+  const scheduledEndTime = document.getElementById("editTaskEndTime").value;
+  const estHours = Number(document.getElementById("editTaskEstHours").value);
+  const note = document.getElementById("editTaskNote").value.trim();
+  const customerName = document.getElementById("editTaskCustomer").value.trim();
+  const contactName = document.getElementById("editTaskContact").value.trim();
+  const contactPhone = document.getElementById("editTaskPhone").value.trim();
+  const address = document.getElementById("editTaskAddress").value.trim();
+
+  if (!name) { toast("请输入任务名称"); return; }
+  if (!selectedWorkers.length) { toast("请选择分配人员"); return; }
+  if (!date) { toast("请选择任务日期"); return; }
+  if (!scheduledStartTime || !scheduledEndTime) { toast("请选择起止时间"); return; }
+  if (!estHours || estHours <= 0) { toast("请输入预计工时"); return; }
+  if (existing && existing.status === TASK_STATUS.PENDING && isScheduledStartInPast(date, scheduledStartTime)) {
+    toast("施工开始时间不能早于当前时间，请选择现在或之后的时间");
+    return;
+  }
+
+  const draft = { name, workType, level, date, scheduledStartTime, scheduledEndTime, estHours, note, customerName, contactName, contactPhone, address };
+  const workerIds = selectedWorkers.map(w => w.id);
+  const conflicts = detectInternalTaskConflicts(draft, id, workerIds);
+  if (conflicts.length) {
+    showTaskConflictModal(conflicts, () => doSaveEditInternalTask(id, { ...draft, workerId, workerName }));
+    return;
+  }
+  doSaveEditInternalTask(id, { ...draft, workerId, workerName });
+}
+
+function doSaveEditInternalTask(id, d) {
+  updateInternalTask(id, {
+    name: d.name, workType: d.workType, level: d.level, workerId: d.workerId, workerName: d.workerName, date: d.date,
+    scheduledStartTime: d.scheduledStartTime, scheduledEndTime: d.scheduledEndTime, estHours: d.estHours, note: d.note,
+    customerName: d.customerName, contactName: d.contactName, contactPhone: d.contactPhone, address: d.address
+  });
+  if (d.customerName) { try { upsertCustomer(d.customerName, d.contactPhone, d.address); } catch (e) { /* 不影响保存 */ } }
+
+  toast("任务已更新");
+  closeEditInternalTaskModal();
+  renderInternalTasks();
+  updateInternalTaskBadge();
+}
+
+/* ════════════ 内部任务：导出 Excel ════════════ */
+async function exportInternalTasks() {
+  const tasks = getFilteredInternalTasks();
+  if (!tasks.length) { toast("当前筛选下暂无任务可导出"); return; }
+  try {
+    const ExcelJS = await ensureExcelJS();
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("内部任务");
+    ws.columns = [
+      { header: "任务名称", key: "name", width: 24 },
+      { header: "工作类型", key: "workType", width: 12 },
+      { header: "等级", key: "level", width: 8 },
+      { header: "人员", key: "workerName", width: 10 },
+      { header: "日期", key: "date", width: 12 },
+      { header: "安排起", key: "sst", width: 9 },
+      { header: "安排止", key: "set", width: 9 },
+      { header: "预计(h)", key: "est", width: 9 },
+      { header: "实际起", key: "ast", width: 9 },
+      { header: "实际止", key: "aet", width: 9 },
+      { header: "工时(h)", key: "hours", width: 9 },
+      { header: "状态", key: "status", width: 10 },
+      { header: "客户", key: "cust", width: 16 },
+      { header: "联系人", key: "contact", width: 10 },
+      { header: "电话", key: "phone", width: 14 },
+      { header: "地址", key: "addr", width: 24 },
+      { header: "备注", key: "note", width: 24 }
+    ];
+    const statusText = { pending: "待开始", in_progress: "进行中", completed: "待审核", verified: "已审核" };
+    tasks.forEach(t => {
+      ws.addRow({
+        name: t.name, workType: t.workType, level: t.level, workerName: t.workerName,
+        date: t.date, sst: t.scheduledStartTime, set: t.scheduledEndTime, est: t.estHours,
+        ast: t.actualStartTime, aet: t.actualEndTime,
+        hours: (t.calculatedHours != null && t.calculatedHours !== undefined) ? t.calculatedHours : (t.actualHours || ""),
+        status: statusText[t.status] || t.status,
+        cust: t.customerName, contact: t.contactName, phone: t.contactPhone, addr: t.address, note: t.note
+      });
+    });
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `内部任务_${todayStr()}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("已导出 Excel");
+  } catch (e) {
+    console.error("导出内部任务失败:", e);
+    toast("导出失败，请重试");
+  }
+}
+
+/* 审核提交核心（单条按钮与批量共用）：更新状态 + 计入内部工时统计 */
+async function verifyInternalTaskCommit(id, hours, note) {
+  const task = getInternalTasks().find(t => t.id === id);
+  if (!task) return false;
+  await updateInternalTask(id, {
+    status: TASK_STATUS.VERIFIED,
+    verifiedAt: new Date().toLocaleString('zh-CN'),
+    actualHours: hours,
+    verifyNote: note
+  });
+  const wids = getTaskWorkerIds(task);
+  const wnames = getTaskWorkerNames(task);
+  const baseNote = note ? `审核备注: ${note}${task.note ? ' | ' + task.note : ''}` : (task.note || '');
+  if (wids.length) {
+    wids.forEach((wid, idx) => {
+      addInternalWorkLog({
+        workerId: wid,
+        workerName: wnames[idx] || getWorker(wid)?.name || wid,
+        workType: task.workType,
+        date: task.date,
+        startTime: task.actualStartTime || task.scheduledStartTime || '-',
+        endTime: task.actualEndTime || '-',
+        hours: hours,
+        level: task.level,
+        note: baseNote
+      });
+    });
+  } else {
+    addInternalWorkLog({
+      workerId: task.workerId,
+      workerName: task.workerName,
+      workType: task.workType,
+      date: task.date,
+      startTime: task.actualStartTime || task.scheduledStartTime || '-',
+      endTime: task.actualEndTime || '-',
+      hours: hours,
+      level: task.level,
+      note: baseNote
+    });
+  }
+  return true;
+}
+
 function doVerifyInternalTask(id) {
   const verifyHours = Number(document.getElementById("verifyHours").value);
   const verifyNote = document.getElementById("verifyNote").value.trim();
@@ -15582,29 +16496,7 @@ function doVerifyInternalTask(id) {
     return;
   }
   
-  const tasks = getInternalTasks();
-  const task = tasks.find(t => t.id === id);
-  if (!task) return;
-  
-  updateInternalTask(id, {
-    status: TASK_STATUS.VERIFIED,
-    verifiedAt: new Date().toLocaleString('zh-CN'),
-    actualHours: verifyHours,
-    verifyNote: verifyNote
-  });
-  
-  addInternalWorkLog({
-    workerId: task.workerId,
-    workerName: task.workerName,
-    workType: task.workType,
-    date: task.date,
-    startTime: task.actualStartTime || task.scheduledStartTime || '-',
-    endTime: task.actualEndTime || '-',
-    hours: verifyHours,
-    level: task.level,
-    note: verifyNote ? `审核备注: ${verifyNote}${task.note ? ' | ' + task.note : ''}` : (task.note || '')
-  });
-  
+  verifyInternalTaskCommit(id, verifyHours, verifyNote);
   closeVerifyModal();
   toast("审核通过，工时已计入内部工时统计");
   renderInternalTasks();
@@ -15843,148 +16735,189 @@ function initCustomSelects(container) {
 document.addEventListener("click", () => closeAllCS());
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAllCS(); });
 
-function renderInternalTasks() {
-  const container = document.getElementById("internalTaskList");
-  if (!container) return;
-  
+/* 内部任务筛选 + 搜索 + 排序：列表渲染与导出共用 */
+function getFilteredInternalTasks() {
   const tasks = getInternalTasks();
   const statusFilter = document.getElementById("internalTaskStatusFilter")?.value || "";
   const workerFilter = document.getElementById("internalTaskWorkerFilter")?.value || "";
   const typeFilter = document.getElementById("internalTaskTypeFilter")?.value || "";
   const dateFilter = document.getElementById("internalTaskDateFilter")?.value || "3days";
-  
+  const search = (document.getElementById("internalTaskSearch")?.value || "").trim().toLowerCase();
+  const sortBy = document.getElementById("internalTaskSort")?.value || "status";
+
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  
+
   const filtered = tasks.filter(t => {
     if (statusFilter && t.status !== statusFilter) return false;
-    if (workerFilter && t.workerId !== workerFilter) return false;
+    if (workerFilter && !taskHasWorker(t, workerFilter)) return false;
     if (typeFilter && t.workType !== typeFilter) return false;
-    
-    if (dateFilter === "3days") {
-      if (t.status === TASK_STATUS.PENDING || t.status === TASK_STATUS.IN_PROGRESS) return true;
-      const taskDate = new Date(t.date);
-      taskDate.setHours(0, 0, 0, 0);
-      const diffDays = (taskDate - today) / (1000 * 60 * 60 * 24);
-      return diffDays >= -2 && diffDays <= 0;
-    } else if (dateFilter === "7days") {
-      if (t.status === TASK_STATUS.PENDING || t.status === TASK_STATUS.IN_PROGRESS) return true;
-      const taskDate = new Date(t.date);
-      taskDate.setHours(0, 0, 0, 0);
-      const diffDays = (taskDate - today) / (1000 * 60 * 60 * 24);
-      return diffDays >= -6 && diffDays <= 0;
+    if (search) {
+      const hay = [t.name, t.customerName, t.workerName, t.contactName, t.note].join(" ").toLowerCase();
+      if (!hay.includes(search)) return false;
     }
-    
+    if (dateFilter === "3days") {
+      // 待开始/进行中/待审核 始终可见，已审核才按日期归档
+      if (t.status === TASK_STATUS.PENDING || t.status === TASK_STATUS.IN_PROGRESS || t.status === TASK_STATUS.COMPLETED) return true;
+      const taskDate = new Date(t.date); taskDate.setHours(0, 0, 0, 0);
+      const diffDays = (taskDate - today) / 86400000;
+      // 窗口含未来2天，覆盖即将到来的安排（如 8/16）
+      return diffDays >= -2 && diffDays <= 2;
+    } else if (dateFilter === "7days") {
+      if (t.status === TASK_STATUS.PENDING || t.status === TASK_STATUS.IN_PROGRESS || t.status === TASK_STATUS.COMPLETED) return true;
+      const taskDate = new Date(t.date); taskDate.setHours(0, 0, 0, 0);
+      const diffDays = (taskDate - today) / 86400000;
+      // 窗口含未来6天
+      return diffDays >= -6 && diffDays <= 6;
+    }
     return true;
-  }).sort((a, b) => {
-    const statusOrder = { pending: 0, in_progress: 1, completed: 2, verified: 3 };
-    if (statusOrder[a.status] !== statusOrder[b.status]) {
+  });
+
+  const statusOrder = { pending: 0, in_progress: 1, completed: 2, verified: 3 };
+  filtered.sort((a, b) => {
+    if (sortBy === "date") {
+      if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+      return statusOrder[a.status] - statusOrder[b.status];
+    } else if (sortBy === "worker") {
+      const aw = taskWorkerNamesText(a), bw = taskWorkerNamesText(b);
+      if (aw !== bw) return aw < bw ? -1 : 1;
       return statusOrder[a.status] - statusOrder[b.status];
     }
+    if (statusOrder[a.status] !== statusOrder[b.status]) return statusOrder[a.status] - statusOrder[b.status];
     return new Date(b.date) - new Date(a.date);
   });
-  
-  if (filtered.length === 0) {
-    container.innerHTML = '<div class="empty">暂无内部任务</div>';
-    return;
+  return filtered;
+}
+
+function renderInternalTaskCard(t) {
+  const statusText = { pending: '待开始', in_progress: '进行中', completed: '待审核', verified: '已审核' };
+  const statusHint = { pending: '未开始', in_progress: '正在施工', completed: '等待审核', verified: '已结案' };
+
+  // 逾期（待开始且已过安排日）/ 超时（进行中超过 WORKING_TIMEOUT）
+  const todayStrVal = todayStr();
+  const isOverdue = t.status === TASK_STATUS.PENDING && t.date && t.date < todayStrVal;
+  const isTimeout = t.status === TASK_STATUS.IN_PROGRESS && t.startTimestamp && (Date.now() - t.startTimestamp) > WORKING_TIMEOUT_HOURS * 3600 * 1000;
+  const alertTag = isOverdue ? '<span class="it-tag it-tag--alert">⚠ 逾期</span>'
+    : isTimeout ? '<span class="it-tag it-tag--alert it-tag--alert-warn">⏱ 超时</span>' : '';
+
+  const calcH = t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours);
+  const shortDate = t.date ? t.date.slice(5) : '';
+  const isOvernight = t.scheduledStartTime && t.scheduledEndTime && t.scheduledEndTime < t.scheduledStartTime;
+  const endLabel = (isOvernight ? '次日 ' : '') + (t.scheduledEndTime || '-');
+
+  const svgClock = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>`;
+  const svgBuilding = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 21v-6h6v6"/></svg>`;
+  const svgUser = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>`;
+  const svgPhone = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`;
+  const svgPin = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`;
+
+  let actionButtons = '';
+  if (t.status === TASK_STATUS.PENDING) {
+    actionButtons = perm.startTask(t) ? `<button class="it-action-btn it-action-btn--primary" onclick="startInternalTask('${t.id}')"><span class="it-btn-icon">▶</span>任务开始</button>` : '';
+  } else if (t.status === TASK_STATUS.IN_PROGRESS) {
+    actionButtons = perm.completeTask(t) ? `<button class="it-action-btn it-action-btn--success" onclick="completeInternalTask('${t.id}')"><span class="it-btn-icon">✓</span>任务完成</button>` : '';
+  } else if (t.status === TASK_STATUS.COMPLETED) {
+    actionButtons = perm.verifyTask() ? `<button class="it-action-btn it-action-btn--primary" onclick="showVerifyModal('${t.id}')"><span class="it-btn-icon">✎</span>审核</button>` : '';
   }
-  
-  container.innerHTML = filtered.map(t => {
-    const statusText = { pending: '待开始', in_progress: '进行中', completed: '待审核', verified: '已审核' };
 
-    const calcH = t.calculatedHours !== undefined ? t.calculatedHours : (t.actualHours || t.estHours);
-    const shortDate = t.date ? t.date.slice(5) : '';
-    const isOvernight = t.scheduledStartTime && t.scheduledEndTime && t.scheduledEndTime < t.scheduledStartTime;
-    const endLabel = (isOvernight ? '次日 ' : '') + (t.scheduledEndTime || '-');
-
-    const svgClock = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>`;
-    const svgBuilding = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 21v-6h6v6"/></svg>`;
-    const svgUser = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>`;
-    const svgPhone = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>`;
-    const svgPin = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>`;
-
-    let actionButtons = '';
-    if (t.status === TASK_STATUS.PENDING) {
-      actionButtons = perm.startTask(t) ? `<button class="it-action-btn it-action-btn--primary" onclick="startInternalTask('${t.id}')">任务开始</button>` : '';
-    } else if (t.status === TASK_STATUS.IN_PROGRESS) {
-      actionButtons = perm.completeTask(t) ? `<button class="it-action-btn it-action-btn--success" onclick="completeInternalTask('${t.id}')">任务完成</button>` : '';
-    } else if (t.status === TASK_STATUS.COMPLETED) {
-      actionButtons = perm.verifyTask() ? `<button class="it-action-btn it-action-btn--primary" onclick="showVerifyModal('${t.id}')">审核</button>` : '';
-    }
-
-    const timeInfo = t.status === TASK_STATUS.PENDING && t.scheduledStartTime && t.scheduledEndTime
+  const timeInfo = t.status === TASK_STATUS.PENDING && t.scheduledStartTime && t.scheduledEndTime
+    ? `<div class="it-time-box">
+         <div class="it-tline it-tline--main">${svgClock} <b>${t.scheduledStartTime} → ${endLabel}</b><span class="it-duration">预计 ${fmtHours(t.estHours)}h</span></div>
+       </div>`
+    : t.status === TASK_STATUS.IN_PROGRESS
       ? `<div class="it-time-box">
-           <div class="it-tline">${svgCal(12)} 安排：<b>${t.scheduledStartTime} → ${endLabel}</b><span class="it-duration">(${fmtHours(t.estHours)}h)</span></div>
+           <div class="it-tline it-tline--main">${svgClock} <b>${t.scheduledStartTime || '-'} → ${endLabel}</b><span class="it-duration">预计 ${fmtHours(t.estHours)}h</span></div>
+           <div class="it-tline">实际开始：<b>${t.actualStartTime || '-'}</b></div>
          </div>`
-      : t.status === TASK_STATUS.IN_PROGRESS
+      : t.status === TASK_STATUS.COMPLETED
         ? `<div class="it-time-box">
-             <div class="it-tline">${svgCal(12)} 安排：<b>${t.scheduledStartTime || '-'} → ${endLabel}</b></div>
-             <div class="it-tline">${svgClock} 实际开始：<b>${t.actualStartTime || '-'}</b></div>
+             <div class="it-tline it-tline--main">${svgClock} <b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b><span class="it-duration">${fmtHours(calcH)}h</span></div>
+             <div class="it-tline">安排 ${t.scheduledStartTime || '-'} → ${endLabel} · 预计 ${fmtHours(t.estHours)}h · <span class="it-status-hint it-status-hint--completed">等待审核</span></div>
            </div>`
-        : t.status === TASK_STATUS.COMPLETED
+        : t.status === TASK_STATUS.VERIFIED
           ? `<div class="it-time-box">
-               <div class="it-tline">${svgCal(12)} 安排：<b>${t.scheduledStartTime || '-'} → ${endLabel}</b></div>
-               <div class="it-tline">${svgClock} 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b><span class="it-duration">(${fmtHours(calcH)}h)</span></div>
-               <div class="it-tline">预计：${fmtHours(t.estHours)}h · <span class="it-status-hint it-status-hint--completed">等待审核</span></div>
+               <div class="it-tline it-tline--main">${svgClock} <b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b><span class="it-duration">${fmtHours(calcH)}h</span></div>
+               <div class="it-tline">安排 ${t.scheduledStartTime || '-'} → ${endLabel} · 预计 ${fmtHours(t.estHours)}h · <span class="it-status-hint it-status-hint--verified">已审核</span></div>
+               ${t.verifyNote ? `<div class="it-tline it-note-line">备注：${esc(t.verifyNote)}</div>` : ''}
              </div>`
-          : t.status === TASK_STATUS.VERIFIED
-            ? `<div class="it-time-box">
-                 <div class="it-tline">${svgCal(12)} 安排：<b>${t.scheduledStartTime || '-'} → ${endLabel}</b></div>
-                 <div class="it-tline">${svgClock} 实际：<b>${t.actualStartTime || '-'} ~ ${t.actualEndTime || '-'}</b><span class="it-duration">(${fmtHours(calcH)}h)</span></div>
-                 <div class="it-tline">预计：${fmtHours(t.estHours)}h · <span class="it-status-hint it-status-hint--verified">已审核</span></div>
-                 ${t.verifyNote ? `<div class="it-tline">备注：${esc(t.verifyNote)}</div>` : ''}
-               </div>`
-            : '';
+          : '';
 
-    return `
-      <div class="card internal-task-card it-card--${t.status}">
-        <div class="it-body">
-          <div class="it-head-row">
-            <h3 class="it-title">${esc(t.name)}</h3>
-            <span class="it-status-badge it-status-badge--${t.status}">
-              <i class="it-dot"></i>${statusText[t.status]}
-            </span>
-          </div>
-
-          <div class="it-tags">
-            <span class="it-tag">${esc(t.workType)}</span>
-            <span class="it-tag">${esc(t.level)}</span>
-            <span class="it-tag">预计<b>${esc(t.estHours)}</b>h</span>
-          </div>
-
-          <div class="it-meta-row">
-            <span class="it-meta-item"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>${esc(t.workerName)}</span>
-            <span class="it-meta-item"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>${esc(shortDate)}</span>
-          </div>
-
-          ${(t.customerName || t.contactName || t.contactPhone || t.address)
-            ? `<div class="it-customer">
-                 ${t.customerName ? `<span class="it-cline">${svgBuilding} ${esc(t.customerName)}</span>` : ""}
-                 ${t.contactName ? `<span class="it-cline">${svgUser} ${esc(t.contactName)}</span>` : ""}
-                 ${t.contactPhone ? `<span class="it-cline">${svgPhone} ${esc(t.contactPhone)}</span>` : ""}
-                 ${t.address ? `<span class="it-cline">${svgPin} ${esc(t.address)}</span>` : ""}
-               </div>`
-            : ""}
-
-          ${t.note ? `<div class="it-note">${esc(t.note)}</div>` : ''}
-
-          ${timeInfo}
+  return `
+    <div class="card internal-task-card it-card--${t.status}">
+      <div class="it-card-glow"></div>
+      <div class="it-card-accent"></div>
+      <div class="it-body">
+        <div class="it-head-row">
+          ${batchMode ? `<label class="it-batch-wrap"><input type="checkbox" class="it-batch-cb" data-id="${t.id}" ${batchSelected.has(t.id) ? 'checked' : ''} onchange="onBatchCheck('${t.id}', this.checked)" /><span class="it-batch-tick"></span></label>` : ''}
+          <h3 class="it-title">${esc(t.name)}</h3>
+          <span class="it-status-badge it-status-badge--${t.status}" title="${statusHint[t.status]}">
+            <i class="it-dot"></i>${statusText[t.status]}
+          </span>
         </div>
 
-        <div class="it-footer">
-          <div class="it-actions">
-            ${actionButtons}
-          </div>
-          ${perm.deleteTask() ? `<button class="it-del-link" onclick="deleteInternalTask('${t.id}')">删除</button>` : ''}
+        <div class="it-tags">
+          <span class="it-tag it-tag--type">${workTypeIcon(t.workType)}${esc(t.workType)}</span>
+          <span class="it-tag">${esc(t.level)}</span>
+          <span class="it-tag it-tag--hours">⏱ ${esc(t.estHours)}h</span>
+          ${alertTag}
+        </div>
+
+        <div class="it-meta-row">
+          <span class="it-meta-item it-meta-item--workers" title="${esc(taskWorkerNamesText(t))}">
+            ${renderWorkerAvatars(t)}
+          </span>
+          <span class="it-meta-item it-meta-item--date">
+            ${svgCal(12)} ${esc(shortDate) || '未排期'}
+          </span>
+        </div>
+
+        ${(t.customerName || t.contactName || t.contactPhone || t.address)
+          ? `<div class="it-customer">
+               ${t.customerName ? `<span class="it-cline">${svgBuilding} ${esc(t.customerName)}</span>` : ""}
+               ${t.contactName ? `<span class="it-cline">${svgUser} ${esc(t.contactName)}</span>` : ""}
+               ${t.contactPhone ? `<span class="it-cline">${svgPhone} ${esc(t.contactPhone)}</span>` : ""}
+               ${t.address ? `<span class="it-cline">${svgPin} ${esc(t.address)}</span>` : ""}
+             </div>`
+          : ""}
+
+        ${t.note ? `<div class="it-note"><span class="it-note-icon">📝</span>${esc(t.note)}</div>` : ''}
+
+        ${timeInfo}
+      </div>
+
+      <div class="it-footer">
+        <div class="it-actions">
+          ${actionButtons}
+        </div>
+        <div class="it-foot-links">
+          ${perm.addTask() ? `<button class="it-edit-link" onclick="openEditInternalTaskModal('${t.id}')"><span class="it-link-icon">✎</span>编辑</button>` : ''}
+          ${perm.deleteTask() ? `<button class="it-del-link" onclick="deleteInternalTask('${t.id}')"><span class="it-link-icon">🗑</span>删除</button>` : ''}
         </div>
       </div>
-    `;
-  }).join("");
+    </div>
+  `;
+}
 
+function renderInternalTasks() {
+  const container = document.getElementById("internalTaskList");
+  if (!container) return;
+
+  const filtered = getFilteredInternalTasks();
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="empty">暂无内部任务</div>';
+    renderInternalTaskBatchBar();
+    return;
+  }
+
+  container.innerHTML = filtered.map(t => renderInternalTaskCard(t)).join("");
+  renderInternalTaskBatchBar();
   initCustomSelects(container.parentElement);
 }
 
 let internalTasksInitialized = false;
+let batchMode = false;
+const batchSelected = new Set();
 function initInternalTasks() {
   try {
     const workerSelect = document.getElementById("internalTaskWorkerFilter");
@@ -15992,15 +16925,20 @@ function initInternalTasks() {
       workerSelect.innerHTML = '<option value="">全部人员</option>' + 
         cache.workers.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
     }
-    
+
     if (!internalTasksInitialized) {
       const btn = document.getElementById("btnNewInternalTask");
       if (btn) {
         btn.addEventListener("click", showNewInternalTaskModal);
       }
+      const batchBtn = document.getElementById("btnBatchInternalTask");
+      if (batchBtn) batchBtn.addEventListener("click", toggleBatchMode);
+      const exportBtn = document.getElementById("btnExportInternalTasks");
+      if (exportBtn) exportBtn.addEventListener("click", exportInternalTasks);
       internalTasksInitialized = true;
     }
     renderInternalTasks();
+    renderInternalTaskBatchBar();
     initCustomSelects(document.getElementById("internalTasks"));
   } catch (e) {
     console.error("Error initializing internal tasks:", e);
@@ -22212,7 +23150,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v7788c9f8";
+  const APP_VERSION = "v422c2056";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
