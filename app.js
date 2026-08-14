@@ -1183,11 +1183,14 @@ function formatCrossDaySegmentsCompact(segs) {
 function checkProjectHourFeasibility(p, ds) {
   const result = { ok: true, level: "ok", availableHours: 0, perPersonHours: 0, ratio: 0 };
   if (!p) return result;
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED].includes(p.status)) return result;
   // 与卡片/详情一致：先取已分配人数，否则用预约填的 workerCount（预约阶段常未分配，靠 workerCount 给估工时除）
   const workers = Math.max(1, ((p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1));
   const est = Number(p.estimatedHours) || 0;
-  if (est <= 0) return result;
-  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED].includes(p.status)) return result;
+  // 已施工/已登记的实际工时（工时记录优先，无记录时 fallback 到 actualHours）
+  const consumed = hoursDiff(p).act;
+  const remaining = Math.max(0, est - consumed);
+  if (remaining <= 0) return result;
 
   let seg;
   if (Array.isArray(p.workSegments) && p.workSegments.length > 1 && ds) {
@@ -1199,7 +1202,7 @@ function checkProjectHourFeasibility(p, ds) {
   if (!seg || !seg.start || !seg.end || seg.end <= seg.start) return result;
 
   const availableHours = Math.max(0, (seg.end - seg.start) / (1000 * 60 * 60));
-  const perPersonHours = est / workers;
+  const perPersonHours = remaining / workers;
   const ratio = availableHours > 0 ? perPersonHours / availableHours : 0;
   result.availableHours = availableHours;
   result.perPersonHours = perPersonHours;
@@ -7723,13 +7726,15 @@ async function saveQuickEditProjectTime(id) {
     payload.estimatedHours = p.estimatedHours;
   }
 
-  // 工时可行性校验：人均预约工时显著超过可用施工窗口时给出提示
-  if (estimatedHours > 0 && workerCount > 0 && totalBookedHours > 0) {
-    const perPersonHours = estimatedHours / workerCount;
+  // 工时可行性校验：人均剩余工时显著超过可用施工窗口时给出提示
+  const consumedQuick = p ? hoursDiff(p).act : 0;
+  const remainingQuick = Math.max(0, payload.estimatedHours - consumedQuick);
+  if (remainingQuick > 0 && workerCount > 0 && totalBookedHours > 0) {
+    const perPersonHours = remainingQuick / workerCount;
     const ratio = perPersonHours / totalBookedHours;
     if (ratio > 1.0) {
       const critical = ratio > 1.5;
-      const msg = `${critical ? '⚠️ 工时严重异常' : '⚠️ 工时可能不合理'}：预约总工时 ${estimatedHours}h / ${workerCount}人 = 人均 ${perPersonHours.toFixed(1)}h，但施工窗口仅 ${totalBookedHours.toFixed(1)}h，${critical ? '远超' : '大于'}可用时间。建议增加人手、拆分多天或调整预约时间。是否仍要保存？`;
+      const msg = `${critical ? '⚠️ 工时严重异常' : '⚠️ 工时可能不合理'}：剩余工时 ${remainingQuick.toFixed(1)}h / ${workerCount}人 = 人均 ${perPersonHours.toFixed(1)}h，但施工窗口仅 ${totalBookedHours.toFixed(1)}h，${critical ? '远超' : '大于'}可用时间。建议增加人手、拆分多天或调整预约时间。是否仍要保存？`;
       if (!(await confirmDialog(msg, "工时异常确认"))) return;
     }
   }
@@ -7911,13 +7916,15 @@ async function saveProject(id) {
 
   const preExisting = id ? getProject(id) : null;  // 保存前快照，供变更日志对比（loadAll 前即正确）
 
-  // 工时可行性校验：人均预约工时显著超过可用施工窗口时给出提示
-  if (estimatedHours > 0 && workerCount > 0 && totalBookedHours > 0) {
-    const perPersonHours = estimatedHours / workerCount;
+  // 工时可行性校验：人均剩余工时显著超过可用施工窗口时给出提示
+  const consumedSave = preExisting ? hoursDiff(preExisting).act : 0;
+  const remainingSave = Math.max(0, payload.estimatedHours - consumedSave);
+  if (remainingSave > 0 && workerCount > 0 && totalBookedHours > 0) {
+    const perPersonHours = remainingSave / workerCount;
     const ratio = perPersonHours / totalBookedHours;
     if (ratio > 1.0) {
       const critical = ratio > 1.5;
-      const msg = `${critical ? '⚠️ 工时严重异常' : '⚠️ 工时可能不合理'}：预约总工时 ${estimatedHours}h / ${workerCount}人 = 人均 ${perPersonHours.toFixed(1)}h，但施工窗口仅 ${totalBookedHours.toFixed(1)}h，${critical ? '远超' : '大于'}可用时间。建议增加人手、拆分多天或调整预约时间。是否仍要保存？`;
+      const msg = `${critical ? '⚠️ 工时严重异常' : '⚠️ 工时可能不合理'}：剩余工时 ${remainingSave.toFixed(1)}h / ${workerCount}人 = 人均 ${perPersonHours.toFixed(1)}h，但施工窗口仅 ${totalBookedHours.toFixed(1)}h，${critical ? '远超' : '大于'}可用时间。建议增加人手、拆分多天或调整预约时间。是否仍要保存？`;
       if (!(await confirmDialog(msg, "工时异常确认"))) return;
     }
   }
@@ -22205,7 +22212,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vccf46f75";
+  const APP_VERSION = "va17c5c50";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
