@@ -4599,7 +4599,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   if (dayMakeupRecords.length > 0) {
     leaveSection += `
       <div class="tl-makeup-section tl-makeup-section--day">
-        <div class="tl-makeup-header">🛠 ${dateStr} 轮休补班 ${dayMakeupRecords.length} 人（轮休日实际上班）</div>
+        <div class="tl-makeup-header">🛠 ${dateStr} 轮休已上班 ${dayMakeupRecords.length} 人（轮休日实际上班）</div>
         <div class="tl-day-off__list">${dayMakeupRecords.map((lr) => renderLeaveLine(lr, false)).join("")}</div>
       </div>`;
   }
@@ -4744,10 +4744,18 @@ async function deleteWorker(id) {
     const used = cache.projects.some((p) => (p.workLogs || []).some((l) => l.workerId === id));
     if (used && !(await confirmDialog("该人员已有施工工时记录，删除不会移除历史记录。确定删除该人员？", "删除人员"))) return;
     if (!used && !(await confirmDialog("确定删除该人员？", "删除人员"))) return;
-    await repo.deleteWorker(id);
-    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteWorker 后台同步失败：", e));
+    // 乐观删除：立即从本地移除并刷新；云端删除放后台
+    cache.workers = cache.workers.filter((w) => w.id !== id);
+    persistCloudCache(currentUser && currentUser.id);
     renderAll();
     toast("已删除");
+    repo.deleteWorker(id)
+      .then(() => repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteWorker 后台同步失败：", e)))
+      .catch((e) => {
+        console.error("删除施工人员失败:", e);
+        toast("删除云端失败：" + (e.message || "请重试") + "，已恢复");
+        repo.loadAll().then(() => renderAll()).catch(() => {});
+      });
   } catch (e) {
     console.error("删除施工人员失败:", e);
     toast("删除失败：" + (e.message || "请重试"));
@@ -4847,10 +4855,18 @@ async function deleteOutsourcedWorker(id) {
   try {
     if (!perm.manageOutsourced()) { toast("权限不足"); return; }
     if (!(await confirmDialog("确定删除该外协人员？", "删除外协人员"))) return;
-    await repo.deleteOutsourcedWorker(id);
-    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteOutsourcedWorker 后台同步失败：", e));
+    // 乐观删除：立即从本地移除并刷新；云端删除放后台
+    cache.outsourcedWorkers = cache.outsourcedWorkers.filter((w) => w.id !== id);
+    persistCloudCache(currentUser && currentUser.id);
     renderAll();
     toast("已删除");
+    repo.deleteOutsourcedWorker(id)
+      .then(() => repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteOutsourcedWorker 后台同步失败：", e)))
+      .catch((e) => {
+        console.error("删除外协人员失败:", e);
+        toast("删除云端失败：" + (e.message || "请重试") + "，已恢复");
+        repo.loadAll().then(() => renderAll()).catch(() => {});
+      });
   } catch (e) {
     console.error("删除外协人员失败:", e);
     toast("删除失败：" + (e.message || "请重试"));
@@ -5420,10 +5436,18 @@ async function deleteWorkerSchedule(id) {
     const s = getWorkerSchedule(id);
     if (s && !perm.deleteSchedule(s)) { toast("无「删除日程」权限"); return; }
     if (!(await confirmDialog("确定删除该日程？", "删除日程"))) return;
-    await repo.deleteWorkerSchedule(id);
-    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteWorkerSchedule 后台同步失败：", e));
+    // 乐观删除：立即从本地移除并刷新；云端删除放后台
+    cache.workerSchedules = cache.workerSchedules.filter((x) => x.id !== id);
+    persistCloudCache(currentUser && currentUser.id);
     renderAll();
     toast("已删除");
+    repo.deleteWorkerSchedule(id)
+      .then(() => repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteWorkerSchedule 后台同步失败：", e)))
+      .catch((e) => {
+        console.error("删除日程失败:", e);
+        toast("删除云端失败：" + (e.message || "请重试") + "，已恢复");
+        repo.loadAll().then(() => renderAll()).catch(() => {});
+      });
   } catch (e) {
     console.error("删除日程失败:", e);
     toast("删除失败：" + (e.message || "请重试"));
@@ -6341,9 +6365,18 @@ async function deleteLeaveRecord(id) {
       return;
     }
     if (!(await confirmDialog("确定删除该休假记录？", "删除休假记录"))) return;
-    await repo.deleteLeaveRecord(id);
+    // 乐观删除：立即从本地移除并刷新；云端删除放后台
+    cache.leaveRecords = cache.leaveRecords.filter((r) => r.id !== id);
+    persistCloudCache(currentUser && currentUser.id);
     renderAll();
     toast("休假记录已删除");
+    repo.deleteLeaveRecord(id)
+      .then(() => repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteLeaveRecord 后台同步失败：", e)))
+      .catch((e) => {
+        console.error("删除休假记录失败:", e);
+        toast("删除云端失败：" + (e.message || "请重试") + "，已恢复");
+        repo.loadAll().then(() => renderAll()).catch(() => {});
+      });
   } catch (e) {
     console.error("删除休假记录失败:", e);
     toast("删除失败：" + (e.message || "请重试"));
@@ -6355,19 +6388,19 @@ async function deleteLeaveRecord(id) {
 /* 标记/取消「轮休日实际上班（补班）」。标记后会从「休息」变为「正常出勤」。 */
 async function toggleLeaveMakeup(id) {
   try {
-    if (!perm.manageMakeup()) { toast("权限不足：无法操作补班"); return; }
+    if (!perm.manageMakeup()) { toast("权限不足：无法操作上班"); return; }
     const record = getLeaveRecord(id);
     if (!record) return;
-    if (record.leaveType !== "rotational") { toast("只有轮休记录可以标记补班"); return; }
+    if (record.leaveType !== "rotational") { toast("只有轮休记录可以标记已上班"); return; }
     const next = { ...record, workedMakeup: !record.workedMakeup };
-    if (!next.workedMakeup) next.makeupLeaveId = null; // 取消补班时一并解除关联
+    if (!next.workedMakeup) next.makeupLeaveId = null; // 取消上班时一并解除关联
     await repo.saveLeaveRecord(next, id);
     repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] toggleLeaveMakeup 后台同步失败：", e));
-    logOperation("LEAVE_MAKEUP", `${record.workerName}的轮休(${record.startDate})`, next.workedMakeup ? "标记为补班（实际上班）" : "取消补班标记");
+    logOperation("LEAVE_MAKEUP", `${record.workerName}的轮休(${record.startDate})`, next.workedMakeup ? "标记为已上班" : "取消上班标记");
     renderAll();
-    toast(next.workedMakeup ? "已标记为补班（该轮休日视为实际上班）" : "已取消补班标记");
+    toast(next.workedMakeup ? "已确认已上班（该轮休日视为出勤）" : "已取消上班标记");
   } catch (e) {
-    console.error("标记补班失败:", e);
+    console.error("标记上班失败:", e);
     toast("操作失败：" + (e.message || "请重试"));
   }
 }
@@ -6396,7 +6429,7 @@ async function openMakeupLink(id) {
     const content = `
       <div class="repair-form">
         <div class="form-row">
-          <label>补班日期</label>
+          <label>上班日期</label>
           <div class="input" style="background:#f3f4f6;">${esc(record.startDate)}（${esc(record.workerName)} 轮休日实际上班）</div>
         </div>
         <div class="form-row">
@@ -6446,7 +6479,7 @@ async function clearMakeupLink(id) {
     await repo.saveLeaveRecord({ ...record, makeupLeaveId: null }, id);
     repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] clearMakeupLink 后台同步失败：", e));
     renderAll();
-    toast("已取消关联（仍保留补班标记）");
+    toast("已取消关联（仍保留上班标记）");
   } catch (e) {
     console.error("取消补班关联失败:", e);
     toast("操作失败：" + (e.message || "请重试"));
@@ -8290,18 +8323,22 @@ async function deleteProject(id) {
   }
   if (!perm.deleteProject(p)) { toast("无权限删除项目"); return; }
   if (!(await confirmDialog("确定删除该项目及其施工记录？", "删除项目"))) return;
-  try {
-    await repo.deleteProject(id);
-    if (currentProjectId === id) currentProjectId = "";
-    clearTimeout(reloadTimer);
-    await repo.loadAll();
-    renderAll();
-    toast("已删除");
-    logOperation("PROJECT_DELETE", p.name || "项目", `ID: ${id}`);
-  } catch (error) {
-    console.error("删除项目失败:", error);
-    toast("删除失败，请重试");
-  }
+  // 乐观删除：立即从本地移除并刷新；云端删除放后台
+  const idx = cache.projects.findIndex((x) => x.id === id);
+  if (idx >= 0) cache.projects.splice(idx, 1);
+  if (currentProjectId === id) currentProjectId = "";
+  clearTimeout(reloadTimer);
+  persistCloudCache(currentUser && currentUser.id);
+  renderAll();
+  logOperation("PROJECT_DELETE", p.name || "项目", `ID: ${id}`);
+  toast("已删除");
+  repo.deleteProject(id)
+    .then(() => repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] deleteProject 后台同步失败：", e)))
+    .catch((e) => {
+      console.error("删除项目云端失败:", e);
+      toast("删除云端失败：" + (e.message || "未知错误") + "，已恢复");
+      repo.loadAll().then(() => renderAll()).catch(() => {});
+    });
 }
 
 async function cancelProject(id) {
@@ -11707,13 +11744,19 @@ async function deleteWorkLog(pid, lid) {
   const p = getProject(pid);
   if (p && !perm.deleteWorkLog(p)) { toast("无权限删除工时记录"); return; }
   const log = (p.workLogs || []).find(l => l.id === lid);
-  await repo.deleteWorkLog(pid, lid);
-  const p2 = getProject(pid);
-  if (p2 && p2.workLogs) p2.workLogs = p2.workLogs.filter((l) => l.id !== lid);
+  // 乐观删除：立即从本地移除并刷新；云端删除放后台
+  if (p && p.workLogs) p.workLogs = p.workLogs.filter((l) => l.id !== lid);
+  persistCloudCache(currentUser && currentUser.id);
   logOperation("WORK_LOG_DELETE", `${p.name} - ${log?.workerName || ""}`, `工时：${log?.hours || 0}小时，日期：${log?.date || "未知"}，等级：${log?.level || "未知"}，类型：${log?.isOutsourced ? "外协" : "内部"}`);
   renderAll();
   toast("已删除");
-  repo.loadAll().then(async () => { await recomputeActualHours(pid); renderAll(); }).catch((e) => console.warn("删除工时后台同步失败：", e));
+  repo.deleteWorkLog(pid, lid)
+    .then(() => repo.loadAll().then(async () => { await recomputeActualHours(pid); renderAll(); }).catch((e) => console.warn("删除工时后台同步失败：", e)))
+    .catch((e) => {
+      console.error("删除工时云端失败:", e);
+      toast("删除云端失败：" + (e.message || "未知错误") + "，已恢复");
+      repo.loadAll().then(async () => { await recomputeActualHours(pid); renderAll(); }).catch(() => {});
+    });
 }
 
 /* 修改完工工时用的分段行（携带 data-wid / data-date / data-id 等元数据，便于保存时还原归属与日期） */
@@ -16803,7 +16846,7 @@ function renderStoreStats() {
               <td class="ss-store">
                 <span class="ss-rank ${i === 0 ? 'ss-rank--top' : ''}">${i + 1}</span>
                 <span class="ss-store-name">${esc(r.name)}</span>
-                ${r.id && r.count > 0 ? `<button class="btn btn-small" style="margin-left:6px;padding:1px 6px;font-size:10px" onclick="showStoreProjects('${r.id}', '${esc(r.name)}')">查看</button>` : ""}
+                ${r.id && r.count > 0 ? `<button class="btn small ss-view" onclick="showStoreProjects('${r.id}', '${esc(r.name)}')">查看</button>` : ""}
               </td>
               <td class="ss-num"><b>${r.count}</b></td>
               <td class="ss-dist">${distBar(r)}</td>
@@ -16970,10 +17013,18 @@ async function removeStore(id) {
     ? "该门店下已有预约，删除后这些预约将变为「未指定门店」。确定删除？"
     : "确定删除该门店？";
   if (!(await confirmDialog(msg, "删除门店"))) return;
-  await repo.deleteStore(id);
-  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] removeStore 后台同步失败：", e));
+  // 乐观删除：立即从本地移除并刷新；云端删除放后台
+  cache.stores = cache.stores.filter((s) => s.id !== id);
+  persistCloudCache(currentUser && currentUser.id);
   renderAll();
   toast("已删除");
+  repo.deleteStore(id)
+    .then(() => repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] removeStore 后台同步失败：", e)))
+    .catch((e) => {
+      console.error(e);
+      toast("删除云端失败：" + (e.message || "未知错误") + "，已恢复");
+      repo.loadAll().then(() => renderAll()).catch(() => {});
+    });
 }
 
 /* ============================================================
@@ -17129,9 +17180,18 @@ async function saveUserPerms(id, role) {
 
 async function deleteAccount(id, email) {
   if (!(await confirmDialog(`确定要删除账号 ${email} 吗？此操作不可撤销。`, "删除账号"))) return;
-  await repo.deleteAccount(id);
-  toast("账号已删除");
+  // 乐观删除：立即从本地移除并刷新；云端删除放后台
+  cache.accounts = cache.accounts.filter((a) => a.id !== id);
+  persistCloudCache(currentUser && currentUser.id);
   renderAccounts();
+  toast("账号已删除");
+  repo.deleteAccount(id)
+    .then(() => repo.loadAll().then(() => renderAccounts()).catch((e) => console.warn("[sync] deleteAccount 后台同步失败：", e)))
+    .catch((e) => {
+      console.error(e);
+      toast("删除云端失败：" + (e.message || "未知错误") + "，已恢复");
+      repo.loadAll().then(() => renderAccounts()).catch(() => {});
+    });
 }
 
 async function addLocalAccount() {
@@ -19377,10 +19437,11 @@ function renderLeaveCard(record, showActions) {
           <span class="leave-card__tag" style="background:${statusStyle.bg};color:${statusStyle.text};border-color:${statusStyle.border};">${statusLabel}</span>
           <span class="leave-card__tag" style="background:${typeStyle.bg};color:${typeStyle.text};border-color:${typeStyle.border};">${typeLabel}</span>
           <span class="leave-card__tag leave-card__tag--duration">${duration}</span>
-          ${isRotMakeup ? `<span class="leave-card__tag leave-card__tag--makeup">🛠 已补班${record.makeupLeaveId ? "·已抵扣" : ""}</span>` : ""}
-          ${makeupOffset ? `<span class="leave-card__tag leave-card__tag--offset">✅ 已补班抵扣</span>` : ""}
+          ${isRotMakeup ? `<span class="leave-card__tag leave-card__tag--makeup">🛠 已上班${record.makeupLeaveId ? "·已抵扣" : ""}</span>` : ""}
+          ${makeupOffset ? `<span class="leave-card__tag leave-card__tag--offset">✅ 已上班抵扣</span>` : ""}
           ${conflicts.length > 0 ? `<span class="leave-card__tag leave-card__tag--warn">⚠ ${conflicts.length}冲突</span>` : ""}
           ${isWithdrawable ? `<button class="leave-card__withdraw-btn" type="button" onclick="withdrawLeave('${record.id}')">撤回</button>` : ""}
+          ${canDeleteLeaveRecord(record) ? `<button class="leave-card__del leave-card__del--mobile" type="button" onclick="deleteLeaveRecord('${record.id}')" title="删除">删除</button>` : ""}
         </div>
         ${conflictInfo}
         <div class="card-actions leave-card__actions">
@@ -19392,7 +19453,6 @@ function renderLeaveCard(record, showActions) {
               <button class="btn small danger" onclick="rejectLeave('${record.id}')">拒绝</button>
             ` : ""}
           ` : ""}
-          ${canDeleteLeaveRecord(record) ? `<button class="leave-card__del leave-card__del--mobile" type="button" onclick="deleteLeaveRecord('${record.id}')" title="删除">删除</button>` : ""}
         </div>
       </div>
     </div>
@@ -19565,8 +19625,8 @@ function showLeaveDetail(id) {
         </div>` : ""}
         ${record.leaveType === "rotational" ? `
         <div class="leave-detail__item">
-          <div class="leave-detail__label">补班状态</div>
-          <div class="leave-detail__value">${isRotMakeup ? "已补班（视为上班）" : "未补班（正常休息）"}${record.makeupLeaveId ? " · 已关联抵消" : ""}</div>
+          <div class="leave-detail__label">是否上班</div>
+          <div class="leave-detail__value">${isRotMakeup ? "已上班" : "未上班（正常休息）"}${record.makeupLeaveId ? " · 已关联抵消" : ""}</div>
         </div>` : ""}
         ${record.reviewerName ? `
         <div class="leave-detail__item">
@@ -19576,7 +19636,7 @@ function showLeaveDetail(id) {
         ${makeupOffset ? `
         <div class="leave-detail__item leave-detail__item--full">
           <div class="leave-detail__alert leave-detail__alert--success">
-            <b>✅ 已被补班抵消</b>
+            <b>✅ 已被上班抵消</b>
             <span>由 ${esc(makeupOffset.workerName)} 的轮休（${esc(makeupOffset.startDate)}）上班抵消，不计入请假天数</span>
           </div>
         </div>` : ""}
@@ -19602,14 +19662,14 @@ function showLeaveDetail(id) {
         ${record.leaveType === "rotational" && perm.manageMakeup() ? `
         <div class="leave-detail__ops">
           ${isRotMakeup ? `
-            <button class="btn small" onclick="toggleLeaveMakeup('${record.id}'); modal.close();">取消补班</button>
+            <button class="btn small" onclick="toggleLeaveMakeup('${record.id}'); modal.close();">取消上班</button>
             ${record.makeupLeaveId ? `
               <button class="btn small" onclick="clearMakeupLink('${record.id}'); modal.close();">取消关联</button>
             ` : `
               <button class="btn small warning" onclick="openMakeupLink('${record.id}'); modal.close();">抵消请假</button>
             `}
           ` : `
-            <button class="btn small" onclick="toggleLeaveMakeup('${record.id}'); modal.close();">标记补班</button>
+            <button class="btn small" onclick="toggleLeaveMakeup('${record.id}'); modal.close();">确认已上班</button>
           `}
         </div>
         ` : `<div></div>`}
@@ -21901,7 +21961,9 @@ async function init() {
 }
 
 // 防重复提交：为「自带保存按钮」的表单提交函数统一加锁
-// 点击保存按钮后即刻禁用该按钮并显示「保存中…」，函数完成（含校验失败/异常）自动恢复，避免重复提交
+// 点击保存/删除按钮后仅禁用该按钮防重复提交；不再把按钮文字卡成「保存中…」数秒
+// （云端往返很慢，原先会一直显示「保存中…」）。原函数（含云端 await）在后台继续执行，
+// 锁保持到它真正完成；按钮文字维持原样（仅置灰），完成后恢复。
 function registerSubmitGuards() {
   const GUARDED = [
     // —— 原有：表单保存类（弹窗内确认按钮双击由 _modalConfirmLock 拦截，这里补一层函数级兜底）——
@@ -21932,7 +21994,7 @@ function registerSubmitGuards() {
     const orig = window[name];
     if (typeof orig !== "function") continue;
     if (orig.__guarded) continue;              // 已包裹过则跳过，避免重复调用 registerSubmitGuards 时多层嵌套包装
-    const wrapper = async function (...args) {
+    const wrapper = function (...args) {
       if (locks[name]) {                        // 该函数正在保存，忽略重复触发，避免重复写入云数据
         toast("操作处理中，请勿重复点击");
         return;
@@ -21940,24 +22002,28 @@ function registerSubmitGuards() {
       locks[name] = true;
       const btn = document.querySelector(`button[onclick^="${name}("]`);
       const txt = btn ? btn.textContent : "";
+      // 仅禁用 + 置灰防重复点击，不把文字改成「保存中…」
       if (btn) {
         btn.disabled = true;
-        btn.textContent = "保存中…";
         btn.style.opacity = "0.65";
         btn.style.pointerEvents = "none";
       }
-      try {
-        return await orig.apply(this, args);
-      } finally {
-        locks[name] = false;
-        // 若弹窗已关闭（按钮被销毁）则无需恢复；否则恢复按钮供重试
-        if (btn && document.body.contains(btn)) {
-          btn.disabled = false;
-          btn.textContent = txt;
-          btn.style.opacity = "";
-          btn.style.pointerEvents = "";
+      const p = (async () => {
+        try {
+          return await orig.apply(this, args);
+        } finally {
+          locks[name] = false;
+          // 若弹窗已关闭（按钮被销毁）则无需恢复；否则恢复按钮供重试
+          if (btn && document.body.contains(btn)) {
+            btn.disabled = false;
+            btn.textContent = txt;
+            btn.style.opacity = "";
+            btn.style.pointerEvents = "";
+          }
         }
-      }
+      })();
+      p.catch(() => {});   // 防未处理拒绝告警；函数自身通常有 try/catch 并 toast
+      return p;
     };
     wrapper.__guarded = true;
     window[name] = wrapper;
@@ -22139,7 +22205,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va7d1e2ae";
+  const APP_VERSION = "vccf46f75";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -22787,13 +22853,13 @@ function returnPanelHtml(v, trip) {
             <span class="veh-start-km__val">${Number(trip.startKm).toLocaleString()} km</span>
             <input type="hidden" id="vtqStart" value="${Number(trip.startKm)}" />
           </div>
-          <label>还车公里</label>
+          <label>还车公里 <span style="color:#dc2626">*</span></label>
           <input type="text" inputmode="numeric" class="input veh-km-big" id="vtqEnd"
-                 value="${Number(trip.startKm)}"
+                 value=""
                  placeholder="输入还车时总里程"
                  onfocus="moveInputCursorToEnd(this)"
                  oninput="this.value = this.value.replace(/[^0-9]/g, ''); calcQuickMileage()" />
-          <div id="vtqMileage" class="vtq-mileage hint">👉 已填入起始公里，请改为还车读数</div>
+          <div id="vtqMileage" class="vtq-mileage hint">请输入还车时的总里程读数（必填）</div>
         </div>
         <div class="veh-quick-fields">
           <div class="veh-ret-info">使用中：${esc(trip.driverName || "未知")}<br>出发 ${fmtDateTime(trip.outTime)}</div>
@@ -22816,7 +22882,7 @@ function returnPanelHtml(v, trip) {
         </div>
       </div>
       <div class="veh-quick-actions">
-        <button class="btn primary" onclick="saveReturnVehicle()">确认还车</button>
+        <button class="btn primary" id="vtqReturnBtn" disabled onclick="saveReturnVehicle()">确认还车</button>
         <button class="btn" onclick="closeVehicleQuick()">取消</button>
       </div>
     </div>`;
@@ -23546,28 +23612,44 @@ function setVtqType(type) {
   });
 }
 
-/* 还车时实时计算里程（起始、回来均可校准；公里数为整数） */
+/* 还车时实时计算里程（起始、回来均可校准；公里数为整数）。
+   还车公里必须手填且大于起始，否则「确认还车」按钮禁用，防漏记里程。 */
 function calcQuickMileage() {
   const startEl = document.getElementById("vtqStart");
   const endEl = document.getElementById("vtqEnd");
   const preview = document.getElementById("vtqMileage");
   if (!endEl || !preview) return;
-  preview.classList.remove("hint");
   const start = startEl ? (Number((startEl.value || "").replace(/\D/g, "")) || 0) : 0;
   const end = Number((endEl.value || "").replace(/\D/g, "")) || 0;
-  if (end > 0 && end < start) {
-    preview.textContent = `⚠️ 回来读数小于起始（${start.toLocaleString()}）`;
-    preview.classList.add("warn");
+  const btn = document.getElementById("vtqReturnBtn");
+  const enable = () => { if (btn) btn.disabled = false; };
+  const disable = () => { if (btn) btn.disabled = true; };
+  if (end === 0) {
+    preview.textContent = "请输入还车时的总里程读数（必填）";
+    preview.classList.add("hint");
+    preview.classList.remove("warn");
+    disable();
     return;
   }
-  preview.classList.remove("warn");
+  if (end < start) {
+    preview.textContent = `⚠️ 回来读数小于起始（${start.toLocaleString()}）`;
+    preview.classList.add("warn");
+    preview.classList.remove("hint");
+    disable();
+    return;
+  }
   const m = Math.max(0, Math.round(end - start));
   if (m > 400) {
     preview.textContent = `本次里程：${m.toLocaleString()} km ⚠️ 超过 400，请核对仪表读数`;
     preview.classList.add("warn");
+    preview.classList.remove("hint");
+    enable(); // 仍允许提交，由确认弹窗二次核对
     return;
   }
   preview.textContent = `本次里程：${m.toLocaleString()} km`;
+  preview.classList.remove("warn");
+  preview.classList.remove("hint");
+  enable();
 }
 
 function closeVehicleQuick() {
@@ -23782,16 +23864,26 @@ async function saveUseVehicle() {
     date: dateKey(new Date()),
     note, createdAt: now
   };
-  try {
-    await repo.saveVehicleTrip(trip);
-    repo.loadAll().then(() => renderVehicleTrips()).catch((e) => console.warn("[sync] saveUseVehicle 后台同步失败：", e));
-    closeVehicleQuick();
-    renderVehicleTrips();
-    toast(`已用车 · ${v.name}（${driverName}）`);
-  } catch (e) {
-    console.error(e);
-    toast("保存失败：" + (e.message || "未知错误"));
-  }
+  // 乐观更新本地缓存，立即关面板、提示；云端写入放后台，避免「保存中…」卡 2-4 秒
+  cache.vehicleTrips = cache.vehicleTrips || [];
+  cache.vehicleTrips.push(trip);
+  persistCloudCache(currentUser && currentUser.id);
+
+  closeVehicleQuick();
+  renderVehicleTrips();
+  toast(`已用车 · ${v.name}（${driverName}）`);
+
+  repo.saveVehicleTrip(trip)
+    .then(() => {
+      repo.loadAll().then(() => renderVehicleTrips()).catch((e) => console.warn("[sync] saveUseVehicle 后台同步失败：", e));
+    })
+    .catch((e) => {
+      console.error(e);
+      toast("用车云端保存失败：" + (e.message || "未知错误") + "，请检查网络后重试");
+      cache.vehicleTrips = cache.vehicleTrips.filter((t) => t.id !== trip.id);
+      persistCloudCache(currentUser && currentUser.id);
+      renderVehicleTrips();
+    });
 }
 
 /* 确认还车：结算该次里程 */
@@ -23804,7 +23896,7 @@ async function saveReturnVehicle() {
   const startKm = Number((document.getElementById("vtqStart").value || "").replace(/\D/g, "")) || 0;
   const endKmRaw = (document.getElementById("vtqEnd").value || "").replace(/\D/g, "");
   const endKm = endKmRaw ? parseInt(endKmRaw, 10) : 0;
-  if (!(endKm >= startKm)) { toast("请填写不小于起始的回来公里数"); return; }
+  if (!endKm || endKm <= startKm) { toast("请填写大于起始的还车公里数"); document.getElementById("vtqEnd").focus(); return; }
   const mileage = Math.max(0, Math.round(endKm - startKm));
   if (mileage > 400) {
     if (!(await confirmDialog(`本次里程 ${mileage.toLocaleString()} km 超过 400，确认仪表读数无误？`, "里程核对"))) {
@@ -23824,27 +23916,45 @@ async function saveReturnVehicle() {
     backTime: now,
     note: (trip.note ? trip.note + (retNote ? " | " : "") : "") + retNote
   };
-  try {
-    await repo.saveVehicleTrip(updated);
-    repo.loadAll().then(() => renderVehicleTrips()).catch((e) => console.warn("[sync] saveReturnVehicle 后台同步失败：", e));
-    closeVehicleQuick();
-    renderVehicleTrips();
-    toast(`已还车 · ${trip.vehicleName} 本次 ${mileage.toLocaleString()} km`);
-  } catch (e) {
-    console.error(e);
-    toast("保存失败：" + (e.message || "未知错误"));
-  }
+  // 乐观更新本地缓存，立即关面板、提示；云端写入放后台，避免「保存中…」卡 2-4 秒
+  const oldTrip = trip;
+  const tripIdx = (cache.vehicleTrips || []).findIndex((t) => t.id === updated.id);
+  if (tripIdx >= 0) cache.vehicleTrips[tripIdx] = updated;
+  else cache.vehicleTrips.push(updated);
+  persistCloudCache(currentUser && currentUser.id);
+
+  closeVehicleQuick();
+  renderVehicleTrips();
+  toast(`已还车 · ${trip.vehicleName} 本次 ${mileage.toLocaleString()} km`);
+
+  repo.saveVehicleTrip(updated)
+    .then(() => {
+      repo.loadAll().then(() => renderVehicleTrips()).catch((e) => console.warn("[sync] saveReturnVehicle 后台同步失败：", e));
+    })
+    .catch((e) => {
+      console.error(e);
+      toast("还车云端保存失败：" + (e.message || "未知错误") + "，请检查网络后重试");
+      const idx = (cache.vehicleTrips || []).findIndex((t) => t.id === updated.id);
+      if (idx >= 0) cache.vehicleTrips[idx] = oldTrip;
+      persistCloudCache(currentUser && currentUser.id);
+      renderVehicleTrips();
+    });
 }
 
 async function deleteVehicleTripHandler(id) {
   if (!perm.deleteVehicleTrip()) { toast("无权限删除里程记录"); return; }
   if (!(await confirmDialog("确定删除这条里程记录？", "删除里程"))) return;
-  try {
-    await repo.deleteVehicleTrip(id);
-    repo.loadAll().then(() => renderVehicleTrips()).catch((e) => console.warn("[sync] deleteVehicleTripHandler 后台同步失败：", e));
-    renderVehicleTrips();
-    toast("已删除");
-  } catch (e) {
-    toast("删除失败：" + (e.message || "未知错误"));
-  }
+  // 乐观删除：立即从本地移除并刷新；云端删除放后台
+  const idx = (cache.vehicleTrips || []).findIndex((t) => t.id === id);
+  if (idx >= 0) cache.vehicleTrips.splice(idx, 1);
+  persistCloudCache(currentUser && currentUser.id);
+  renderVehicleTrips();
+  toast("已删除");
+  repo.deleteVehicleTrip(id)
+    .then(() => repo.loadAll().then(() => renderVehicleTrips()).catch((e) => console.warn("[sync] deleteVehicleTripHandler 后台同步失败：", e)))
+    .catch((e) => {
+      console.error(e);
+      toast("删除云端失败：" + (e.message || "未知错误") + "，已恢复");
+      repo.loadAll().then(() => renderVehicleTrips()).catch(() => {});
+    });
 }

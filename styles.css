@@ -1722,7 +1722,12 @@ select.input {
   box-shadow: 0 2px 6px rgba(0,0,0,0.06);
 }
 .btn:active { transform: translateY(0); }
-
+.btn:disabled, .btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
 .btn.primary {
   background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
   border-color: transparent;
@@ -2113,14 +2118,16 @@ select.input {
   border-radius: 50%;
 }
 
-/* 修复：代码里用 class="btn small"，但 CSS 只有 .btn-small */
-.btn.small {
+/* 兼容两种写法：class="btn small" 与 class="btn btn-small" */
+.btn.small,
+.btn-small {
   padding: 5px 10px;
   font-size: 12px;
   border-radius: 6px;
   transition: all 0.15s ease;
 }
-.btn.small:hover {
+.btn.small:hover,
+.btn-small:hover {
   transform: translateY(-1px);
 }
 .btn.small.primary {
@@ -5594,6 +5601,19 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 .ss-seg { height: 100%; }
 .ss-seg + .ss-seg { box-shadow: inset 1px 0 0 rgba(255,255,255,0.6); }
 .store-stats-table tbody tr { transition: background .12s; }
+/* 店面统计「查看」按钮：清晰的小边框按钮，避免 10px 细字模糊 */
+.store-stats-table .ss-view {
+  margin-left: 6px;
+  color: #4f46e5;
+  background: #fff;
+  border-color: #c7d2fe;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.store-stats-table .ss-view:hover {
+  background: #eef2ff;
+  border-color: #4f46e5;
+}
 .store-stats-table tbody tr:hover { background: #f8fafc; }
 .ss-legend {
   display: flex;
@@ -12338,18 +12358,23 @@ table.data.project-hours-diff thead th {
 .leave-card:hover .leave-card__del:not(.leave-card__del--mobile) {
   display: inline-flex;
 }
-/* 手机端专用删除按钮：绝对定位在卡片右下角，不占流式空间，桌面端隐藏 */
+/* 手机端专用删除按钮：放在标签行末尾，与撤回按钮同处一行、右对齐 */
 .leave-card__del--mobile {
-  position: absolute;
-  bottom: 6px;
-  right: 6px;
-  padding: 1px 7px;
-  font-size: 10px;
+  margin-left: auto;
+  padding: 0px 5px;
+  font-size: 9px;
+  line-height: 1.5;
   border-radius: 3px;
-  opacity: 0.75;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #dc2626;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  opacity: 0.85;
   display: none !important;
 }
-/* 触屏设备无 hover：头部删除隐藏，右下角常显 */
+/* 触屏设备无 hover：头部删除隐藏，标签行删除显示 */
 @media (hover: none) {
   .leave-card__header-actions .leave-card__del {
     display: none !important;
