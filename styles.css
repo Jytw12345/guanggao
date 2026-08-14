@@ -611,33 +611,58 @@ body {
 .mobile-sync-time {
   display: none;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-size: 11px;
   font-weight: 600;
   color: #4338ca;
   background: linear-gradient(135deg, #eef2ff, #e0e7ff);
   border: 1px solid #c7d2fe;
   border-radius: 999px;
-  padding: 3px 10px;
+  padding: 4px 11px;
   white-space: nowrap;
   box-shadow: 0 1px 3px rgba(79, 70, 229, 0.15);
   line-height: 1;
   cursor: pointer;
+  transition: background .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
-.mobile-sync-time .sync-ico { font-size: 11px; line-height: 1; }
+.mobile-sync-time .sync-ico {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  line-height: 1;
+}
+.mobile-sync-time .sync-ico svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .mobile-sync-time .sync-txt { letter-spacing: 0.2px; }
+/* 同步中：圆环 spinner（svg 内圈弧旋转），永不渲染成方块 */
+.mobile-sync-time .ss-track { stroke: currentColor; stroke-opacity: .22; }
+.mobile-sync-time .ss-arc { stroke: currentColor; }
+.mobile-sync-time .sync-ico--spin svg {
+  transform-origin: center;
+  animation: ssRotate .7s linear infinite;
+}
+@keyframes ssRotate { to { transform: rotate(360deg); } }
 .mobile-sync-time.is-fresh {
   color: #047857;
   background: linear-gradient(135deg, #d1fae5, #a7f3d1);
   border-color: #6ee7b7;
   box-shadow: 0 1px 3px rgba(16, 185, 129, 0.2);
 }
-.mobile-sync-time.is-fresh .sync-ico {
-  display: inline-block;  /* 同步完成：静止，不带动画 */
+.mobile-sync-time.is-syncing {
+  /* 同步中：胶囊轻微呼吸，提示「正在活动」 */
+  animation: ssPulse 1.4s ease-in-out infinite;
 }
-.mobile-sync-time.is-syncing .sync-ico {
-  display: inline-block;
-  animation: syncSpin 0.7s linear infinite;  /* 同步中：持续转 */
+@keyframes ssPulse {
+  0%, 100% { box-shadow: 0 1px 3px rgba(79, 70, 229, 0.15); }
+  50% { box-shadow: 0 1px 9px rgba(79, 70, 229, 0.38); }
 }
 .mobile-sync-time.is-failed {
   color: #b91c1c;
@@ -645,10 +670,6 @@ body {
   border-color: #fca5a5;
   box-shadow: 0 1px 3px rgba(220, 38, 38, 0.2);
 }
-.mobile-sync-time.is-failed .sync-ico {
-  display: inline-block;  /* 同步失败：静止告警 */
-}
-@keyframes syncSpin { 0% { transform: rotate(0); } 100% { transform: rotate(360deg); } }
 
 /* 顶部「全量刷新」按钮：与同步胶囊视觉协调（靛蓝药丸），点击时图标旋转 */
 .sync-full-refresh:not([hidden]) {

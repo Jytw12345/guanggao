@@ -4104,6 +4104,12 @@ function setSyncStatus(cls, text) {
   // 正确流程：开始同步时显式调用 showSyncing()，数据就绪后调用 recordSyncTime()。
 }
 
+// 同步胶囊图标：全部用内联 SVG，避免手机端 emoji 字体缺失时渲染成「方块」再旋转
+const SVG_SYNC_RING   = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ss-track" cx="12" cy="12" r="9"/><path class="ss-arc" d="M12 3a9 9 0 0 1 9 9"/></svg>';
+const SVG_SYNC_CHECK  = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>';
+const SVG_SYNC_CLOCK  = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+const SVG_SYNC_ALERT  = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5"/><path d="M12 16.6v.4"/><path d="M10.3 4.3 3 17a2 2 0 0 0 1.7 3h14.6A2 2 0 0 0 21 17L13.7 4.3a2 2 0 0 0-3.4 0z"/></svg>';
+
 // 同步进行中：图标持续转圈，文案「同步中…」
 function showSyncing() {
   const el = document.getElementById("mobileSyncTime");
@@ -4111,7 +4117,7 @@ function showSyncing() {
   if (syncJustTimer) { clearTimeout(syncJustTimer); syncJustTimer = null; }
   el.classList.remove("is-fresh", "is-failed");
   el.classList.add("is-syncing");
-  el.innerHTML = `<span class="sync-ico">🔄</span><span class="sync-txt">同步中…</span>`;
+  el.innerHTML = `<span class="sync-ico sync-ico--spin">${SVG_SYNC_RING}</span><span class="sync-txt">同步中…</span>`;
   el.title = "正在与云端同步…";
   // 兜底：若一直停在进行中（如之后再无完成回调），4 秒后尝试落定为「同步完成」；
   // 但若此刻云端拉取仍在进行中（节流挂起或正在请求），不要强行标完成，保持转圈；
@@ -4134,7 +4140,7 @@ function updateMobileSyncTime() {
   if (!lastSyncTime) {
     if (syncSyncingTimer) { clearTimeout(syncSyncingTimer); syncSyncingTimer = null; }
     el.classList.remove("is-fresh", "is-syncing", "is-failed");
-    el.innerHTML = `<span class="sync-ico">🕒</span><span class="sync-txt">未同步</span>`;
+    el.innerHTML = `<span class="sync-ico">${SVG_SYNC_CLOCK}</span><span class="sync-txt">未同步</span>`;
     el.title = "尚未与云端同步";
     return;
   }
@@ -4143,7 +4149,7 @@ function updateMobileSyncTime() {
     if (syncSyncingTimer) { clearTimeout(syncSyncingTimer); syncSyncingTimer = null; }
     el.classList.remove("is-syncing", "is-failed");
     el.classList.add("is-fresh");
-    el.innerHTML = `<span class="sync-ico">✅</span><span class="sync-txt">同步完成</span>`;
+    el.innerHTML = `<span class="sync-ico">${SVG_SYNC_CHECK}</span><span class="sync-txt">同步完成</span>`;
     el.title = "同步完成 · 点击立即同步";
     if (!syncJustTimer) {
       syncJustTimer = setTimeout(() => {
@@ -4166,7 +4172,7 @@ function updateMobileSyncTime() {
     const hrs = Math.floor(mins / 60);
     rel = hrs < 24 ? `${hrs} 小时前` : `${Math.floor(hrs / 24)} 天前`;
   }
-  el.innerHTML = `<span class="sync-ico">🕒</span><span class="sync-txt">同步于 ${t}</span>`;
+  el.innerHTML = `<span class="sync-ico">${SVG_SYNC_CLOCK}</span><span class="sync-txt">同步于 ${t}</span>`;
   el.title = `上次同步：${t} · ${rel}`;
 }
 
@@ -22406,7 +22412,7 @@ async function startCloudSession() {
     if (msync) {
       msync.classList.remove("is-syncing", "is-fresh");
       msync.classList.add("is-failed");
-      msync.innerHTML = `<span class="sync-ico">⚠️</span><span class="sync-txt">同步失败</span>`;
+      msync.innerHTML = `<span class="sync-ico">${SVG_SYNC_ALERT}</span><span class="sync-txt">同步失败</span>`;
       msync.title = "云端同步失败：" + (e.message || "");
     }
     setSyncStatus("offline", "● 同步失败");
@@ -23190,7 +23196,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v5614e116";
+  const APP_VERSION = "vc8b118ca";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
