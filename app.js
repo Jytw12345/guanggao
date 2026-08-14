@@ -4410,7 +4410,7 @@ function renderWorkerAssignmentsText(dateStr, workerId = null) {
       const isRepairTask = !!repairRo;
       const evStart = isRepairTask ? new Date(repairRo.appointmentTime) : projectStart(p);
       const evEnd = isRepairTask ? new Date(new Date(repairRo.appointmentTime).getTime() + 2 * 60 * 60 * 1000) : projectEnd(p);
-      const isOvernight = evStart && evEnd && evEnd < evStart; // 跨夜：结束早于开始（次日凌晨）
+      const isOvernight = evStart && evEnd && dateKey(evEnd) !== dateKey(evStart); // 跨夜：结束日期晚于开始日期（次日凌晨）
       const startStr = evStart ? `${String(evStart.getHours()).padStart(2,"0")}:${String(evStart.getMinutes()).padStart(2,"0")}` : "待定";
       const endStr = evEnd ? `${String(evEnd.getHours()).padStart(2,"0")}:${String(evEnd.getMinutes()).padStart(2,"0")}` : "";
       const timeStr = evStart && evEnd ? `${startStr} ~ ${endStr}${isOvernight ? "（次日）" : ""}` : (evStart ? `从 ${startStr} 起` : "时间待定");
@@ -7959,6 +7959,9 @@ async function saveQuickEditProjectTime(id) {
     if (end === time) { toast("结束时间需晚于开始时间"); return; }
     if (end < time) fullEnd = addLocalDateTimeDays(fullEnd, 1); // 跨天夜间施工：结束算次日
     totalBookedHours = (new Date(fullEnd) - new Date(fullTime)) / (1000 * 60 * 60);
+    // 同步 workSegments：单段快速修改也必须让分段数据跟 appointmentTime/endTime 一致，
+    // 否则时间线 / fmtTimeRange 仍读旧 workSegments 导致显示旧日期。
+    segPayload = [{ date, start: time, end }];
   }
 
   /* 施工开始时间不能早于当前时间：只能往现在及之后改，不能往前改（仅当允许修改预约时间时校验） */
@@ -11008,6 +11011,7 @@ function delayProject(id) {
         appointmentTime: newAppointmentTime,
         originalAppointmentTime: p.originalAppointmentTime || p.appointmentTime,
         endTime: newEndTime,
+        workSegments: endTimeStr ? [{ date: newDate, start: newTime, end: endTimeStr }] : p.workSegments,
         delayReason: reason,
         delayCount: delayCount,
         scheduleHistory: scheduleHistory,
@@ -12701,8 +12705,9 @@ function generateWorkerScheduleDescription(dateStr = null) {
         const storeName = store ? store.name : "未知门店";
         const pStart = projectStart(p);
         const pEnd = projectEnd(p);
+        const isOvernightDay = pStart && pEnd && dateKey(pEnd) !== dateKey(pStart);
         const startTime = pStart ? `${String(pStart.getHours()).padStart(2, "0")}:${String(pStart.getMinutes()).padStart(2, "0")}` : "08:00";
-        const endTime = pEnd ? `${String(pEnd.getHours()).padStart(2, "0")}:${String(pEnd.getMinutes()).padStart(2, "0")}` : "18:00";
+        const endTime = pEnd ? `${String(pEnd.getHours()).padStart(2, "0")}:${String(pEnd.getMinutes()).padStart(2, "0")}${isOvernightDay ? "（次日）" : ""}` : "18:00";
       
         const internalWorkers = (p.assignedWorkerIds || []).map(wid2 => {
           const w2 = getWorker(wid2);
@@ -23185,7 +23190,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2cf4ce82";
+  const APP_VERSION = "v5614e116";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
