@@ -60,14 +60,27 @@
         <span class="tab-indicator" aria-hidden="true"></span>
       </nav>
       <div class="header-right">
-        <div class="mobile-sync-time" id="mobileSyncTime" title="上次同步时间"></div>
-        <button id="btnFullRefresh" class="sync-full-refresh" hidden onclick="forceFullRefresh()" title="从服务器全量刷新（绕过本地缓存，确保历史数据最新）">↻</button>
+        <div class="mobile-sync-time" id="mobileSyncTime" title="点击立即同步" onclick="manualSync()"></div>
+        <button id="btnFullRefresh" class="sync-full-refresh" hidden onclick="forceFullRefresh()" title="从服务器全量刷新（绕过本地缓存，确保历史数据最新）">
+          <!-- 静止时显示完整下载图标；同步中时托盘固定，箭头依次下落 -->
+          <svg class="dl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <svg class="dl-tray" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          </svg>
+          <span class="dl-arrow" style="--start-y:-8px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><path d="M7 11l5 5 5-5"/></svg></span>
+          <span class="dl-arrow" style="--start-y:-1px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><path d="M7 11l5 5 5-5"/></svg></span>
+          <span class="dl-arrow" style="--start-y:6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><path d="M7 11l5 5 5-5"/></svg></span>
+        </button>
         <div class="global-search" id="globalSearchWrap">
           <button type="button" class="gs-toggle" id="gsToggle" aria-label="搜索" title="搜索" onclick="toggleGlobalSearch()">🔍</button>
           <input type="text" id="globalSearch" class="gs-input" placeholder="搜索项目 / 员工 / 门店..." />
           <div id="globalSearchResults" class="search-results"></div>
         </div>
-        <span id="syncStatus" class="sync-status" title="本地模式">💻</span>
+        <span id="syncStatus" class="sync-status" title="本地模式 · 点击立即同步" onclick="manualSync()">💻</span>
         <button id="userMenu" class="user-menu-btn hidden" aria-label="用户菜单">👤</button>
       </div>
       <div id="userDropdown" class="user-dropdown hidden">

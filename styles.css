@@ -506,7 +506,7 @@ body {
   border-radius: 999px;
   font-size: 14px;
   line-height: 1;
-  cursor: help;
+  cursor: pointer;
   color: #64748b;
   background: #f1f5f9;
   transition: all .2s ease;
@@ -520,8 +520,17 @@ body {
   background: rgba(239, 68, 68, 0.10);
 }
 .sync-status .sync-spin {
-  display: inline-block;
-  animation: syncSpin 0.8s linear infinite;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  animation: syncSpin 0.45s linear infinite;
+}
+.sync-status .sync-spin svg {
+  width: 100%;
+  height: 100%;
+  color: currentColor;
 }
 
 /* 启动数据加载遮罩：仅在「界面已空、数据仍在拉取」时出现，秒开场景不显示 */
@@ -576,7 +585,7 @@ body {
   white-space: nowrap;
   box-shadow: 0 1px 3px rgba(79, 70, 229, 0.15);
   line-height: 1;
-  cursor: default;
+  cursor: pointer;
 }
 .mobile-sync-time .sync-ico { font-size: 11px; line-height: 1; }
 .mobile-sync-time .sync-txt { letter-spacing: 0.2px; }
@@ -606,31 +615,81 @@ body {
 
 /* 顶部「全量刷新」按钮：与同步胶囊视觉协调（靛蓝药丸），点击时图标旋转 */
 .sync-full-refresh:not([hidden]) {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 30px;
   height: 30px;
   padding: 0;
-  border: 1px solid #c7d2fe;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #eef2ff, #e0e7ff);
-  color: #4338ca;
+  border: 1px solid #e0e7ff;
+  border-radius: 8px;
+  background: #f5f3ff;
+  color: #5b4dc9;
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
-  box-shadow: 0 1px 3px rgba(79, 70, 229, 0.15);
+  box-shadow: 0 1px 2px rgba(91, 77, 201, 0.08);
   transition: all .15s ease;
   flex-shrink: 0;
+  overflow: hidden;
+}
+.sync-full-refresh svg { width: 14px; height: 14px; }
+.sync-full-refresh .dl-icon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 15px;
+  height: 15px;
+  margin-left: -7.5px;
+  margin-top: -7.5px;
+  opacity: 1;
+  transition: opacity .12s ease;
+}
+.sync-full-refresh .dl-tray {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 15px;
+  height: 15px;
+  margin-left: -7.5px;
+  margin-top: -7.5px;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.sync-full-refresh .dl-arrow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  margin-top: -7px;
+  opacity: 0;
+  transition: opacity .12s ease;
 }
 .sync-full-refresh[hidden] { display: none; }
 .sync-full-refresh:hover:not([hidden]) {
-  background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
-  color: #3730a3;
+  background: #ede9fe;
+  color: #4c3fb8;
 }
 .sync-full-refresh:active:not([hidden]) { transform: scale(0.94); }
-.sync-full-refresh.spinning { animation: syncSpin 0.7s linear infinite; pointer-events: none; }
+.sync-full-refresh.spinning { pointer-events: none; }
+.sync-full-refresh.spinning .dl-icon { opacity: 0; }
+.sync-full-refresh.spinning .dl-tray { opacity: 1; }
+.sync-full-refresh.spinning .dl-arrow {
+  opacity: 1;
+  animation: dlArrowDrop 0.55s ease-in-out infinite;
+}
+.sync-full-refresh.spinning .dl-arrow:nth-child(4) { animation-delay: 0s; }
+.sync-full-refresh.spinning .dl-arrow:nth-child(5) { animation-delay: 0.11s; }
+.sync-full-refresh.spinning .dl-arrow:nth-child(6) { animation-delay: 0.22s; }
 .sync-full-refresh[disabled] { opacity: 0.6; cursor: default; }
+@keyframes dlArrowDrop {
+  0% { opacity: 0.2; transform: translateY(var(--start-y)); }
+  35% { opacity: 1; }
+  100% { opacity: 0.2; transform: translateY(calc(var(--start-y) + 9px)); }
+}
 @media (max-width: 768px) {
   .sync-full-refresh:not([hidden]) { width: 32px; height: 32px; }
 }

@@ -3867,10 +3867,21 @@ function setSyncStatus(cls, text) {
   if (el) {
     el.className = "sync-status " + (cls || "");
     const t = (text || "").replace(/^●\s*/, "");
-    el.title = t || "同步状态";
+    // 桌面端圆点 tooltip 也带上相对时间，和手机胶囊一致（不知道多久前同步时只能看手机端）
+    let title = t || "同步状态";
+    if (lastSyncTime) {
+      const diff = Date.now() - lastSyncTime;
+      const mins = Math.floor(diff / 60000);
+      const rel = mins < 60 ? (mins <= 1 ? "1 分钟内" : mins + " 分钟前") : (() => {
+        const hrs = Math.floor(mins / 60);
+        return hrs < 24 ? hrs + " 小时前" : Math.floor(hrs / 24) + " 天前";
+      })();
+      title += " · " + rel;
+    }
+    el.title = title + " · 点击立即同步";
     let icon = "●";
     if (/同步中|连接中/.test(t)) {
-      icon = '<span class="sync-spin">↻</span>';
+      icon = '<span class="sync-spin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><circle cx="12" cy="12" r="10" stroke-dasharray="42 20"/></svg></span>';
     } else if (/已同步|同步完成|完成/.test(t)) {
       icon = "✓";
     } else if (/离线|失败|异常|待授权|不稳定|重试中/.test(t)) {
@@ -3925,7 +3936,7 @@ function updateMobileSyncTime() {
     el.classList.remove("is-syncing", "is-failed");
     el.classList.add("is-fresh");
     el.innerHTML = `<span class="sync-ico">✅</span><span class="sync-txt">同步完成</span>`;
-    el.title = "同步完成";
+    el.title = "同步完成 · 点击立即同步";
     if (!syncJustTimer) {
       syncJustTimer = setTimeout(() => {
         syncJustTimer = null;
@@ -18706,6 +18717,16 @@ async function forceFullRefresh() {
   }
 }
 
+/* 点击顶部「同步状态」胶囊/圆点触发的轻量同步。
+   与回前台/联网自动同步走同一条路（缓存融合、只拉活跃+近120天），不绕过缓存、不拉全量历史。
+   真正的「强制全量拉服务器」仍由独立的 ↻ 按钮（forceFullRefresh）承担，避免误触重同步。 */
+function manualSync() {
+  if (MODE !== "cloud") { toast("本地模式无需同步"); return; }
+  if (repo.isLoading && repo.isLoading()) { toast("正在同步中，请稍候"); return; }
+  showSyncing(); // 顶栏转圈反馈；数据就绪后由 recordSyncTime 落定「完成」
+  resyncFromCloud("manual tap");
+}
+
 /* 头部角色标签（已迁移到用户下拉菜单，此处保留空函数避免旧调用报错） */
 function renderRoleInfo() {
   const el = document.getElementById("roleInfo");
@@ -21305,6 +21326,10 @@ async function startCloudSession() {
       // 无缓存：界面还空，拉取数据期间显示加载遮罩，缓解等待的延迟感
       showBootLoader();
     }
+    // 全量刷新按钮是操作入口：进入云模式同步流程即显示，不等同步完成
+    const fbtn = document.getElementById("btnFullRefresh");
+    if (fbtn) fbtn.hidden = false;
+
     // ② 后台拉取最新数据；成功后静默刷新。失败则用缓存兜底
     const synced = await repo.loadAll();
     await loadWorkTimeoutSetting(); // 拉取全局部署的「连续施工超时阈值」（多人统一标准）
@@ -21325,9 +21350,6 @@ async function startCloudSession() {
       setSyncStatus("offline", "● 离线（本地缓存）");
     }
     hideBootLoader(); // 数据已就绪，收起加载遮罩
-    // 云模式登录成功：显示「全量刷新」按钮（仅云端模式有意义，本地模式保持隐藏）
-    const fbtn = document.getElementById("btnFullRefresh");
-    if (fbtn) fbtn.hidden = false;
     subscribeRealtime();
   } catch (e) {
     console.error("加载云端会话失败:", e);
@@ -22117,7 +22139,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vce1e3098";
+  const APP_VERSION = "va7d1e2ae";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
