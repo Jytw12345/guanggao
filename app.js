@@ -4247,7 +4247,7 @@ function renderWorkers(dateStr) {
   if (!list) return;
   
   if (cache.workers.length === 0) {
-    list.innerHTML = `<div class="empty">暂无施工人员，点击右上角「添加人员」创建。</div>`;
+    list.innerHTML = `<div class="empty">暂无施工人员，点击「+ 添加施工人员」创建。</div>`;
     return;
   }
   
@@ -4280,8 +4280,9 @@ function renderWorkers(dateStr) {
       ${overdueSection}
       <div id="workerScheduleView">${scheduleHtml}</div>
     </div>
-    <div class="section-head" style="margin-bottom: 12px;">
+    <div class="section-head" style="margin-bottom: 12px; display:flex; align-items:center; justify-content:space-between;">
       <h3 style="margin:0; font-size:16px;">👷 施工人员列表</h3>
+      ${perm.addWorker() ? `<button class="btn primary" onclick="newWorker()">+ 添加施工人员</button>` : ""}
     </div>
     <div class="card-grid" style="margin-top:0;">
     ${cache.workers.map((w) => {
@@ -18880,7 +18881,6 @@ function applyPermissions() {
     if (el) el.classList.toggle("hidden", hidden);
   };
   setHidden("btnNewProject", !perm.createProject());
-  setHidden("btnNewWorker", !perm.addWorker());
   setHidden("btnNewStore", !perm.manageStores());
   setHidden("btnWageConfig", !perm.manageWageConfig());
   setHidden("btnNewSchedule", !perm.addSchedule());
@@ -21686,7 +21686,6 @@ function bindEvents() {
     maskTouchStart = false;
   });
 
-  document.getElementById("btnNewWorker").addEventListener("click", newWorker);
   document.getElementById("btnNewProject").addEventListener("click", newProject);
   document.getElementById("btnNewStore").addEventListener("click", newStore);
   document.getElementById("projectSearch").addEventListener("input", renderProjects);
@@ -22213,7 +22212,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v8c7a6128";
+  const APP_VERSION = "v7788c9f8";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
