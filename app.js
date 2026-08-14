@@ -3886,7 +3886,8 @@ function setSyncStatus(cls, text) {
     if (/同步中|连接中/.test(t)) {
       icon = '<span class="sync-spin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><circle cx="12" cy="12" r="10" stroke-dasharray="42 20"/></svg></span>';
     } else if (/已同步|同步完成|完成/.test(t)) {
-      icon = "✓";
+      // 同步完成：实心静止圆环（区别于动画中的缺口旋转圆环）
+      icon = '<span class="sync-static"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/></svg></span>';
     } else if (/离线|失败|异常|待授权|不稳定|重试中/.test(t)) {
       icon = "⚠";
     } else if (/本地模式/.test(t)) {
@@ -22212,7 +22213,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va17c5c50";
+  const APP_VERSION = "v8c7a6128";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

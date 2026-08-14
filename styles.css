@@ -527,7 +527,15 @@ body {
   height: 16px;
   animation: syncSpin 0.45s linear infinite;
 }
-.sync-status .sync-spin svg {
+.sync-status .sync-static {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.sync-status .sync-spin svg,
+.sync-status .sync-static svg {
   width: 100%;
   height: 100%;
   color: currentColor;
