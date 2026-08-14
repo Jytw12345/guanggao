@@ -682,9 +682,9 @@ function showDelayInfo(projectId) {
   if (!p) return;
   const items = [];
   if (p.delayReason) items.push({ label: "延期原因", value: p.delayReason, variant: "highlight", icon: "📝" });
-  if (p.appointmentTime) items.push({ label: "新预约时间", value: fmtDateTime(p.appointmentTime), icon: "🕒" });
+  if (p.appointmentTime) items.push({ label: "新预约时间", value: fmtDateTime(p.appointmentTime), icon: svgCal(16) });
   if (p.originalAppointmentTime && p.originalAppointmentTime !== p.appointmentTime)
-    items.push({ label: "原预约时间", value: fmtDateTime(p.originalAppointmentTime), icon: "↩️" });
+    items.push({ label: "原预约时间", value: fmtDateTime(p.originalAppointmentTime), icon: svgCal(16) });
   items.push({ label: "延期次数", value: String(p.delayCount || 0), icon: "🔢" });
   showKVModal("延期信息", items);
 }
@@ -748,7 +748,7 @@ function showLeaveConflictInfo(projectId) {
   const items = all.map(r => {
     const typeLabel = LEAVE_TYPE_LABEL[r.leaveType] || "请假";
     const range = `${r.startDate}${r.startType && r.startType !== "all" ? " " + r.startType : ""} ~ ${r.endDate}${r.endType && r.endType !== "all" ? " " + r.endType : ""}`;
-    const lines = [`📅 ${esc(range)}`];
+    const lines = [`${svgCal(14)} ${esc(range)}`];
     if (r.reason) lines.push(`📝 ${esc(r.reason)}`);
     const conflict = new Date(`${r.startDate}T${r.startTime || "08:00"}`) < pEnd && new Date(`${r.endDate}T${r.endTime || "18:00"}`) > pStart;
     return {
@@ -775,7 +775,7 @@ function showCrossDayInfo(projectId) {
     return {
       label: `第 ${i + 1} 天 · ${esc(s.date)}`,
       value: "",
-      icon: "📅",
+      icon: svgCal(16),
       html: `🕐 ${esc(s.startHM)} ~ ${esc(s.endHM)}${crossNight ? "（跨夜）" : ""}`,
     };
   });
@@ -1839,8 +1839,12 @@ function buildStatusTimeCards(p) {
   const nodes = [];
   const add = (icon, label, value, variant) => { if (value) nodes.push({ icon, label, value, variant }); };
 
-  if (p.appointmentTime) add("📅", "预约时间", fmtFull(p.appointmentTime), "blue");
-  if (isProjectTimeModified(p)) add("📋", "改期前", fmtFull(p.originalAppointmentTime), "gray");
+  if (p.originalAppointmentTime && p.originalAppointmentTime !== p.appointmentTime) {
+    add(svgCal(16), "原预约时间", fmtFull(p.originalAppointmentTime), "blue");
+    add(svgCal(16), "新预约时间", fmtFull(p.appointmentTime), "blue");
+  } else if (p.appointmentTime) {
+    add(svgCal(16), "预约时间", fmtFull(p.appointmentTime), "blue");
+  }
   /* 开工时间用 originalStartedAt（首次开工），避免暂停/恢复后 startedAt 被重置为恢复时间，
      导致时间线出现「开工晚于暂停」的错乱顺序。 */
   const startedAt = p.originalStartedAt || p.startedAt;
@@ -1899,6 +1903,70 @@ function gotoConstructionWorklog(id) {
     return;
   }
   gotoConstruction(id, { scrollToWorklog: true });
+}
+
+/* 计算项目各施工人员实际工时（人·小时）及汇总。
+   优先按在场时段自动计算；无时段时退回 workLogs 手动登记值。 */
+function calcProjectWorkerStats(p) {
+  const workerLogs = {};
+  (p.workLogs || []).forEach((log) => {
+    if (!log) return;
+    const key = log.workerId || log.workerName || "unknown";
+    if (!workerLogs[key]) {
+      workerLogs[key] = {
+        name: log.workerName || "未知",
+        hours: 0,
+        isOutsourced: log.isOutsourced || (log.workerId && log.workerId.startsWith("outsourced:"))
+      };
+    }
+    workerLogs[key].hours += Number(log.hours) || 0;
+  });
+
+  const workerPeriods = {};
+  const chWorkerName = {};
+  const chIsOutsourced = {};
+  const allWids = new Set([...(p.assignedWorkerIds || [])]);
+  (p.workerChangeHistory || []).forEach((ch) => {
+    if (ch.workerId) {
+      allWids.add(ch.workerId);
+      chWorkerName[ch.workerId] = ch.workerName || chWorkerName[ch.workerId];
+      if (ch.isOutsourced) chIsOutsourced[ch.workerId] = true;
+    }
+  });
+  allWids.forEach((wid) => {
+    workerPeriods[wid] = buildWorkerPeriods(p, wid);
+  });
+
+  const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
+  allWids.forEach((wid) => {
+    if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
+      const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+      if (!lastPeriod.end) lastPeriod.end = periodEndTime;
+      if (lastPeriod.end && new Date(lastPeriod.end) < new Date(lastPeriod.start)) lastPeriod.end = lastPeriod.start;
+    }
+  });
+
+  const allWorkers = new Set([...(p.assignedWorkerIds || []), ...Object.keys(workerLogs), ...Object.keys(workerPeriods)]);
+  const workerStats = [];
+  allWorkers.forEach((wid) => {
+    const isAssigned = (p.assignedWorkerIds || []).includes(wid);
+    const logEntry = workerLogs[wid];
+    const worker = getWorker(wid);
+    const name = logEntry ? logEntry.name : (worker ? worker.name : (chWorkerName[wid] || "未知"));
+    const isOutsourced = logEntry ? logEntry.isOutsourced : !!chIsOutsourced[wid];
+    const periods = workerPeriods[wid] || [];
+    let hours = 0;
+    if (periods.length > 0) {
+      hours = calcWorkerRealtimeHours(p, wid, periods);
+    } else if (logEntry && logEntry.hours > 0) {
+      hours = logEntry.hours;
+    }
+    hours = Math.round(hours * 10) / 10;
+    workerStats.push({ name, hours, isAssigned, isOutsourced, id: wid, periods });
+  });
+
+  const totalHours = Math.round(workerStats.reduce((sum, ws) => sum + ws.hours, 0) * 10) / 10;
+  return { workerStats, totalHours, workerPeriods, workerLogs };
 }
 
 function toast(msg) {
@@ -2042,7 +2110,12 @@ const mapProject = (r) => ({
   phone: r.phone,
   address: r.address,
   appointmentTime: r.appointment_time || r.appointmentTime || "",
-  originalAppointmentTime: r.original_appointment_time || r.originalAppointmentTime || null,
+  originalAppointmentTime: r.original_appointment_time || r.originalAppointmentTime || (() => {
+    const dhRaw = r.delay_history || r.delayHistory;
+    const dh = (typeof dhRaw === "string" ? safeJsonParse(dhRaw, null) : dhRaw) || [];
+    const first = dh[0];
+    return first && first.originalDate && first.originalTime ? buildLocalDateTime(first.originalDate, first.originalTime) : null;
+  })() || null,
   endTime: r.end_time || r.endTime || "",
   workSegments: (r.work_segments ? (typeof r.work_segments === "string" ? safeJsonParse(r.work_segments, null) : r.work_segments) : null)
     || (r.workSegments ? (typeof r.workSegments === "string" ? safeJsonParse(r.workSegments, null) : r.workSegments) : null),
@@ -3929,7 +4002,7 @@ function renderWorkerOverdueSection(workerId = null) {
     } else if (delayed) {
       badge = "⏰ 已延期";
       const appt = p.appointmentTime || p.startTime;
-      sub = `原预约 ${appt ? fmtDateTime(appt) : "时间待定"}` + (p.delayReason ? ` · ${p.delayReason}` : "");
+      sub = `新预约 ${appt ? fmtDateTime(appt) : "时间待定"}` + (p.delayReason ? ` · ${p.delayReason}` : "");
       badgeCls = "overdue";
       level = 2;
     } else {
@@ -6672,6 +6745,108 @@ async function openProjectFromCard(id, opts = {}) {
   gotoConstruction(id, opts);
 }
 
+/* 请假/轮休半天提示：根据 startType/endType 生成「（上午）」「（下午）」
+   「（上午~下午）」或自定义时段的「（08:00-12:00）」；全天（all/all）返回空串。 */
+function leaveHalfDayHint(r) {
+  const st = r.startType || "all";
+  const et = r.endType || "all";
+  if (st === "all" && et === "all") return "";
+  if (st === "custom" || et === "custom") {
+    const s = r.startTime ? r.startTime.slice(0, 5) : "";
+    const e = r.endTime ? r.endTime.slice(0, 5) : "";
+    if (s && e) return `（${s}-${e}）`;
+    return "";
+  }
+  const label = { all: "", morning: "上午", afternoon: "下午", custom: "" };
+  const sL = label[st] || "";
+  const eL = label[et] || "";
+  if (sL && eL) return sL === eL ? `（${sL}）` : `（${sL}~${eL}）`;
+  return sL ? `（${sL}）` : (eL ? `（${eL}）` : "");
+}
+
+/* 首页（项目预约）右上角「今日不在岗」徽标：无休假人员时隐藏。
+   点击徽标弹出气泡，列出当天请假/轮休人员；气泡内可跳转休假管理。 */
+function updateHomeLeaveBadge() {
+  const wrap = document.getElementById("homeLeaveBadgeWrap");
+  if (!wrap) return;
+  const today = todayStr();
+  const dayLeaves = cache.leaveRecords.filter(r => {
+    if (r.status === LEAVE_STATUS.REJECTED) return false;
+    return today >= r.startDate && today <= r.endDate;
+  });
+  if (dayLeaves.length === 0) {
+    wrap.innerHTML = "";
+    return;
+  }
+
+  const restList = dayLeaves
+    .filter(r => r.leaveType === "rotational" && !r.workedMakeup)
+    .map(r => ({
+      name: esc(r.workerName || (getWorker(r.workerId) ? getWorker(r.workerId).name : "未知")),
+      pending: r.status === LEAVE_STATUS.PENDING,
+      hint: leaveHalfDayHint(r)
+    }));
+  const leaveList = dayLeaves
+    .filter(r => r.leaveType !== "rotational")
+    .map(r => ({
+      name: esc(r.workerName || (getWorker(r.workerId) ? getWorker(r.workerId).name : "未知")),
+      pending: r.status === LEAVE_STATUS.PENDING,
+      hint: leaveHalfDayHint(r)
+    }));
+
+  const total = restList.length + leaveList.length;
+  const rows = [];
+  if (restList.length > 0) {
+    rows.push(`<div class="home-leave-pop__group">
+      <div class="home-leave-pop__head rest">🌴 轮休 ${restList.length} 人</div>
+      <div class="home-leave-pop__names">${restList.map(x => x.name + (x.hint ? `<span class="home-leave-pop__hint">${x.hint}</span>` : "") + (x.pending ? '<span class="home-leave-pop__pending">（待审批）</span>' : "")).join("、")}</div>
+    </div>`);
+  }
+  if (leaveList.length > 0) {
+    rows.push(`<div class="home-leave-pop__group">
+      <div class="home-leave-pop__head leave">🏥 请假 ${leaveList.length} 人</div>
+      <div class="home-leave-pop__names">${leaveList.map(x => x.name + (x.hint ? `<span class="home-leave-pop__hint">${x.hint}</span>` : "") + (x.pending ? '<span class="home-leave-pop__pending">（待审批）</span>' : "")).join("、")}</div>
+    </div>`);
+  }
+
+  wrap.innerHTML = `
+    <button class="home-leave-badge" id="homeLeaveBadge" type="button" title="今日不在岗 ${total} 人">
+      <span class="home-leave-badge__dot"></span>
+      <span class="home-leave-badge__text">今日不在岗 ${total} 人</span>
+      <span class="home-leave-badge__short">${total} 人休假</span>
+    </button>
+    <div class="home-leave-popover" id="homeLeavePopover">
+      <div class="home-leave-popover__title">今日不在岗</div>
+      ${rows.join("")}
+      <button class="home-leave-popover__link" onclick="switchTab('leaves'); closeHomeLeavePopover();" type="button">查看休假管理 →</button>
+    </div>
+  `;
+
+  const badge = document.getElementById("homeLeaveBadge");
+  const popover = document.getElementById("homeLeavePopover");
+  if (badge && popover) {
+    badge.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const willOpen = !popover.classList.contains("open");
+      closeHomeLeavePopover();
+      if (willOpen) {
+        popover.classList.add("open");
+        // 气泡右对齐，避免小屏溢出
+        const badgeRect = badge.getBoundingClientRect();
+        const popW = popover.offsetWidth || 260;
+        let left = badgeRect.right - popW;
+        if (left < 8) left = 8;
+        popover.style.top = (badgeRect.bottom + 8) + "px";
+        popover.style.left = left + "px";
+      }
+    });
+  }
+}
+
+function closeHomeLeavePopover() {
+  document.querySelectorAll(".home-leave-popover.open").forEach(el => el.classList.remove("open"));
+}
+
 function renderProjects() {
   const kw = document.getElementById("projectSearch").value.trim().toLowerCase();
   const status = document.getElementById("projectStatusFilter").value;
@@ -6747,6 +6922,7 @@ function renderProjects() {
   }
 
   updateProjectStatusIndicator(items);
+  updateHomeLeaveBadge();
 
   if (kw) {
     items = items.filter((p) =>
@@ -8547,7 +8723,8 @@ function renderConstruction() {
 
   const end = new Date(p.endTime || p.startTime);
   const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
-  
+  const projectWorkerStats = calcProjectWorkerStats(p);
+
   box.innerHTML = `
     <div class="detail-block">
       <div class="proj-hero">
@@ -8724,40 +8901,18 @@ function renderConstruction() {
       <h3>📝 施工记录</h3>
       <div class="rec-timeline">
         ${buildStatusTimeCards(p)}
+        ${projectWorkerStats.totalHours > 0 ? `<div class="rec-node rec-node--violet">
+          <span class="rec-node__icon">⚙️</span>
+          <span class="rec-node__body">
+            <span class="rec-node__label">总工时</span>
+            <span class="rec-node__value">${fmtHours(projectWorkerStats.totalHours)} 工时</span>
+          </span>
+        </div>` : ""}
         ${p.startedAt ? `<div class="rec-node rec-node--violet">
           <span class="rec-node__icon">⏱</span>
           <span class="rec-node__body">
-            <span class="rec-node__label">工时时长</span>
-            <span class="rec-node__value">${(() => {
-              const projectEndTime = getProjectEffectiveEndTime(p);
-              let totalHours = 0;
-              const workWids = new Set([...(p.assignedWorkerIds || [])]);
-              (p.workerChangeHistory || []).forEach(ch => { if (ch.workerId) workWids.add(ch.workerId); });
-              workWids.forEach(wid => {
-                const periods = buildWorkerPeriods(p, wid);
-                periods.forEach(pr => {
-                  const start = new Date(pr.start);
-                  const end = pr.end ? new Date(pr.end) : projectEndTime;
-                  let dur = (end - start) / (1000 * 60 * 60);
-                  (p.pauseHistory || []).forEach(ph => {
-                    if (ph.pauseAt && ph.resumedAt) {
-                      const ps = new Date(ph.pauseAt);
-                      const pe = new Date(ph.resumedAt);
-                      const os = ps > start ? ps : start;
-                      const oe = pe < end ? pe : end;
-                      if (oe > os) dur -= (oe - os) / (1000 * 60 * 60);
-                    }
-                  });
-                  totalHours += dur;
-                });
-              });
-              const totalMins = Math.round(totalHours * 60);
-              const hours = Math.floor(totalMins / 60);
-              const mins = totalMins % 60;
-              if (hours > 0 && mins > 0) return `${hours}小时${mins}分钟`;
-              if (hours > 0) return `${hours}小时`;
-              return `${mins}分钟`;
-            })()}</span>
+            <span class="rec-node__label">施工时长</span>
+            <span class="rec-node__value">${esc(calcActualWorkDuration(p))}</span>
           </span>
         </div>` : ""}
       </div>
@@ -8911,81 +9066,8 @@ function renderConstruction() {
       })()}
       
       ${(() => {
-        const workerLogs = {};
-        (p.workLogs || []).forEach((log) => {
-          const key = log.workerId || log.workerName || "unknown";
-          if (!workerLogs[key]) {
-            workerLogs[key] = { name: log.workerName, hours: 0, isOutsourced: log.isOutsourced || (log.workerId && log.workerId.startsWith("outsourced:")) };
-          }
-          workerLogs[key].hours += Number(log.hours) || 0;
-        });
-        
-        const workerPeriods = {};
-        const chWorkerName = {};
-        const chIsOutsourced = {};
-        const allWids = new Set([...(p.assignedWorkerIds || [])]);
-        (p.workerChangeHistory || []).forEach((ch) => {
-          if (ch.workerId) {
-            allWids.add(ch.workerId);
-            chWorkerName[ch.workerId] = ch.workerName || chWorkerName[ch.workerId];
-            if (ch.isOutsourced) chIsOutsourced[ch.workerId] = true;
-          }
-        });
-        allWids.forEach((wid) => {
-          workerPeriods[wid] = buildWorkerPeriods(p, wid);
-        });
-
-        const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
-        allWids.forEach((wid) => {
-          if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
-            const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
-            if (!lastPeriod.end) {
-              lastPeriod.end = periodEndTime;
-            }
-            /* 防御：恢复施工后立即又暂停/完工，可能导致 end 早于 start */
-            if (lastPeriod.end && new Date(lastPeriod.end) < new Date(lastPeriod.start)) {
-              lastPeriod.end = lastPeriod.start;
-            }
-          }
-        });
-        
-        const pauseDurations = {};
-        (p.pauseHistory || []).forEach((ph) => {
-          if (ph.pauseAt && ph.resumedAt) {
-            const pauseStart = new Date(ph.pauseAt);
-            const pauseEnd = new Date(ph.resumedAt);
-            pauseDurations[ph.pauseAt] = (pauseEnd - pauseStart) / (1000 * 60 * 60);
-          }
-        });
-        
-        const allWorkers = new Set([...(p.assignedWorkerIds || []), ...Object.keys(workerLogs), ...Object.keys(workerPeriods)]);
-        const workerStats = [];
-        
-        allWorkers.forEach((wid) => {
-          const isAssigned = (p.assignedWorkerIds || []).includes(wid);
-          const logEntry = workerLogs[wid];
-          const worker = getWorker(wid);
-          const name = logEntry ? logEntry.name : (worker ? worker.name : (chWorkerName[wid] || "未知"));
-          const isOutsourced = logEntry ? logEntry.isOutsourced : !!chIsOutsourced[wid];
-          const periods = workerPeriods[wid] || [];
-          
-          let hours = 0;
-          
-          /* 优先根据实际在场时段计算工时（与下方显示的时间段同源，保证一致）；
-             仅在完全没有时段记录时才退回 workLogs 手动登记值（防止被手动改过后与时段矛盾） */
-          if (periods.length > 0) {
-            hours = calcWorkerRealtimeHours(p, wid, periods);
-          } else if (logEntry && logEntry.hours > 0) {
-            hours = logEntry.hours;
-          }
-          
-          hours = Math.round(hours * 10) / 10;
-          
-          workerStats.push({ name, hours, isAssigned, isOutsourced, id: wid, periods });
-        });
-        
+        const workerStats = projectWorkerStats.workerStats;
         if (workerStats.length === 0) return "";
-        
         return `
         <details class="rec-details rec-details--green">
           <summary>👷 工人工时统计（${workerStats.length}人）</summary>
@@ -10518,6 +10600,7 @@ function delayProject(id) {
       const patch = {
         status: STATUS.DELAYED,
         appointmentTime: newAppointmentTime,
+        originalAppointmentTime: p.originalAppointmentTime || p.appointmentTime,
         endTime: newEndTime,
         delayReason: reason,
         delayCount: delayCount,
@@ -18333,6 +18416,7 @@ function switchTab(name) {
     const t = o.querySelector(".tab-dropdown-toggle");
     if (t) t.setAttribute("aria-expanded", "false");
   });
+  closeHomeLeavePopover();
   document.querySelector(".tabs").classList.remove("open");
   window.scrollTo({ top: 0, behavior: "instant" });
 
@@ -21089,6 +21173,7 @@ function showAuthError(msg) {
 }
 
 let authSubmitting = false; // 防止双击登录/注册按钮触发重复请求
+let isLoggingOut = false; // 标记「主动登出中」，避免 onAuthStateChange 把主动登出误判为会话过期
 
 async function doLogin() {
   if (authSubmitting) return;
@@ -21139,6 +21224,7 @@ async function doSignup() {
 }
 
 async function doLogout() {
+  isLoggingOut = true; // 标记主动登出，屏蔽 onAuthStateChange 的「会话过期」误报
   try {
     await sb.auth.signOut();
   } catch (e) {
@@ -21266,6 +21352,20 @@ function showNoAccess(email) {
   const screen = document.getElementById("noAccessScreen");
   document.getElementById("noAccessEmail").textContent = email || "";
   screen.classList.remove("hidden");
+}
+
+/* 会话意外失效（过期/被踢）时回到登录页：仅切 UI，不清空本地缓存数据，
+   重新登录后 startCloudSession 会用缓存秒开并后台拉新。 */
+function goToLogin() {
+  currentUser = null;
+  currentProfile = null;
+  const authScreen = document.getElementById("authScreen");
+  const userMenu = document.getElementById("userMenu");
+  const noAccess = document.getElementById("noAccessScreen");
+  if (authScreen) authScreen.classList.remove("hidden");
+  if (userMenu) userMenu.classList.add("hidden");
+  if (noAccess) noAccess.classList.add("hidden");
+  setSyncStatus("", "● 本地模式");
 }
 
 /* ============================================================
@@ -21428,6 +21528,9 @@ function bindEvents() {
         const t = o.querySelector(".tab-dropdown-toggle");
         if (t) t.setAttribute("aria-expanded", "false");
       });
+    }
+    if (!e.target.closest(".home-leave-badge-wrap")) {
+      closeHomeLeavePopover();
     }
     if (!tabs.contains(e.target) && !menuToggle.contains(e.target)) {
       tabs.classList.remove("open");
@@ -21657,6 +21760,23 @@ async function init() {
     } else {
       MODE = "cloud";
       sb = window.supabase.createClient(window.APP_CONFIG.SUPABASE_URL, window.APP_CONFIG.SUPABASE_ANON_KEY);
+      // 会话状态监听：access token 过期 / refresh token 失效 / 多端踢下线时，
+      // supabase 会自动 emit SIGNED_OUT（后台冻结超 1 小时、refresh token rotation 都可能触发）。
+      // 此时给用户友好提示并回到登录页，避免界面无响应或操作报错时不知原因。
+      sb.auth.onAuthStateChange((event) => {
+        if (event === "SIGNED_OUT" || event === "USER_DELETED") {
+          const authScreen = document.getElementById("authScreen");
+          const userMenu = document.getElementById("userMenu");
+          const wasLoggedIn = authScreen && authScreen.classList.contains("hidden") &&
+            userMenu && !userMenu.classList.contains("hidden");
+          // 主动登出（doLogout 已处理跳转）或初始就不在登录态，不打扰
+          if (isLoggingOut || !wasLoggedIn) return;
+          isLoggingOut = true; // 防重复触发
+          toast("登录已过期，请重新登录");
+          goToLogin();
+          isLoggingOut = false;
+        }
+      });
       // 注意：出于安全考虑，前端不再持有 service_role 密钥。
       // 彻底删除 Auth 用户等需要管理员权限的操作应放在服务端（Edge Function / 自有后端），
       // 密钥仅保存在服务端环境变量中。当前未配置时，删除账号只会清除 profiles 记录。
@@ -21997,7 +22117,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vbc20266f";
+  const APP_VERSION = "vce1e3098";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -22583,7 +22703,8 @@ function usePanelHtml(v) {
       <div class="veh-panel-rule">—— 用车登记 · ${esc(v.name)} ——</div>
       <div class="veh-quick-fields">
         <div class="form-row">
-          <label>起始公里数 <span class="veh-hint">（整数，请核对仪表）</span></label>
+          <div class="veh-km-alert">⚠️ 请核对仪表读数，起始公里数务必准确</div>
+          <label>起始公里数 <span class="veh-hint">（整数）</span></label>
           <input type="text" inputmode="numeric" class="input veh-km-edit" id="vtqStart"
                  value="${Number(startKm)}"
                  onfocus="moveInputCursorToEnd(this)"

@@ -4072,6 +4072,111 @@ textarea.input { resize: vertical; min-height: 50px; }
   margin-bottom: 6px;
 }
 
+/* 首页（项目预约）右上角「今日不在岗」徽标与气泡 */
+.home-leave-badge-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.home-leave-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #fed7aa;
+  background: linear-gradient(135deg, #fff7ed, #ffedd5);
+  color: #9a3412;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s ease;
+  white-space: nowrap;
+}
+.home-leave-badge:hover {
+  background: linear-gradient(135deg, #ffedd5, #fed7aa);
+  border-color: #f97316;
+  box-shadow: 0 2px 8px rgba(249, 115, 22, 0.14);
+}
+.home-leave-badge__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f97316;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.18);
+  flex-shrink: 0;
+}
+.home-leave-badge__short { display: none; }
+.home-leave-popover {
+  position: fixed;
+  min-width: 240px;
+  max-width: min(360px, calc(100vw - 32px));
+  background: #fff;
+  border: 1px solid #fed7aa;
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16);
+  padding: 12px 14px;
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 200;
+}
+.home-leave-popover.open {
+  display: flex;
+  animation: dropdownIn .18s ease;
+}
+.home-leave-popover__title {
+  font-weight: 700;
+  font-size: 14px;
+  color: #7c2d12;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f3f4f6;
+}
+.home-leave-pop__group { display: flex; flex-direction: column; gap: 4px; }
+.home-leave-pop__head {
+  font-size: 13px;
+  font-weight: 600;
+}
+.home-leave-pop__head.rest { color: #047857; }
+.home-leave-pop__head.leave { color: #b91c1c; }
+.home-leave-pop__names {
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.5;
+}
+.home-leave-pop__pending {
+  color: #9ca3af;
+  font-size: 12px;
+  margin-left: 2px;
+}
+.home-leave-pop__hint {
+  color: #6366f1;
+  font-size: 12px;
+  margin-left: 2px;
+}
+.home-leave-popover__link {
+  margin-top: 4px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: none;
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  transition: background .15s ease;
+}
+.home-leave-popover__link:hover { background: #ffedd5; }
+
+@media (max-width: 640px) {
+  .home-leave-badge { padding: 5px 10px; font-size: 12px; }
+  .home-leave-badge__text { display: none; }
+  .home-leave-badge__short { display: inline; }
+  .home-leave-badge__dot { width: 8px; height: 8px; }
+  .home-leave-popover { max-width: calc(100vw - 32px); }
+}
+
 .worker-assign { display: flex; flex-direction: column; gap: 10px; }
 .worker-assign-item { background: #fff; border: 1px solid #eef2f7; border-radius: 8px; padding: 10px 12px; }
 .worker-assign-name { font-weight: 600; font-size: 14px; color: #111827; margin-bottom: 6px; }
@@ -9816,8 +9921,8 @@ table.data.project-hours-diff thead th {
   margin-bottom: 10px;
 }
 .veh-hint {
-  color: var(--muted, #6b7280);
-  font-weight: 400;
+  color: #d97706;
+  font-weight: 600;
   font-size: 11px;
 }
 .veh-lock {
@@ -9836,7 +9941,21 @@ table.data.project-hours-diff thead th {
   font-weight: 800;
   text-align: center;
   letter-spacing: 1px;
-  color: var(--primary, #2563eb);
+  color: #d97706;
+}
+.veh-km-alert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 .veh-ret-info {
   font-size: 13px;
