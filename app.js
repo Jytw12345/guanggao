@@ -2825,23 +2825,27 @@ const repo = {
       // 强制全量刷新（forceFull）时忽略本地缓存，走无条件全量 select *，从服务器核对全部历史
       const hasCache = forceFull ? false : !!(cachedSnap && cachedSnap.cache && Array.isArray(cachedSnap.cache.projects) && cachedSnap.cache.projects.length);
       const sinceISO = new Date(Date.now() - CLOUD_HISTORY_LOOKBACK_DAYS * 86400000).toISOString().slice(0, 19) + "Z";
-      const pRes = await cloudQuery(() => {
+      // 活跃项目查询 与 全量 id 对账查询互不依赖，并行发出，省去一次往返。
+      const pPromise = cloudQuery(() => {
         const q = sb.from("projects").select("*");
         if (hasCache) q.or(`status.in.(${CLOUD_ACTIVE_STATUSES}),updated_at.gte.${sinceISO}`);
         return q;
       });
-      const activeIds = (pRes.data || []).map((r) => r.id);
       // 删除一致性：额外轻量拉取云端全量项目 id（仅 id 列，体积小），用于剔除
       // 本地缓存中已被其他端删除的项目，避免「一端删除、另一端仍幽灵出现」。
       // 注意：cancelled/已完工 等非活跃状态项目不会出现在上面的 active 查询里，
       // 若只按 activeIds 判断，删除它们后本地缓存会永远补回，故必须用全量 id 对账。
-      let cloudIds = null;
-      try {
-        const idRes = await cloudQuery(() => sb.from("projects").select("id"));
-        if (!idRes.error) cloudIds = new Set((idRes.data || []).map((r) => r.id));
-      } catch (e) {
-        console.warn("[cloud-cache] 拉取全量 id 失败，跳过去重校验：", e && e.message);
-      }
+      const idPromise = (async () => {
+        try {
+          const idRes = await cloudQuery(() => sb.from("projects").select("id"));
+          return idRes.error ? null : new Set((idRes.data || []).map((r) => r.id));
+        } catch (e) {
+          console.warn("[cloud-cache] 拉取全量 id 失败，跳过去重校验：", e && e.message);
+          return null;
+        }
+      })();
+      const [pRes, cloudIds] = await Promise.all([pPromise, idPromise]);
+      const activeIds = (pRes.data || []).map((r) => r.id);
       const lRes = await cloudQuery(() => {
         const q = sb.from("work_logs").select("*");
         if (hasCache) q.in("project_id", activeIds.length ? activeIds : ["__none__"]);
@@ -22945,8 +22949,10 @@ async function startCloudSession() {
     setSyncStatus("online", "● 连接中…");
     showSyncing(); // 移动端：登录后开始首次同步，顶部显示「同步中…」（只此一次）
 
-    // 载入当前用户的角色 / 门店
-    const { data: prof } = await sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
+    // 并行：拉取角色档案 + 从本地缓存秒开（两者互不依赖，重叠 I/O 缩短首屏等待）
+    const profilesP = sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
+    const hydrated = await hydrateFromCloudCache(currentUser.id);
+    const { data: prof } = await profilesP;
     currentProfile = { id: (prof && prof.id) || currentUser.id, role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null, adminPasswordHash: (prof && prof.admin_password_hash) || null };
 
     const displayName = currentProfile.name || currentUser.email;
@@ -22968,7 +22974,6 @@ async function startCloudSession() {
     }
 
     // ① 先用本地缓存秒开：弱网/离线也能立即看到上次数据，不再白屏等全量拉取
-    const hydrated = await hydrateFromCloudCache(currentProfile.id);
     if (hydrated) {
       renderRoleInfo();
       applyPermissions();
@@ -22984,11 +22989,13 @@ async function startCloudSession() {
     const fbtn = document.getElementById("btnFullRefresh");
     if (fbtn) fbtn.hidden = false;
 
-    // ② 后台拉取最新数据；成功后静默刷新。失败则用缓存兜底
-    const synced = await repo.loadAll();
-    await loadWorkTimeoutSetting(); // 拉取全局部署的「连续施工超时阈值」（多人统一标准）
-    await loadAutoReviewSetting(); // 拉取全局部署的「验收后自动审核（小时）」
-    await loadFakeMileageKmhSetting(); // 拉取全局部署的「用车记录虚假里程阈值（km/h）」
+    // ② 后台拉取最新数据；与 3 个全局设置并行发出，减少总等待。失败则缓存兜底
+    const [synced] = await Promise.all([
+      repo.loadAll(),
+      loadWorkTimeoutSetting(), // 全局部署的「连续施工超时阈值」（多人统一标准）
+      loadAutoReviewSetting(),  // 全局部署的「验收后自动审核（小时）」
+      loadFakeMileageKmhSetting(), // 全局部署的「用车记录虚假里程阈值（km/h）」
+    ]);
     if (!hydrated) {
       // 首次无缓存：此时才有数据可渲染
       renderRoleInfo();
@@ -23802,7 +23809,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v8f1a0083";
+  const APP_VERSION = "va41aa7e0";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
