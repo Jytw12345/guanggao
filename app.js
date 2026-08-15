@@ -7609,8 +7609,8 @@ function renderProjects() {
               ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
               ${leaveConflicts.length > 0 ? `<span class="badge danger" style="cursor:pointer" title="查看人员请假/轮休" onclick="showLeaveConflictInfo('${esc(p.id)}')">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
             </div>
-            ${isDelayed ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}${delayCount ? ` ${delayCount}次` : ""}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}${pauseCount ? ` ${pauseCount}次` : ""}</span>` : `<span class="badge ${p.status} card-title__status">${p.status}</span>`}
           </div>
+          ${isDelayed ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}${delayCount ? ` ${delayCount}次` : ""}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}${pauseCount ? ` ${pauseCount}次` : ""}</span>` : `<span class="badge ${p.status} card-title__status">${p.status}</span>`}
         </div>
 
         <!-- 暂停/延期/取消原因（次数与原因合并一行） -->
@@ -23841,7 +23841,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v940b8b71";
+  const APP_VERSION = "v43a5d626";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

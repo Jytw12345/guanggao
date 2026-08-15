@@ -1969,10 +1969,10 @@ select.input {
   font-weight: 800;
   line-height: 1.35;
   color: #0f172a;
-  word-break: break-word;
-  min-width: 0;
+  word-break: keep-all;        /* 中文项目名不按单字折断，避免被挤成竖排 */
+  min-width: 130px;            /* 标题至少保留约 8 个汉字宽度，不被右侧胶囊压成细长条 */
   flex: 1 1 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;   /* 超长无空格英文/数字仍可在溢出处折断 */
 }
 
 .card-title .badge { white-space: nowrap; }
@@ -1985,7 +1985,7 @@ select.input {
   justify-content: flex-end;
   align-items: flex-start;
   gap: 4px;
-  flex: 0 1 auto;
+  flex: 1 1 auto;   /* 占中间弹性空间：提醒胶囊不足时贴右、过多时在右侧内部折行 */
   min-width: 0;
 }
 .card-title__chips {
@@ -2004,13 +2004,14 @@ select.input {
   padding: 2px 8px;
   line-height: 1.4;
 }
-/* 状态胶囊固定贴右，始终在提醒标签右侧 */
+/* 状态胶囊独立为标题行最后一个直接子元素：永远钉在卡片右上角，
+   不被标题长度 / 提醒胶囊数量挤压换行（margin-left:auto 推到最右、flex-shrink:0 不被压缩） */
 .card-title__status {
   flex: 0 0 auto;
+  flex-shrink: 0;
   margin-top: 1px;
-  order: 1;
+  margin-left: auto;
 }
-.card-title__chips { order: 0; }
 
 
 
@@ -7079,6 +7080,8 @@ table.data.project-hours-diff thead th {
 
   .card-title h3 {
     font-size: 17px;
+    min-width: 110px;  /* 窄屏适当收紧，但仍保持约 6-7 个汉字宽度，避免竖排 */
+    word-break: keep-all;
   }
 
   .project-select-wrapper {
