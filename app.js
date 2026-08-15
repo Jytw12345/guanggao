@@ -1122,7 +1122,8 @@ function formatDurationCompact(hours) {
 /* 项目历程摘要 chips：暂停次数(+累计时长) + 延期次数。
    返回 HTML 片段，放在状态胶囊旁，一眼看到项目经历了什么。 */
 function projectHistoryChipsHtml(p) {
-  // 卡片底部独立行只显示暂停次数（时长已在卡片底部「已暂停 X天Y小时」展示，避免冗余）
+  // 状态胶囊已显示「已暂停」时不再重复挂次数 badge，避免双标；次数信息已合入胶囊
+  if (p.status === STATUS.PAUSED) return "";
   const pauseCount = p.pauseCount || 0;
   if (pauseCount > 0) {
     return `<span class="badge history-pause" title="暂停${pauseCount}次">⏸ ${pauseCount}次</span>`;
@@ -1132,6 +1133,8 @@ function projectHistoryChipsHtml(p) {
 
 /* 单个延期 chip，用于放在状态胶囊左边（与状态同行，HTML 顺序在前） */
 function projectDelayChipHtml(p) {
+  // 状态胶囊已显示「已延期」时不再重复挂次数 badge，避免双标；次数信息已合入胶囊
+  if (p.status === STATUS.DELAYED) return "";
   const delayCount = p.delayCount || (p.delayHistory || []).length;
   if (delayCount > 0) {
     return `<span class="badge history-delay" title="延期${delayCount}次">🕒 ${delayCount}次</span>`;
@@ -7332,7 +7335,9 @@ function renderProjects() {
     const isPausedTooLong = !!pausedTooLongInfo;
     const isDelayed = p.status === STATUS.DELAYED;
     const isRescheduled = isProjectTimeModified(p); // 当前预约时间确实不同于最初预约时间
-    const isCrossDay = Array.isArray(p.workSegments) && p.workSegments.length > 1; // 跨天多段施工
+    const delayCount = p.delayCount || (p.delayHistory || []).length;
+    const pauseCount = p.pauseCount || 0;
+    const isCrossDay = Array.isArray(p.workSegments) && p.workSegments.length > 1 && !isCompleted(p); // 跨天多段施工（仅未完工项目提示，已完工不再挂此 badge）
     const workElapsedText = workingTooLong ? (getElapsedSinceStartText(p) || "") : "";
     const overtimeText = isOvertimeWorking ? calcActualWorkDuration({ accumulatedWorkHours: (overtimeInfo.overtimeMs || 0) / 3600000 }) : "";
     
@@ -7347,7 +7352,7 @@ function renderProjects() {
     });
     
     return `
-      <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed || isForgotWorkFlag) ? "card-overdue" + ((overnight || isAfterWork || isForgotWorkFlag) ? " card-overdue--overnight" : "") : ""}${isPausedTooLong ? " card-overdue--paused" : ""}" data-status="${esc(p.status)}">
+      <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed || isForgotWorkFlag) ? "card-overdue" + ((overnight || isForgotWorkFlag) ? " card-overdue--overnight" : "") : ""}${isPausedTooLong ? " card-overdue--paused" : ""}" data-status="${esc(p.status)}">
         <div class="card-status-bar"></div>
         <div class="card-title card-title--with-status">
           <h3>${esc(p.name)}</h3>
@@ -7364,7 +7369,7 @@ function renderProjects() {
               ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
               ${leaveConflicts.length > 0 ? `<span class="badge danger" style="cursor:pointer" title="查看人员请假/轮休" onclick="showLeaveConflictInfo('${esc(p.id)}')">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
             </div>
-            ${isDelayed ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}</span>` : `<span class="badge ${p.status} card-title__status">${p.status}</span>`}
+            ${isDelayed ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}${delayCount ? ` ${delayCount}次` : ""}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}${pauseCount ? ` ${pauseCount}次` : ""}</span>` : `<span class="badge ${p.status} card-title__status">${p.status}</span>`}
           </div>
         </div>
 
@@ -9112,6 +9117,8 @@ function renderConstruction() {
 
   const end = new Date(p.endTime || p.startTime);
   const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
+  const delayCount = p.delayCount || (p.delayHistory || []).length;
+  const pauseCount = p.pauseCount || 0;
   const projectWorkerStats = calcProjectWorkerStats(p);
 
   box.innerHTML = `
@@ -9123,7 +9130,7 @@ function renderConstruction() {
             ${projectDelayChipHtml(p)}
             ${projectHistoryChipsHtml(p)}
             ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
-            <span class="badge ${p.status}">${p.status}</span>
+            <span class="badge ${p.status}">${p.status}${p.status === STATUS.DELAYED && delayCount ? ` ${delayCount}次` : (p.status === STATUS.PAUSED && pauseCount ? ` ${pauseCount}次` : "")}</span>
             ${p.reworkCount > 0 ? `<span class="badge rework" style="cursor:pointer" title="查看返工记录" onclick="showReworkInfo('${esc(p.id)}')">🔄 返工 ${p.reworkCount} 次</span>` : ""}
           </div>
         </div>
@@ -23322,7 +23329,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v3dbf769e";
+  const APP_VERSION = "v5f00eb1a";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
