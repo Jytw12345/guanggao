@@ -1950,10 +1950,14 @@ select.input {
 
 .card-title {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: flex-start;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
+}
+
+.card-title--with-status {
+  justify-content: space-between;
 }
 
 .card-title h3 {
@@ -1970,17 +1974,12 @@ select.input {
 
 .card-title .badge { white-space: nowrap; }
 
-/* 标题行右侧（响应式：平时并排、超长堆叠）
-   - 空间够（短名）：状态胶囊在右、chips 紧贴其左，同行并排
-   - 空间窄（超长名）：状态胶囊留在右上、chips 自动换到下一行右对齐
-   实现：row-reverse + flex-wrap + status order:0 / chips order:1
-   （DOM 仍是 chips→status，靠 order 让 status 排到 flow 首位；row-reverse 下
-   首位在右，故 status 永远贴右；空间不够时排在后面的 chips 自然折到下一行） */
+/* 标题右侧：提醒标签 + 状态胶囊同一行，整体贴右。
+   空间够：提醒标签在左、状态胶囊在右；空间窄：提醒标签自动折到下方右对齐。 */
 .card-title__right {
   display: flex;
-  flex-direction: row-reverse;
   flex-wrap: wrap;
-  justify-content: flex-start;   /* row-reverse 下 flex-start = 贴右 */
+  justify-content: flex-end;
   align-items: flex-start;
   gap: 4px;
   flex: 0 1 auto;
@@ -1989,25 +1988,26 @@ select.input {
 .card-title__chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 3px;
+  gap: 4px;
   align-items: flex-start;
   justify-content: flex-end;
   min-width: 0;
   max-width: 100%;
-  order: 1;                      /* 排在 status 之后 */
 }
 .card-title__chips > * { flex-shrink: 0; }
-/* chips 与右侧状态胶囊保持同样高度，视觉上更整齐 */
+/* chips 与状态胶囊保持同样高度，视觉上更整齐 */
 .card-title__chips .badge {
   font-size: 11px;
   padding: 2px 8px;
   line-height: 1.4;
 }
-.card-title__right > .card-title__status,
-.card-title__right > .badge:last-child {
-  order: 0;                      /* flow 首位 → 窄时留在第一行右上 */
+/* 状态胶囊固定贴右，始终在提醒标签右侧 */
+.card-title__status {
   flex: 0 0 auto;
+  margin-top: 1px;
+  order: 1;
 }
+.card-title__chips { order: 0; }
 
 
 

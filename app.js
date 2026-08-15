@@ -604,6 +604,15 @@ function isOverdueNotStarted(p) {
   return new Date() > new Date(start);
 }
 
+/* 是否「忘记施工」：逾期未开工 + 预约日期不是今天（已跨到次日或更久）。
+   这种项目大概率是整条漏做，需要比普通的「超时未开工」更强的提醒。 */
+function isForgotWork(p) {
+  if (!isOverdueNotStarted(p)) return false;
+  const start = p.appointmentTime || p.startTime;
+  if (!start) return false;
+  return dateKey(new Date(start)) < todayStr();
+}
+
 /* 预约时间 / 预约工时是否已锁定。
    业务规则：项目一旦开工，预约时间与预约工时即成为历史基准（用于对比实际工时、考核准点率），
    不允许再回头修改——即使拥有「修改所有项目预约时间/工时」权限也不行。
@@ -832,13 +841,17 @@ function showOverdueNotStartedInfo(projectId) {
     return;
   }
   const overdueMs = new Date() - start;
+  const forgot = isForgotWork(p);
   const items = [
     { label: "项目状态", value: p.status, variant: "warn", icon: "📋" },
     { label: "原定开工时间", value: fmtDateTime(start), icon: "🚀" },
-    { label: "已超时未开工", value: fmtDurationFromMs(overdueMs), variant: "warn", icon: "🚨" },
+    { label: forgot ? "已跨夜未开工" : "已超时未开工", value: fmtDurationFromMs(overdueMs), variant: "warn", icon: "🚨" },
     { label: "门店", value: storeName(p.storeId), icon: "🏪" },
   ];
-  showKVModal("超时未开工", items);
+  if (forgot) {
+    items.splice(2, 0, { label: "提醒", value: "预约日期已过，疑似忘记施工", variant: "danger", icon: "⚠️" });
+  }
+  showKVModal(forgot ? "忘记施工" : "超时未开工", items);
 }
 
 function getProjectDisplayWorkers(p) {
@@ -4231,11 +4244,14 @@ function renderWorkerOverdueSection(workerId = null) {
       badgeCls = "overdue";
       level = 2;
     } else {
-      badge = "🚨 超时未开工";
+      const forgot = isForgotWork(p);
       const appt = p.appointmentTime || p.startTime;
-      sub = `预约 ${appt ? fmtDateTime(appt) : "时间待定"}`;
+      badge = forgot ? "🚨 忘记施工" : "🚨 超时未开工";
+      sub = forgot
+        ? `预约 ${appt ? fmtDateTime(appt) : "时间待定"} 未开工，已跨夜`
+        : `预约 ${appt ? fmtDateTime(appt) : "时间待定"}`;
       badgeCls = "overdue";
-      level = 2;
+      level = forgot ? 1 : 2; // 忘记施工优先级更高
     }
     items.push({
       level, badgeCls, badge, title: p.name, sub,
@@ -4421,7 +4437,8 @@ function renderWorkerAssignmentsText(dateStr, workerId = null) {
       const endStr = evEnd ? `${String(evEnd.getHours()).padStart(2,"0")}:${String(evEnd.getMinutes()).padStart(2,"0")}` : "";
       const timeStr = evStart && evEnd ? `${startStr} ~ ${endStr}${isOvernight ? "（次日）" : ""}` : (evStart ? `从 ${startStr} 起` : "时间待定");
       const workType = (p.workContent && p.workContent.length) ? p.workContent.join("、") : "";
-      const overdueTag = isOverdueNotStarted(p) ? `<span class="badge overdue" style="cursor:pointer" title="查看超时未开工详情" onclick="showOverdueNotStartedInfo('${esc(p.id)}')">🚨 超时未开工</span> ` : "";
+      const forgot = isForgotWork(p);
+      const overdueTag = isOverdueNotStarted(p) ? `<span class="badge overdue" style="cursor:pointer" title="${forgot ? "点击查看忘记施工详情" : "查看超时未开工详情"}" onclick="showOverdueNotStartedInfo('${esc(p.id)}')">${forgot ? "🚨 忘记施工" : "🚨 超时未开工"}</span> ` : "";
       const forgottenInfo = getForgottenCompleteInfo(p);
       const fakeWorking = isFakeWorking(p);
       const forgottenTag = forgottenInfo ? `<span class="badge ${fakeWorking ? "fake-working" : "forgotten"}">${fakeWorking ? "🚨 虚假施工" : (forgottenInfo.level === "overnight" ? "🌙 跨夜未完工" : "⚠️ " + forgottenInfo.text)}</span> ` : "";
@@ -7205,6 +7222,7 @@ function renderProjects() {
     if (ot) return ot.isAfterWork ? 2 : 1;
     if (getProjectPausedTooLongInfo(p)) return 1;
     if (p.status === STATUS.DELAYED) return 1;
+    if (isForgotWork(p)) return 2; // 忘记施工比普通逾期未开工更优先
     return isPendingOverdue(p) ? 1 : 0;
   };
   let items = cache.projects.slice().sort((a, b) => {
@@ -7303,6 +7321,7 @@ function renderProjects() {
     const end = new Date(p.endTime || p.startTime);
     const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
     const isPending = isPendingOverdue(p); // 未完工且预约时间已过的超期待处理
+    const isForgotWorkFlag = isForgotWork(p); // 逾期未开工且已跨夜：疑似忘记施工
     const forgottenInfo = getForgottenCompleteInfo(p); // 开工超阈值 / 跨夜仍施工中（疑似忘点完工）
     const workingTooLong = !!forgottenInfo;
     const overnight = forgottenInfo && forgottenInfo.level === "overnight";
@@ -7328,23 +7347,24 @@ function renderProjects() {
     });
     
     return `
-      <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed) ? "card-overdue" + ((overnight || isAfterWork) ? " card-overdue--overnight" : "") : ""}${isPausedTooLong ? " card-overdue--paused" : ""}" data-status="${esc(p.status)}">
+      <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed || isForgotWorkFlag) ? "card-overdue" + ((overnight || isAfterWork || isForgotWorkFlag) ? " card-overdue--overnight" : "") : ""}${isPausedTooLong ? " card-overdue--paused" : ""}" data-status="${esc(p.status)}">
         <div class="card-status-bar"></div>
-        <div class="card-title">
+        <div class="card-title card-title--with-status">
           <h3>${esc(p.name)}</h3>
           <div class="card-title__right">
             <div class="card-title__chips">
               ${isRescheduled ? `<span class="badge modified" style="cursor:pointer" title="查看改期信息" onclick="showRescheduleInfo('${esc(p.id)}')">${svgCal(12)} 已改期</span>` : ""}
               ${projectDelayChipHtml(p)}
               ${projectHistoryChipsHtml(p)}
-              ${isOverdue ? `<span class="badge overdue" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
+              ${isForgotWorkFlag ? `<span class="badge overdue" style="cursor:pointer" title="点击查看忘记施工详情" onclick="showOverdueNotStartedInfo('${esc(p.id)}')">🚨 忘记施工</span>` : ""}
+              ${isOverdue && !isForgotWorkFlag ? `<span class="badge overdue" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
               ${isCrossDay ? `<span class="badge crossday" style="cursor:pointer" title="查看跨天施工日程" onclick="showCrossDayInfo('${esc(p.id)}')">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
               ${workingTooLong ? `<span class="badge ${isFakeWorking(p) ? "fake-working" : (overnight ? "overdue" : "pending")}" data-elapsed-marker data-elapsed-prefix="${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")}" data-project-id="${esc(p.id)}">${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")} ${workElapsedText}</span>` : ""}
               ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}" style="cursor:pointer" title="查看加班/超时详情" onclick="showOvertimeInfo('${esc(p.id)}')">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
               ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
               ${leaveConflicts.length > 0 ? `<span class="badge danger" style="cursor:pointer" title="查看人员请假/轮休" onclick="showLeaveConflictInfo('${esc(p.id)}')">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
             </div>
-            ${isDelayed ? `<span class="badge ${p.status}" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status}" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}</span>` : `<span class="badge ${p.status}">${p.status}</span>`}
+            ${isDelayed ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}</span>` : `<span class="badge ${p.status} card-title__status">${p.status}</span>`}
           </div>
         </div>
 
@@ -7803,9 +7823,13 @@ function quickEditProjectTimeForm(p = {}) {
   const lockMsg = locked ? appointmentLockReason(p) : "";
   const apptDisabled = locked || !perm.editAppointment(p);
   const hoursDisabled = locked || !perm.editHours(p);
-  const startDate = p.appointmentTime ? new Date(p.appointmentTime) : new Date();
-  const startTimeStr = p.appointmentTime
-    ? `${String(startDate.getHours()).padStart(2, '0')}:${String(startDate.getMinutes()).padStart(2, '0')}`
+  const apptDate = p.appointmentTime ? new Date(p.appointmentTime) : null;
+  const now = new Date();
+  // 过期项目进入快速修改时，日期默认调到今天，避免日期框显示昨天但又受 min=today 限制保存不了
+  const isPast = apptDate && dateKey(apptDate) < todayStr();
+  const startDate = isPast ? now : (apptDate || now);
+  const startTimeStr = apptDate
+    ? `${String(apptDate.getHours()).padStart(2, '0')}:${String(apptDate.getMinutes()).padStart(2, '0')}`
     : "08:00";
   const defaultEndTimeStr = (() => {
     if (p.endTime) {
@@ -8409,7 +8433,21 @@ async function submitRepairOrder(projectId) {
     const cb = document.getElementById("repairWorker_" + wid);
     return cb && cb.checked;
   });
-  
+
+  // —— 维修人员冲突检测：选定工人当天该时段是否已有请假/日程/其它项目 ——
+  if (assignedWorkerIds.length) {
+    const repEnd = new Date(`${date}T${time}`);
+    repEnd.setMinutes(repEnd.getMinutes() + (estimatedHours > 0 ? estimatedHours * 60 : 120));
+    const repEndHM = `${String(repEnd.getHours()).padStart(2, "0")}:${String(repEnd.getMinutes()).padStart(2, "0")}`;
+    const busy = assignedWorkerIds.map(wid => {
+      const c = checkWorkerAvailability(wid, date, time, repEndHM);
+      return (c.leave || c.schedule || c.project) ? { wid, name: (getWorker(wid) || {}).name || wid, c } : null;
+    }).filter(Boolean);
+    if (busy.length) {
+      if (!(await confirmDialog(`以下维修人员在该维修时段已有安排冲突：<br>${describeWorkerConflicts(busy)}<br><br>仍要提交维修单吗？`, "维修人员冲突"))) return;
+    }
+  }
+
   const fullTime = `${date}T${time}`;
   const repairOrders = Array.isArray(p.repairOrders) ? p.repairOrders.slice() : [];
   const seq = repairOrders.length + 1;
@@ -8576,6 +8614,20 @@ async function submitRepairReschedule(projectId, repairId) {
   const idx = p.repairOrders.findIndex(r => r.id === repairId);
   if (idx < 0) { toast("维修单不存在"); return; }
   const cur = p.repairOrders[idx];
+  // 改期同样检测维修人员冲突
+  const rwIds = (cur.assignedWorkerIds || []);
+  if (rwIds.length) {
+    const rEnd = new Date(`${date}T${time}`);
+    rEnd.setMinutes(rEnd.getMinutes() + ((cur.estimatedHours > 0 ? cur.estimatedHours : 2) * 60));
+    const rEndHM = `${String(rEnd.getHours()).padStart(2, "0")}:${String(rEnd.getMinutes()).padStart(2, "0")}`;
+    const busy = rwIds.map(wid => {
+      const c = checkWorkerAvailability(wid, date, time, rEndHM);
+      return (c.leave || c.schedule || c.project) ? { wid, name: (getWorker(wid) || {}).name || wid, c } : null;
+    }).filter(Boolean);
+    if (busy.length) {
+      if (!(await confirmDialog(`以下维修人员在该维修时段已有安排冲突：<br>${describeWorkerConflicts(busy)}<br><br>仍要改期到此时段吗？`, "维修人员冲突"))) return;
+    }
+  }
   const ro = { ...cur, appointmentTime: new Date(`${date}T${time}`).toISOString() };
   if (!ro.originalRepairTime) ro.originalRepairTime = cur.appointmentTime; // 首次改期留痕
   const repairOrders = p.repairOrders.slice();
@@ -9592,7 +9644,7 @@ function isWorkerOnLeave(workerId, dateStr) {
   if (!workerId || !dateStr) return null;
   return cache.leaveRecords.find((l) => {
     if (l.workerId !== workerId) return false;
-    if (l.status !== LEAVE_STATUS.APPROVED && l.status !== LEAVE_STATUS.PENDING) return false;
+    if (l.status !== LEAVE_STATUS.APPROVED) return false;
     return dateStr >= l.startDate && dateStr <= l.endDate;
   });
 }
@@ -9695,6 +9747,45 @@ function getProjectScheduleConflict(workerId, projectStartDate, projectEndDate, 
   }
   
   return null;
+}
+
+/* 统一的人员占用检测：某工人在指定日期+时段是否被占用。
+   返回 { leave, schedule, project }，任一非 null 即存在冲突。
+   - leave：已审批请假（isWorkerOnLeave 仅认 APPROVED）
+   - schedule：个人日程
+   - project：时间重叠的其它未完工项目（与 assignConflicts 口径一致）
+   供「分配人员 / 维修单 / 返工预约」复用，保证冲突检测口径统一。 */
+function checkWorkerAvailability(workerId, dateStr, startHM, endHM) {
+  const res = { leave: null, schedule: null, project: null };
+  if (!workerId || !dateStr) return res;
+  const sHM = startHM || "08:00", eHM = endHM || "18:00";
+  const leave = getProjectLeaveConflict(workerId, dateStr, dateStr);
+  if (leave && isLeaveConflict(leave, sHM, eHM)) res.leave = leave;
+  const sched = getProjectScheduleConflict(workerId, dateStr, dateStr, sHM, eHM);
+  if (sched) res.schedule = sched;
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dayStart = new Date(y, m - 1, d), dayEnd = new Date(y, m - 1, d + 1);
+  const winStart = new Date(`${dateStr}T${sHM}`), winEnd = new Date(`${dateStr}T${eHM}`);
+  for (const o of (cache.projects || [])) {
+    if (isCompleted(o)) continue;
+    if (!(o.assignedWorkerIds || []).includes(workerId)) continue;
+    const os = projectStart(o), oe = projectEnd(o);
+    if (!os || !oe) continue;
+    if (!(os >= dayStart && os < dayEnd)) continue;          // 不在同一天
+    if (os < winEnd && oe > winStart) { res.project = o; break; } // 时段重叠
+  }
+  return res;
+}
+
+/* 生成人员占用冲突的可读提示（用于弹窗）。parts 为冲突明细数组 */
+function describeWorkerConflicts(list) {
+  return list.map((b) => {
+    const why = [];
+    if (b.c.leave) why.push("请假");
+    if (b.c.schedule) why.push(`日程「${b.c.schedule.title || "个人日程"}」`);
+    if (b.c.project) why.push(`项目「${b.c.project.name}」`);
+    return `· ${b.name}：${why.join("、")}`;
+  }).join("<br>");
 }
 
 /* 获取工人的所有请假记录 */
@@ -10334,14 +10425,17 @@ function findWorkerActiveProjectConflicts(project) {
   const myWorkers = project.assignedWorkerIds || [];
   if (!myWorkers.length) return [];
   const conflicts = [];
+  const ps = projectStart(project), pe = projectEnd(project);
   (cache.projects || []).forEach(other => {
     if (other.id === project.id) return;
     if (other.status !== STATUS.WORKING) return; // 仅「正在施工」算冲突
     const shared = (other.assignedWorkerIds || []).filter(wid => myWorkers.includes(wid));
-    if (shared.length) {
-      const names = shared.map(wid => (getWorker(wid) && getWorker(wid).name) || wid);
-      conflicts.push({ project: other, workerIds: shared, workers: names });
-    }
+    if (!shared.length) return;
+    // 仅当两项目时间确实重叠才算冲突，避免「上周未点完工的老项目」误报
+    const os = projectStart(other), oe = projectEnd(other);
+    if (ps && pe && os && oe && !(os < pe && oe > ps)) return;
+    const names = shared.map(wid => (getWorker(wid) && getWorker(wid).name) || wid);
+    conflicts.push({ project: other, workerIds: shared, workers: names });
   });
   return conflicts;
 }
@@ -10384,9 +10478,9 @@ async function removeConflictingWorkersFromPrevProjects(conflicts, myWorkerIds) 
     if (!shared.length) continue;
     const prevIds = prev.assignedWorkerIds || [];
     const newIds = prevIds.filter(wid => !shared.includes(wid));
-    const newNames = (prev.assignedWorkerNames || []).filter((nm, i) => !shared.includes(prevIds[i]));
-    await repo.patchProject(prev.id, { assignedWorkerIds: newIds, assignedWorkerNames: newNames });
-    optimisticApplyAndSync(prev.id, { assignedWorkerIds: newIds, assignedWorkerNames: newNames }, "");
+    // 注：assignedWorkerNames 为历史遗留死字段，显示从不依赖它，仅维护 ids 即可
+    await repo.patchProject(prev.id, { assignedWorkerIds: newIds });
+    optimisticApplyAndSync(prev.id, { assignedWorkerIds: newIds }, "");
   }
   toast("已将冲突工人从之前项目移除");
 }
@@ -11489,6 +11583,15 @@ async function confirmRework(id) {
   const operator = currentProfile.name || currentUser?.email || "系统";
   const mode = document.querySelector('input[name="rwMode"]:checked')?.value || "new";
   const payable = document.getElementById("rwPayable") ? document.getElementById("rwPayable").checked : true;
+  // —— 返工预约冲突检测：沿用原项目派工，检查新预约时段是否与工人其它安排冲突 ——
+  const rwIds = (p.assignedWorkerIds || []);
+  if (rwIds.length) {
+    const busy = rwIds.map(wid => {
+      const c = checkWorkerAvailability(wid, date, time, end);
+      return (c.leave || c.schedule || c.project) ? { wid, name: (getWorker(wid) || {}).name || wid, c } : null;
+    }).filter(Boolean);
+    if (busy.length && !(await confirmDialog(`以下派工人员在该返工时段已有安排冲突：<br>${describeWorkerConflicts(busy)}<br><br>仍要生成返工预约吗？`, "返工人员冲突"))) return;
+  }
   clearTimeout(reloadTimer);
   try {
     if (mode === "reopen") {
@@ -12537,7 +12640,10 @@ function generateWorkerScheduleDescription(dateStr = null) {
     // - 施工中/已暂停 仅当已超过计划完工时间(endTime)才算，避免正常推进的多天项目
     //   因"预约/开工时间(appointmentTime)已过"而被误报为超期。
     // 预约中且未开工的超期归「逾期未开工」处理，此处不再重复。
-    const overdueList = allTodayProjects.filter(p => {
+    // 「超期未完工 / 忘记施工 / 逾期未开工」属跨日提醒，不只看当天有段的项目
+    // （昨天预约中未施工、或昨天开工跨到今天仍超时的项目，今天概览也应能看见）。
+    const overdueList = cache.projects.filter(p => {
+      if (p.status === STATUS.CANCELLED || isCompleted(p)) return false;
       if (p.status === STATUS.DELAYED) return false; // 已主动延期：用户已改期，不算超期未完工
       if (p.status === STATUS.BOOKED) return false;
       if ((p.status === STATUS.WORKING || p.status === STATUS.PAUSED) && p.endTime) {
@@ -12553,14 +12659,33 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const more = overdueList.length > 2 ? `<div class="sched-warn-more">等${overdueList.length}个项目</div>` : "";
       smartAlerts.push(`<div class="sched-warn-amber">⏰ <strong>超期未完工</strong>${items}${more}</div>`);
     }
-    const notStartedList = allTodayProjects.filter(p => isOverdueNotStarted(p));
-    if (notStartedList.length > 0) {
-      const items = notStartedList.slice(0, 2).map(p => {
+    // 逾期未开工 / 忘记施工：跨日聚合（昨天预约中未施工的，今天也要能看到）
+    const notStartedList = cache.projects.filter(p =>
+      p.status !== STATUS.CANCELLED && !isCompleted(p) && isOverdueNotStarted(p)
+    );
+    const forgotWorkList = notStartedList.filter(p => isForgotWork(p));
+    const normalNotStartedList = notStartedList.filter(p => !isForgotWork(p));
+    if (forgotWorkList.length > 0) {
+      const items = forgotWorkList.slice(0, 2).map(p => {
         const note = getProjectStatusNote(p, { includeStatus: true, maxLen: 40 });
-        return `<div class="sched-warn-item"><span class="sched-goto" onclick="gotoConstruction('${p.id}')">${esc(p.name)}</span>${note ? `<span class="sched-warn-reason">（${esc(note)}）</span>` : ""}</div>`;
+        const appt = p.appointmentTime || p.startTime;
+        const apptStr = appt ? `${fmtDateShort(appt)} ${fmtTime(appt)}` : "";
+        const reasonText = [note, apptStr].filter(Boolean).join(" · ");
+        return `<div class="sched-warn-item"><span class="sched-goto" onclick="gotoConstruction('${p.id}')">${esc(p.name)}</span>${reasonText ? `<span class="sched-warn-reason">（${esc(reasonText)}）</span>` : ""}</div>`;
       }).join("");
-      const more = notStartedList.length > 2 ? `<div class="sched-warn-more">等${notStartedList.length}个项目</div>` : "";
-      smartAlerts.push(`<div class="sched-warn-amber strong">🚨 <strong>逾期未开工</strong>${items}${more}</div>`);
+      const more = forgotWorkList.length > 2 ? `<div class="sched-warn-more">等${forgotWorkList.length}个项目</div>` : "";
+      smartAlerts.push(`<div class="sched-warn-red strong">🚨 <strong>忘记施工</strong>${items}${more}</div>`);
+    }
+    if (normalNotStartedList.length > 0) {
+      const items = normalNotStartedList.slice(0, 2).map(p => {
+        const note = getProjectStatusNote(p, { includeStatus: true, maxLen: 40 });
+        const appt = p.appointmentTime || p.startTime;
+        const apptStr = appt ? `${fmtDateShort(appt)} ${fmtTime(appt)}` : "";
+        const reasonText = [note, apptStr].filter(Boolean).join(" · ");
+        return `<div class="sched-warn-item"><span class="sched-goto" onclick="gotoConstruction('${p.id}')">${esc(p.name)}</span>${reasonText ? `<span class="sched-warn-reason">（${esc(reasonText)}）</span>` : ""}</div>`;
+      }).join("");
+      const more = normalNotStartedList.length > 2 ? `<div class="sched-warn-more">等${normalNotStartedList.length}个项目</div>` : "";
+      smartAlerts.push(`<div class="sched-warn-amber strong">⏰ <strong>逾期未开工</strong>${items}${more}</div>`);
     }
     if (smartAlerts.length > 0) {
       description += `<div class="sched-smart-alerts">${smartAlerts.join("")}</div>`;
@@ -12796,7 +12921,8 @@ function generateWorkerScheduleDescription(dateStr = null) {
         }
 
         if (isOverdueNotStarted(p)) {
-          taskDesc += `。<span style="color:#dc2626;font-weight:600;">🚨 已过预约时间，请尽快开始施工</span>`;
+          const forgot = isForgotWork(p);
+          taskDesc += `。<span style="color:#dc2626;font-weight:600;">${forgot ? "🚨 已跨夜未开工，疑似忘记施工" : "🚨 已过预约时间，请尽快开始施工"}</span>`;
         }
       
         if (pStart) {
@@ -13051,7 +13177,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
         case STATUS.BOOKED:
           if (isOverdue) {
             statusColor = "#ef4444";
-            statusText = "预约中（已超期）";
+            statusText = isForgotWork(p) ? "忘记施工" : "预约中（已超期）";
             progress = 0;
           } else if (notStartedOverdue) {
             statusColor = "#ef4444";
@@ -23196,7 +23322,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc8b118ca";
+  const APP_VERSION = "v3dbf769e";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
