@@ -1141,23 +1141,16 @@ function formatDurationCompact(hours) {
 /* 项目历程摘要 chips：暂停次数(+累计时长) + 延期次数。
    返回 HTML 片段，放在状态胶囊旁，一眼看到项目经历了什么。 */
 function projectHistoryChipsHtml(p) {
-  // 状态胶囊已显示「已暂停」时不再重复挂次数 badge，避免双标；次数信息已合入胶囊
-  if (p.status === STATUS.PAUSED) return "";
-  const pauseCount = p.pauseCount || 0;
-  if (pauseCount > 0) {
-    return `<span class="badge history-pause" title="暂停${pauseCount}次">⏸ ${pauseCount}次</span>`;
-  }
+  // 暂停次数不再以标题胶囊展示：
+  //  - 当前暂停状态已由状态胶囊「已暂停 N次」表达；
+  //  - 历史暂停且有原因时，次数与原因聚合在卡片详情区「⏸ 暂停N次 · 暂停原因」展示。
   return "";
 }
 
-/* 单个延期 chip，用于放在状态胶囊左边（与状态同行，HTML 顺序在前） */
+/* 单个延期 chip：已不再以标题胶囊展示（历史延期、但现在未处于延期态）。
+   - 当前延期状态已由状态胶囊「已延期 N次」表达；
+   - 历史延期且有原因时，次数与原因聚合在卡片详情区「🕒 延期N次 · 延期原因」展示。 */
 function projectDelayChipHtml(p) {
-  // 状态胶囊已显示「已延期」时不再重复挂次数 badge，避免双标；次数信息已合入胶囊
-  if (p.status === STATUS.DELAYED) return "";
-  const delayCount = p.delayCount || (p.delayHistory || []).length;
-  if (delayCount > 0) {
-    return `<span class="badge history-delay" title="延期${delayCount}次">🕒 延期${delayCount}次</span>`;
-  }
   return "";
 }
 
@@ -7617,7 +7610,7 @@ function renderProjects() {
         </div>
 
         <!-- 暂停/延期/取消原因（次数与原因合并一行） -->
-        ${p.status === STATUS.PAUSED && p.pauseReason ? (() => { const tooLong = pausedTooLongTimeHtml(p); return `<div class="card-reason paused"><span class="card-reason__count">⏸ 暂停${pauseCount}次</span><span class="card-reason__sep">·</span><span>暂停原因：${esc(p.pauseReason)}</span>${p.pausedAt ? `<span class="card-reason__sep">·</span><small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${tooLong ? `<span class="card-reason__sep">·</span>${tooLong}` : ""}</div>`; })() : ""}
+        ${p.pauseReason ? (() => { const tooLong = pausedTooLongTimeHtml(p); return `<div class="card-reason paused"><span class="card-reason__count">⏸ 暂停${pauseCount}次</span><span class="card-reason__sep">·</span><span>暂停原因：${esc(p.pauseReason)}</span>${p.pausedAt ? `<span class="card-reason__sep">·</span><small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${tooLong ? `<span class="card-reason__sep">·</span>${tooLong}` : ""}</div>`; })() : ""}
         ${p.delayReason ? `<div class="card-reason delayed"><span class="card-reason__count">🕒 延期${delayCount}次</span><span class="card-reason__sep">·</span><span>延期原因：${esc(p.delayReason)}</span></div>` : ""}
         ${p.status === STATUS.CANCELLED && p.cancelReason ? `<div class="card-reason cancelled">✕ 取消原因：${esc(p.cancelReason)}</div>` : ""}
 
@@ -9389,7 +9382,7 @@ function renderConstruction() {
           ${p.phone ? `<span>电话</span><b><a href="javascript:void(0)" data-tel="${esc(p.phone)}" onclick="callPhone(event)">${esc(p.phone)}</a></b>` : ""}
           <span>地址</span><b>${esc(p.address || "—")}</b>
         </div>
-        ${p.status === STATUS.PAUSED && p.pauseReason ? (() => { const tooLong = pausedTooLongTimeHtml(p); return `<div class="card-reason paused"><span class="card-reason__count">⏸ 暂停${pauseCount}次</span><span class="card-reason__sep">·</span><span>暂停原因：${esc(p.pauseReason)}</span>${p.pausedAt ? `<span class="card-reason__sep">·</span><small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${tooLong ? `<span class="card-reason__sep">·</span>${tooLong}` : ""}</div>`; })() : ""}
+        ${p.pauseReason ? (() => { const tooLong = pausedTooLongTimeHtml(p); return `<div class="card-reason paused"><span class="card-reason__count">⏸ 暂停${pauseCount}次</span><span class="card-reason__sep">·</span><span>暂停原因：${esc(p.pauseReason)}</span>${p.pausedAt ? `<span class="card-reason__sep">·</span><small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${tooLong ? `<span class="card-reason__sep">·</span>${tooLong}` : ""}</div>`; })() : ""}
         ${p.delayReason ? `<div class="card-reason delayed"><span class="card-reason__count">🕒 延期${delayCount}次</span><span class="card-reason__sep">·</span><span>延期原因：${esc(p.delayReason)}</span></div>` : ""}
         ${renderProjectContentPreview(p)}
         ${p.estimatedHours > 0 ? `
@@ -23844,7 +23837,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v4628536f";
+  const APP_VERSION = "ve5ae109d";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
