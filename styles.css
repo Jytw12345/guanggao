@@ -7166,10 +7166,12 @@ table.data.project-hours-diff thead th {
 
   /* 手机端右上角主操作按钮统一缩小，与标题和筛选器更协调 */
   .section-head > .btn.primary,
+  .section-head > .btn.small,
   #btnNewProject,
   #btnNewInternalTask,
   #btnNewWorker,
-  #btnNewOutsourced {
+  #btnNewOutsourced,
+  #btnManageVehicles {
     padding: 6px 10px;
     font-size: 12px;
     border-radius: 6px;
