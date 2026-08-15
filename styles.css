@@ -1951,9 +1951,7 @@ select.input {
   50% { opacity: 0.35; transform: scale(1.01); }
 }
 
-/* 卡片标题：
-   第一行：标题在左，短胶囊+状态胶囊在右；
-   第二行：长告警胶囊占满整行并右对齐（右边缘与状态胶囊右边缘对齐）。 */
+/* 卡片标题：默认 flex 布局（工人/门店卡片） */
 .card-title {
   display: flex;
   flex-wrap: wrap;
@@ -1977,16 +1975,40 @@ select.input {
 
 .card-title .badge { white-space: nowrap; }
 
-/* 右侧短胶囊区：包含短提醒胶囊和状态胶囊，自身不换行，贴在第一行右上角 */
-.card-title__right {
+/* 项目卡片标题：标题文字环绕右侧胶囊
+   第一行：短胶囊+状态胶囊浮在右上，标题第一行在左侧；
+   第二行：长告警胶囊浮在右侧，标题第二行在同一行左侧。
+   标题继续换行则占满整行。 */
+.card-title--with-status {
+  display: block;
+  overflow: hidden;             /* BFC 包含所有 float，避免父容器高度塌陷 */
+}
+
+.card-title--with-status .card-title__right,
+.card-title--with-status .card-title__long-chips {
+  float: right;
+  clear: right;                 /* 每个胶囊区独占一行，垂直堆叠 */
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   justify-content: flex-end;
   align-items: flex-start;
   gap: 4px;
-  flex: 0 1 auto;
-  margin-left: auto;           /* 标题很短时也推到最右 */
+  max-width: 100%;
+  margin-left: 8px;
+  margin-bottom: 4px;
+}
+
+.card-title--with-status .card-title__right {
+  flex-wrap: nowrap;          /* 短胶囊区自身不换行 */
+}
+
+.card-title--with-status h3 {
+  display: block;
+  /* 不创建 BFC，让文本行自然环绕右侧 float；标题超长时内部换行 */
+  flex: none;
   min-width: 0;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 /* 短提醒胶囊区：状态胶囊左侧，空间不够时内部折行 */
@@ -1996,8 +2018,6 @@ select.input {
   justify-content: flex-end;
   gap: 4px;
   align-items: flex-start;
-  flex: 0 1 auto;
-  min-width: 0;
 }
 .card-title__chips > * { flex-shrink: 0; }
 .card-title__chips .badge,
@@ -2020,8 +2040,8 @@ select.input {
   justify-content: flex-end;
   gap: 4px;
   align-items: flex-start;
-  flex: 1 1 100%;
-  min-width: 0;
+  clear: both;                 /* 换到新行，避免被 float 顶到旁边 */
+  padding-top: 4px;
 }
 .card-title__long-chips > * { flex-shrink: 0; }
 

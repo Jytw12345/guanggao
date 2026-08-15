@@ -1145,7 +1145,7 @@ function projectHistoryChipsHtml(p) {
   if (p.status === STATUS.PAUSED) return "";
   const pauseCount = p.pauseCount || 0;
   if (pauseCount > 0) {
-    return `<span class="badge history-pause" title="暂停${pauseCount}次">⏸ 暂停${pauseCount}次</span>`;
+    return `<span class="badge history-pause" title="暂停${pauseCount}次">⏸ ${pauseCount}次</span>`;
   }
   return "";
 }
@@ -7595,7 +7595,6 @@ function renderProjects() {
       <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed || isForgotWorkFlag) ? "card-overdue" + ((overnight || isForgotWorkFlag) ? " card-overdue--overnight" : "") : ""}${isPausedTooLong ? " card-overdue--paused" : ""}" data-status="${esc(p.status)}">
         <div class="card-status-bar"></div>
         <div class="card-title card-title--with-status">
-          <h3>${esc(p.name)}</h3>
           <div class="card-title__right">
             <div class="card-title__chips">
               ${isRescheduled ? `<span class="badge modified" style="cursor:pointer" title="查看改期信息" onclick="showRescheduleInfo('${esc(p.id)}')">${svgCal(12)} 已改期</span>` : ""}
@@ -7614,6 +7613,7 @@ function renderProjects() {
             ${workingTooLong ? `<span class="badge ${isFakeWorking(p) ? "fake-working" : (overnight ? "overdue" : "pending")}">${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")} ${workElapsedText}</span>` : ""}
             ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}" style="cursor:pointer" title="查看加班/超时详情" onclick="showOvertimeInfo('${esc(p.id)}')">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
           </div>` : ""}
+          <h3>${esc(p.name)}</h3>
         </div>
 
         <!-- 暂停/延期/取消原因（次数与原因合并一行） -->
@@ -23844,7 +23844,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v9abbb42c";
+  const APP_VERSION = "v4628536f";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
