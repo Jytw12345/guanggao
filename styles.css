@@ -13190,3 +13190,15 @@ table.data.project-hours-diff thead th {
   .leave-detail__value { font-size: 12.5px; }
   .leave-detail__footer { margin-top: 14px; padding-top: 12px; }
 }
+
+/* 车辆管理弹窗 */
+.veh-manage-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; max-height: 50vh; overflow-y: auto; }
+.veh-manage-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; }
+.veh-manage-info { min-width: 0; }
+.veh-manage-name { font-weight: 600; color: #111827; display: flex; align-items: center; gap: 8px; }
+.veh-manage-plate { font-weight: 400; color: #6b7280; font-size: 12px; }
+.veh-manage-meta { font-size: 12px; color: #6b7280; margin-top: 2px; display: flex; align-items: center; gap: 8px; }
+.veh-manage-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.veh-status { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; line-height: 1.6; }
+.veh-status--on { background: #dcfce7; color: #166534; }
+.veh-status--off { background: #f1f5f9; color: #64748b; }

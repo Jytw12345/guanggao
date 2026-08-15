@@ -161,7 +161,7 @@ function getAllowedStatuses(currentStatus) {
 const TIGHT_GAP_MINUTES = 30;
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [], vehicleTrips: [], internalTasks: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [], vehicleTrips: [], vehicles: [], internalTasks: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -292,6 +292,7 @@ const CAP = {
   VEHICLE_VIEW: "vehicle_view",
   VEHICLE_TRIP_ADD: "vehicle_trip_add",
   VEHICLE_TRIP_DELETE: "vehicle_trip_delete",
+  VEHICLE_MANAGE: "vehicle_manage",
 };
 
 /* 权限项的中文说明（角色权限配置页逐行展示，顺序即展示顺序） */
@@ -362,6 +363,7 @@ const CAP_LABEL = {
   vehicle_view: "查看车辆里程",
   vehicle_trip_add: "用车/还车登记",
   vehicle_trip_delete: "删除里程记录",
+  vehicle_manage: "管理车辆",
   repair_create: "发起维修单",
   manage_wage_config: "管理工时单价",
   repair_complete: "完成维修",
@@ -380,7 +382,7 @@ const CAP_GROUPS = [
   { label: "系统管理", caps: ["manage_stores","manage_wage_config"] },
   { label: "个人日程", caps: ["schedule_view","schedule_view_all","schedule_add","schedule_edit_own","schedule_edit_all","schedule_delete_own","schedule_delete_all"] },
   { label: "内部任务", caps: ["task_view","task_add","task_start","task_complete","task_delete","task_verify","internal_work_log"] },
-  { label: "车辆里程", caps: ["vehicle_view","vehicle_trip_add","vehicle_trip_delete"] },
+  { label: "车辆里程", caps: ["vehicle_view","vehicle_trip_add","vehicle_trip_delete","vehicle_manage"] },
 ];
 
 /* 默认权限模板（与 SQL seed 一致）；云端会用 role_permissions 表覆盖 */
@@ -409,6 +411,7 @@ const DEFAULT_ROLE_PERMS = {
     task_view: true, task_add: true, task_start: true, task_complete: true, task_delete: true, task_verify: true,
     internal_work_log: false,
     vehicle_view: true, vehicle_trip_add: true, vehicle_trip_delete: false,
+    vehicle_manage: true,
   },
   worker: {
     project_create: true, project_edit_own: false, project_edit_all: false,
@@ -434,6 +437,7 @@ const DEFAULT_ROLE_PERMS = {
     task_view: true, task_add: false, task_start: true, task_complete: true, task_delete: false, task_verify: false,
     internal_work_log: false,
     vehicle_view: true, vehicle_trip_add: true, vehicle_trip_delete: false,
+    vehicle_manage: false,
   },
 };
 
@@ -568,6 +572,7 @@ const perm = {
   viewVehicle: () => can(CAP.VEHICLE_VIEW),
   addVehicleTrip: () => can(CAP.VEHICLE_TRIP_ADD),
   deleteVehicleTrip: () => can(CAP.VEHICLE_TRIP_DELETE),
+  vehicleManage: () => can(CAP.VEHICLE_MANAGE),
   doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE) || can(CAP.CONSTRUCTION_LOG_WORK) || can(CAP.CONSTRUCTION_LOG_OUTSOURCED)),
   manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT),
   manageMakeup: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_BATCH_ROTATIONAL),
@@ -2442,6 +2447,17 @@ const mapVehicleTrip = (r) => ({
   createdAt: r.created_at || r.createdAt || "",
 });
 
+const mapVehicle = (r) => ({
+  id: r.id,
+  name: r.name || "",
+  plate: r.plate || "",
+  type: r.type || "",
+  active: r.active !== false,
+  sort: Number(r.sort) || 0,
+  note: r.note || "",
+  createdAt: r.created_at || r.createdAt || "",
+});
+
 const vehicleTripToRow = (t) => ({
   id: t.id,
   vehicle_id: t.vehicleId || null,
@@ -2461,6 +2477,16 @@ const vehicleTripToRow = (t) => ({
   note: t.note || null,
   fuel_level: t.fuelLevel != null ? Number(t.fuelLevel) : null,
   created_at: t.createdAt || new Date().toISOString(),
+});
+
+const vehicleToRow = (v) => ({
+  id: v.id,
+  name: v.name || "",
+  plate: v.plate || "",
+  type: v.type || null,
+  active: v.active !== false,
+  sort: Number(v.sort) || 0,
+  note: v.note || null,
 });
 
 /* 内部任务：云端行 <-> 内存对象 双向映射（与 vehicle_trips 同范式） */
@@ -2728,7 +2754,7 @@ const repo = {
         if (hasCache) q.in("project_id", activeIds.length ? activeIds : ["__none__"]);
         return q;
       });
-      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes, itRes] = await Promise.all([
+      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes, itRes, vRes] = await Promise.all([
         cloudQuery(() => sb.from("workers").select("*")),
         cloudQuery(() => sb.from("stores").select("*")),
         cloudQuery(() => sb.from("role_permissions").select("*")),
@@ -2741,6 +2767,7 @@ const repo = {
         cloudQuery(() => sb.from("vehicle_trips").select("*")),
         cloudQuery(() => sb.from("user_permissions").select("*")),
         cloudQuery(() => sb.from("internal_tasks").select("*")),
+        cloudQuery(() => sb.from("vehicles").select("*")),
       ]);
       const allErrors = [
         { name: "workers", res: wRes },
@@ -2752,6 +2779,7 @@ const repo = {
         { name: "leave_quota", res: lqRes },
         { name: "holidays", res: hRes },
         { name: "user_permissions", res: uRes },
+        { name: "vehicles", res: vRes },
       ].filter(e => e.res.error);
       
       if (allErrors.length > 0) {
@@ -2877,6 +2905,18 @@ const repo = {
       } else {
         console.warn("vehicle_trips 表读取失败（可能尚未创建）:", vtRes.error.message);
         cache.vehicleTrips = [];
+      }
+      if (!vRes.error) {
+        cache.vehicles = (vRes.data || []).map((r) => mapVehicle(r));
+        // 云端为空（首次部署）：用内置种子补齐，保证界面与历史里程记录一致
+        if ((cache.vehicles || []).length === 0 && MODE === "cloud") {
+          cache.vehicles = SEED_VEHICLES.map((v) => ({ ...v }));
+          Promise.all(SEED_VEHICLES.map((v) => repo.saveVehicle(v)))
+            .catch((e) => console.warn("[sync] vehicles 种子写入失败：", e && e.message));
+        }
+      } else {
+        console.warn("vehicles 表读取失败（可能尚未创建）:", vRes.error.message);
+        cache.vehicles = [];
       }
       // 内部任务：云端真源；首次（表为空）将本机 localStorage 历史一次性迁移上云
       if (!itRes.error) {
@@ -3015,6 +3055,29 @@ const repo = {
       if (error) return fail(error);
     } else {
       cache.vehicleTrips = cache.vehicleTrips.filter((t) => t.id !== id);
+      saveLocal();
+    }
+  },
+
+  /* ---- 车辆主数据（云端真源 + 本地缓存兜底） ---- */
+  async saveVehicle(v) {
+    const row = vehicleToRow(v);
+    if (MODE === "cloud") {
+      const { error } = await sb.from("vehicles").upsert(row);
+      if (error) return fail(error);
+    } else {
+      const idx = cache.vehicles.findIndex((x) => x.id === row.id);
+      if (idx >= 0) cache.vehicles[idx] = { ...cache.vehicles[idx], ...v };
+      else cache.vehicles.push(v);
+      saveLocal();
+    }
+  },
+  async deleteVehicle(id) {
+    if (MODE === "cloud") {
+      const { error } = await sb.from("vehicles").delete().eq("id", id);
+      if (error) return fail(error);
+    } else {
+      cache.vehicles = cache.vehicles.filter((x) => x.id !== id);
       saveLocal();
     }
   },
@@ -3487,6 +3550,7 @@ function loadLocal() {
       cache.operationLogs = data.operationLogs || [];
       cache.accounts = data.accounts || [];
       cache.vehicleTrips = data.vehicleTrips || [];
+      cache.vehicles = data.vehicles || [];
       cache.internalTasks = (data.internalTasks || []).map(normalizeInternalTask);
       // 本地模式历史兼容：旧版内部任务存在独立的 "internalTasks" key，
       // 若 STORE_KEY 中尚未收录，则从旧 key 迁移进来（仅首次，避免重复）。
@@ -3544,6 +3608,7 @@ function saveLocal() {
       operationLogs: cache.operationLogs,
       accounts: cache.accounts,
       vehicleTrips: cache.vehicleTrips,
+      vehicles: cache.vehicles,
       internalTasks: cache.internalTasks
     }));
   } catch (e) {
@@ -3632,6 +3697,7 @@ function serializeCloudSnapshot() {
       workerSchedules: cache.workerSchedules,
       accounts: cache.accounts,
       vehicleTrips: cache.vehicleTrips,
+      vehicles: cache.vehicles,
       internalTasks: cache.internalTasks,
     },
     rolePerms,
@@ -3867,6 +3933,7 @@ const REALTIME_TABLES = {
   holidays: "holidays",
   worker_schedules: "worker_schedules",
   vehicle_trips: "vehicleTrips",
+  vehicles: "vehicles",
   internal_tasks: "internalTasks",
   profiles: "accounts",
   user_permissions: "user_permissions",
@@ -20277,6 +20344,7 @@ function applyPermissions() {
   };
   setHidden("btnNewProject", !perm.createProject());
   setHidden("btnNewStore", !perm.manageStores());
+  setHidden("btnManageVehicles", !(perm.vehicleManage() && MODE === "cloud"));
   setHidden("btnWageConfig", !perm.manageWageConfig());
   setHidden("btnNewSchedule", !perm.addSchedule());
   setHidden("btnNewInternalTask", !perm.addTask());
@@ -23083,6 +23151,7 @@ function bindEvents() {
 
   document.getElementById("btnNewProject").addEventListener("click", newProject);
   document.getElementById("btnNewStore").addEventListener("click", newStore);
+  document.getElementById("btnManageVehicles").addEventListener("click", openVehicleManager);
   document.getElementById("projectSearch").addEventListener("input", () => {
     clearTimeout(projectSearchTimer);
     projectSearchTimer = setTimeout(renderProjects, 120);
@@ -23610,7 +23679,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vcdd8bbd3";
+  const APP_VERSION = "vb8a61d3e";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -24018,11 +24087,19 @@ document.addEventListener("keydown", (e) => {
  * ============================================================ */
 
 /* 三辆固定车辆（id 不要改动，否则历史记录会对不上） */
-const VEHICLES = [
+const SEED_VEHICLES = [
   { id: "wuling",   name: "五菱货车",  plate: "鲁HE6F66" },
   { id: "toyota",   name: "丰田雅力士", plate: "鲁HB23E4" },
   { id: "dongfeng", name: "东风面包车", plate: "鲁HA006Q" },
 ];
+
+/* 内置种子车辆；云端为空或本地模式时 fallback。id 不要改动，否则历史里程记录会对不上 */
+function getVehicles() {
+  if (MODE === "cloud") return (cache.vehicles && cache.vehicles.length) ? cache.vehicles : SEED_VEHICLES;
+  return SEED_VEHICLES;
+}
+function getActiveVehicles() { return getVehicles().filter((v) => v.active !== false); }
+function getVehicle(id) { return getVehicles().find((v) => v.id === id) || null; }
 
 /* 仪表盘指针满偏对应的月度里程（km）：达到该值指针指向最大值 */
 const VEHICLE_MONTH_TARGET = 2000;
@@ -24129,7 +24206,7 @@ function renderVehicleDashboards() {
   if (!wrap) return;
   const cur = new Date();
   const curKey = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`;
-  wrap.innerHTML = VEHICLES.map((v) => {
+  wrap.innerHTML = getActiveVehicles().map((v) => {
     const inUse = isVehicleInUse(v.id);
     const open = inUse ? getOpenTrip(v.id) : null;
     const km = inUse ? (Number(open.startKm) || 0) : getLastKmForVehicle(v.id);
@@ -24402,7 +24479,7 @@ function populateVtFilters() {
   if (!vSel || !dSel) return;
   const curV = (window._vtFilter && window._vtFilter.vehicleId) || "";
   const curD = (window._vtFilter && window._vtFilter.driverName) || "";
-  vSel.innerHTML = `<option value="">全部车辆</option>` + VEHICLES.map((v) =>
+  vSel.innerHTML = `<option value="">全部车辆</option>` + getActiveVehicles().map((v) =>
     `<option value="${v.id}" ${v.id === curV ? "selected" : ""}>${esc(v.name)}${v.plate ? " · " + esc(v.plate) : ""}</option>`).join("");
   const names = new Set();
   (cache.workers || []).forEach((w) => names.add(w.name));
@@ -24717,7 +24794,7 @@ function renderVehicleSummary() {
   const label = `${yy}年${Number(mm)}月`;
 
   const list = (cache.vehicleTrips || []).filter((t) => monthKeyOf(t) === mk);
-  const perVeh = VEHICLES.map((v) => {
+  const perVeh = getActiveVehicles().map((v) => {
     const sum = list.filter((t) => t.vehicleId === v.id)
       .reduce((s, t) => s + (Number(t.mileage) || 0), 0);
     return { ...v, sum: Math.round(sum * 10) / 10 };
@@ -25224,7 +25301,7 @@ async function saveUseVehicle() {
   const vid = window._vtqVehicleId;
   if (!vid) return;
   if (isVehicleInUse(vid)) { toast("该车尚未还车，无法再次用车"); return; }
-  const v = VEHICLES.find((x) => x.id === vid);
+  const v = getVehicle(vid);
   const driverInput = document.getElementById("vtqDriver");
   const driverRaw = (driverInput.value || "").trim();
   if (!driverRaw) { toast("请填写司机（用车必须填写）"); driverInput.focus(); return; }
@@ -25295,6 +25372,114 @@ async function saveUseVehicle() {
       persistCloudCache(currentUser && currentUser.id);
       renderVehicleTrips();
     });
+}
+
+/* ============================================================
+ * 车辆管理（管理员/店长，仅云端；软停用保留历史）
+ * ============================================================ */
+function openVehicleManager() {
+  if (!perm.vehicleManage()) { toast("无权限管理车辆"); return; }
+  if (MODE !== "cloud") { toast("本地模式不支持管理车辆，请切换到云端模式"); return; }
+  modal.open("管理车辆", vehicleManageList());
+}
+function vehicleManageList() {
+  const list = getVehicles().slice().sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0));
+  const rows = list.map((v) => {
+    const on = v.active !== false;
+    const status = on
+      ? `<span class="veh-status veh-status--on">启用</span>`
+      : `<span class="veh-status veh-status--off">已停用</span>`;
+    return `<div class="veh-manage-row">
+      <div class="veh-manage-info">
+        <div class="veh-manage-name">${esc(v.name)} <span class="veh-manage-plate">${esc(v.plate || "")}</span></div>
+        <div class="veh-manage-meta">${esc(v.type || "未分类")} · ${status}</div>
+      </div>
+      <div class="veh-manage-actions">
+        <button class="btn small" onclick="editVehicle('${escJsAttr(v.id)}')">编辑</button>
+        <button class="btn small ${on ? "warning" : "primary"}" onclick="toggleVehicleActive('${escJsAttr(v.id)}')">${on ? "启用" : "停用"}</button>
+      </div>
+    </div>`;
+  }).join("");
+  return `<div class="veh-manage-list">${rows || '<div class="empty">暂无车辆</div>'}</div>
+    <div class="form-actions">
+      <button class="btn" onclick="modal.close()">关闭</button>
+      <button class="btn primary" onclick="newVehicle()">+ 添加车辆</button>
+    </div>`;
+}
+function vehicleForm(s = {}) {
+  return `
+    <div class="form-row">
+      <label>车型名称 *</label>
+      <input class="input" id="vName" value="${esc(s.name || "")}" placeholder="如：五菱货车" />
+    </div>
+    <div class="form-row">
+      <label>车牌号 *</label>
+      <input class="input" id="vPlate" value="${esc(s.plate || "")}" placeholder="如：鲁HE6F66" />
+    </div>
+    <div class="form-row">
+      <label>车辆类型</label>
+      <select class="input" id="vType">
+        ${["货车","轿车","面包车","SUV","其他"].map((t) => `<option value="${t}" ${t === (s.type || "") ? "selected" : ""}>${t}</option>`).join("")}
+      </select>
+    </div>
+    <div class="form-row">
+      <label>备注</label>
+      <input class="input" id="vNote" value="${esc(s.note || "")}" placeholder="选填" />
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="openVehicleManager()">取消</button>
+      <button class="btn primary" onclick="saveVehicleForm('${s.id || ""}')">保存</button>
+    </div>`;
+}
+function newVehicle() {
+  if (!perm.vehicleManage()) { toast("无权限管理车辆"); return; }
+  if (MODE !== "cloud") { toast("本地模式不支持管理车辆，请切换到云端模式"); return; }
+  modal.open("添加车辆", vehicleForm());
+}
+function editVehicle(id) {
+  if (!perm.vehicleManage()) { toast("无权限管理车辆"); return; }
+  const v = getVehicle(id);
+  if (!v) { toast("车辆不存在"); return; }
+  modal.open("编辑车辆", vehicleForm(v));
+}
+async function saveVehicleForm(id) {
+  if (!perm.vehicleManage()) { toast("无权限管理车辆"); return; }
+  if (MODE !== "cloud") { toast("本地模式不支持管理车辆，请切换到云端模式"); return; }
+  const name = document.getElementById("vName").value.trim();
+  const plate = document.getElementById("vPlate").value.trim();
+  const type = document.getElementById("vType").value.trim();
+  const note = document.getElementById("vNote").value.trim();
+  if (!name) { toast("请填写车型名称"); return; }
+  if (!plate) { toast("请填写车牌号"); return; }
+  if (getVehicles().some((v) => v.plate === plate && v.id !== id)) { toast("该车牌已存在，请检查"); return; }
+  const existing = id ? getVehicle(id) : null;
+  const v = {
+    id: id || ("veh_" + Date.now()),
+    name, plate, type, note,
+    active: existing ? (existing.active !== false) : true,
+    sort: existing ? (Number(existing.sort) || 0) : 0,
+  };
+  await repo.saveVehicle(v);
+  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] saveVehicleForm 后台同步失败：", e));
+  modal.close();
+  renderAll();
+  toast("已保存");
+}
+async function toggleVehicleActive(id) {
+  if (!perm.vehicleManage()) { toast("无权限管理车辆"); return; }
+  if (MODE !== "cloud") { toast("本地模式不支持管理车辆，请切换到云端模式"); return; }
+  const v = getVehicle(id);
+  if (!v) { toast("车辆不存在"); return; }
+  const next = v.active === false ? true : false;
+  const action = next ? "启用" : "停用";
+  if (!(await confirmDialog(`确定${action}「${v.name}」？${next ? "" : "停用后该车不再出现在车辆卡片与筛选中，历史记录仍保留。"}`, action + "车辆"))) return;
+  if (!next && isVehicleInUse(id)) { toast("该车正在使用中，请先还车再停用"); return; }
+  v.active = next;
+  await repo.saveVehicle(v);
+  repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] toggleVehicleActive 后台同步失败：", e));
+  modal.close();
+  renderAll();
+  toast(`已${action}`);
 }
 
 /* 确认还车：结算该次里程 */
