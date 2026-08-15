@@ -1241,6 +1241,21 @@ function projectSegOnDate(p, ds) {
   return getBookedSegments(p).find((s) => s.date === ds) || null;
 }
 
+/* 计算项目在某一天的「预计工时（人小时）」。
+   跨天项目按当天 workSegments 分段的时长 × 施工人数；
+   单日项目或无分段时回退到 p.estimatedHours。
+   用于日历、详情面板、工时异常检测，避免把总工时重复堆到每一天。 */
+function getProjectDayEstimatedHours(p, ds) {
+  if (!p) return 0;
+  const seg = ds ? projectSegOnDate(p, ds) : null;
+  if (seg && seg.start && seg.end && seg.end > seg.start) {
+    const segHours = (seg.end - seg.start) / (1000 * 60 * 60);
+    const workers = Math.max(1, ((p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1));
+    return segHours * workers;
+  }
+  return Number(p.estimatedHours) || 0;
+}
+
 /* 紧凑格式化跨天施工分段（用于工时统计明细等窄空间）。
    例如各段时间相同：08-11~08-12 · 08:00~13:00
    各段时间不同：共2天 · 08-11 08:00~13:00、08-12 14:00~18:00 */
@@ -1274,16 +1289,24 @@ function checkProjectHourFeasibility(p, ds) {
   if (remaining <= 0) return result;
 
   let seg;
+  let availableHours = 0;
+  let perPersonHours = 0;
   if (Array.isArray(p.workSegments) && p.workSegments.length > 1 && ds) {
+    // 跨天项目：按当天分段窗口把剩余工时分摊到今天及之后的所有分段，避免把总工时堆到某一天误报
     seg = projectSegOnDate(p, ds);
+    if (!seg || !seg.start || !seg.end || seg.end <= seg.start) return result;
+    availableHours = Math.max(0, (seg.end - seg.start) / (1000 * 60 * 60));
+    const futureSegs = p.workSegments.filter((s) => s && s.date && s.date >= ds);
+    const futureCount = futureSegs.length || 1;
+    perPersonHours = remaining / workers / futureCount;
   } else {
     const segs = getBookedSegments(p);
     seg = (segs && segs.length) ? segs[0] : null;
+    if (!seg || !seg.start || !seg.end || seg.end <= seg.start) return result;
+    availableHours = Math.max(0, (seg.end - seg.start) / (1000 * 60 * 60));
+    perPersonHours = remaining / workers;
   }
-  if (!seg || !seg.start || !seg.end || seg.end <= seg.start) return result;
 
-  const availableHours = Math.max(0, (seg.end - seg.start) / (1000 * 60 * 60));
-  const perPersonHours = remaining / workers;
   const ratio = availableHours > 0 ? perPersonHours / availableHours : 0;
   result.availableHours = availableHours;
   result.perPersonHours = perPersonHours;
@@ -1753,24 +1776,47 @@ function calcDuration(start, end) {
   return `${mins}分钟`;
 }
 
+/* 将小时数格式化为「X天 Y小时 Z分钟」或「X小时 Y分钟」等可读文本 */
+function fmtDurationFromHours(totalHours) {
+  const hours = Math.floor(totalHours);
+  const mins = Math.floor((totalHours - hours) * 60);
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  if (days > 0) {
+    if (remainingHours > 0 && mins > 0) return `${days}天 ${remainingHours}小时 ${mins}分钟`;
+    if (remainingHours > 0) return `${days}天 ${remainingHours}小时`;
+    if (mins > 0) return `${days}天 ${mins}分钟`;
+    return `${days}天`;
+  }
+  if (hours > 0) return `${hours}小时 ${mins}分钟`;
+  if (mins > 0) return `${mins}分钟`;
+  return "0分钟";
+}
+
 function calcActualWorkDuration(p) {
-  const accumulatedWorkHours = p.accumulatedWorkHours || 0;
-  if (accumulatedWorkHours > 0) {
-    const hours = Math.floor(accumulatedWorkHours);
-    const mins = Math.floor((accumulatedWorkHours - hours) * 60);
-    const days = Math.floor(hours / 24);
-    const remainingHours = hours % 24;
-    if (days > 0) {
-      if (remainingHours > 0 && mins > 0) return `${days}天 ${remainingHours}小时 ${mins}分钟`;
-      if (remainingHours > 0) return `${days}天 ${remainingHours}小时`;
-      if (mins > 0) return `${days}天 ${mins}分钟`;
-      return `${days}天`;
-    }
-    if (hours > 0) return `${hours}小时 ${mins}分钟`;
-    return `${mins}分钟`;
+  if (!p) return "—";
+
+  // 加班/超时等场景传入的合成对象：只有 accumulatedWorkHours，直接格式化
+  const accOnly = Number(p.accumulatedWorkHours) || 0;
+  if (!p.startedAt && accOnly > 0) return fmtDurationFromHours(accOnly);
+  if (!p.startedAt) return "—";
+
+  // 施工中：累计工时 + 本次恢复后持续到现在的时长
+  if (p.status === STATUS.WORKING) {
+    const acc = Number(p.accumulatedWorkHours) || 0;
+    const sessionStart = p.resumedAt ? new Date(p.resumedAt) : new Date(p.startedAt);
+    const currentHours = Math.max(0, (new Date() - sessionStart) / (1000 * 60 * 60));
+    return fmtDurationFromHours(acc + currentHours);
   }
 
-  if (!p.startedAt || !p.finishedAt) return "—";
+  // 已结束/暂停/延期/取消：accumulatedWorkHours 已在状态变更时结算
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.PAUSED, STATUS.DELAYED, STATUS.CANCELLED].includes(p.status)) {
+    const acc = Number(p.accumulatedWorkHours) || 0;
+    if (acc > 0) return fmtDurationFromHours(acc);
+  }
+
+  // 兜底：按起止锚点计算（兼容无 accumulatedWorkHours 的历史数据）
+  if (!p.finishedAt) return "—";
   const s = new Date(p.startedAt);
   const e = new Date(p.finishedAt);
   if (isNaN(s) || isNaN(e)) return "—";
@@ -1778,41 +1824,60 @@ function calcActualWorkDuration(p) {
   const pauseDurationTotal = derivePauseDuration(p);
   const actualMs = diffMs - pauseDurationTotal * 60 * 60 * 1000;
   if (actualMs <= 0) return "0分钟";
-  const days = Math.floor(actualMs / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((actualMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-  const mins = Math.floor((actualMs % (1000 * 60 * 60)) / (1000 * 60));
-  if (days > 0) {
-    if (hours > 0 && mins > 0) return `${days}天 ${hours}小时 ${mins}分钟`;
-    if (hours > 0) return `${days}天 ${hours}小时`;
-    if (mins > 0) return `${days}天 ${mins}分钟`;
-    return `${days}天`;
-  }
-  if (hours > 0) return `${hours}小时 ${mins}分钟`;
-  return `${mins}分钟`;
+  return fmtDurationFromHours(actualMs / (1000 * 60 * 60));
 }
 
-/* 项目「已施工时长」文本：
-   - 施工中(WORKING)：从 startedAt 实时累加到当前时刻
-   - 已暂停(PAUSED)：冻结在 pausedAt（不再累加）
-   - 已完工(DONE/已验收/已审核)：复用 calcActualWorkDuration（已扣暂停/已累加 sessions）
+/* 项目「已施工总时长」文本（自首次开工起累计，扣除暂停）：
+   - 施工中(WORKING)：accumulatedWorkHours + 本次恢复后持续到现在的时长
+   - 已暂停(PAUSED)：accumulatedWorkHours（暂停时已结算）
+   - 已完工(DONE/已验收/已审核)：复用 calcActualWorkDuration
    - 预约中/已延期/已取消：返回 null（不显示） */
 function getElapsedSinceStartText(p) {
   if (!p || !p.startedAt) return null;
   const s = new Date(p.startedAt);
   if (isNaN(s.getTime())) return null;
+
   const FINISHED_STATES = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED];
-  let e = null;
-  if (p.status === STATUS.WORKING) {
-    e = new Date();
-  } else if (p.status === STATUS.PAUSED && p.pausedAt) {
-    e = new Date(p.pausedAt);
-  } else if (FINISHED_STATES.includes(p.status) || p.finishedAt) {
+  if (FINISHED_STATES.includes(p.status) || p.finishedAt) {
     return calcActualWorkDuration(p);
+  }
+
+  let totalHours = 0;
+  if (p.status === STATUS.WORKING) {
+    const acc = Number(p.accumulatedWorkHours) || 0;
+    const sessionStart = p.resumedAt ? new Date(p.resumedAt) : s;
+    const currentHours = Math.max(0, (new Date() - sessionStart) / (1000 * 60 * 60));
+    totalHours = acc + currentHours;
+  } else if (p.status === STATUS.PAUSED && p.pausedAt) {
+    // 暂停时 accumulatedWorkHours 已包含本次会话
+    totalHours = Number(p.accumulatedWorkHours) || 0;
   } else {
     return null;
   }
-  if (isNaN(e.getTime())) return null;
-  const ms = e.getTime() - s.getTime();
+
+  if (totalHours <= 0) return null;
+  const mins = Math.floor(totalHours * 60);
+  const days = Math.floor(mins / (60 * 24));
+  const h = Math.floor((mins % (60 * 24)) / 60);
+  const m = mins % 60;
+  if (days > 0) {
+    if (h > 0 && m > 0) return `${days}天${h}小时${m}分钟`;
+    if (h > 0) return `${days}天${h}小时`;
+    if (m > 0) return `${days}天${m}分钟`;
+    return `${days}天`;
+  }
+  if (h > 0 && m > 0) return `${h}小时${m}分钟`;
+  if (h > 0) return `${h}小时`;
+  if (m > 0) return `${m}分钟`;
+  return "1分钟";
+}
+
+/* 当前连续施工会话时长（用于「连续施工/跨夜未完工/虚假施工」警示 chip） */
+function getCurrentSessionDurationText(p) {
+  if (!p || !p.startedAt || p.status !== STATUS.WORKING) return null;
+  const start = new Date(p.resumedAt || p.startedAt);
+  if (isNaN(start.getTime())) return null;
+  const ms = new Date() - start;
   if (ms <= 0) return null;
   const mins = Math.floor(ms / 60000);
   const days = Math.floor(mins / (60 * 24));
@@ -1872,20 +1937,33 @@ function buildCardActualTimeline(p) {
 
   // 单天 / 无会话：保持原样
   const parts = [];
-  if (p.startedAt) parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--blue"></span><span>开工 ${fmtDateTime(p.startedAt)}</span></div>`);
+  const originalStartedAt = p.originalStartedAt || p.startedAt;
+  const hasResumeHistory = !!(p.originalStartedAt && p.startedAt &&
+    Math.abs(new Date(p.originalStartedAt).getTime() - new Date(p.startedAt).getTime()) > 60000);
+
+  // 开工时间：始终显示首次开工；若有恢复史，再显示本次施工
+  if (originalStartedAt) {
+    const startLabel = hasResumeHistory ? "首次开工" : "开工";
+    parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--blue"></span><span>${startLabel} ${fmtDateTime(originalStartedAt)}</span></div>`);
+  }
+  if (hasResumeHistory && p.startedAt) {
+    parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--green"></span><span>本次施工 ${fmtDateTime(p.startedAt)} 起</span></div>`);
+  }
+
   if (p.finishedAt) parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--green"></span><span>完工 ${fmtDateTime(p.finishedAt)}</span></div>`);
+
   // 已施工时长（与"时长"语义合并，避免重复显示同一个 calcActualWorkDuration 值）
   // 当存在 workingTooLong chip（虚假施工/跨夜/连续施工）时，时间线跳过此行——时长信息由 chip 唯一承担，避免重复
   const elapsedText = getElapsedSinceStartText(p);
   const hasWorkingTooLongChip = p.status === STATUS.WORKING && getForgottenCompleteInfo(p);
-  if (elapsedText && !hasWorkingTooLongChip) parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--orange"></span><span data-elapsed-marker data-project-id="${esc(p.id)}">已施工 ${esc(elapsedText)}</span></div>`);
+  if (elapsedText && !hasWorkingTooLongChip) parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--orange"></span><span data-elapsed-marker data-project-id="${esc(p.id)}">累计已施工 ${esc(elapsedText)}</span></div>`);
   // 有暂停时单独显示暂停时长，与"已施工"对照（无暂停时不显示，避免无意义空行）
   const pauseHours = derivePauseDuration(p);
   if (pauseHours > 0.017) { // > 1 分钟
     const ph = Math.floor(pauseHours);
     const pm = Math.round((pauseHours - ph) * 60);
     const pauseText = ph > 0 ? (pm > 0 ? `${ph}小时${pm}分钟` : `${ph}小时`) : `${pm}分钟`;
-    parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--gray"></span><span>暂停 ${pauseText}</span></div>`);
+    parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--gray"></span><span>累计已暂停 ${pauseText}</span></div>`);
   }
   return parts.join("");
 }
@@ -2034,6 +2112,15 @@ function buildStatusTimeCards(p) {
     const pauseTime = p.pausedAt || (() => { const h = p.pauseHistory || []; return h.length > 0 ? h[h.length - 1].pauseAt : null; })();
     if (pauseTime) add("⏸", "暂停时间", fmtFull(pauseTime), "amber");
   }
+  // 恢复时间：当前施工中（resumedAt）或历史暂停记录里有恢复时间
+  if (p.status === STATUS.WORKING && p.resumedAt) {
+    add("▶", "恢复时间", fmtFull(p.resumedAt), "cyan");
+  } else if ((p.pauseHistory || []).length > 0) {
+    const lastResumed = [...p.pauseHistory].reverse().find((ph) => ph.resumedAt);
+    if (lastResumed && lastResumed.resumedAt) {
+      add("▶", "恢复时间", fmtFull(lastResumed.resumedAt), "cyan");
+    }
+  }
   if ((p.delayHistory || []).length > 0) {
     const lastDelay = p.delayHistory[p.delayHistory.length - 1];
     add("⚠", "延期时间", fmtFull(lastDelay.time), "amber");
@@ -2117,14 +2204,20 @@ function calcProjectWorkerStats(p) {
     workerPeriods[wid] = buildWorkerPeriods(p, wid);
   });
 
-  const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
-  allWids.forEach((wid) => {
-    if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
-      const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
-      if (!lastPeriod.end) lastPeriod.end = periodEndTime;
-      if (lastPeriod.end && new Date(lastPeriod.end) < new Date(lastPeriod.start)) lastPeriod.end = lastPeriod.start;
-    }
-  });
+  /* 对非施工中的终端状态（已完工/验收/审核/取消/暂停），强制关闭未结束的时段，
+     避免显示"至今"并持续计时。施工中(WORKING)保持最后一段开放，由 calcWorkerRealtimeHours
+     按当前时间实时累计；若在此处强制 end=now，会导致 calcWorkerRealtimeHours 把该段
+     误判为已结算而跳过，结果实时工时为 0。 */
+  if (p.status !== STATUS.WORKING) {
+    const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
+    allWids.forEach((wid) => {
+      if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
+        const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
+        if (!lastPeriod.end) lastPeriod.end = periodEndTime;
+        if (lastPeriod.end && new Date(lastPeriod.end) < new Date(lastPeriod.start)) lastPeriod.end = lastPeriod.start;
+      }
+    });
+  }
 
   const allWorkers = new Set([...(p.assignedWorkerIds || []), ...Object.keys(workerLogs), ...Object.keys(workerPeriods)]);
   const workerStats = [];
@@ -2135,11 +2228,11 @@ function calcProjectWorkerStats(p) {
     const name = logEntry ? logEntry.name : (worker ? worker.name : (chWorkerName[wid] || "未知"));
     const isOutsourced = logEntry ? logEntry.isOutsourced : !!chIsOutsourced[wid];
     const periods = workerPeriods[wid] || [];
-    let hours = 0;
+    // 总工时 = workLogs 中已登记的工时 + 当前开放时段的实时工时。
+    // calcWorkerRealtimeHours 只统计 pr.end 为 null 的开放段，已结算/关闭段不会重复计入。
+    let hours = (logEntry ? logEntry.hours : 0);
     if (periods.length > 0) {
-      hours = calcWorkerRealtimeHours(p, wid, periods);
-    } else if (logEntry && logEntry.hours > 0) {
-      hours = logEntry.hours;
+      hours += calcWorkerRealtimeHours(p, wid, periods);
     }
     hours = Math.round(hours * 10) / 10;
     workerStats.push({ name, hours, isAssigned, isOutsourced, id: wid, periods });
@@ -7475,7 +7568,7 @@ function renderProjects() {
     const delayCount = p.delayCount || (p.delayHistory || []).length;
     const pauseCount = p.pauseCount || 0;
     const isCrossDay = Array.isArray(p.workSegments) && p.workSegments.length > 1 && !isCompleted(p); // 跨天多段施工（仅未完工项目提示，已完工不再挂此 badge）
-    const workElapsedText = workingTooLong ? (getElapsedSinceStartText(p) || "") : "";
+    const workElapsedText = workingTooLong ? (getCurrentSessionDurationText(p) || "") : "";
     const overtimeText = isOvertimeWorking ? calcActualWorkDuration({ accumulatedWorkHours: (overtimeInfo.overtimeMs || 0) / 3600000 }) : "";
     
     const pStart = new Date(p.appointmentTime || p.startTime);
@@ -7501,7 +7594,7 @@ function renderProjects() {
               ${isForgotWorkFlag ? `<span class="badge overdue" style="cursor:pointer" title="点击查看忘记施工详情" onclick="showOverdueNotStartedInfo('${esc(p.id)}')">🚨 忘记施工</span>` : ""}
               ${isOverdue && !isForgotWorkFlag ? `<span class="badge overdue" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
               ${isCrossDay ? `<span class="badge crossday" style="cursor:pointer" title="查看跨天施工日程" onclick="showCrossDayInfo('${esc(p.id)}')">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
-              ${workingTooLong ? `<span class="badge ${isFakeWorking(p) ? "fake-working" : (overnight ? "overdue" : "pending")}" data-elapsed-marker data-elapsed-prefix="${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")}" data-project-id="${esc(p.id)}">${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")} ${workElapsedText}</span>` : ""}
+              ${workingTooLong ? `<span class="badge ${isFakeWorking(p) ? "fake-working" : (overnight ? "overdue" : "pending")}">${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")} ${workElapsedText}</span>` : ""}
               ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}" style="cursor:pointer" title="查看加班/超时详情" onclick="showOvertimeInfo('${esc(p.id)}')">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
               ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
               ${leaveConflicts.length > 0 ? `<span class="badge danger" style="cursor:pointer" title="查看人员请假/轮休" onclick="showLeaveConflictInfo('${esc(p.id)}')">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
@@ -9993,11 +10086,8 @@ function getWorkerDailyHours(dateStr, workerId) {
   cache.projects.forEach((p) => {
     if (isCompleted(p)) return;
     if (!(p.assignedWorkerIds || []).includes(workerId)) return;
-    const s = projectStart(p);
-    if (!s) return;
-    if (fmtDate(s) !== dateStr) return;
     const people = Math.max(1, (p.assignedWorkerIds || []).length);
-    total += (Number(p.estimatedHours) || 0) / people;
+    total += getProjectDayEstimatedHours(p, dateStr) / people;
   });
   getInternalTasks().forEach((t) => {
     if (t.status === TASK_STATUS.VERIFIED) return;
@@ -12871,7 +12961,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const projects = workerSchedule[wid];
       const totalHrs = projects.reduce((sum, p) => {
         const workerCount = Math.max(1, (p.assignedWorkerIds || []).length);
-        return sum + ((p.estimatedHours || 0) / workerCount);
+        return sum + (getProjectDayEstimatedHours(p, dateStrFormatted) / workerCount);
       }, 0);
       const worker = getWorker(wid);
       workerHours[worker ? worker.name : "未知"] = totalHrs.toFixed(1);
@@ -12926,7 +13016,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
           const w = getWorker(wid);
           return w ? w.name : "未知";
         });
-        const perHrs = ((p.estimatedHours || 0) / Math.max(1, p.assignedWorkerIds.length)).toFixed(1);
+        const perHrs = (getProjectDayEstimatedHours(p, dateStrFormatted) / Math.max(1, p.assignedWorkerIds.length)).toFixed(1);
         const chips = workers.map(n => `<span class="sched-team-person"><span class="sched-team-avatar">${esc(n.charAt(0))}</span>${esc(n)} <em>· ${perHrs}h</em></span>`).join("");
         const note = getProjectStatusNote(p, { includeStatus: true, showReason: false });
         const teamReasonColor = STAT_COLOR[p.status] || "#6b7280";
@@ -13184,7 +13274,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
     // —— 关于人员：工时统计 ——
     description += `<div class="sched-sec-h">⏱️ 工时统计</div>`;
     const totalEstimatedHours = allTodayProjects.reduce((sum, p) => {
-      return sum + (p.estimatedHours || 0);
+      return sum + getProjectDayEstimatedHours(p, dateStrFormatted);
     }, 0);
     // 实际人·小时：统一用 calcProjectActualPersonHours，已暂停/延期的项目会停在暂停点，不再继续计时
     const totalActualPersonHours = allTodayProjects.reduce((sum, p) => {
@@ -21262,7 +21352,7 @@ function renderCalendar() {
     }).join("");
     const more = items.length > 3 ? `<div class="cal-more">+${items.length - 3} 更多</div>` : "";
     const countBadge = items.length ? `<span class="cal-count">${items.length}</span>` : "";
-    const totalHours = items.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+    const totalHours = items.reduce((sum, p) => sum + getProjectDayEstimatedHours(p, ds), 0);
     /* 工时阈值按当天实际在岗人数动态计算：
        在岗产能 = 当天未请假施工人员数 × DAILY_WORK_HOURS
        > 产能 100% → 严重超载(红)；> 产能 80% → 接近满负荷(橙)；其余默认蓝 */
@@ -21337,7 +21427,7 @@ function renderCalDay() {
     box.innerHTML = `<div class="detail-block"><h3>${svgCal(18)} ${esc(calSelectedDate)}</h3><p class="hint" style="margin:0">当天暂无预约。</p></div>`;
     return;
   }
-  const totalEst = items.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+  const totalEst = items.reduce((sum, p) => sum + getProjectDayEstimatedHours(p, calSelectedDate), 0);
   const totalAct = items.reduce((sum, p) => sum + (p.actualHours || 0), 0);
   const workerHours = {};
   items.forEach((p) => {
@@ -21535,9 +21625,9 @@ function renderTimelineInDetail() {
   const hasInternalWorker = (p) => (p.assignedWorkerIds || []).length > 0;
   const hasOutsourced = (p) => (p.outsourcedWorkers || "").trim().length > 0;
   
-  const statEstHours = items.reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+  const statEstHours = items.reduce((sum, p) => sum + getProjectDayEstimatedHours(p, calSelectedDate), 0);
   const statActHours = items.reduce((sum, p) => sum + (p.actualHours || 0), 0);
-  const statInternalHours = items.filter(hasInternalWorker).reduce((sum, p) => sum + (p.estimatedHours || 0), 0);
+  const statInternalHours = items.filter(hasInternalWorker).reduce((sum, p) => sum + getProjectDayEstimatedHours(p, calSelectedDate), 0);
   const statOutsourcedHours = items.reduce((sum, p) => sum + Math.max(p.outsourcedHours, p.outsourcedHoursFromLogs) || 0, 0);
   const statOutsourcedWorkers = items.reduce((total, p) => {
     if (!hasOutsourced(p)) return total;
@@ -23679,7 +23769,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v74104230";
+  const APP_VERSION = "v228c1a35";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
