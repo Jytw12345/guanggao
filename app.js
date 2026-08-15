@@ -3799,6 +3799,8 @@ function serializeCloudSnapshot() {
     },
     rolePerms,
     userPerms,
+    // 缓存当前角色档案：下次启动可先于 profiles 网络返回即用旧权限秒开渲染
+    currentProfile: currentProfile ? { ...currentProfile } : null,
   };
 }
 
@@ -3830,16 +3832,20 @@ async function persistCloudCache(profileId) {
   }
 }
 
-// 启动秒开：先尝试读取上次快照并恢复。返回是否成功 hydrate
+// 启动秒开：先尝试读取上次快照并恢复。返回 { hydrated, cachedProfile }
+// hydrated: 数据缓存是否成功恢复；cachedProfile: 上次缓存的角色档案（含 role 才有效）
 async function hydrateFromCloudCache(profileId) {
-  if (!profileId) return false;
+  if (!profileId) return { hydrated: false, cachedProfile: null };
   try {
     const snap = await loadCloudCache(profileId);
-    if (!snap) return false;
-    return applyCloudCacheSnapshot(snap);
+    if (!snap) return { hydrated: false, cachedProfile: null };
+    const hydrated = applyCloudCacheSnapshot(snap);
+    const cachedProfile = (hydrated && snap.currentProfile && snap.currentProfile.role)
+      ? snap.currentProfile : null;
+    return { hydrated, cachedProfile };
   } catch (e) {
     console.warn("[cloud-cache] 读取 IndexedDB 失败：", e && e.message);
-    return false;
+    return { hydrated: false, cachedProfile: null };
   }
 }
 
@@ -22929,6 +22935,22 @@ function hideBootLoader() {
   el.classList.remove("show");
 }
 
+// 把当前 currentProfile 应用到下拉栏（姓名 / 角色徽章 / 登出按钮），幂等可重复调用
+function applyProfileToUI() {
+  if (!currentProfile) return;
+  const displayName = currentProfile.name || (currentUser && currentUser.email) || "";
+  const roleLabel = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
+  const nameEl = document.getElementById("dropdownName");
+  const roleEl = document.getElementById("dropdownRoleBadge");
+  if (nameEl) nameEl.textContent = displayName;
+  if (roleEl) roleEl.textContent = roleLabel;
+  const lou = document.getElementById("btnLogoutMenu");
+  if (lou) lou.onclick = () => {
+    document.getElementById("userDropdown").classList.add("hidden");
+    doLogout();
+  };
+}
+
 async function startCloudSession() {
   try {
     const { data } = await sb.auth.getSession();
@@ -22949,32 +22971,20 @@ async function startCloudSession() {
     setSyncStatus("online", "● 连接中…");
     showSyncing(); // 移动端：登录后开始首次同步，顶部显示「同步中…」（只此一次）
 
-    // 并行：拉取角色档案 + 从本地缓存秒开（两者互不依赖，重叠 I/O 缩短首屏等待）
+    // 并行：拉取权威角色档案 + 从本地缓存秒开（数据 + 上次缓存的角色），重叠 I/O 缩短首屏等待
     const profilesP = sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
-    const hydrated = await hydrateFromCloudCache(currentUser.id);
-    const { data: prof } = await profilesP;
-    currentProfile = { id: (prof && prof.id) || currentUser.id, role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null, adminPasswordHash: (prof && prof.admin_password_hash) || null };
+    const cacheResult = await hydrateFromCloudCache(currentUser.id);
+    const hydrated = cacheResult.hydrated;
+    const cachedProfile = cacheResult.cachedProfile;
 
-    const displayName = currentProfile.name || currentUser.email;
-    const roleLabel = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
-
-    document.getElementById("dropdownName").textContent = displayName;
-    document.getElementById("dropdownRoleBadge").textContent = roleLabel;
-
-    // 用 onclick 赋值（幂等）替代 addEventListener，避免重复登录时监听器累积
-    document.getElementById("btnLogoutMenu").onclick = () => {
-      document.getElementById("userDropdown").classList.add("hidden");
-      doLogout();
-    };
-
-    // 未分配角色：显示提示并停止后续加载
-    if (!currentProfile.role) {
-      showNoAccess(currentUser.email);
-      return;
-    }
-
-    // ① 先用本地缓存秒开：弱网/离线也能立即看到上次数据，不再白屏等全量拉取
-    if (hydrated) {
+    // 用上次缓存的角色「秒开」渲染：无需等待 profiles 网络返回即可带权限显示界面。
+    // 代价：若角色刚被变更 / 撤销，有极小时差会先用旧权限，profiles 回来后立即校正。
+    let profBefore = null;
+    const canInstantRender = !!(cachedProfile && hydrated);
+    if (canInstantRender) {
+      profBefore = cachedProfile;
+      currentProfile = cachedProfile;
+      applyProfileToUI();
       renderRoleInfo();
       applyPermissions();
       updateInternalTaskBadge();
@@ -22982,12 +22992,34 @@ async function startCloudSession() {
       setSyncStatus("online", "● 本地缓存（同步中…）");
       showSyncing();
     } else {
-      // 无缓存：界面还空，拉取数据期间显示加载遮罩，缓解等待的延迟感
+      // 无缓存数据 / 无缓存角色：界面暂空，拉取数据期间显示加载遮罩，缓解等待的延迟感
       showBootLoader();
     }
+
     // 全量刷新按钮是操作入口：进入云模式同步流程即显示，不等同步完成
     const fbtn = document.getElementById("btnFullRefresh");
     if (fbtn) fbtn.hidden = false;
+
+    // 拿到权威角色档案后校正（角色 / 门店 / 姓名变化则随后用新权限重渲染）
+    const { data: prof } = await profilesP;
+    const newProfile = { id: (prof && prof.id) || currentUser.id, role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null, adminPasswordHash: (prof && prof.admin_password_hash) || null };
+    const roleChanged = !!(profBefore && (profBefore.role !== newProfile.role || profBefore.storeId !== newProfile.storeId || profBefore.name !== newProfile.name));
+    currentProfile = newProfile;
+    applyProfileToUI();
+
+    // 未分配角色：显示提示并停止后续加载
+    if (!currentProfile.role) {
+      showNoAccess(currentUser.email);
+      return;
+    }
+
+    if (roleChanged) {
+      // 角色有变：用新权限重渲染（数据已在，无需再 showBootLoader）
+      renderRoleInfo();
+      applyPermissions();
+      updateInternalTaskBadge();
+      renderAll();
+    }
 
     // ② 后台拉取最新数据；与 3 个全局设置并行发出，减少总等待。失败则缓存兜底
     const [synced] = await Promise.all([
@@ -22996,8 +23028,8 @@ async function startCloudSession() {
       loadAutoReviewSetting(),  // 全局部署的「验收后自动审核（小时）」
       loadFakeMileageKmhSetting(), // 全局部署的「用车记录虚假里程阈值（km/h）」
     ]);
-    if (!hydrated) {
-      // 首次无缓存：此时才有数据可渲染
+    if (!canInstantRender) {
+      // 首次无缓存 / 无缓存角色：此时才有数据或权限可渲染
       renderRoleInfo();
       applyPermissions();
       updateInternalTaskBadge();
@@ -23809,7 +23841,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va41aa7e0";
+  const APP_VERSION = "v940b8b71";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
