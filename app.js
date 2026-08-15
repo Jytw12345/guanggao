@@ -1644,6 +1644,13 @@ function diffColor(diff) {
   return "var(--muted)";
 }
 
+/* Excel 导出专用：差异列前景色 + 背景色（diffColor 返回 CSS 变量，不能直接写 argb） */
+function diffExcelStyle(diff) {
+  if (diff > 0) return { fg: "FFDC2626", bg: "FFFEF2F2" };      // 红字 + 浅红底（实际>预计）
+  if (diff < 0) return { fg: "FF16A34A", bg: "FFF0FDF4" };      // 绿字 + 浅绿底（实际<预计）
+  return { fg: "FF64748B", bg: null };                           // 灰字，无底色
+}
+
 /* 带符号的差异文本：+1 / -2 / 0 */
 function fmtSignedDiff(diff) {
   const rounded = diff.toFixed(2);
@@ -17939,6 +17946,7 @@ function collectStoreStats() {
 function renderStoreStats() {
   const box = document.getElementById("storeStatsTable");
   if (!box) return;
+  const month = document.getElementById("storeStatsMonth") ? document.getElementById("storeStatsMonth").value : "";
   const rows = collectStoreStats();
   if (rows.length === 0) { box.innerHTML = `<div class="empty">暂无门店数据。</div>`; return; }
   const statuses = Object.values(STATUS);
@@ -17982,7 +17990,7 @@ function renderStoreStats() {
               <td class="ss-store">
                 <span class="ss-rank ${i === 0 ? 'ss-rank--top' : ''}">${i + 1}</span>
                 <span class="ss-store-name">${esc(r.name)}</span>
-                ${r.id && r.count > 0 ? `<button class="btn small ss-view" onclick="showStoreProjects('${r.id}', '${esc(r.name)}')">查看</button>` : ""}
+                ${r.id && r.count > 0 ? `<button class="btn small ss-view" onclick="showStoreProjects('${r.id}', '${esc(r.name)}', '${esc(month || "")}')">查看</button>` : ""}
               </td>
               <td class="ss-num"><b>${r.count}</b></td>
               <td class="ss-dist">${distBar(r)}</td>
@@ -18005,87 +18013,283 @@ function renderStoreStats() {
     </div>`;
   initCustomSelects(document.getElementById("storeStats"));
 }
-function exportStoreStats() {
+/* 构造一张「项目明细」工作表（按门店拆分或合并共用）。
+ * projects: 已按月份筛选的项目数组 */
+function buildStoreDetailSheet(wb, sheetName, projects) {
+  const detailSheet = wb.addWorksheet(sheetName);
+  detailSheet.columns = [
+    { header: "门店", key: "store", width: 18 },
+    { header: "项目名称", key: "name", width: 28 },
+    { header: "客户", key: "client", width: 16 },
+    { header: "状态", key: "status", width: 10 },
+    { header: "预约日期", key: "appointmentDate", width: 12 },
+    { header: "预约时间", key: "appointmentTime", width: 12 },
+    { header: "预计工时", key: "est", width: 11 },
+    { header: "实际工时", key: "act", width: 11 },
+    { header: "差异", key: "diff", width: 11 },
+    { header: "施工人员", key: "workers", width: 26 }
+  ];
+  const headerFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+  const headerFont = { bold: true, color: { argb: "FF1E293B" } };
+  detailSheet.getRow(1).eachCell((cell) => {
+    cell.fill = headerFill;
+    cell.font = headerFont;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+  });
+  detailSheet.views = [{ state: "frozen", ySplit: 1 }];
+  projects.forEach((p) => {
+    const h = hoursDiff(p);
+    const workers = (p.assignedWorkerIds || [])
+      .map((wid) => (getWorker(wid) && getWorker(wid).name) || wid)
+      .filter(Boolean)
+      .join(", ");
+    const appt = p.appointmentTime ? new Date(p.appointmentTime) : null;
+    const row = detailSheet.addRow({
+      store: storeName(p.storeId),
+      name: p.name || "未命名",
+      client: p.clientName || "",
+      status: p.status || "—",
+      appointmentDate: appt ? fmtDate(p.appointmentTime) : "",
+      appointmentTime: appt ? `${String(appt.getHours()).padStart(2, "0")}:${String(appt.getMinutes()).padStart(2, "0")}` : "",
+      est: h.hasActual ? h.est : (h.est > 0 ? h.est : ""),
+      act: h.hasActual ? h.act : "",
+      diff: h.hasActual ? h.diff : "",
+      workers
+    });
+    row.getCell("est").alignment = { horizontal: "right" };
+    row.getCell("act").alignment = { horizontal: "right" };
+    row.getCell("diff").alignment = { horizontal: "right" };
+    if (h.hasActual) {
+      const diffStyle = diffExcelStyle(h.diff);
+      const diffCell = row.getCell("diff");
+      diffCell.font = { color: { argb: diffStyle.fg } };
+      if (diffStyle.bg) {
+        diffCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: diffStyle.bg } };
+      }
+    }
+  });
+  return detailSheet;
+}
+
+/* Excel 工作表名：最长 31 字符，禁用 \ / * ? : [ ]，且不重复 */
+function safeSheetName(name, used) {
+  let s = (name || "门店").replace(/[\\/*?:\[\]]/g, " ").replace(/\s+/g, " ").trim().slice(0, 31) || "门店";
+  const base = s;
+  let i = 1;
+  while (used.has(s.toLowerCase())) {
+    const suffix = "_" + i;
+    s = base.slice(0, 31 - suffix.length) + suffix;
+    i++;
+  }
+  used.add(s.toLowerCase());
+  return s;
+}
+
+async function exportStoreStats() {
   const rows = collectStoreStats();
   if (rows.length === 0) { toast("暂无数据可导出"); return; }
-  const month = document.getElementById("storeStatsMonth").value || "全部";
+
+  const monthInput = document.getElementById("storeStatsMonth");
+  const month = monthInput ? monthInput.value : "";
+  const monthLabel = month || "全部";
   const statuses = Object.values(STATUS);
-  const header = ["门店", "预约数", ...statuses, "合计预计(已登记)", "合计实际(已登记)", "差异(实际-预计)"];
-  const lines = [header.join(",")].concat(rows.map((r) => [
-    `"${String(r.name).replace(/"/g, '""')}"`,
-    r.count,
-    ...statuses.map((s) => r.byStatus[s] || 0),
-    fmtHours(r.recordedEst),
-    fmtHours(r.act),
-    fmtSignedDiff(r.recordedDiff),
-  ].join(",")));
-  const csv = "\ufeff" + lines.join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `店面统计_${month}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-  toast("已导出 CSV");
+
+  // 与首页统计口径一致的项目明细（按预约时间所属月份）
+  const detailProjects = cache.projects.filter((p) => {
+    if (!month) return true;
+    return monthKey(p.appointmentTime) === month;
+  });
+
+  try {
+    const ExcelJS = await ensureExcelJS();
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "广告施工预约系统";
+    wb.created = new Date();
+    wb.modified = new Date();
+
+    /* ---------- Sheet 1：门店汇总 ---------- */
+    const summarySheet = wb.addWorksheet("门店汇总");
+    summarySheet.columns = [
+      { header: "门店", key: "name", width: 22 },
+      { header: "预约数", key: "count", width: 10 },
+      ...statuses.map((s) => ({ header: s, key: s, width: 10 })),
+      { header: "预计工时(已登记)", key: "recordedEst", width: 16 },
+      { header: "实际工时(已登记)", key: "act", width: 16 },
+      { header: "差异", key: "diff", width: 12 }
+    ];
+
+    const headerFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
+    const headerFont = { bold: true, color: { argb: "FF1E293B" } };
+    summarySheet.getRow(1).eachCell((cell) => {
+      cell.fill = headerFill;
+      cell.font = headerFont;
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+    });
+
+    rows.forEach((r) => {
+      const row = summarySheet.addRow({
+        name: r.name,
+        count: r.count,
+        ...Object.fromEntries(statuses.map((s) => [s, r.byStatus[s] || 0])),
+        recordedEst: r.recordedEst,
+        act: r.act,
+        diff: r.recordedDiff
+      });
+      row.getCell("count").alignment = { horizontal: "right" };
+      statuses.forEach((s) => row.getCell(s).alignment = { horizontal: "right" });
+      row.getCell("recordedEst").alignment = { horizontal: "right" };
+      row.getCell("act").alignment = { horizontal: "right" };
+      row.getCell("diff").alignment = { horizontal: "right" };
+      const sumDiffStyle = diffExcelStyle(r.recordedDiff);
+      const sumDiffCell = row.getCell("diff");
+      sumDiffCell.font = { color: { argb: sumDiffStyle.fg } };
+      if (sumDiffStyle.bg) {
+        sumDiffCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: sumDiffStyle.bg } };
+      }
+    });
+
+    // 合计行
+    const total = rows.reduce((acc, r) => {
+      acc.count += r.count;
+      statuses.forEach((s) => { acc[s] = (acc[s] || 0) + (r.byStatus[s] || 0); });
+      acc.recordedEst += r.recordedEst;
+      acc.act += r.act;
+      acc.diff += r.recordedDiff;
+      return acc;
+    }, { name: "合计", count: 0, recordedEst: 0, act: 0, diff: 0 });
+    const totalRow = summarySheet.addRow(total);
+    totalRow.eachCell((cell) => {
+      cell.font = { bold: true };
+      if (cell.col > 1) cell.alignment = { horizontal: "right" };
+    });
+    const totalDiffStyle = diffExcelStyle(total.diff);
+    const totalDiffCell = totalRow.getCell("diff");
+    totalDiffCell.font = { bold: true, color: { argb: totalDiffStyle.fg } };
+    if (totalDiffStyle.bg) {
+      totalDiffCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: totalDiffStyle.bg } };
+    }
+
+    /* ---------- Sheet 2：项目明细（合并，按筛选月份） ---------- */
+    buildStoreDetailSheet(wb, "项目明细", detailProjects);
+
+    /* ---------- Sheet 3+：按门店分好的项目明细（同样按筛选月份） ---------- */
+    const usedNames = new Set(["门店汇总".toLowerCase(), "项目明细".toLowerCase()]);
+    const byStore = {};
+    detailProjects.forEach((p) => {
+      const key = p.storeId || "";
+      (byStore[key] = byStore[key] || []).push(p);
+    });
+    // 与汇总一致的顺序：未指定门店在前，其余按编号排序
+    rows.forEach((r) => {
+      const projs = byStore[r.id];
+      if (!projs || projs.length === 0) return;
+      const label = r.id ? storeName(r.id) : "未指定门店";
+      buildStoreDetailSheet(wb, safeSheetName(label, usedNames), projs);
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `店面统计_${monthLabel}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("已导出 Excel");
+  } catch (e) {
+    console.error("导出门店统计失败:", e);
+    toast("导出失败，请重试");
+  }
 }
 
 /* ============================================================
  * 门店管理（总经理）
  * ============================================================ */
 
-/* 查看门店关联的预约项目列表 */
-function showStoreProjects(storeId, storeName) {
-  const projs = cache.projects.filter((p) => p.storeId === storeId);
-  if (projs.length === 0) {
+/* 查看门店关联的预约项目列表。
+ * monthFilter: "" 表示显示全部，"YYYY-MM" 表示先只显示当月（可切换）。
+ */
+function showStoreProjects(storeId, storeNameParam, monthFilter) {
+  const allProjs = cache.projects.filter((p) => p.storeId === storeId);
+  if (allProjs.length === 0) {
     toast("该门店暂无关联项目");
     return;
   }
-  /* 按状态排序：活跃 > 等待 > 终态 */
-  const statusOrder = { "进行中": 0, "施工中": 0, "预约中": 1, "待施工": 1, "已暂停": 2, "暂停": 2, "已延期": 3, "已完工": 4, "已完成": 4, "已验收": 5, "已审核": 6, "已取消": 7 };
-  projs.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
 
-  const rows = projs.map((p) => {
-    const st = p.status || "—";
-    /* 状态颜色：覆盖全部状态，避免走默认红色 */
-    const sc = st === "进行中" || st === "施工中" ? "#dbeafe;color:#1d4ed8" :
-              st === "预约中" || st === "待施工" ? "#eef6ff;color:#1d4ed8" :
-              st === "已完工" ? "#dcfce7;color:#166534" :
-              st === "已完成" ? "#dcfce7;color:#166534" :
-              st === "已验收" ? "#f5f3ff;color:#5b21b6" :
-              st === "已审核" ? "#ecfeff;color:#155e75" :
-              st === "已暂停" || st === "暂停" ? "#fef3c7;color:#92400e" :
-              st === "已延期" ? "#fef2f2;color:#991b1b" :
-              st === "已取消" ? "#f1f5f9;color:#64748b" :
-              "#f1f5f9;color:#64748b";
-    const h = hoursDiff(p);
-    const fmtH = (v) => v > 0 ? Math.round(v * 10) / 10 + "h" : "";
-    const hoursText = h.hasActual ? fmtH(h.act) : (h.est > 0 ? fmtH(h.est) + "(预)" : "—");
-    /* 日期格式化：ISO → MM-DD（仅日期） */
-    const fmtDate = (s) => { if (!s) return ""; try { const d = new Date(s); if (isNaN(d.getTime())) return s; const m = String(d.getMonth()+1).padStart(2,"0"); const dd = String(d.getDate()).padStart(2,"0"); return `${m}-${dd}`; } catch(e) { return s; } };
-    const dStart = fmtDate(p.startDate || p.appointmentTime || "");
-    const dEnd = fmtDate(p.endDate);
-    return `<tr>
-      <td><a href="javascript:void(0)" onclick="modal.close(); openProjectFromCard('${p.id}')" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(p.name || "未命名")}</a></td>
-      <td>${esc(p.clientName || "—")}</td>
-      <td><span style="display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:600;background:${sc};white-space:nowrap">${esc(st)}</span></td>
-      <td style="white-space:nowrap">${esc(dStart)}${dEnd ? `<br><small style="color:#94a3b8">${esc(dEnd)}</small>` : ""}</td>
-      <td style="text-align:right;white-space:nowrap;font-weight:500;color:#334155">${hoursText}</td>
-    </tr>`;
-  }).join("");
+  const sName = storeNameParam || storeName(storeId);
+  const hasFilter = !!monthFilter;
 
-  const content = `
-    <div style="padding:4px 0">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-        <span style="font-size:13px;color:#64748b"><b style="color:#1f2937">${esc(storeName)}</b> · 共 ${projs.length} 个项目</span>
-      </div>
-      <div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:8px">
-        <table class="data" style="margin:0;font-size:12px">
-          <thead><tr><th>项目名称</th><th>客户</th><th>状态</th><th>日期</th><th style="text-align:right">工时</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    </div>`;
-  modal.open(`${storeName} — 关联项目`, content, { closeOnMask: true });
+  const render = (showAll) => {
+    const projs = showAll ? allProjs : allProjs.filter((p) => monthKey(p.appointmentTime) === monthFilter);
+    const inMonthCount = allProjs.filter((p) => monthKey(p.appointmentTime) === monthFilter).length;
+
+    /* 按状态排序：活跃 > 等待 > 终态 */
+    const statusOrder = { "进行中": 0, "施工中": 0, "预约中": 1, "待施工": 1, "已暂停": 2, "暂停": 2, "已延期": 3, "已完工": 4, "已完成": 4, "已验收": 5, "已审核": 6, "已取消": 7 };
+    projs.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
+
+    const rows = projs.map((p) => {
+      const inMonth = monthKey(p.appointmentTime) === monthFilter;
+      const st = p.status || "—";
+      /* 状态颜色：覆盖全部状态，避免走默认红色 */
+      const sc = st === "进行中" || st === "施工中" ? "#dbeafe;color:#1d4ed8" :
+                st === "预约中" || st === "待施工" ? "#eef6ff;color:#1d4ed8" :
+                st === "已完工" ? "#dcfce7;color:#166534" :
+                st === "已完成" ? "#dcfce7;color:#166534" :
+                st === "已验收" ? "#f5f3ff;color:#5b21b6" :
+                st === "已审核" ? "#ecfeff;color:#155e75" :
+                st === "已暂停" || st === "暂停" ? "#fef3c7;color:#92400e" :
+                st === "已延期" ? "#fef2f2;color:#991b1b" :
+                st === "已取消" ? "#f1f5f9;color:#64748b" :
+                "#f1f5f9;color:#64748b";
+      const h = hoursDiff(p);
+      const fmtH = (v) => v > 0 ? Math.round(v * 10) / 10 + "h" : "";
+      const hoursText = h.hasActual ? fmtH(h.act) : (h.est > 0 ? fmtH(h.est) + "(预)" : "—");
+      /* 日期格式化：ISO → MM-DD（仅日期） */
+      const fmtDate = (s) => { if (!s) return ""; try { const d = new Date(s); if (isNaN(d.getTime())) return s; const m = String(d.getMonth()+1).padStart(2,"0"); const dd = String(d.getDate()).padStart(2,"0"); return `${m}-${dd}`; } catch(e) { return s; } };
+      const dStart = fmtDate(p.startDate || p.appointmentTime || "");
+      const dEnd = fmtDate(p.endDate);
+      const monthTag = showAll && inMonth ? `<span class="ss-month-tag" title="属于统计月份 ${monthFilter}">当月</span>` : "";
+      return `<tr class="${inMonth ? 'ss-in-month' : ''}">
+        <td><a href="javascript:void(0)" onclick="modal.close(); openProjectFromCard('${p.id}')" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(p.name || "未命名")}</a>${monthTag}</td>
+        <td>${esc(p.clientName || "—")}</td>
+        <td><span style="display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:600;background:${sc};white-space:nowrap">${esc(st)}</span></td>
+        <td style="white-space:nowrap">${esc(dStart)}${dEnd ? `<br><small style="color:#94a3b8">${esc(dEnd)}</small>` : ""}</td>
+        <td style="text-align:right;white-space:nowrap;font-weight:500;color:#334155">${hoursText}</td>
+      </tr>`;
+    }).join("");
+
+    const summary = hasFilter
+      ? `当月 <b style="color:#2563eb">${inMonthCount}</b> 个 · 全部 <b>${allProjs.length}</b> 个`
+      : `全部 <b>${allProjs.length}</b> 个项目`;
+
+    const toggle = hasFilter ? `
+      <div class="ss-toggle-group" role="tablist">
+        <button type="button" class="ss-toggle ${!showAll ? 'active' : ''}" onclick="__showStoreProjects_toggle(false)" role="tab" aria-selected="${!showAll}">仅当月</button>
+        <button type="button" class="ss-toggle ${showAll ? 'active' : ''}" onclick="__showStoreProjects_toggle(true)" role="tab" aria-selected="${showAll}">显示全部</button>
+      </div>` : "";
+
+    const content = `
+      <div style="padding:4px 0">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+          <span style="font-size:13px;color:#64748b"><b style="color:#1f2937">${esc(sName)}</b> · ${summary}</span>
+          ${toggle}
+        </div>
+        <div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:8px">
+          <table class="data" style="margin:0;font-size:12px">
+            <thead><tr><th>项目名称</th><th>客户</th><th>状态</th><th>日期</th><th style="text-align:right">工时</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+
+    // 每次都走 modal.open，它会覆盖内容并显示弹窗
+    modal.open(`${sName} — 关联项目`, content, { closeOnMask: true });
+  };
+
+  // 暴露切换函数给 onclick（模态关闭时自动失效，无需清理）
+  window.__showStoreProjects_toggle = (showAll) => render(showAll);
+
+  // 默认：有月份筛选时先显示当月
+  render(false);
 }
 
 function renderStores() {
@@ -23339,7 +23543,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc4d6a712";
+  const APP_VERSION = "v036ea259";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

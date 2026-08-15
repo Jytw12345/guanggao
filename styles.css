@@ -5990,6 +5990,46 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 .ss-legend-item { display: inline-flex; align-items: center; gap: 4px; }
 .ss-legend-item i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 
+/* 门店关联项目弹窗：当月/全部切换 + 当月标记 */
+.ss-toggle-group {
+  display: inline-flex;
+  background: #f1f5f9;
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+.ss-toggle {
+  border: none;
+  background: transparent;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.ss-toggle:hover { background: rgba(255,255,255,0.6); }
+.ss-toggle.active {
+  background: #fff;
+  color: #1e40af;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.ss-month-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #1d4ed8;
+  background: #dbeafe;
+  border-radius: 99px;
+  vertical-align: middle;
+}
+.ss-in-month { background: #f8fafc; }
+.ss-in-month:hover { background: #eff6ff !important; }
+
 /* 角色权限配置表 */
 .perm-table {
   table-layout: fixed;
