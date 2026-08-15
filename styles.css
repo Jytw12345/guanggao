@@ -563,6 +563,9 @@ body {
   0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 5px rgba(34, 197, 94, 0.6); }
   50% { opacity: 0.25; transform: scale(0.65); box-shadow: 0 0 0 transparent; }
 }
+@keyframes syncSpin {
+  to { transform: rotate(360deg); }
+}
 .sync-status .sync-spin svg,
 .sync-status .sync-static svg {
   width: 100%;
