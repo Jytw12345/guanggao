@@ -99,6 +99,20 @@ const STATUS_COLOR = {
   '已延期': { fg: '#dc2626', bg: '#fef2f2', border: '#fca5a5' },
   '已取消': { fg: '#6b7280', bg: '#f9fafb', border: '#d1d5db' },
 };
+
+/* 状态色唯一来源：所有状态→颜色（徽章 / 统计色条 / Excel / 门店项目表）统一走这里，
+ * 避免各处硬编码散落导致配色漂移。canonical 状态直接命中 STATUS_COLOR；
+ * 其它模块使用的相近别名映射到规范状态色，保证视觉一致。 */
+function statusStyle(status) {
+  if (STATUS_COLOR[status]) return STATUS_COLOR[status];
+  const alias = {
+    '进行中': STATUS_COLOR['施工中'],
+    '待施工': STATUS_COLOR['预约中'],
+    '已完成': STATUS_COLOR['已完工'],
+    '暂停': STATUS_COLOR['已暂停'],
+  };
+  return alias[status] || { fg: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' };
+}
 function statusHexToArgb(hex) { return 'FF' + hex.replace('#', '').toUpperCase(); }
 // 运行时把状态色注入为 .badge.<状态> 规则，使 CSS 不再是独立来源
 function injectStatusBadgeStyles() {
@@ -665,7 +679,7 @@ function showRescheduleInfo(projectId) {
         由 <b>${esc(operator)}</b> 于 ${esc(changedAt)} 修改
       </div>` : ""}
     </div>`;
-  modal.open(svgCal(18) + " 改期信息", content);
+  modal.open("改期信息", content, { titleHtml: svgCal(18) + " 改期信息" });
 }
 
 /* 通用键值信息弹窗（延期/暂停等标记的详情复用） */
@@ -682,7 +696,7 @@ function showKVModal(title, items) {
       </div>
     </div>`;
   }).join("");
-  modal.open(svgCal(16) + " " + title, `<div class="kv-info">${body}</div>`);
+  modal.open(title, `<div class="kv-info">${body}</div>`, { titleHtml: svgCal(16) + " " + esc(title) });
 }
 
 /* 点击「已延期」状态胶囊：查看延期详情 */
@@ -2754,6 +2768,10 @@ const repo = {
         } else {
           toast(`云端数据读取失败，${allErrors.length} 个表出错，请检查建表脚本是否已执行`);
         }
+        // 首启且本地无任何缓存：显示持久错误横幅，区分「无数据」与「加载失败」
+        if (!((cache.projects || []).length || (cache.workers || []).length || (cache.stores || []).length)) {
+          showCloudLoadError(`数据加载失败（${allErrors.length} 个表出错），请检查网络或建表脚本后重试`);
+        }
         return false;
       }
       // 角色权限：以默认模板为底，用云端配置覆盖（rpRes 出错则退回默认）
@@ -2891,6 +2909,7 @@ const repo = {
       recordSyncTime();
       // 缓存落盘为 best-effort，不阻塞下拉刷新完成（已在后台静默写入）
       persistCloudCache(currentUser && currentUser.id);
+      hideCloudLoadError();
       return true;
   },
 
@@ -3353,6 +3372,40 @@ function fail(error) {
   toast(message);
   console.error("[app] 操作失败:", error);
   // 不再 throw，避免未捕获异常导致 UI 崩溃
+  // 写入/读取失败后用已有节流机制补偿同步一次，让界面自愈回云端真值，
+  // 避免「界面显示成功但云端实际失败」的乐观更新残留（不逐调用点回滚，集中兜底）。
+  if (MODE === "cloud" && typeof repo !== "undefined" && repo && repo.loadAll && !_loadAllPromise) {
+    try { repo.loadAll(false); } catch (e) { /* 补偿同步本身失败不阻断 */ }
+  }
+}
+
+/* 云端首次加载失败且本地无任何缓存数据时，显示持久错误横幅，
+ * 让用户能区分「真没数据」与「加载失败」，并提供重试入口。
+ * 仅当本地缓存为空（首启/缓存清空后拉取失败）才显示，已有本地数据时
+ * 走既有离线/同步状态提示，不重复打扰。 */
+function showCloudLoadError(msg) {
+  let el = document.getElementById("cloudLoadError");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "cloudLoadError";
+    el.className = "cloud-error-banner hidden";
+    el.innerHTML = `
+      <span class="cloud-error-banner__icon">⚠️</span>
+      <span class="cloud-error-banner__text"></span>
+      <button type="button" class="cloud-error-banner__btn" onclick="retryCloudLoad()">重试</button>
+      <button type="button" class="cloud-error-banner__close" onclick="hideCloudLoadError()">×</button>`;
+    document.body.appendChild(el);
+  }
+  el.querySelector(".cloud-error-banner__text").textContent = msg;
+  el.classList.remove("hidden");
+}
+function hideCloudLoadError() {
+  const el = document.getElementById("cloudLoadError");
+  if (el) el.classList.add("hidden");
+}
+function retryCloudLoad() {
+  hideCloudLoadError();
+  if (typeof repo !== "undefined" && repo && repo.loadAll) repo.loadAll(false);
 }
 
 function migrateData(data) {
@@ -5657,7 +5710,7 @@ function newWorkerScheduleForWorker(workerId) {
   if (!perm.addSchedule()) { toast("无「添加日程」权限"); return; }
   const w = getWorker(workerId);
   if (!w) return;
-  modal.open(`为 ${esc(w.name)} 添加日程`, workerScheduleForm({ workerId, workerName: w.name }));
+  modal.open(`为 ${w.name} 添加日程`, workerScheduleForm({ workerId, workerName: w.name }));
   toggleAllDaySchedule();
 }
 
@@ -5912,7 +5965,7 @@ function openLeaveForm(workerId) {
         <button class="btn primary" onclick="submitLeaveForm()">提交请假申请</button>
       </div>
     </div>`;
-  modal.open(`${svgCal(18)} ${w ? "请假申请" : "添加休假"}`, form);
+  modal.open(w ? "请假申请" : "添加休假", form, { titleHtml: `${svgCal(18)} ${w ? "请假申请" : "添加休假"}` });
   const workerSelectEl = document.getElementById("leaveWorkerSelect");
   if (workerSelectEl) {
     workerSelectEl.addEventListener("change", function() {
@@ -7787,7 +7840,7 @@ function showProjectContent(id) {
       <div class="proj-content-detail__label" style="margin-top:16px;">💬 注意事项</div>
       <div class="proj-content-detail__note">${linkifyPhones(p.note)}</div>
     </div>`;
-  modal.open(`${esc(p.name)} · 施工内容`, html, { closeOnMask: true });
+  modal.open(`${p.name} · 施工内容`, html, { closeOnMask: true });
 }
 
 function switchAssignTab(btn) {
@@ -8623,7 +8676,7 @@ function openRepairReschedule(projectId, repairId) {
         <button class="btn primary" onclick="submitRepairReschedule('${projectId}','${repairId}')">确定改期</button>
       </div>
     </div>`;
-  modal.open(svgCal(18) + " 改期维修", form);
+  modal.open("改期维修", form, { titleHtml: svgCal(18) + " 改期维修" });
 }
 
 async function submitRepairReschedule(projectId, repairId) {
@@ -8882,10 +8935,12 @@ function toggleProjectPickerFilter(key, checked) {
 
 function onProjectPickerSearch(val) {
   projectPickerSearchKeyword = val || "";
-  const listEl = document.getElementById("projectPickerList");
-  const countEl = document.querySelector(".project-picker-count");
-  if (!listEl) return;
-  const keyword = projectPickerSearchKeyword.trim().toLowerCase();
+  clearTimeout(projectPickerSearchTimer);
+  projectPickerSearchTimer = setTimeout(() => {
+    const listEl = document.getElementById("projectPickerList");
+    const countEl = document.querySelector(".project-picker-count");
+    if (!listEl) return;
+    const keyword = projectPickerSearchKeyword.trim().toLowerCase();
   let items = applyProjectPickerFilters(constructionProjectList);
   if (keyword) {
     items = items.filter(p => {
@@ -8914,6 +8969,7 @@ function onProjectPickerSearch(val) {
           </div>`;
       }).join("")
     : `<div class="project-picker-empty">没有匹配的项目</div>`;
+  }, 120);
 }
 
 function pickConstructionProject(id) {
@@ -9083,7 +9139,7 @@ function renderConstruction() {
     }).join("");
   const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).filter(n => n.trim());
   const allChips = [...(assignedChips ? assignedChips : ""), ...outsourcedNames.map(n =>
-    `<span class="assign-chip outsourced"><span class="chip-icon">🤝</span>${esc(n.trim())}<button class="chip-x" onclick="removeOutsourcedWorker('${p.id}', '${(n.trim() || "").replace(/'/g, "\\'")}')" title="移除">✕</button></span>`
+    `<span class="assign-chip outsourced"><span class="chip-icon">🤝</span>${esc(n.trim())}<button class="chip-x" onclick="removeOutsourcedWorker('${p.id}', '${escJsAttr(n.trim())}')" title="移除">✕</button></span>`
   )].join("");
   const hasAny = (assigned.length > 0) || (outsourcedNames.length > 0);
 
@@ -18229,17 +18285,9 @@ function showStoreProjects(storeId, storeNameParam, monthFilter) {
     const rows = projs.map((p) => {
       const inMonth = monthKey(p.appointmentTime) === monthFilter;
       const st = p.status || "—";
-      /* 状态颜色：覆盖全部状态，避免走默认红色 */
-      const sc = st === "进行中" || st === "施工中" ? "#dbeafe;color:#1d4ed8" :
-                st === "预约中" || st === "待施工" ? "#eef6ff;color:#1d4ed8" :
-                st === "已完工" ? "#dcfce7;color:#166534" :
-                st === "已完成" ? "#dcfce7;color:#166534" :
-                st === "已验收" ? "#f5f3ff;color:#5b21b6" :
-                st === "已审核" ? "#ecfeff;color:#155e75" :
-                st === "已暂停" || st === "暂停" ? "#fef3c7;color:#92400e" :
-                st === "已延期" ? "#fef2f2;color:#991b1b" :
-                st === "已取消" ? "#f1f5f9;color:#64748b" :
-                "#f1f5f9;color:#64748b";
+      /* 状态颜色：统一走 statusStyle（单一来源），避免各处硬编码漂移 */
+      const cs = statusStyle(st);
+      const sc = `${cs.bg};color:${cs.fg}`;
       const h = hoursDiff(p);
       const fmtH = (v) => v > 0 ? Math.round(v * 10) / 10 + "h" : "";
       const hoursText = h.hasActual ? fmtH(h.act) : (h.est > 0 ? fmtH(h.est) + "(预)" : "—");
@@ -18818,7 +18866,10 @@ async function requireAdminPassword(actionName) {
 
 const modal = {
   open(title, bodyHtml, options = {}) {
-    document.getElementById("modalTitle").innerHTML = title;
+    // 标题默认按纯文本转义，避免调用方传入用户数据造成 XSS。
+    // 需要带图标的标题请走 options.titleHtml（内容由调用方保证安全）。
+    const titleHtml = (options && options.titleHtml != null) ? options.titleHtml : esc(title);
+    document.getElementById("modalTitle").innerHTML = titleHtml;
     document.getElementById("modalBody").innerHTML = bodyHtml;
     
     const confirmBtn = document.getElementById("modalConfirm");
@@ -18873,6 +18924,19 @@ const modal = {
 
 /* 全局搜索功能 */
 let globalSearchTimer = null;
+let projectSearchTimer = null;
+let driverInputTimer = null;
+let projectPickerSearchTimer = null;
+let vehiclePickerSearchTimer = null;
+
+/* 用于 onclick="fn('...')" 这类「HTML 双引号属性内嵌单引号 JS 字符串」场景：
+ * 先对数据做 JS 字符串转义（反斜杠/单引号/双引号），再做 HTML 属性转义，
+ * 彻底避免用户输入的反斜杠/引号/尖括号破坏属性或造成注入。 */
+function escJsAttr(s) {
+  const js = String(s == null ? "" : s)
+    .replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/"/g, '\\"');
+  return escAttr(js);
+}
 
 function toggleGlobalSearch() {
   const wrap = document.getElementById("globalSearchWrap");
@@ -23019,7 +23083,10 @@ function bindEvents() {
 
   document.getElementById("btnNewProject").addEventListener("click", newProject);
   document.getElementById("btnNewStore").addEventListener("click", newStore);
-  document.getElementById("projectSearch").addEventListener("input", renderProjects);
+  document.getElementById("projectSearch").addEventListener("input", () => {
+    clearTimeout(projectSearchTimer);
+    projectSearchTimer = setTimeout(renderProjects, 120);
+  });
   document.getElementById("projectStatusFilter").addEventListener("change", (e) => {
     onProjectStatusChange(e.target.value);
     renderProjects();
@@ -23543,7 +23610,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v036ea259";
+  const APP_VERSION = "v98a5c1e0";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -24852,7 +24919,10 @@ function renderDriverComboMenu(filter) {
 
 function onDriverInput() {
   if (!_driverComboOpen) { openDriverCombo(); return; }
-  renderDriverComboMenu(document.getElementById("vtqDriver").value.trim());
+  clearTimeout(driverInputTimer);
+  driverInputTimer = setTimeout(() => {
+    renderDriverComboMenu(document.getElementById("vtqDriver").value.trim());
+  }, 120);
 }
 
 function onDriverKey(e) {
@@ -25070,11 +25140,13 @@ function openVehicleProjectPicker() {
 
 function onVehicleProjectPickerSearch(val) {
   _vehicleProjectPickerSearch = val || "";
-  const listEl = document.getElementById("vehicleProjectPickerList");
-  const countEl = document.querySelector(".project-picker-count");
-  if (!listEl) return;
-  const currentId = document.getElementById("vtqProject")?.value || "";
-  const keyword = _vehicleProjectPickerSearch.trim().toLowerCase();
+  clearTimeout(vehiclePickerSearchTimer);
+  vehiclePickerSearchTimer = setTimeout(() => {
+    const listEl = document.getElementById("vehicleProjectPickerList");
+    const countEl = document.querySelector(".project-picker-count");
+    if (!listEl) return;
+    const currentId = document.getElementById("vtqProject")?.value || "";
+    const keyword = _vehicleProjectPickerSearch.trim().toLowerCase();
   const EXCLUDE = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED];
   let items = (cache.projects || []).filter((p) => !EXCLUDE.includes(p.status));
   if (keyword) {
@@ -25104,6 +25176,7 @@ function onVehicleProjectPickerSearch(val) {
           </div>`;
       }).join("")
     : `<div class="project-picker-empty">没有匹配的项目</div>`;
+  }, 120);
 }
 
 function pickVehicleProject(id) {
