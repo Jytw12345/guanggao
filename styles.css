@@ -2456,8 +2456,12 @@ select.input {
   color: #9ca3af;
 }
 
-/* 卡片暂停/延期原因提示 */
+/* 卡片暂停/延期原因提示：次数与原因同一行 */
 .card-reason {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 12px;
   line-height: 1.4;
   padding: 6px 10px;
@@ -2465,6 +2469,8 @@ select.input {
   margin-bottom: 10px;
   word-break: break-word;
 }
+.card-reason__count { font-weight: 600; }
+.card-reason__sep { opacity: 0.5; }
 .card-reason.paused {
   background: #fff7ed;
   color: #c2410c;
@@ -2476,10 +2482,6 @@ select.input {
   opacity: 0.85;
   font-weight: 500;
   word-break: break-all;
-}
-.card-reason.paused .card-reason__time::before {
-  content: " · ";
-  opacity: 0.6;
 }
 .card-reason.delayed {
   background: #fef2f2;
@@ -5030,11 +5032,35 @@ textarea.input { resize: vertical; min-height: 50px; }
 
 .schedule-progress-title {
   display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.schedule-progress-title__top,
+.schedule-progress-title__bottom {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  flex: 1;
   min-width: 0;
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.schedule-progress-title__top .schedule-progress-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.schedule-progress-header__right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
 .schedule-progress-name {
@@ -7125,7 +7151,16 @@ table.data.project-hours-diff thead th {
 
   /* 移动端：项目进度跟踪卡片 状态与操作按钮紧凑化，避免超宽 */
   .schedule-progress-header {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+  .schedule-progress-title {
+    flex-direction: column;
+    gap: 3px;
+  }
+  .schedule-progress-title__top,
+  .schedule-progress-title__bottom {
+    width: 100%;
     gap: 4px;
   }
   .schedule-progress-info {

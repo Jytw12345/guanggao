@@ -1292,13 +1292,13 @@ function checkProjectHourFeasibility(p, ds) {
   let availableHours = 0;
   let perPersonHours = 0;
   if (Array.isArray(p.workSegments) && p.workSegments.length > 1 && ds) {
-    // 跨天项目：按当天分段窗口把剩余工时分摊到今天及之后的所有分段，避免把总工时堆到某一天误报
+    // 跨天项目：每天的人均工时 = 该天「施工时段时长 × 人数 ÷ 人数」= 该天施工时段时长。
+    // 即按当天实际施工窗口算（不用总工时平摊，否则短窗口那天会被误判超载）。
+    // 日历/详情的「当天预计工时」同样用 getProjectDayEstimatedHours，口径保持一致。
     seg = projectSegOnDate(p, ds);
     if (!seg || !seg.start || !seg.end || seg.end <= seg.start) return result;
     availableHours = Math.max(0, (seg.end - seg.start) / (1000 * 60 * 60));
-    const futureSegs = p.workSegments.filter((s) => s && s.date && s.date >= ds);
-    const futureCount = futureSegs.length || 1;
-    perPersonHours = remaining / workers / futureCount;
+    perPersonHours = getProjectDayEstimatedHours(p, ds) / workers;
   } else {
     const segs = getBookedSegments(p);
     seg = (segs && segs.length) ? segs[0] : null;
@@ -7589,8 +7589,8 @@ function renderProjects() {
           <div class="card-title__right">
             <div class="card-title__chips">
               ${isRescheduled ? `<span class="badge modified" style="cursor:pointer" title="查看改期信息" onclick="showRescheduleInfo('${esc(p.id)}')">${svgCal(12)} 已改期</span>` : ""}
-              ${projectDelayChipHtml(p)}
-              ${projectHistoryChipsHtml(p)}
+              ${!p.delayReason ? projectDelayChipHtml(p) : ""}
+              ${!p.pauseReason ? projectHistoryChipsHtml(p) : ""}
               ${isForgotWorkFlag ? `<span class="badge overdue" style="cursor:pointer" title="点击查看忘记施工详情" onclick="showOverdueNotStartedInfo('${esc(p.id)}')">🚨 忘记施工</span>` : ""}
               ${isOverdue && !isForgotWorkFlag ? `<span class="badge overdue" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
               ${isCrossDay ? `<span class="badge crossday" style="cursor:pointer" title="查看跨天施工日程" onclick="showCrossDayInfo('${esc(p.id)}')">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
@@ -7603,9 +7603,9 @@ function renderProjects() {
           </div>
         </div>
 
-        <!-- 暂停/延期/取消原因 -->
-        ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}${p.pausedAt ? `<small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${pausedTooLongTimeHtml(p)}</div>` : ""}
-        ${p.delayReason ? `<div class="card-reason delayed">🕒 延期原因：${esc(p.delayReason)}</div>` : ""}
+        <!-- 暂停/延期/取消原因（次数与原因合并一行） -->
+        ${p.status === STATUS.PAUSED && p.pauseReason ? (() => { const tooLong = pausedTooLongTimeHtml(p); return `<div class="card-reason paused"><span class="card-reason__count">⏸ 暂停${pauseCount}次</span><span class="card-reason__sep">·</span><span>暂停原因：${esc(p.pauseReason)}</span>${p.pausedAt ? `<span class="card-reason__sep">·</span><small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${tooLong ? `<span class="card-reason__sep">·</span>${tooLong}` : ""}</div>`; })() : ""}
+        ${p.delayReason ? `<div class="card-reason delayed"><span class="card-reason__count">🕒 延期${delayCount}次</span><span class="card-reason__sep">·</span><span>延期原因：${esc(p.delayReason)}</span></div>` : ""}
         ${p.status === STATUS.CANCELLED && p.cancelReason ? `<div class="card-reason cancelled">✕ 取消原因：${esc(p.cancelReason)}</div>` : ""}
 
         <!-- 摘要行：门店 / 客户 -->
@@ -9360,8 +9360,8 @@ function renderConstruction() {
         <div class="proj-hero__head">
           <span class="proj-hero__name">${esc(p.name)}</span>
           <div class="proj-hero__badges">
-            ${projectDelayChipHtml(p)}
-            ${projectHistoryChipsHtml(p)}
+            ${!p.delayReason ? projectDelayChipHtml(p) : ""}
+            ${!p.pauseReason ? projectHistoryChipsHtml(p) : ""}
             ${isOverdue ? `<span class="badge overdue">🔴 超期</span>` : ""}
             <span class="badge ${p.status}">${p.status}${p.status === STATUS.DELAYED && delayCount ? ` ${delayCount}次` : (p.status === STATUS.PAUSED && pauseCount ? ` ${pauseCount}次` : "")}</span>
             ${p.reworkCount > 0 ? `<span class="badge rework" style="cursor:pointer" title="查看返工记录" onclick="showReworkInfo('${esc(p.id)}')">🔄 返工 ${p.reworkCount} 次</span>` : ""}
@@ -9376,8 +9376,8 @@ function renderConstruction() {
           ${p.phone ? `<span>电话</span><b><a href="javascript:void(0)" data-tel="${esc(p.phone)}" onclick="callPhone(event)">${esc(p.phone)}</a></b>` : ""}
           <span>地址</span><b>${esc(p.address || "—")}</b>
         </div>
-        ${p.status === STATUS.PAUSED && p.pauseReason ? `<div class="card-reason paused">⏸ 暂停原因：${esc(p.pauseReason)}${p.pausedAt ? `<small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${pausedTooLongTimeHtml(p)}</div>` : ""}
-        ${p.delayReason ? `<div class="card-reason delayed">🕒 延期原因：${esc(p.delayReason)}</div>` : ""}
+        ${p.status === STATUS.PAUSED && p.pauseReason ? (() => { const tooLong = pausedTooLongTimeHtml(p); return `<div class="card-reason paused"><span class="card-reason__count">⏸ 暂停${pauseCount}次</span><span class="card-reason__sep">·</span><span>暂停原因：${esc(p.pauseReason)}</span>${p.pausedAt ? `<span class="card-reason__sep">·</span><small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${tooLong ? `<span class="card-reason__sep">·</span>${tooLong}` : ""}</div>`; })() : ""}
+        ${p.delayReason ? `<div class="card-reason delayed"><span class="card-reason__count">🕒 延期${delayCount}次</span><span class="card-reason__sep">·</span><span>延期原因：${esc(p.delayReason)}</span></div>` : ""}
         ${renderProjectContentPreview(p)}
         ${p.estimatedHours > 0 ? `
         <div class="proj-hero__progress">
@@ -9413,6 +9413,34 @@ function renderConstruction() {
         ${p.finishedAt ? `<div class="info-item"><div class="k">✅ 完工</div><div class="v">${esc(fmtDateTime(p.finishedAt))}</div></div>` : ""}
         ${p.startedAt && p.finishedAt ? `<div class="info-item"><div class="k">⏱️ 时长</div><div class="v"><b>${esc(calcActualWorkDuration(p))}</b></div></div>` : ""}
       </div>
+      ${(() => {
+        const segs = getBookedSegments(p);
+        if (!segs || segs.length <= 1) return "";
+        const workers = Math.max(1, (p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1);
+        const rows = segs.map((s) => {
+          const durH = Math.max(0, (s.end - s.start) / (1000 * 60 * 60));
+          const dayH = durH * workers;
+          return `<tr>
+            <td style="padding:5px 8px;border-bottom:1px solid var(--border)">${esc(s.date)}</td>
+            <td style="padding:5px 8px;border-bottom:1px solid var(--border)">${esc(s.startHM)} ~ ${esc(s.endHM)}</td>
+            <td style="padding:5px 8px;border-bottom:1px solid var(--border)">${durH.toFixed(1)} 小时</td>
+            <td style="padding:5px 8px;border-bottom:1px solid var(--border)">${dayH.toFixed(1)} 工时</td>
+          </tr>`;
+        }).join("");
+        return `<div class="detail-block" style="border-left:4px solid #3b82f6">
+          <h3>📅 每日施工窗口（共 ${segs.length} 天）</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead><tr>
+              <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:600">日期</th>
+              <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:600">时段</th>
+              <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:600">当天窗口</th>
+              <th style="text-align:left;padding:5px 8px;color:var(--muted);font-weight:600">当天预计工时</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <p class="hint" style="margin:6px 0 0">当天预计工时 = 当天窗口时长 × ${workers} 名施工人；用于核对工时异常是否误报。</p>
+        </div>`;
+      })()}
       ${(() => {
         const reworks = getReworkOrders(p.id);
         if (!reworks.length) return "";
@@ -13388,8 +13416,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
       // 跨天项目在按天视图中显示：第几天 / 共几天 + 当天施工时段
       let trackTimeText;
       if (isCrossDayTrack && todaySeg && segs.length > 1) {
-        const dayIndex = segs.findIndex(s => s.date === todaySeg.date) + 1;
-        trackTimeText = `第${dayIndex}天 · ${todaySeg.startHM}~${todaySeg.endHM}`;
+        trackTimeText = `${todaySeg.startHM}~${todaySeg.endHM}`;
       } else {
         const startTime = pStart ? `${String(pStart.getHours()).padStart(2, "0")}:${String(pStart.getMinutes()).padStart(2, "0")}` : "08:00";
         const endTime = pEnd ? `${String(pEnd.getHours()).padStart(2, "0")}:${String(pEnd.getMinutes()).padStart(2, "0")}` : "12:00";
@@ -13518,12 +13545,18 @@ function generateWorkerScheduleDescription(dateStr = null) {
         <div class="schedule-progress-item ${statusClass}" style="--status-color: ${statusColor};">
           <div class="schedule-progress-header" onclick="toggleProgressDetail(this)" data-pid="${esc(p.id)}">
             <div class="schedule-progress-title">
-              <span class="schedule-progress-name" style="cursor:pointer;">${esc(p.name)}</span>
-              ${isCrossDayTrack && todaySeg && segs.length > 1 ? `<span class="badge crossday" style="margin-left:6px;font-size:10px;padding:1px 7px;">${svgCal(11)} 第${segs.findIndex(s => s.date === todaySeg.date) + 1}天/共${segs.length}天</span>` : ""}
-              <span class="schedule-progress-store">${esc(storeName)}</span>
+              <div class="schedule-progress-title__top">
+                <span class="schedule-progress-name" style="cursor:pointer;">${esc(p.name)}</span>
+                ${feasibilityBadge}
+                ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}
+              </div>
+              <div class="schedule-progress-title__bottom">
+                <span class="schedule-progress-store">${esc(storeName)}</span>
+                ${isCrossDayTrack && todaySeg && segs.length > 1 ? `<span class="badge crossday" style="margin-left:2px;font-size:10px;padding:1px 7px;">${svgCal(11)} 第${segs.findIndex(s => s.date === todaySeg.date) + 1}天/共${segs.length}天</span>` : ""}
+                <span class="schedule-progress-time" style="margin-left:2px">${trackTimeText}</span>
+              </div>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span class="schedule-progress-time">${trackTimeText} ${feasibilityBadge} ${isOverdue ? '<span class="overdue-badge">🔴 已超期</span>' : ''}</span>
+            <div class="schedule-progress-header__right">
               <span class="progress-toggle-icon">▶</span>
             </div>
           </div>
@@ -23769,7 +23802,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v228c1a35";
+  const APP_VERSION = "v8f1a0083";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
