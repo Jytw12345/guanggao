@@ -1145,7 +1145,7 @@ function projectHistoryChipsHtml(p) {
   if (p.status === STATUS.PAUSED) return "";
   const pauseCount = p.pauseCount || 0;
   if (pauseCount > 0) {
-    return `<span class="badge history-pause" title="暂停${pauseCount}次">⏸ ${pauseCount}次</span>`;
+    return `<span class="badge history-pause" title="暂停${pauseCount}次">⏸ 暂停${pauseCount}次</span>`;
   }
   return "";
 }
@@ -1156,7 +1156,7 @@ function projectDelayChipHtml(p) {
   if (p.status === STATUS.DELAYED) return "";
   const delayCount = p.delayCount || (p.delayHistory || []).length;
   if (delayCount > 0) {
-    return `<span class="badge history-delay" title="延期${delayCount}次">🕒 ${delayCount}次</span>`;
+    return `<span class="badge history-delay" title="延期${delayCount}次">🕒 延期${delayCount}次</span>`;
   }
   return "";
 }
@@ -7604,13 +7604,16 @@ function renderProjects() {
               ${isForgotWorkFlag ? `<span class="badge overdue" style="cursor:pointer" title="点击查看忘记施工详情" onclick="showOverdueNotStartedInfo('${esc(p.id)}')">🚨 忘记施工</span>` : ""}
               ${isOverdue && !isForgotWorkFlag ? `<span class="badge overdue" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
               ${isCrossDay ? `<span class="badge crossday" style="cursor:pointer" title="查看跨天施工日程" onclick="showCrossDayInfo('${esc(p.id)}')">${svgCal(12)} 跨天${p.workSegments.length}天</span>` : ""}
-              ${workingTooLong ? `<span class="badge ${isFakeWorking(p) ? "fake-working" : (overnight ? "overdue" : "pending")}">${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")} ${workElapsedText}</span>` : ""}
-              ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}" style="cursor:pointer" title="查看加班/超时详情" onclick="showOvertimeInfo('${esc(p.id)}')">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
               ${!workingTooLong && !isOvertimeWorking && isPending && !isOverdue ? `<span class="badge pending">⚠️ 待处理</span>` : ""}
               ${leaveConflicts.length > 0 ? `<span class="badge danger" style="cursor:pointer" title="查看人员请假/轮休" onclick="showLeaveConflictInfo('${esc(p.id)}')">⚠️ 人员${leaveConflicts.every(r => r.leaveType === "rotational") ? "轮休" : "请假"}</span>` : ""}
             </div>
+            ${isDelayed ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}${delayCount ? ` ${delayCount}次` : ""}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}${pauseCount ? ` ${pauseCount}次` : ""}</span>` : `<span class="badge ${p.status} card-title__status">${p.status}</span>`}
           </div>
-          ${isDelayed ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看延期信息" onclick="showDelayInfo('${esc(p.id)}')">${p.status}${delayCount ? ` ${delayCount}次` : ""}</span>` : p.status === STATUS.PAUSED ? `<span class="badge ${p.status} card-title__status" style="cursor:pointer" title="查看暂停信息" onclick="showPauseInfo('${esc(p.id)}')">${p.status}${pauseCount ? ` ${pauseCount}次` : ""}</span>` : `<span class="badge ${p.status} card-title__status">${p.status}</span>`}
+          ${(workingTooLong || (!workingTooLong && isOvertimeWorking)) ? `
+          <div class="card-title__long-chips">
+            ${workingTooLong ? `<span class="badge ${isFakeWorking(p) ? "fake-working" : (overnight ? "overdue" : "pending")}">${isFakeWorking(p) ? "🚨 虚假施工" : (overnight ? "🌙 跨夜未完工" : "⚠️ 连续施工")} ${workElapsedText}</span>` : ""}
+            ${!workingTooLong && isOvertimeWorking ? `<span class="badge ${isAfterWork ? "overdue" : "pending"}" style="cursor:pointer" title="查看加班/超时详情" onclick="showOvertimeInfo('${esc(p.id)}')">${isAfterWork ? `🌙 加班施工 ${overtimeText}` : `⏰ 施工超时 ${overtimeText}`}</span>` : ""}
+          </div>` : ""}
         </div>
 
         <!-- 暂停/延期/取消原因（次数与原因合并一行） -->
@@ -23841,7 +23844,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v43a5d626";
+  const APP_VERSION = "v9abbb42c";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

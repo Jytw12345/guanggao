@@ -1951,16 +1951,16 @@ select.input {
   50% { opacity: 0.35; transform: scale(1.01); }
 }
 
+/* 卡片标题：
+   第一行：标题在左，短胶囊+状态胶囊在右；
+   第二行：长告警胶囊占满整行并右对齐（右边缘与状态胶囊右边缘对齐）。 */
 .card-title {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-start;
   align-items: flex-start;
-  gap: 8px;
+  gap: 4px 8px;
   margin-bottom: 10px;
-}
-
-.card-title--with-status {
-  justify-content: space-between;
 }
 
 .card-title h3 {
@@ -1970,48 +1970,60 @@ select.input {
   line-height: 1.35;
   color: #0f172a;
   word-break: keep-all;        /* 中文项目名不按单字折断，避免被挤成竖排 */
-  min-width: 130px;            /* 标题至少保留约 8 个汉字宽度，不被右侧胶囊压成细长条 */
-  flex: 1 1 0;
   overflow-wrap: break-word;   /* 超长无空格英文/数字仍可在溢出处折断 */
+  flex: 1 1 130px;             /* 标题弹性占剩余空间，至少留约 8 个汉字宽度 */
+  min-width: 130px;
 }
 
 .card-title .badge { white-space: nowrap; }
 
-/* 标题右侧：提醒标签 + 状态胶囊同一行，整体贴右。
-   空间够：提醒标签在左、状态胶囊在右；空间窄：提醒标签自动折到下方右对齐。 */
+/* 右侧短胶囊区：包含短提醒胶囊和状态胶囊，自身不换行，贴在第一行右上角 */
 .card-title__right {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
   align-items: flex-start;
   gap: 4px;
-  flex: 1 1 auto;   /* 占中间弹性空间：提醒胶囊不足时贴右、过多时在右侧内部折行 */
+  flex: 0 1 auto;
+  margin-left: auto;           /* 标题很短时也推到最右 */
   min-width: 0;
 }
+
+/* 短提醒胶囊区：状态胶囊左侧，空间不够时内部折行 */
 .card-title__chips {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 4px;
   align-items: flex-start;
-  justify-content: flex-end;
+  flex: 0 1 auto;
   min-width: 0;
-  max-width: 100%;
 }
 .card-title__chips > * { flex-shrink: 0; }
-/* chips 与状态胶囊保持同样高度，视觉上更整齐 */
-.card-title__chips .badge {
+.card-title__chips .badge,
+.card-title__long-chips .badge {
   font-size: 11px;
   padding: 2px 8px;
   line-height: 1.4;
 }
-/* 状态胶囊独立为标题行最后一个直接子元素：永远钉在卡片右上角，
-   不被标题长度 / 提醒胶囊数量挤压换行（margin-left:auto 推到最右、flex-shrink:0 不被压缩） */
+
+/* 状态胶囊：始终位于右侧胶囊区最右端，自身不被压缩、不折行 */
 .card-title__status {
   flex: 0 0 auto;
   flex-shrink: 0;
-  margin-top: 1px;
-  margin-left: auto;
 }
+
+/* 长告警胶囊区：占满整行，右对齐到卡片右边缘（即状态胶囊右边缘） */
+.card-title__long-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  align-items: flex-start;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.card-title__long-chips > * { flex-shrink: 0; }
 
 
 
