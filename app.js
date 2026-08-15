@@ -2123,6 +2123,14 @@ function calcProjectWorkerStats(p) {
   return { workerStats, totalHours, workerPeriods, workerLogs };
 }
 
+// 根据提示文案自动推断语义类型，用于给 toast 上不同的状态色（无需调用方逐个改参数）。
+function toastType(msg) {
+  if (/失败|错误|不足|冲突|无权|无法|不能|请填写|请选择|不能为空|已存在|无效|缺失|不正确|不匹配|未授权/.test(msg)) return "error";
+  if (/⚠️|警告|注意|超时|超期|过期|即将|提醒|慎重|勿|慎用/.test(msg)) return "warning";
+  if (/(已保存|保存成功|已删除|已添加|已更新|已修改|已创建|已生成|已复制|已导出|成功|已完成|已提交|已发送|已推送|已通过)/.test(msg)) return "success";
+  return "info";
+}
+
 function toast(msg) {
   // 云端写操作成功提示 → 刷新顶部同步时间戳，让用户明确看到「同步完成」且时间变动。
   // 本地模式（离线）不刷新，避免误导；「保存失败」等提示不匹配正则，不会误触发。
@@ -2131,9 +2139,11 @@ function toast(msg) {
   }
   const el = document.getElementById("toast");
   el.textContent = msg;
+  el.classList.remove("toast-success", "toast-error", "toast-warning", "toast-info");
+  el.classList.add("toast-" + toastType(msg));
   el.classList.remove("hidden");
   clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.add("hidden"), 2000);
+  el._t = setTimeout(() => el.classList.add("hidden"), 2200);
 }
 
 function showNotificationAlert(msg) {
@@ -23329,7 +23339,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v68967916";
+  const APP_VERSION = "vc4d6a712";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

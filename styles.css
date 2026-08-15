@@ -6340,14 +6340,34 @@ table.data.project-hours-diff thead th {
   bottom: 28px;
   left: 50%;
   transform: translateX(-50%);
-  background: #111827;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: #fff;
-  padding: 10px 20px;
-  border-radius: 8px;
+  padding: 10px 18px 10px 14px;
+  border-radius: 10px;
   z-index: 99999;
   box-shadow: var(--shadow);
   animation: fadein 0.2s;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  max-width: 86vw;
 }
+.toast::before {
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+/* 语义色：成功绿 / 失败红 / 警告琥珀 / 信息蓝灰（不再清一色纯黑） */
+.toast-info    { background: #334155; }
+.toast-info::before    { content: "\2139"; }   /* ℹ */
+.toast-success { background: #16a34a; }
+.toast-success::before { content: "\2713"; }   /* ✓ */
+.toast-error   { background: #dc2626; }
+.toast-error::before   { content: "\2715"; }   /* ✕ */
+.toast-warning { background: #d97706; }
+.toast-warning::before { content: "\26A0"; }   /* ⚠ */
 @keyframes fadein { from { opacity: 0; transform: translate(-50%, 10px);} to {opacity:1;} }
 
 /* ===== 自定义下拉刷新指示器（移动端手势触发，替代浏览器原生下拉=整页reload） ===== */
