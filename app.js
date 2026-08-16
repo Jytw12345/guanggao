@@ -23930,7 +23930,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2d4f97cf";
+  const APP_VERSION = "v01716cd2";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -24524,13 +24524,13 @@ function usePanelHtml(v) {
       <div class="veh-panel-rule">—— 用车登记 · ${esc(v.name)} ——</div>
       <div class="veh-quick-fields">
         <div class="form-row">
-          <div class="veh-km-alert">⚠️ 请核对仪表读数，起始公里数务必准确</div>
+          <div class="veh-km-alert">请核对仪表读数，起始公里数务必准确</div>
           <label>起始公里数 <span class="veh-hint">（整数）</span></label>
           <input type="text" inputmode="numeric" class="input veh-km-edit" id="vtqStart"
                  value="${Number(startKm)}"
                  onfocus="moveInputCursorToEnd(this)"
                  oninput="this.value = this.value.replace(/[^0-9]/g, '')" />
-          <div class="veh-km-ref">上次记录：${Number(startKm).toLocaleString()} km · 与仪表不符请直接修改</div>
+          <div class="veh-km-ref"><strong>上次记录：${Number(startKm).toLocaleString()} km</strong> · <em>与仪表不符请直接修改</em></div>
         </div>
         <div class="form-row">
           <label>开车目的</label>
@@ -24589,10 +24589,10 @@ function returnPanelHtml(v, trip) {
           <label>还车公里 <span style="color:#dc2626">*</span></label>
           <input type="text" inputmode="numeric" class="input veh-km-big" id="vtqEnd"
                  value=""
-                 placeholder="输入还车里程"
+                 placeholder="输入表显里程"
                  onfocus="moveInputCursorToEnd(this)"
                  oninput="this.value = this.value.replace(/[^0-9]/g, ''); calcQuickMileage()" />
-          <div id="vtqMileage" class="vtq-mileage hint">请输入还车仪表盘总里程，需大于起始 ${Number(trip.startKm).toLocaleString()} km（必填）</div>
+          <div id="vtqMileage" class="vtq-mileage hint">请输入仪表盘表显总里程，需大于起始 ${Number(trip.startKm).toLocaleString()} km（必填）</div>
         </div>
         <div class="veh-quick-fields">
           <div class="veh-ret-info">使用中：${esc(trip.driverName || "未知")}<br>出发 ${fmtDateTime(trip.outTime)}</div>
