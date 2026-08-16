@@ -1946,7 +1946,7 @@ function normWorkType(t) {
 }
 const LEVELS = ["初级", "中级", "高级", "特级"];
 
-function buildWorkerPeriods(p, wid) {
+function buildWorkerPeriods(p, wid, includeFallback = true) {
   // 项目未实际开工前，分配人员只是排班准备，不应产生工时记录。
   if (!isConstructionStarted(p)) return [];
 
@@ -1978,7 +1978,10 @@ function buildWorkerPeriods(p, wid) {
       }
     }
   });
-  if (periods.length === 0 && p.startedAt) {
+  /* 兜底：项目已开工但某工人无明确 assign 记录时（常见于历史数据或创建即开工），
+     按项目开工时间生成一段开放时段。注意：此兜底只对「当前仍在场」的工人适用，
+     已移除工人若历史记录不完整不应凭空获得工时。 */
+  if (includeFallback && periods.length === 0 && p.startedAt) {
     periods.push({ start: p.startedAt, end: null });
   }
 
@@ -2112,12 +2115,19 @@ function gotoConstructionWorklog(id) {
 }
 
 /* 计算项目各施工人员实际工时（人·小时）及汇总。
-   优先按在场时段自动计算；无时段时退回 workLogs 手动登记值。 */
+   只统计「当前」在场/外包的工人；已移除人员的历史工时保留在 workLogs 中，
+   但不计入本项目摘要，避免"已移除的人还占着总工时"。 */
 function calcProjectWorkerStats(p) {
+  const currentAssigned = p.assignedWorkerIds || [];
+  const currentOutsourced = (p.outsourcedWorkers || "").split(",").map((n) => n.trim()).filter((n) => n).map((name) => "outsourced:" + name);
+  const currentWids = new Set([...currentAssigned, ...currentOutsourced]);
+
+  // workLogs 只取当前在场工人；移除人员的日志不纳入本项目工时摘要。
   const workerLogs = {};
   (p.workLogs || []).forEach((log) => {
     if (!log) return;
     const key = log.workerId || log.workerName || "unknown";
+    if (!currentWids.has(key)) return;
     if (!workerLogs[key]) {
       workerLogs[key] = {
         name: log.workerName || "未知",
@@ -2131,16 +2141,15 @@ function calcProjectWorkerStats(p) {
   const workerPeriods = {};
   const chWorkerName = {};
   const chIsOutsourced = {};
-  const allWids = new Set([...(p.assignedWorkerIds || [])]);
   (p.workerChangeHistory || []).forEach((ch) => {
     if (ch.workerId) {
-      allWids.add(ch.workerId);
       chWorkerName[ch.workerId] = ch.workerName || chWorkerName[ch.workerId];
       if (ch.isOutsourced) chIsOutsourced[ch.workerId] = true;
     }
   });
-  allWids.forEach((wid) => {
-    workerPeriods[wid] = buildWorkerPeriods(p, wid);
+
+  currentWids.forEach((wid) => {
+    workerPeriods[wid] = buildWorkerPeriods(p, wid, true);
   });
 
   /* 对非施工中的终端状态（已完工/验收/审核/取消/暂停），强制关闭未结束的时段，
@@ -2149,7 +2158,7 @@ function calcProjectWorkerStats(p) {
      误判为已结算而跳过，结果实时工时为 0。 */
   if (p.status !== STATUS.WORKING) {
     const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
-    allWids.forEach((wid) => {
+    currentWids.forEach((wid) => {
       if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
         const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
         if (!lastPeriod.end) lastPeriod.end = periodEndTime;
@@ -2158,10 +2167,9 @@ function calcProjectWorkerStats(p) {
     });
   }
 
-  const allWorkers = new Set([...(p.assignedWorkerIds || []), ...Object.keys(workerLogs), ...Object.keys(workerPeriods)]);
   const workerStats = [];
-  allWorkers.forEach((wid) => {
-    const isAssigned = (p.assignedWorkerIds || []).includes(wid);
+  currentWids.forEach((wid) => {
+    const isAssigned = currentAssigned.includes(wid);
     const logEntry = workerLogs[wid];
     const worker = getWorker(wid);
     const name = logEntry ? logEntry.name : (worker ? worker.name : (chWorkerName[wid] || "未知"));
@@ -9588,12 +9596,19 @@ function renderConstruction() {
         </div>
       </details>` : ""}
       
-      ${p.workerChangeHistory.length > 0 ? `
+      ${p.workerChangeHistory.length > 0 ? (() => {
+        /* 渲染时折叠连续重复的同一工人同动作（多为误触/重试导致），保留历史不丢数据 */
+        const deduped = p.workerChangeHistory.filter((wch, idx, arr) => {
+          if (idx === 0) return true;
+          const prev = arr[idx - 1];
+          return !(wch.workerId && prev.workerId === wch.workerId && prev.action === wch.action);
+        });
+        return `
       <details class="rec-details rec-details--green">
-        <summary>👥 人员变动（${p.workerChangeHistory.length}次）</summary>
+        <summary>👥 人员变动（${deduped.length}次）</summary>
         <div class="rec-details__body">
           <div class="rec-list">
-            ${p.workerChangeHistory.map((wch, idx) => {
+            ${deduped.map((wch, idx) => {
               const changeTime = new Date(wch.time);
               const timeStr = `${changeTime.getMonth() + 1}/${changeTime.getDate()} ${String(changeTime.getHours()).padStart(2, "0")}:${String(changeTime.getMinutes()).padStart(2, "0")}`;
               return `<div class="rec-list__item">
@@ -9605,7 +9620,8 @@ function renderConstruction() {
             }).join("")}
           </div>
         </div>
-      </details>` : ""}
+      </details>`;
+      })() : ""}
       
       ${(() => {
         const allSessions = [...(p.workSessions || [])];
@@ -10222,23 +10238,28 @@ async function assignWorker(pid) {
     
     const worker = getWorker(wid);
     const workerChangeHistory = [...(p.workerChangeHistory || [])];
-    workerChangeHistory.push({
-      time: new Date().toISOString(),
-      action: "assign",
-      workerId: wid,
-      workerName: worker ? worker.name : "未知",
-      workerPhone: worker ? worker.phone : ""
-    });
-    
+    const prev = workerChangeHistory.filter((ch) => ch.workerId === wid).pop();
+    if (!prev || prev.action !== "assign") {
+      workerChangeHistory.push({
+        time: new Date().toISOString(),
+        action: "assign",
+        workerId: wid,
+        workerName: worker ? worker.name : "未知",
+        workerPhone: worker ? worker.phone : ""
+      });
+    }
+
     const actionLogs = [...(p.actionLogs || [])];
-    actionLogs.push({
-      time: new Date().toISOString(),
-      action: "assign",
-      description: `分配安装人员：${worker ? worker.name : "未知"}`,
-      operator: currentProfile.name || currentUser?.email || "系统",
-      operatorRole: currentProfile.role
-    });
-    
+    if (!prev || prev.action !== "assign") {
+      actionLogs.push({
+        time: new Date().toISOString(),
+        action: "assign",
+        description: `分配安装人员：${worker ? worker.name : "未知"}`,
+        operator: currentProfile.name || currentUser?.email || "系统",
+        operatorRole: currentProfile.role
+      });
+    }
+
     try {
       const newIds = cur.concat(wid);
       await repo.setAssignedWorkers(pid, newIds);
@@ -10461,53 +10482,58 @@ async function unassignWorker(pid, wid) {
     const now = new Date();
     const nowStr = now.toISOString();
     
+    const prev = workerChangeHistory.filter((ch) => ch.workerId === wid).pop();
+    const alreadyUnassigned = prev && prev.action === "unassign";
+
     let autoHours = 0;
-    if (p.status === STATUS.WORKING && p.startedAt) {
+    if (p.status === STATUS.WORKING && p.startedAt && !alreadyUnassigned) {
       /* 按该人员真实在场时段计工时，而非整段时长平摊到所有在场人员 */
       const periods = buildWorkerPeriods(p, wid);
       autoHours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
     }
-    
-    workerChangeHistory.push({
-      time: nowStr,
-      action: "unassign",
-      workerId: wid,
-      workerName: worker ? worker.name : "未知",
-      workerPhone: worker ? worker.phone : "",
-      autoHours: autoHours > 0 ? autoHours : null,
-      accumulatedWorkHoursAtRemoval: p.accumulatedWorkHours || 0
-    });
-    
+
     const actionLogs = [...(p.actionLogs || [])];
-    let logDesc = `移除安装人员：${worker ? worker.name : "未知"}`;
-    
-    if (autoHours > 0) {
-      logDesc += `，自动记录工时 ${autoHours} 小时`;
-      
-      const workLog = {
-        id: 'log_' + Date.now() + '_' + wid,
-        projectId: pid,
+
+    if (!alreadyUnassigned) {
+      workerChangeHistory.push({
+        time: nowStr,
+        action: "unassign",
         workerId: wid,
         workerName: worker ? worker.name : "未知",
-        hours: autoHours,
-        date: dateKey(now),
-        note: `系统自动计算：从${fmtDateTime(p.startedAt)}到${fmtDateTime(nowStr)}，共${autoHours}小时`,
-        level: "中级",
-        workType: "",
-        isOutsourced: false,
-        createdAt: nowStr
-      };
-      
-      await repo.addWorkLog(pid, workLog);
+        workerPhone: worker ? worker.phone : "",
+        autoHours: autoHours > 0 ? autoHours : null,
+        accumulatedWorkHoursAtRemoval: p.accumulatedWorkHours || 0
+      });
+
+      let logDesc = `移除安装人员：${worker ? worker.name : "未知"}`;
+      if (autoHours > 0) {
+        logDesc += `，自动记录工时 ${autoHours} 小时`;
+
+        const workLog = {
+          id: 'log_' + Date.now() + '_' + wid,
+          projectId: pid,
+          workerId: wid,
+          workerName: worker ? worker.name : "未知",
+          hours: autoHours,
+          date: dateKey(now),
+          note: `系统自动计算：从${fmtDateTime(p.startedAt)}到${fmtDateTime(nowStr)}，共${autoHours}小时`,
+          level: "中级",
+          workType: "",
+          isOutsourced: false,
+          createdAt: nowStr
+        };
+
+        await repo.addWorkLog(pid, workLog);
+      }
+
+      actionLogs.push({
+        time: nowStr,
+        action: "unassign",
+        description: logDesc,
+        operator: currentProfile.name || currentUser?.email || "系统",
+        operatorRole: currentProfile.role
+      });
     }
-    
-    actionLogs.push({
-      time: nowStr,
-      action: "unassign",
-      description: logDesc,
-      operator: currentProfile.name || currentUser?.email || "系统",
-      operatorRole: currentProfile.role
-    });
     
     await repo.setAssignedWorkers(pid, next);
     const patchOk = await repo.patchProject(pid, { workerChangeHistory, actionLogs });
@@ -23783,7 +23809,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v957897ff";
+  const APP_VERSION = "vdf57576c";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
