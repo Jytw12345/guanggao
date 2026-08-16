@@ -35,6 +35,8 @@ const DAILY_BLOCK_CAP = 18;
 const DAILY_WARN_CAP = 12;
 // 点完工时「开工→完工」时长小于此分钟数，疑似未实际施工仅登记工时，给出警告（非拦截）。
 const SHORT_WORK_WARN_MINUTES = 30;
+// 反向失真守卫（与「虚假施工」对称）：实际在场窗口很短（< SHORT_WORK_WARN_MINUTES 分钟）却填报大量工时（> 此值小时），弹确认拦截。
+const LOGGED_VS_ONSITE_WARN_HOURS = 2;
 
 // 每人每天标准工作量（小时）。用于「工时预警」与「施工人员安排」超限提醒。
 const DAILY_WORK_HOURS = 8;
@@ -11417,6 +11419,10 @@ async function autoPromoteDelayedProjects() {
         patch.resumedAt = null;
         patch.pausedAt = null;
         patch.pauseCount = 0;
+        // 一并清掉随开工产生的施工会话 / 暂停历史，否则 BOOKED 项目会残留「施工时段明细」「暂停 N 次」
+        // 等已开工态数据，与"未开工"状态不一致（workerChangeHistory 属审计留存，保留）。
+        patch.workSessions = [];
+        patch.pauseHistory = [];
       }
       try {
         await repo.patchProject(p.id, patch);
@@ -11519,9 +11525,17 @@ async function unreviewProject(id) {
   if (!perm.unreviewProject(p)) { toast("权限不足：无法反审核项目"); return; }
   if (!(await confirmDialog("确定取消审核？取消后项目将恢复为「已完工」状态，可继续编辑。", "取消审核"))) return;
   clearTimeout(reloadTimer);
-  await repo.patchProject(id, { status: STATUS.DONE });
+  const actionLogs = [...(p.actionLogs || [])];
+  actionLogs.push({
+    time: new Date().toISOString(),
+    action: "unreview",
+    description: "取消审核，项目恢复为已完工",
+    operator: currentProfile.name || currentUser?.email || "系统",
+    operatorRole: currentProfile.role
+  });
+  await repo.patchProject(id, { status: STATUS.DONE, actionLogs });
   const p2 = getProject(id);
-  if (p2) p2.status = STATUS.DONE;
+  if (p2) { p2.status = STATUS.DONE; p2.actionLogs = actionLogs; }
   renderAll();
   toast("已取消审核");
   repo.loadAll().then(() => renderAll()).catch((e) => console.warn("反审核后台同步失败：", e));
@@ -11980,6 +11994,74 @@ async function recomputeActualHours(pid) {
   return total;
 }
 
+/* 预约中(BOOKED)直接登记工时触发的「自动开工」：与 updateProjectStatus(WORKING) 行为保持一致，
+   把登记工时的工人一并补进在场名单 + 人员变动历史 + 操作日志，避免：
+   1) 该工人不被计入本项目工人工时统计（既不在 assignedWorkerIds/outsourcedWorkers，会被过滤掉）；
+   2) 旧兜底逻辑给无 assign 记录的工人凭空生成 startedAt→现在的时段，与已登记 workLog 叠加重复计工时。
+   内部工人入 assignedWorkerIds，外协入 outsourcedWorkers 串；若该工人最近一条人员变动已是 assign 则不重复追加。 */
+async function autoStartWithWorker(id, p, workerId, workerName, isOutsourced) {
+  const now = new Date().toISOString();
+
+  // 1) 在场名单：内部入 assignedWorkerIds，外协入 outsourcedWorkers 串
+  let assignedWorkerIds = [...(p.assignedWorkerIds || [])];
+  let outsourcedWorkers = (p.outsourcedWorkers || "").trim();
+  if (isOutsourced) {
+    const names = outsourcedWorkers ? outsourcedWorkers.split(/[,，]/).map(n => n.trim()).filter(n => n) : [];
+    if (!names.includes(workerName)) names.push(workerName);
+    outsourcedWorkers = names.join(",");
+  } else {
+    if (!assignedWorkerIds.includes(workerId)) assignedWorkerIds.push(workerId);
+  }
+
+  // 2) 人员变动历史：补一条 assign（若该工人最近一条不是 assign，避免重复）
+  const workerChangeHistory = [...(p.workerChangeHistory || [])];
+  const prev = workerChangeHistory.filter(ch => ch.workerId === workerId).pop();
+  if (!prev || prev.action !== "assign") {
+    const w = isOutsourced ? null : getWorker(workerId);
+    workerChangeHistory.push({
+      time: now,
+      action: "assign",
+      workerId,
+      workerName,
+      workerPhone: w ? w.phone : "",
+      isOutsourced: !!isOutsourced
+    });
+  }
+
+  // 3) 操作日志：开始施工
+  const actionLogs = [...(p.actionLogs || [])];
+  actionLogs.push({
+    time: now,
+    action: "start",
+    description: "开始施工（登记工时自动开工）",
+    operator: currentProfile.name || currentUser?.email || "系统",
+    operatorRole: currentProfile.role
+  });
+
+  const patch = {
+    status: STATUS.WORKING,
+    startedAt: now,
+    originalStartedAt: p.originalStartedAt || now,
+    assignedWorkerIds,
+    outsourcedWorkers,
+    workerChangeHistory,
+    actionLogs
+  };
+
+  await repo.patchProject(id, patch);
+  // 乐观更新内存，秒级反馈；后续 loadAll 会静默 reconcile
+  const p2 = getProject(id);
+  if (p2) {
+    p2.status = STATUS.WORKING;
+    p2.startedAt = now;
+    p2.originalStartedAt = patch.originalStartedAt;
+    p2.assignedWorkerIds = assignedWorkerIds;
+    p2.outsourcedWorkers = outsourcedWorkers;
+    p2.workerChangeHistory = workerChangeHistory;
+    p2.actionLogs = actionLogs;
+  }
+}
+
 /* 同日跨项目工时冲突检测 ------------------------------------------------
  * 工时记录只有「单日(date) + 工时(hours)」，无起止时间，故冲突只能退化到"同一天"粒度。
  * 扫描全量项目，返回某工人在某天、跨项目的工时明细。 */
@@ -11994,6 +12076,20 @@ function getWorkerDailyLogs(workerId, date) {
     });
   });
   return entries;
+}
+
+/* 某工人在某项目的「实际在场窗口」分钟数：startedAt → 结束点（finishedAt / pausedAt / 当前）。
+   返回 null 表示项目尚未开工（无 startedAt），无法判定；用于反向失真守卫 B。
+   注意：BOOKED 自动开工时 startedAt=now、窗口≈0，但 B 在校验时 p.startedAt 仍为 null，故不误拦首笔工时。 */
+function getWorkerOnsiteWindowMinutes(p, workerId) {
+  if (!p || !p.startedAt) return null;
+  const start = new Date(p.startedAt);
+  let end;
+  if (p.finishedAt) end = new Date(p.finishedAt);
+  else if (p.status === STATUS.PAUSED && p.pausedAt) end = new Date(p.pausedAt);
+  else end = new Date();
+  const mins = (end - start) / 60000;
+  return mins > 0 ? mins : 0;
 }
 
 async function addWorkLog(id) {
@@ -12047,12 +12143,23 @@ async function addWorkLog(id) {
     if (!(await confirmDialog(html, "工时提醒"))) return;
   }
 
+  // —— 反向失真守卫（B）：单项目在场窗口极短却填报大量工时 ——
+  const onsiteMinsB = getWorkerOnsiteWindowMinutes(p, workerId);
+  if (onsiteMinsB !== null && onsiteMinsB < SHORT_WORK_WARN_MINUTES) {
+    const loggedSoFarB = (p.workLogs || [])
+      .filter(l => l.workerId === workerId)
+      .reduce((s, l) => s + (Number(l.hours) || 0), 0);
+    const loggedTotalB = loggedSoFarB + hours;
+    if (loggedTotalB > LOGGED_VS_ONSITE_WARN_HOURS) {
+      const htmlB = `⚠️ 工时异常提醒<br>${esc(workerName)} 在「${esc(p.name)}」的实际在场约 ${Math.round(onsiteMinsB)} 分钟，却已登记 ${loggedTotalB.toFixed(1)} 小时工时。<br><br>是否确认仍要添加本次 ${hours.toFixed(1)} 小时？`;
+      if (!(await confirmDialog(htmlB, "工时异常确认"))) return;
+    }
+  }
+
   try {
     await commitWorkLog(id, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
     if (p.status === STATUS.BOOKED) {
-      const now = new Date().toISOString();
-      await repo.patchProject(id, { status: STATUS.WORKING, startedAt: now, originalStartedAt: now });
-      p.status = STATUS.WORKING; p.startedAt = now; p.originalStartedAt = now;
+      await autoStartWithWorker(id, p, workerId, workerName, type === "outsourced");
     }
     clearTimeout(reloadTimer);
     renderAll();
@@ -12305,8 +12412,7 @@ function openAllocSlider() {
       if (logs.length === 0) { toast("请至少设置一个作业类型的工时"); return false; }
       for (const log of logs) await commitWorkLog(pid, log);
       if (p.status === STATUS.BOOKED) {
-        const now = new Date().toISOString();
-        await repo.patchProject(pid, { status: STATUS.WORKING, startedAt: now, originalStartedAt: now });
+        await autoStartWithWorker(pid, p, w.workerId, w.workerName, w.isOutsourced);
       }
       clearTimeout(reloadTimer);
       await repo.loadAll();
@@ -14394,6 +14500,9 @@ function openCompleteProjectForm(id) {
           return false;
         }
 
+        const now = new Date();
+        const nowStr = now.toISOString();
+
         const pauseCount = derivePauseCount(p);
         if (pauseCount > 0) {
           const pauseDurationTotal = derivePauseDuration(p);
@@ -14414,8 +14523,19 @@ function openCompleteProjectForm(id) {
           }
         }
 
-        const now = new Date();
-        const nowStr = now.toISOString();
+        // —— 反向失真守卫（A）：在场窗口极短却填报大量工时 ——
+        if (p.startedAt) {
+          const start = new Date(p.startedAt);
+          let end = now;
+          if (p.status === STATUS.PAUSED && p.pausedAt) end = new Date(p.pausedAt);
+          const onsiteMinsA = (end - start) / 60000;
+          if (onsiteMinsA > 0 && onsiteMinsA < SHORT_WORK_WARN_MINUTES && totalHours > LOGGED_VS_ONSITE_WARN_HOURS) {
+            const confirmHtml3 = `⚠️ 工时异常提醒<br>该项目实际在场仅约 ${Math.round(onsiteMinsA)} 分钟，却登记了 ${totalHours.toFixed(1)} 小时工时。<br><br>现场时间与填报工时明显不符，确认仍要完工吗？`;
+            if (!(await confirmDialog(confirmHtml3, "工时异常确认"))) {
+              return false;
+            }
+          }
+        }
 
         const accumulatedWorkHours = p.accumulatedWorkHours || 0;
         let currentWorkDuration = 0;
@@ -23809,7 +23929,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vdf57576c";
+  const APP_VERSION = "v27fb3310";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
