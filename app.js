@@ -8972,7 +8972,7 @@ function updateConstructionSelectLabel() {
 /* 打开自定义项目选择弹窗（替代原生 select 的系统下拉） */
 let constructionProjectList = [];
 let projectPickerSearchKeyword = "";
-/* 施工管理项目选择弹窗状态过滤，默认不勾选（隐藏已完工/已验收/已审核，展示活跃项目） */
+/* 施工管理项目选择弹窗状态过滤：已取消始终隐藏；已完工/已验收/已审核默认隐藏，可勾选显示 */
 let projectPickerStatusFilters = {
   done: false,
   accepted: false,
@@ -8981,6 +8981,7 @@ let projectPickerStatusFilters = {
 
 function applyProjectPickerFilters(items) {
   return items.filter(p => {
+    if (p.status === STATUS.CANCELLED) return false; // 已取消始终隐藏，不显示也不提供勾选
     if (p.status === STATUS.DONE && !projectPickerStatusFilters.done) return false;
     if (p.status === STATUS.ACCEPTED && !projectPickerStatusFilters.accepted) return false;
     if (p.status === STATUS.REVIEWED && !projectPickerStatusFilters.reviewed) return false;
@@ -9023,15 +9024,15 @@ function openProjectPicker() {
     <div class="project-picker-filters">
       <label class="pp-filter-label">
         <input type="checkbox" ${projectPickerStatusFilters.done ? "checked" : ""} onchange="toggleProjectPickerFilter('done', this.checked)">
-        <span>已完工</span>
+        <span>显示已完工</span>
       </label>
       <label class="pp-filter-label">
         <input type="checkbox" ${projectPickerStatusFilters.accepted ? "checked" : ""} onchange="toggleProjectPickerFilter('accepted', this.checked)">
-        <span>已验收</span>
+        <span>显示已验收</span>
       </label>
       <label class="pp-filter-label">
         <input type="checkbox" ${projectPickerStatusFilters.reviewed ? "checked" : ""} onchange="toggleProjectPickerFilter('reviewed', this.checked)">
-        <span>已审核</span>
+        <span>显示已审核</span>
       </label>
     </div>
   `;
@@ -23929,7 +23930,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v27fb3310";
+  const APP_VERSION = "v2d4f97cf";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -24588,17 +24589,17 @@ function returnPanelHtml(v, trip) {
           <label>还车公里 <span style="color:#dc2626">*</span></label>
           <input type="text" inputmode="numeric" class="input veh-km-big" id="vtqEnd"
                  value=""
-                 placeholder="输入还车时总里程"
+                 placeholder="输入还车里程"
                  onfocus="moveInputCursorToEnd(this)"
                  oninput="this.value = this.value.replace(/[^0-9]/g, ''); calcQuickMileage()" />
-          <div id="vtqMileage" class="vtq-mileage hint">请输入还车时的总里程读数（必填）</div>
+          <div id="vtqMileage" class="vtq-mileage hint">请输入还车仪表盘总里程，需大于起始 ${Number(trip.startKm).toLocaleString()} km（必填）</div>
         </div>
         <div class="veh-quick-fields">
           <div class="veh-ret-info">使用中：${esc(trip.driverName || "未知")}<br>出发 ${fmtDateTime(trip.outTime)}</div>
           <div class="form-row">
             <label>剩余油量</label>
             <div class="veh-fuel-gauge">
-              <svg class="veh-fuel-ico" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 22V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v18"/><path d="M2 22h10"/><path d="M14 9l4-4 3 3-4 4"/><path d="M18 5V3h2"/></svg>
+              <span class="veh-fuel-ico" style="font-size:18px;line-height:1;" title="油量">⛽</span>
               <div class="veh-fuel-segs" id="vtqFuelSegs">
                 ${Array.from({length:10},(_,i)=>`<span class="veh-fuel-seg" data-val="${(i+1)*10}"></span>`).join("")}
               </div>
@@ -25305,9 +25306,9 @@ function closeDriverCombo(silent) {
 }
 
 function vehicleProjectOptions(selectedId) {
-  /* 用车关联项目排除“已完工 / 已验收 / 已审核”的终态项目（流程已结束，无需再派车）；
+  /* 用车关联项目排除“已取消 / 已完工 / 已验收 / 已审核”的终态/无效项目（无需再派车）；
      但保留当前表单已选中的项目，避免编辑已有记录时丢失关联 */
-  const EXCLUDE = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED];
+  const EXCLUDE = [STATUS.CANCELLED, STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED];
   const projects = (cache.projects || [])
     .slice()
     .filter((p) => !EXCLUDE.includes(p.status) || p.id === selectedId)
@@ -25415,67 +25416,22 @@ function moveInputCursorToEnd(el) {
 
 /* 用车登记：选择关联项目的弹窗 */
 let _vehicleProjectPickerSearch = "";
+let _vehicleProjectPickerShown = new Set(); // 用车关联项目：用户勾选要显示的已结束/已取消状态
+const VEHICLE_PICKER_HIDDEN_STATUSES = [STATUS.CANCELLED]; // 始终隐藏，不可勾选显示
+const VEHICLE_PICKER_TOGGLE_STATUSES = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED]; // 可勾选显示
 
-function openVehicleProjectPicker() {
+function renderVehicleProjectPickerList() {
+  const listEl = document.getElementById("vehicleProjectPickerList");
+  const countEl = document.querySelector(".project-picker-count");
+  if (!listEl) return;
   const currentId = document.getElementById("vtqProject")?.value || "";
   const keyword = _vehicleProjectPickerSearch.trim().toLowerCase();
-  const EXCLUDE = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED];
-  let items = (cache.projects || []).filter((p) => !EXCLUDE.includes(p.status));
-  if (keyword) {
-    items = items.filter((p) => {
-      const { store, name, date } = buildProjectDisplay(p);
-      return [store, name, date].join(" ").toLowerCase().includes(keyword)
-        || (p.customer && String(p.customer).toLowerCase().includes(keyword))
-        || (p.address && String(p.address).toLowerCase().includes(keyword));
-    });
-  }
-
-  const listHtml = items.length
-    ? items.map((p) => {
-        const { store, name, date } = buildProjectDisplay(p);
-        const active = p.id === currentId ? " active" : "";
-        const statusTag = p.status ? `<span class="pp-status pp-status-${esc(p.status)}">${esc(p.status)}</span>` : "";
-        return `
-          <div class="project-picker-item${active}" onclick="pickVehicleProject('${p.id}')">
-            <div class="pp-main">
-              ${store ? `<span class="pp-store">${store}</span>` : ""}
-              <span class="pp-name">${name}</span>
-            </div>
-            <div class="pp-meta">
-              ${date ? `<span class="pp-date">${svgCal(13)} ${date}</span>` : ""}
-              ${statusTag}
-            </div>
-          </div>`;
-      }).join("")
-    : `<div class="project-picker-empty">没有匹配的项目</div>`;
-
-  const body = `
-    <div class="project-picker">
-      <div class="project-picker-search">
-        <input type="text" id="vehicleProjectPickerSearch" class="input" placeholder="🔍 搜索门店 / 项目名 / 日期 / 客户 / 地址" value="${esc(_vehicleProjectPickerSearch)}" oninput="onVehicleProjectPickerSearch(this.value)" />
-      </div>
-      <div class="project-picker-count">共 ${items.length} 个可选项目</div>
-      <div class="project-picker-list" id="vehicleProjectPickerList">${listHtml}</div>
-      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-        <button type="button" class="btn" style="width:100%" onclick="pickVehicleProject('')">不关联项目</button>
-      </div>
-    </div>
-  `;
-
-  modal.open("选择关联项目", body, { hideFooter: true });
-}
-
-function onVehicleProjectPickerSearch(val) {
-  _vehicleProjectPickerSearch = val || "";
-  clearTimeout(vehiclePickerSearchTimer);
-  vehiclePickerSearchTimer = setTimeout(() => {
-    const listEl = document.getElementById("vehicleProjectPickerList");
-    const countEl = document.querySelector(".project-picker-count");
-    if (!listEl) return;
-    const currentId = document.getElementById("vtqProject")?.value || "";
-    const keyword = _vehicleProjectPickerSearch.trim().toLowerCase();
-  const EXCLUDE = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED];
-  let items = (cache.projects || []).filter((p) => !EXCLUDE.includes(p.status));
+  let items = (cache.projects || []).filter((p) =>
+    !VEHICLE_PICKER_HIDDEN_STATUSES.includes(p.status) &&
+    (!VEHICLE_PICKER_TOGGLE_STATUSES.includes(p.status) ||
+      _vehicleProjectPickerShown.has(p.status) ||
+      p.id === currentId)
+  );
   if (keyword) {
     items = items.filter((p) => {
       const { store, name, date } = buildProjectDisplay(p);
@@ -25503,6 +25459,59 @@ function onVehicleProjectPickerSearch(val) {
           </div>`;
       }).join("")
     : `<div class="project-picker-empty">没有匹配的项目</div>`;
+}
+
+function toggleVehicleProjectShown(status, checked) {
+  if (checked) _vehicleProjectPickerShown.add(status);
+  else _vehicleProjectPickerShown.delete(status);
+  renderVehicleProjectPickerList();
+}
+
+function openVehicleProjectPicker() {
+  const currentId = document.getElementById("vtqProject")?.value || "";
+  const keyword = _vehicleProjectPickerSearch.trim().toLowerCase();
+  let items = (cache.projects || []).filter((p) =>
+    !VEHICLE_PICKER_HIDDEN_STATUSES.includes(p.status) &&
+    (!VEHICLE_PICKER_TOGGLE_STATUSES.includes(p.status) ||
+      _vehicleProjectPickerShown.has(p.status) ||
+      p.id === currentId)
+  );
+  if (keyword) {
+    items = items.filter((p) => {
+      const { store, name, date } = buildProjectDisplay(p);
+      return [store, name, date].join(" ").toLowerCase().includes(keyword)
+        || (p.customer && String(p.customer).toLowerCase().includes(keyword))
+        || (p.address && String(p.address).toLowerCase().includes(keyword));
+    });
+  }
+
+  const toggleChips = VEHICLE_PICKER_TOGGLE_STATUSES.map((s) =>
+    `<label class="pp-filter-label"><input type="checkbox" ${_vehicleProjectPickerShown.has(s) ? "checked" : ""} onchange="toggleVehicleProjectShown('${s}', this.checked)" /> 显示${s}</label>`
+  ).join("");
+
+  const body = `
+    <div class="project-picker">
+      <div class="project-picker-search">
+        <input type="text" id="vehicleProjectPickerSearch" class="input" placeholder="🔍 搜索门店 / 项目名 / 日期 / 客户 / 地址" value="${esc(_vehicleProjectPickerSearch)}" oninput="onVehicleProjectPickerSearch(this.value)" />
+      </div>
+      <div class="project-picker-filters">${toggleChips}</div>
+      <div class="project-picker-count">共 ${items.length} 个可选项目</div>
+      <div class="project-picker-list" id="vehicleProjectPickerList"></div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <button type="button" class="btn" style="width:100%" onclick="pickVehicleProject('')">不关联项目</button>
+      </div>
+    </div>
+  `;
+
+  modal.open("选择关联项目", body, { hideFooter: true });
+  renderVehicleProjectPickerList();
+}
+
+function onVehicleProjectPickerSearch(val) {
+  _vehicleProjectPickerSearch = val || "";
+  clearTimeout(vehiclePickerSearchTimer);
+  vehiclePickerSearchTimer = setTimeout(() => {
+    renderVehicleProjectPickerList();
   }, 120);
 }
 
