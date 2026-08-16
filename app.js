@@ -1692,11 +1692,11 @@ function fmtSignedDiff(diff) {
   return diff > 0 ? `+${rounded}` : `${rounded}`;
 }
 
-/* 工时显示：四舍五入到2位小数，去掉尾随0；用于消除 12.600000000000001 这类浮点误差 */
+/* 工时显示：四舍五入到1位小数，去掉尾随0；用于消除 12.600000000000001 这类浮点误差 */
 function fmtHours(n) {
   const v = Number(n);
   if (!isFinite(v)) return "0";
-  return Number(v.toFixed(2)).toString();
+  return Number(v.toFixed(1)).toString();
 }
 
 /* 工时数值：四舍五入到1位小数，用于 Excel/CSV 数值单元格 */
@@ -1888,77 +1888,23 @@ function getCurrentSessionDurationText(p) {
   return "1分钟";
 }
 
-/* 生成项目卡片的「实际施工时间线」HTML。
-   - 单天项目：保持简洁，显示开工 / 完工 / 总时长。
-   - 跨天项目（workSegments.length > 1）：按 workSessions 逐段列出实际施工时间，
-     方便一眼看到每天真实干了多久；无 sessions 时退回总开工/完工。 */
+/* 生成项目卡片底部「关键时间」单行摘要 HTML。
+   逐段/历史明细已移入「施工记录」弹窗，卡片底部只保留一眼可见的关键时间点，避免与弹窗重复：
+   - 终态（已完工/已验收/已审核）：显示「完工」时间；
+   - 进行中（施工中/已暂停/已延期）或预约中已开工：有恢复史显示「本次施工 X 起」，否则「开工 X 起」；
+   - 未开工（无 startedAt/finishedAt）：返回空，容器整体不渲染。 */
 function buildCardActualTimeline(p) {
-  const segs = getBookedSegments(p);
-  const isCrossDay = segs.length > 1;
-  const sessions = (p.workSessions || []).filter(s => s && s.startTime && s.endTime);
-
-  // 跨天且存在施工会话：按日期分组显示逐段实际施工时间
-  if (isCrossDay && sessions.length > 0) {
-    const groups = {};
-    for (const s of sessions) {
-      const d = new Date(s.startTime);
-      const key = dateKey(d);
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(s);
-    }
-    const lines = [];
-    Object.keys(groups).sort().forEach(key => {
-      const list = groups[key];
-      let dayMins = 0;
-      const parts = list.map(s => {
-        const st = new Date(s.startTime);
-        const en = new Date(s.endTime);
-        const mins = Math.max(0, Math.round((en - st) / 60000));
-        dayMins += mins;
-        return `${hmOf(st)}–${hmOf(en)}`;
-      }).join("、");
-      const h = Math.floor(dayMins / 60);
-      const m = dayMins % 60;
-      const durText = h > 0 ? `${h}小时${m > 0 ? m + "分钟" : ""}` : `${m}分钟`;
-      lines.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--blue"></span><span>${key} ${parts} · ${durText}</span></div>`);
-    });
-    if (lines.length) {
-      lines.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--gray"></span><span>实际合计 ${calcActualWorkDuration(p)}</span></div>`);
-      return lines.join("");
-    }
+  if (p.finishedAt) {
+    return `<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--green"></span><span>完工 ${fmtDateTime(p.finishedAt)}</span></div>`;
   }
-
-  // 单天 / 无会话：保持原样
-  const parts = [];
-  const originalStartedAt = p.originalStartedAt || p.startedAt;
   const hasResumeHistory = !!(p.originalStartedAt && p.startedAt &&
     Math.abs(new Date(p.originalStartedAt).getTime() - new Date(p.startedAt).getTime()) > 60000);
-
-  // 开工时间：始终显示首次开工；若有恢复史，再显示本次施工
-  if (originalStartedAt) {
-    const startLabel = hasResumeHistory ? "首次开工" : "开工";
-    parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--blue"></span><span>${startLabel} ${fmtDateTime(originalStartedAt)}</span></div>`);
+  if (p.startedAt) {
+    const label = hasResumeHistory ? "本次施工" : "开工";
+    const dot = hasResumeHistory ? "card-timeline__dot--green" : "card-timeline__dot--blue";
+    return `<div class="card-timeline__item"><span class="card-timeline__dot ${dot}"></span><span>${label} ${fmtDateTime(p.startedAt)} 起</span></div>`;
   }
-  if (hasResumeHistory && p.startedAt) {
-    parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--green"></span><span>本次施工 ${fmtDateTime(p.startedAt)} 起</span></div>`);
-  }
-
-  if (p.finishedAt) parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--green"></span><span>完工 ${fmtDateTime(p.finishedAt)}</span></div>`);
-
-  // 已施工时长（与"时长"语义合并，避免重复显示同一个 calcActualWorkDuration 值）
-  // 当存在 workingTooLong chip（虚假施工/跨夜/连续施工）时，时间线跳过此行——时长信息由 chip 唯一承担，避免重复
-  const elapsedText = getElapsedSinceStartText(p);
-  const hasWorkingTooLongChip = p.status === STATUS.WORKING && getForgottenCompleteInfo(p);
-  if (elapsedText && !hasWorkingTooLongChip) parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--orange"></span><span data-elapsed-marker data-project-id="${esc(p.id)}">累计已施工 ${esc(elapsedText)}</span></div>`);
-  // 有暂停时单独显示暂停时长，与"已施工"对照（无暂停时不显示，避免无意义空行）
-  const pauseHours = derivePauseDuration(p);
-  if (pauseHours > 0.017) { // > 1 分钟
-    const ph = Math.floor(pauseHours);
-    const pm = Math.round((pauseHours - ph) * 60);
-    const pauseText = ph > 0 ? (pm > 0 ? `${ph}小时${pm}分钟` : `${ph}小时`) : `${pm}分钟`;
-    parts.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--gray"></span><span>累计已暂停 ${pauseText}</span></div>`);
-  }
-  return parts.join("");
+  return "";
 }
 
 function getProjectEffectiveEndTime(p) {
@@ -7716,7 +7662,7 @@ function renderProjects() {
           <span class="card-progress__pct">${Math.round(getProjectProgress(p, est, act, hasActual, done))}%</span>
         </div>
 
-        <!-- 时间节点（仅在有值时显示；跨天项目显示实际施工会话逐段明细；已施工时长 + 暂停时长 在 buildCardActualTimeline 内部统一渲染） -->
+        <!-- 时间节点：仅在有值时显示。卡片底部只保留关键时间点单行摘要（开工/本次施工/完工），逐段与历史明细见「施工记录」弹窗 -->
         ${(p.startedAt || p.finishedAt) ? `
         <div class="card-timeline">
           ${buildCardActualTimeline(p)}
@@ -21871,8 +21817,8 @@ function renderTimelineInDetail() {
     timelineHtml = `
       <div class="timeline-container timeline-horizontal">
         <div class="tl-stats">
-          <span class="tl-stat-item"><span class="tl-stat-label">总预计工时</span><span class="tl-stat-value ${statEstHours > 40 ? 'danger' : statEstHours > 32 ? 'warn' : ''}">${statEstHours}h</span></span>
-          <span class="tl-stat-item"><span class="tl-stat-label">施工人员工时</span><span class="tl-stat-value ${statInternalHours > 40 ? 'danger' : statInternalHours > 32 ? 'warn' : ''}">${statInternalHours}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">总预计工时</span><span class="tl-stat-value ${statEstHours > 40 ? 'danger' : statEstHours > 32 ? 'warn' : ''}">${fmtHours(statEstHours)}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">施工人员工时</span><span class="tl-stat-value ${statInternalHours > 40 ? 'danger' : statInternalHours > 32 ? 'warn' : ''}">${fmtHours(statInternalHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">外协工时</span><span class="tl-stat-value outsourced">${fmtHours(statOutsourcedHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">外协人员</span><span class="tl-stat-value outsourced">${statOutsourcedWorkers}人</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">实际工时</span><span class="tl-stat-value">${fmtHours(statActHours)}h</span></span>
@@ -23837,7 +23783,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "ve5ae109d";
+  const APP_VERSION = "v957897ff";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
