@@ -13671,9 +13671,9 @@ function generateWorkerScheduleDescription(dateStr = null) {
             <div class="schedule-progress-bar ${isOverdue ? 'schedule-progress-fill--overdue' : ''}" style="width: ${progress}%; background-color: ${statusColor};"></div>
           </div>
           <div class="schedule-progress-info">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div class="schedule-progress-info__main">
               <span class="schedule-progress-status" style="color: ${statusColor};">${statusText}</span>
-              ${allWorkers.length > 0 ? `<span style="font-size:12px;color:#6b7280;">👷 ${esc(allWorkers.join(", "))}</span>` : ""}
+              ${allWorkers.length > 0 ? `<span class="schedule-progress-info__workers">👷 ${esc(allWorkers.join(", "))}</span>` : ""}
             </div>
             <span class="schedule-progress-percent">${progress}%</span>
           </div>
@@ -24001,7 +24001,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v8a2f4521";
+  const APP_VERSION = "v8058f7aa";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
