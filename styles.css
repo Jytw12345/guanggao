@@ -2717,6 +2717,34 @@ select.input {
   text-align: right;
 }
 
+/* 施工中进度条流动光效：半透明白色斜纹向右平移循环，表示「活跃进行中」。
+   仅 .is-active（状态=施工中 WORKING）时启用；已暂停/预约/完工等保持静止。 */
+@keyframes ggStripeMove {
+  from { background-position: 0 0; }
+  to   { background-position: 14px 0; }
+}
+.card-progress__bar.is-active,
+.schedule-progress-bar.is-active {
+  position: relative;
+}
+.card-progress__bar.is-active::after,
+.schedule-progress-bar.is-active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.30) 0,
+    rgba(255, 255, 255, 0.30) 7px,
+    rgba(255, 255, 255, 0) 7px,
+    rgba(255, 255, 255, 0) 14px
+  );
+  background-size: 14px 14px;
+  animation: ggStripeMove 0.7s linear infinite;
+}
+
 .card-timeline {
   display: flex;
   flex-direction: column;

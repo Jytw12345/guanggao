@@ -7713,12 +7713,12 @@ function renderProjects() {
         <!-- 进度条 -->
         <div class="card-progress">
           <div class="card-progress__bar-wrap">
-            <div class="card-progress__bar" style="width:${Math.min(100, getProjectProgress(p, est, act, hasActual, done))}%;background:${(() => {
+            <div class="card-progress__bar${p.status === STATUS.WORKING ? ' is-active' : ''}" style="width:${Math.min(100, getProjectProgress(p, est, act, hasActual, done))}%;background:${(() => {
               const pg = getProjectProgress(p, est, act, hasActual, done);
               if (isFakeWorking(p)) return 'linear-gradient(90deg, #dc2626, #fb923c)';
-              if (pg >= 100) return '#10b981';
-              if (p.status === STATUS.PAUSED) return '#f59e0b';
-              if (p.status === STATUS.DELAYED) return '#dc2626';
+              if (pg >= 100 || [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) return '#10b981';
+              if (p.status === STATUS.WORKING || p.status === STATUS.PAUSED) return '#f59e0b';
+              if (p.status === STATUS.DELAYED || p.status === STATUS.CANCELLED) return '#dc2626';
               return '#3b82f6';
             })()};"></div>
           </div>
@@ -13593,18 +13593,18 @@ function generateWorkerScheduleDescription(dateStr = null) {
           break;
         case STATUS.ACCEPTED:
         case STATUS.REVIEWED:
-          statusColor = "#06b6d4";
+          statusColor = "#10b981";
           break;
         case STATUS.PAUSED:
           statusColor = "#f59e0b";
           statusText = "已暂停";
           break;
         case STATUS.DELAYED:
-          statusColor = "#f59e0b";
+          statusColor = "#dc2626";
           statusText = "已延期";
           break;
         case STATUS.CANCELLED:
-          statusColor = "#ef4444";
+          statusColor = "#dc2626";
           break;
         default:
           statusColor = "#6b7280";
@@ -13687,14 +13687,14 @@ function generateWorkerScheduleDescription(dateStr = null) {
             </div>
           </div>
           <div class="schedule-progress-bar-container${isOverdue ? ' schedule-progress-bar--overdue' : ''}">
-            <div class="schedule-progress-bar ${isOverdue ? 'schedule-progress-fill--overdue' : ''}" style="width: ${progress}%; background-color: ${statusColor};"></div>
+            <div class="schedule-progress-bar ${isOverdue ? 'schedule-progress-fill--overdue' : ''}${p.status === STATUS.WORKING ? ' is-active' : ''}" style="width: ${progress}%; background-color: ${statusColor};"></div>
           </div>
           <div class="schedule-progress-info">
             <div class="schedule-progress-info__main">
               <span class="schedule-progress-status" style="color: ${statusColor};">${statusText}</span>
               ${allWorkers.length > 0 ? `<span class="schedule-progress-info__workers">👷 ${esc(allWorkers.join(", "))}</span>` : ""}
             </div>
-            <span class="schedule-progress-percent">${progress}%</span>
+            <span class="schedule-progress-percent">${Math.round(progress)}%</span>
           </div>
           ${statusActions.length > 0 ? `<div class="schedule-progress-actions">${statusActions.join(" ")}</div>` : ""}
           <div class="schedule-progress-detail" id="progDetail-${esc(p.id)}" style="display:none;">
@@ -21654,7 +21654,7 @@ function renderCalendar() {
     const fullCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS;
     const avgPerPerson = totalHours / Math.max(onDutyWorkers, 1);
     let hoursClass = "cal-hours";
-    if (totalHours > fullCapacity) hoursClass += " danger";
+    if (totalHours >= fullCapacity) hoursClass += " danger";
     else if (totalHours > easyCapacity) hoursClass += " warn";
     const hoursTitle = totalHours > 0
       ? `当天预约 ${fmtHours(totalHours)}h，在岗 ${onDutyWorkers} 人；轻松容量 ${fmtHours(easyCapacity)}h（${DAILY_WORK_HOURS_EASY}h/人），满负荷 ${fmtHours(fullCapacity)}h（${DAILY_WORK_HOURS}h/人）；当前人均 ${fmtHours(avgPerPerson)}h`
@@ -21787,10 +21787,10 @@ function renderCalDay() {
 
   /* 工时超载 / 人员冲突提示横幅 */
   const alerts = [];
-  if (internalHours > fullCapacity) {
-    alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，需要加班</b>：已分配 ${fmtHours(internalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（负荷 ${Math.round(loadRatio * 100)}%，超每人 ${DAILY_WORK_HOURS}h），建议安排外协或拆分到其他日期。</div>`);
+  if (internalHours >= fullCapacity) {
+    alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，完成全部项目可能需要加班或外协</b>：已分配 ${fmtHours(internalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），建议拆分到其他日期或安排外协。</div>`);
   } else if (internalHours > easyCapacity) {
-    alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时满负荷（不休息）</b>：已分配 ${fmtHours(internalHours)}h / 轻松容量 ${fmtHours(easyCapacity)}h（人均 ${fmtHours(internalHours / Math.max(onDutyWorkers, 1))}h），已接近或达到每人 10h 上限，请留意排班。</div>`);
+    alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时接近满负荷（不休息）</b>：已分配 ${fmtHours(internalHours)}h，轻松容量 ${fmtHours(easyCapacity)}h（人均 ${DAILY_WORK_HOURS_EASY}h），满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），请留意排班。</div>`);
   }
   const conflictWorkers = [...new Set(items.flatMap((p) => {
     if (isCompleted(p)) return [];
@@ -21946,10 +21946,10 @@ function renderTimelineInDetail() {
 
   // 工时超载 / 人员冲突提示横幅（与列表式视图对齐）
   const alerts = [];
-  if (statInternalHours > fullCapacity) {
-    alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，需要加班</b>：已分配 ${fmtHours(statInternalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（负荷 ${Math.round(loadRatio * 100)}%，超每人 ${DAILY_WORK_HOURS}h），建议安排外协或拆分到其他日期。</div>`);
+  if (statInternalHours >= fullCapacity) {
+    alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，完成全部项目可能需要加班或外协</b>：已分配 ${fmtHours(statInternalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），建议拆分到其他日期或安排外协。</div>`);
   } else if (statInternalHours > easyCapacity) {
-    alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时满负荷（不休息）</b>：已分配 ${fmtHours(statInternalHours)}h / 轻松容量 ${fmtHours(easyCapacity)}h（人均 ${fmtHours(statInternalHours / Math.max(onDutyWorkers, 1))}h），已接近或达到每人 10h 上限，请留意排班。</div>`);
+    alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时接近满负荷（不休息）</b>：已分配 ${fmtHours(statInternalHours)}h，轻松容量 ${fmtHours(easyCapacity)}h（人均 ${DAILY_WORK_HOURS_EASY}h），满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），请留意排班。</div>`);
   }
 
   const conflictInfo = {};
@@ -24111,7 +24111,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v5a89b4a1";
+  const APP_VERSION = "v6fd9fd55";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
