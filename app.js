@@ -16046,7 +16046,7 @@ function openSendNotification() {
   popup.id = "sendNotifModal";
   popup.className = "modal-mask";
   popup.innerHTML = `
-    <div class="modal" onclick="event.stopPropagation()" style="max-width:${isMobile ? '94%' : '460px'};width:${isMobile ? 'auto' : '460px'};max-height:88vh;overflow:auto;">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:${isMobile ? '94%' : '460px'};width:${isMobile ? '94%' : '460px'};max-height:88vh;overflow:auto;">
       <div class="modal-head">
         <h3>📢 发通知</h3>
         <button class="modal-close" onclick="closeSendNotificationModal()">×</button>
@@ -16070,7 +16070,7 @@ function openSendNotification() {
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;">
           <label class="modal-label">正文</label>
-          <textarea id="notifBody" class="input" rows="4" maxlength="500" placeholder="通知的详细内容…"></textarea>
+          <textarea id="notifBody" class="input" rows="4" maxlength="500" placeholder="通知的详细内容…" style="resize:vertical;min-height:80px;max-height:200px;overflow-y:auto" oninput="if(this.scrollHeight<=200){this.style.height='auto';this.style.height=this.scrollHeight+'px'}"></textarea>
         </div>
       </div>
       <div class="modal-footer">
@@ -16180,19 +16180,27 @@ function dispatchStoreManagerAcceptanceNotice(project) {
 
 /* 超期未完工：后台定时扫描，给本门店店长发站内通知。
    触发时机：每次全量同步成功后 + 每 5 分钟前台定时。
-   用 localStorage 记录已通知过的超期项目，避免同一超期反复推送；
-   项目离开超期态（完工/取消/恢复未超时）后自动从记录移除。
-   ★ 云端去重锁：发通知前先查 notifications 表，防止多设备/多用户重复发送（localStorage 只防同设备）。 */
+   用 localStorage 记录已通知过的超期项目，避免同设备内同一超期反复推送；
+   项目离开超期态（完工/取消/恢复未超时）后本机记录移除，下次仍可再提醒。
+   ★ 云端去重锁：发通知前先查 notifications 表（按 项目+类型 去重，不限时间窗口），
+      确保「同一项目、同一状态类型只提示一次」——不再按小时重复推送；防止多设备/多用户重复发送。 */
 const NOTIFIED_OVERDUE_KEY = "notifiedOverdueSet";
 const NOTIFIED_NOTSTARTED_KEY = "notifiedNotStartedSet";
-/** 云端去重：查询 notifications 表，检查指定项目+类型在最近 N 分钟内是否已有通知。返回 Promise<boolean> */
-async function hasRecentCloudNotification(projectId, notifType, windowMinutes) {
-  windowMinutes = windowMinutes || 60;
-  try {
-    const since = new Date(Date.now() - windowMinutes * 60000).toISOString();
-    const { data } = await sb.from("notifications").select("id").eq("ref_id", projectId).eq("ref_type", "project").eq("type", notifType).gte("created_at", since).limit(1);
-    return !!(data && data.length > 0);
-  } catch (_) { return false; } // 查询失败不阻塞，宁可重复不可遗漏
+/** 云端去重：查询 notify_dedup 表，检查指定项目+类型是否已有「本轮已提醒」标记（确保「每种状态每轮只提示一次」；状态解除即清零、复发可再提醒）。成功返回布尔，出错抛异常由调用方降级处理。 */
+async function hasRecentCloudNotification(projectId, notifType) {
+  const { data, error } = await sb.from("notify_dedup").select("project_id").eq("project_id", projectId).eq("type", notifType).limit(1);
+  if (error) throw error; // 让调用方决定降级策略（云端不可用则信任本机去重）
+  return !!(data && data.length > 0);
+}
+/** 发送成功后写入「本轮已提醒」标记（跨设备共享，fire-and-forget）。 */
+function markNotified(projectId, notifType) {
+  sb.from("notify_dedup")
+    .upsert({ project_id: projectId, type: notifType, notified_at: new Date().toISOString() }, { onConflict: "project_id,type" })
+    .then(() => {}).catch(() => {});
+}
+/** 状态解除（项目离开超期/未开工态）时清除标记，使复发可再次提醒（fire-and-forget）。 */
+function clearNotified(projectId, notifType) {
+  sb.from("notify_dedup").delete().eq("project_id", projectId).eq("type", notifType).then(() => {}).catch(() => {});
 }
 function getNotifiedSet(key) {
   try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); }
@@ -16228,9 +16236,12 @@ async function scanOverdueAndNotify() {
   });
   for (const p of overdueProjects) {
     stillOverdue.add(p.id);
-    if (overdueSet.has(p.id)) continue; // 本地已发过
-    // ★ 云端去重：60 分钟内已有人发过则跳过（跨设备/跨用户防重复）
-    if (await hasRecentCloudNotification(p.id, "overdue", 60)) { overdueSet.add(p.id); continue; }
+    const localDone = overdueSet.has(p.id);
+    let cloudDone = null;
+    try { cloudDone = await hasRecentCloudNotification(p.id, "overdue"); } catch (_) { cloudDone = null; }
+    if (cloudDone === true) { overdueSet.add(p.id); continue; }       // 跨设备已发，本机补记并跳过
+    if (cloudDone === null && localDone) continue;                    // 云端不可用，信任本机，防重复
+    if (cloudDone === false && localDone) overdueSet.delete(p.id);    // 本机旧轮记过但云端已清零 → 当作新一轮重新提醒
     const store = getStore(p.storeId);
     const storeName = store ? store.name : "未知门店";
     dispatchStoreManagerNotice(p, {
@@ -16240,9 +16251,10 @@ async function scanOverdueAndNotify() {
       excludeSelf: false,
     });
     overdueSet.add(p.id);
+    markNotified(p.id, "overdue"); // 写入「本轮已提醒」标记（跨设备共享）
   }
   let changed = false;
-  overdueSet.forEach((id) => { if (!stillOverdue.has(id)) { overdueSet.delete(id); changed = true; } });
+  overdueSet.forEach((id) => { if (!stillOverdue.has(id)) { overdueSet.delete(id); clearNotified(id, "overdue"); changed = true; } }); // 状态解除即清零
   if (changed || stillOverdue.size > 0) saveNotifiedOverdueSet(overdueSet);
 
   // ---- ② 忘记开工（超时未开工 / 忘记施工）----
@@ -16251,9 +16263,12 @@ async function scanOverdueAndNotify() {
   const notStartedProjects = (cache.projects || []).filter((p) => isOverdueNotStarted(p));
   for (const p of notStartedProjects) {
     stillNotStarted.add(p.id);
-    if (notStartedSet.has(p.id)) continue;
-    // ★ 云端去重
-    if (await hasRecentCloudNotification(p.id, "not_started", 60)) { notStartedSet.add(p.id); continue; }
+    const localDone = notStartedSet.has(p.id);
+    let cloudDone = null;
+    try { cloudDone = await hasRecentCloudNotification(p.id, "not_started"); } catch (_) { cloudDone = null; }
+    if (cloudDone === true) { notStartedSet.add(p.id); continue; }
+    if (cloudDone === null && localDone) continue;
+    if (cloudDone === false && localDone) notStartedSet.delete(p.id);
     const store = getStore(p.storeId);
     const storeName = store ? store.name : "未知门店";
     const forgot = isForgotWork(p);
@@ -16265,9 +16280,10 @@ async function scanOverdueAndNotify() {
       excludeSelf: false,
     });
     notStartedSet.add(p.id);
+    markNotified(p.id, "not_started");
   }
   changed = false;
-  notStartedSet.forEach((id) => { if (!stillNotStarted.has(id)) { notStartedSet.delete(id); changed = true; } });
+  notStartedSet.forEach((id) => { if (!stillNotStarted.has(id)) { notStartedSet.delete(id); clearNotified(id, "not_started"); changed = true; } });
   if (changed || stillNotStarted.size > 0) saveNotifiedNotStartedSet(notStartedSet);
 }
 
@@ -20859,7 +20875,11 @@ function renderNotifications() {
     document.getElementById("btnMarkAllRead").style.display = "none";
     return;
   }
-  document.getElementById("btnMarkAllRead").style.display = "inline-block";
+  const markBtn = document.getElementById("btnMarkAllRead");
+  markBtn.style.display = "inline-block";
+  // 有未读消息时重置为「全部已读」模式（新消息到达/刷新后恢复）
+  const hasUnread = list.some((n) => !n.readAt);
+  if (hasUnread) { markBtn.textContent = "全部已读"; delete markBtn.dataset.mode; }
   el.innerHTML = `<div class="notif-list">` + list.map((n) => {
     const unread = !n.readAt;
     return `<div class="notif-item ${unread ? "unread" : ""}" onclick="markNotificationRead('${n.id}')">
@@ -20915,7 +20935,16 @@ async function markNotificationRead(id) {
   }
 }
 
-/* 全部已读 */
+/* 全部已读 → 切换为「全部清除」；全部清除 → 删掉所有消息后切回「全部已读」 */
+function toggleMarkOrClearAll() {
+  const btn = document.getElementById("btnMarkAllRead");
+  if (!btn) return;
+  if (btn.dataset.mode === "clear") {
+    clearAllNotifications();
+  } else {
+    markAllNotificationsRead();
+  }
+}
 async function markAllNotificationsRead() {
   const unread = (cache.notifications || []).filter((n) => !n.readAt);
   if (unread.length === 0) return;
@@ -20923,12 +20952,33 @@ async function markAllNotificationsRead() {
   unread.forEach((n) => { n.readAt = ts; });
   renderNotifications();
   updateNotifBadge();
+  // 按钮切换为「全部清除」
+  const btn = document.getElementById("btnMarkAllRead");
+  if (btn) { btn.textContent = "全部清除"; btn.dataset.mode = "clear"; }
   if (MODE === "cloud") {
     try {
       const ids = unread.map((n) => n.id);
       const { error } = await sb.from("notifications").update({ read_at: ts }).in("id", ids);
       if (error) console.warn("全部已读失败:", error.message);
     } catch (e) { console.warn("全部已读异常:", e); }
+  }
+}
+async function clearAllNotifications() {
+  const list = cache.notifications || [];
+  if (list.length === 0) return;
+  if (!confirm("确定要清除所有通知吗？")) return;
+  const ids = list.map((n) => n.id);
+  cache.notifications.length = 0;
+  renderNotifications();
+  updateNotifBadge();
+  // 按钮切回「全部已读」
+  const btn = document.getElementById("btnMarkAllRead");
+  if (btn) { btn.textContent = "全部已读"; delete btn.dataset.mode; }
+  if (MODE === "cloud") {
+    try {
+      const { error } = await sb.from("notifications").delete().in("id", ids);
+      if (error) console.warn("全部清除失败:", error.message);
+    } catch (e) { console.warn("全部清除异常:", e); }
   }
 }
 
@@ -25104,7 +25154,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc96a652a";
+  const APP_VERSION = "v23ed7985";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

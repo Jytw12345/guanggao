@@ -6892,9 +6892,10 @@ table.data.project-hours-diff thead th {
 }
 .modal-label { font-weight: 600; font-size: 13px; color: #334155; }
 .notif-check-list {
-  max-height: 220px; overflow: auto;
+  max-height: 240px; overflow: auto;
   border: 1px solid var(--border); border-radius: 8px; padding: 8px;
-  display: flex; flex-direction: column; gap: 2px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 2px 10px; align-content: start;
 }
 .notif-check-item {
   display: flex; align-items: center; gap: 8px;

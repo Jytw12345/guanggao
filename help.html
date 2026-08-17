@@ -923,7 +923,7 @@
       <table>
         <thead><tr><th>类型</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td><strong>系统自动通知</strong></td><td>系统根据业务事件自动派发。例如：项目<strong>完工后派发给本门店店长</strong>"待验收"提醒；项目<strong>超期 / 忘记开工</strong>时自动通知本门店店长；开始施工 / 暂停 / 完工等关键节点也按规则通知相关门店店长。</td></tr>
+          <tr><td><strong>系统自动通知</strong></td><td>系统根据业务事件自动派发。例如：项目<strong>完工后派发给本门店店长</strong>"待验收"提醒；项目<strong>超期 / 忘记开工</strong>时自动通知本门店店长；开始施工 / 暂停 / 完工等关键节点也按规则通知相关门店店长。其中<strong>超期</strong>与<strong>忘记开工</strong>两类提醒遵循「同一项目同一状态每轮只提示一次」——同一轮内即使多设备/多人同时在线也只发一条；项目<strong>状态解除（完工/开工/恢复）后即清零</strong>，若之后再次超期 / 忘记开工，会<strong>再次提醒</strong>。</td></tr>
           <tr><td><strong>成员手动通知</strong></td><td>拥有发送权限的成员，可在消息中心点击「＋ 发通知」，主动给团队成员发送通知（如临时调度、注意事项等）。</td></tr>
         </tbody>
       </table>
