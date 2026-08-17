@@ -167,7 +167,7 @@ function getAllowedStatuses(currentStatus) {
 const TIGHT_GAP_MINUTES = 30;
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [], vehicleTrips: [], vehicles: [], internalTasks: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [], vehicleTrips: [], vehicles: [], internalTasks: [], notifications: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -182,6 +182,7 @@ let reloadTimer = null;    // 实时刷新去抖
 let workingProjectsTimer = null; // 施工中项目定时刷新
 let elapsedMarkerTimer = null;   // 已施工时长轻量刷新（30s，仅更新 textContent）
 let delayedPromotionTimer = null; // 延期项目自动转正定时检查
+let overdueNotifyTimer = null;    // 超期未完工定时扫描（5 分钟，给本门店店长发站内通知）
 let lastSyncTime = null;   // 上次成功同步时间戳
 let syncJustTimer = null;   // 刚同步提示的延时定时器
 let syncSyncingTimer = null; // 同步中态的兜底定时器
@@ -2888,7 +2889,7 @@ const repo = {
         if (hasCache) q.in("project_id", activeIds.length ? activeIds : ["__none__"]);
         return q;
       });
-      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes, itRes, vRes] = await Promise.all([
+      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes, itRes, vRes, nRes, aRes] = await Promise.all([
         cloudQuery(() => sb.from("workers").select("*")),
         cloudQuery(() => sb.from("stores").select("*")),
         cloudQuery(() => sb.from("role_permissions").select("*")),
@@ -2902,6 +2903,8 @@ const repo = {
         cloudQuery(() => sb.from("user_permissions").select("*")),
         cloudQuery(() => sb.from("internal_tasks").select("*")),
         cloudQuery(() => sb.from("vehicles").select("*")),
+        cloudQuery(() => sb.from("notifications").select("*").eq("recipient_user_id", (currentUser && currentUser.id) || "__none__").order("created_at", { ascending: false })),
+        cloudQuery(() => sb.from("profiles").select("*").order("email")),
       ]);
       const allErrors = [
         { name: "workers", res: wRes },
@@ -2952,6 +2955,11 @@ const repo = {
       }
       cache.stores = (sRes.data || []).map((r) => ({ id: r.id, name: r.name, phone: r.phone || "" }))
         .sort((a, b) => a.name.localeCompare(b.name, "zh"));
+      if (!aRes.error) {
+        cache.accounts = (aRes.data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "" }));
+      } else {
+        console.warn("profiles 表读取失败，发通知人员列表可能为空:", aRes.error.message);
+      }
       cache.workers = (wRes.data || []).map((r) => ({
         id: r.id, name: r.name, phone: r.phone, role: r.role,
       }));
@@ -3077,10 +3085,35 @@ const repo = {
         console.warn("internal_tasks 表读取失败（可能尚未创建）:", itRes.error.message);
         cache.internalTasks = [];
       }
+      // 通知：收件人为当前用户的站内消息。notifications 表可能尚未创建（老库需先跑 migration），
+      // 单独容错——失败时清空并告警，但不进入致命 allErrors 检查，不影响其他数据加载。
+      if (!nRes.error) {
+        cache.notifications = (nRes.data || []).map((r) => ({
+          id: r.id,
+          senderId: r.sender_id || null,
+          senderName: r.sender_name || "系统",
+          recipientUserId: r.recipient_user_id,
+          recipientLabel: r.recipient_label || "",
+          title: r.title || "(无标题)",
+          body: r.body || "",
+          type: r.type || "normal",
+          refType: r.ref_type || null,
+          refId: r.ref_id || null,
+          readAt: r.read_at || null,
+          createdAt: r.created_at,
+        }));
+      } else {
+        console.warn("notifications 表读取失败（可能尚未创建）:", nRes.error.message);
+        cache.notifications = [];
+      }
+      // 首次加载完即刷新未读红点（notifBadge / notifBadgeMenu 为静态元素，已存在）
+      updateNotifBadge();
       // 本次全量成功：清掉失败退避状态，下次抖动重新从最短间隔开始重试
       resyncRetryCount = 0;
       if (resyncRetryTimer) { clearTimeout(resyncRetryTimer); resyncRetryTimer = null; }
       recordSyncTime();
+      // 同步完成后扫描超期项目，给本门店店长发站内通知（fire-and-forget）
+      scanOverdueAndNotify();
       // 缓存落盘为 best-effort，不阻塞下拉刷新完成（已在后台静默写入）
       persistCloudCache(currentUser && currentUser.id);
       hideCloudLoadError();
@@ -4036,8 +4069,79 @@ async function applyIncrementalUpdate(tableName) {
       }
       break;
     }
+    case "notifications": {
+      const before = (cache.notifications || []).map((n) => n.id);
+      const beforeSet = new Set(before);
+      const nRes = await sb.from("notifications")
+        .select("*")
+        .eq("recipient_user_id", (currentUser && currentUser.id) || "__none__")
+        .order("created_at", { ascending: false });
+      if (!nRes.error) {
+        cache.notifications = (nRes.data || []).map((r) => ({
+          id: r.id,
+          senderId: r.sender_id || null,
+          senderName: r.sender_name || "系统",
+          recipientUserId: r.recipient_user_id,
+          recipientLabel: r.recipient_label || "",
+          title: r.title || "(无标题)",
+          body: r.body || "",
+          type: r.type || "normal",
+          refType: r.ref_type || null,
+          refId: r.ref_id || null,
+          readAt: r.read_at || null,
+          createdAt: r.created_at,
+        }));
+        // 仅对「本次新到达」的未读消息弹桌面通知，避免重连补拉时把历史未读全弹一遍
+        const newOnes = cache.notifications.filter((n) => !beforeSet.has(n.id) && !n.readAt);
+        newOnes.forEach((n) => showNotifToast(n));
+        updateNotifBadge();
+        if (typeof renderNotifications === "function") renderNotifications();
+      } else {
+        console.warn("notifications 实时同步读取失败:", nRes.error.message);
+      }
+      break;
+    }
   }
   recordSyncTime();
+}
+
+/* 通知轮询兜底：即使 Supabase Realtime 未开启（notifications 表未加入 supabase_realtime 发布），
+   也每 30 秒轻量拉一次本账号通知，发现新未读就弹消息条 + 刷新红点/列表，避免必须手动刷新。
+   与 realtime 路径共用 showNotifToast / updateNotifBadge，且 toast 自带去重，二者并存不会重复弹。 */
+let notifPollTimer = null;
+async function pollNotifications() {
+  if (MODE !== "cloud" || !cloudConfigured()) return;
+  if (document.hidden) return; // 后台不轮询，省流量
+  try {
+    const nRes = await sb.from("notifications")
+      .select("*")
+      .eq("recipient_user_id", (currentUser && currentUser.id) || "__none__")
+      .order("created_at", { ascending: false });
+    if (nRes.error) { console.warn("通知轮询读取失败:", nRes.error.message); return; }
+    const beforeSet = new Set((cache.notifications || []).map((n) => n.id));
+    cache.notifications = (nRes.data || []).map((r) => ({
+      id: r.id,
+      senderId: r.sender_id || null,
+      senderName: r.sender_name || "系统",
+      recipientUserId: r.recipient_user_id,
+      recipientLabel: r.recipient_label || "",
+      title: r.title || "(无标题)",
+      body: r.body || "",
+      type: r.type || "normal",
+      refType: r.ref_type || null,
+      refId: r.ref_id || null,
+      readAt: r.read_at || null,
+      createdAt: r.created_at,
+    }));
+    // 仅对本次新到达的未读消息弹消息条，避免把历史未读全弹一遍
+    const newOnes = cache.notifications.filter((n) => !beforeSet.has(n.id) && !n.readAt);
+    newOnes.forEach((n) => showNotifToast(n));
+    updateNotifBadge();
+    if (typeof renderNotifications === "function") renderNotifications();
+    schedulePersistCache();
+  } catch (e) {
+    console.warn("通知轮询异常:", e && e.message);
+  }
 }
 
 /* 本地缓存落盘去抖定时器。
@@ -4079,6 +4183,7 @@ const REALTIME_TABLES = {
   user_permissions: "user_permissions",
   operation_logs: "operationLogs",
   leave_quota: "leaveQuota",
+  notifications: "notifications",
 };
 
 /* 查找已建立的实时频道。
@@ -11019,6 +11124,7 @@ async function updateProjectStatus(id, newStatus) {
 
     if (newStatus === STATUS.WORKING) {
       sendNotificationForProjectChange("start", p);
+      dispatchStoreManagerNotice(p, { title: "🏗️ 施工已开始", body: `「${p.name}」已开始施工，请关注进度。`, type: "project_update" });
       logOperation("PROJECT_START", p.name || "项目", `ID: ${id}`);
       if (p.status === STATUS.PAUSED) {
         sendNotificationForProjectChange("resume", getProject(id));
@@ -11030,6 +11136,8 @@ async function updateProjectStatus(id, newStatus) {
       sendNotificationForProjectChange("accepted", p);
     } else if (newStatus === STATUS.PAUSED) {
       sendNotificationForProjectChange("pause", getProject(id));
+      const _pp = getProject(id);
+      if (_pp) dispatchStoreManagerNotice(_pp, { title: "⏸️ 项目已暂停", body: `「${_pp.name}」已暂停施工，请关注。`, type: "project_update" });
       logOperation("PROJECT_PAUSE", p.name || "项目", `ID: ${id}`);
     }
   } catch (error) {
@@ -14704,6 +14812,9 @@ function openCompleteProjectForm(id) {
           saveLocal();
         }
 
+        // 完工后自动派发本门店店长「待验收」站内通知（仅云端模式生效，fire-and-forget 不阻塞 UI）
+        dispatchStoreManagerAcceptanceNotice(p);
+
         // 内存 p 已就地更新为 DONE + 新 workLogs，立即反馈；云端全量 loadAll 改后台静默执行
         renderConstruction();
         toast(`项目已完工，总工时：${totalHours.toFixed(1)} 工时`);
@@ -15799,6 +15910,353 @@ function saveBgReloadSettings() {
   toast(v > 0
     ? ("已保存：后台超过 " + v + " 分钟自动刷新")
     : "已保存：已关闭后台自动刷新");
+}
+
+/* ============ 发通知 ============ */
+
+let _loadingAccounts = false; // 防并发重复拉取 profiles
+
+/* 主动从云端拉取账号列表（用于弹窗打开时 cache.accounts 尚未就绪的情况） */
+async function loadAccounts() {
+  if (MODE !== "cloud" || !cloudConfigured() || _loadingAccounts) return;
+  _loadingAccounts = true;
+  try {
+    const { data, error } = await sb.from("profiles").select("*").order("email");
+    if (!error) {
+      cache.accounts = (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "" }));
+    } else {
+      console.warn("profiles 读取失败:", error.message);
+    }
+  } catch (e) {
+    console.warn("profiles 读取异常:", e && e.message);
+  } finally {
+    _loadingAccounts = false;
+  }
+}
+
+/* 任何云端登录用户均可发通知（本地模式无多端推送，不支持） */
+function canSendNotification() { return MODE === "cloud" && cloudConfigured(); }
+
+/* 计算收件目标用户列表（按当前角色 + 所选范围展开） */
+function computeNotifTargets(scope, storeId, selectedIds) {
+  const me = currentUser && currentUser.id;
+  const sameSid = (a, b) => String(a || "").trim() === String(b || "").trim();
+  let list = [];
+  if (scope === "specific") {
+    list = (cache.accounts || []).filter((a) => selectedIds.indexOf(a.id) >= 0);
+  } else if (scope === "all") {
+    list = (cache.accounts || []).slice();
+  } else if (scope === "managers") {
+    list = (cache.accounts || []).filter((a) => a.role === ROLE.STORE);
+  } else if (scope === "workers") {
+    list = (cache.accounts || []).filter((a) => a.role === ROLE.WORKER);
+  } else if (scope === "store_all") {
+    list = (cache.accounts || []).filter((a) => sameSid(a.storeId, storeId));
+  } else if (scope === "store_managers") {
+    const sid = isManager() ? storeId : myStore();
+    list = (cache.accounts || []).filter((a) => a.role === ROLE.STORE && sameSid(a.storeId, sid));
+  } else if (scope === "store_workers") {
+    const sid = isManager() ? storeId : myStore();
+    list = (cache.accounts || []).filter((a) => a.role === ROLE.WORKER && sameSid(a.storeId, sid));
+  }
+  // 去掉自己（不给自己发）
+  return list.filter((a) => a.id && a.id !== me);
+}
+
+/* 渲染「指定人员」复选框列表（总经理=全部账号；店长=本门店账号） */
+function renderNotifSpecificList() {
+  const box = document.getElementById("notifSpecificList");
+  if (!box) return;
+  const sameSid = (a, b) => String(a || "").trim() === String(b || "").trim();
+  const accounts = cache.accounts || [];
+
+  // 人员列表尚未加载：自动拉取一次并刷新
+  if (accounts.length === 0) {
+    box.innerHTML = `<div class="notif-empty" style="padding:20px 0;color:#999;">人员数据加载中…</div>`;
+    loadAccounts().then(() => {
+      if (document.getElementById("notifSpecificList")) renderNotifSpecificList();
+    }).catch(() => {
+      if (document.getElementById("notifSpecificList")) {
+        box.innerHTML = `<div class="notif-empty" style="padding:20px 0;color:#999;">人员数据加载失败，请稍后重试</div>`;
+      }
+    });
+    return;
+  }
+
+  let emptyMsg = "没有可选人员";
+  let pool = accounts;
+  if (!isManager()) {
+    const sid = myStore();
+    if (!sid) {
+      emptyMsg = "当前账号未分配门店，请联系管理员分配门店";
+    } else {
+      pool = accounts.filter((a) => sameSid(a.storeId, sid));
+      emptyMsg = "该门店暂无其他人员";
+    }
+  }
+
+  box.innerHTML = pool.map((a) => `
+    <label class="notif-check-item">
+      <input type="checkbox" class="notif-specific-cb" value="${a.id}">
+      <span>${esc(a.name || a.email || a.id)}</span>
+      <span class="notif-check-role">${a.role === ROLE.STORE ? "店长" : a.role === ROLE.WORKER ? "施工" : a.role === ROLE.MANAGER ? "总经理" : ""}</span>
+    </label>`).join("") ||
+    `<div class="notif-empty" style="padding:20px 0;color:#999;">${emptyMsg}</div>`;
+}
+
+/* 根据范围显示/隐藏动态区（门店选择、指定人员列表） */
+function syncNotifScopeUI() {
+  const scope = document.getElementById("notifScope").value;
+  const storeRow = document.getElementById("notifStoreRow");
+  const specificRow = document.getElementById("notifSpecificRow");
+  const needStore = (isManager() && (scope === "store_all" || scope === "store_managers" || scope === "store_workers"));
+  if (storeRow) storeRow.style.display = needStore ? "flex" : "none";
+  if (specificRow) {
+    specificRow.style.display = (scope === "specific") ? "block" : "none";
+    if (scope === "specific") renderNotifSpecificList();
+  }
+}
+
+function openSendNotification() {
+  if (!canSendNotification()) { toast("仅云端模式可发通知"); return; }
+  const isMobile = window.innerWidth <= 768;
+
+  /* 范围选项：按角色给出 */
+  let scopeOpts = "";
+  if (isManager()) {
+    scopeOpts = `
+      <option value="all">全部人员</option>
+      <option value="store_all">指定门店全部人员</option>
+      <option value="managers">全部门店店长</option>
+      <option value="workers">全部施工人员</option>
+      <option value="specific">指定人员…</option>`;
+  } else {
+    scopeOpts = `
+      <option value="store_managers">本门店店长</option>
+      <option value="store_workers">本门店施工人员</option>
+      <option value="specific">指定人员…</option>`;
+  }
+  /* 门店下拉（仅总经理可跨门店选；店长锁定本门店不可选） */
+  const stores = (cache.stores || []);
+  const storeOpts = isManager()
+    ? `<option value="">— 选择门店 —</option>` + stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")
+    : stores.filter((s) => s.id === myStore()).map((s) => `<option value="${s.id}" selected>${esc(s.name)}</option>`).join("");
+
+  const popup = document.createElement("div");
+  popup.id = "sendNotifModal";
+  popup.className = "modal-mask";
+  popup.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:${isMobile ? '94%' : '460px'};width:${isMobile ? 'auto' : '460px'};max-height:88vh;overflow:auto;">
+      <div class="modal-head">
+        <h3>📢 发通知</h3>
+        <button class="modal-close" onclick="closeSendNotificationModal()">×</button>
+      </div>
+      <div class="modal-body" style="padding:14px;display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <label class="modal-label">接收范围</label>
+          <select id="notifScope" class="input" onchange="syncNotifScopeUI()">${scopeOpts}</select>
+        </div>
+        <div id="notifStoreRow" style="display:none;flex-direction:column;gap:6px;">
+          <label class="modal-label">门店</label>
+          <select id="notifStoreId" class="input">${storeOpts}</select>
+        </div>
+        <div id="notifSpecificRow" style="display:none;flex-direction:column;gap:6px;">
+          <label class="modal-label">选择人员（可多选）</label>
+          <div id="notifSpecificList" class="notif-check-list"></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <label class="modal-label">标题</label>
+          <input id="notifTitle" class="input" maxlength="60" placeholder="一句话说明通知主题">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <label class="modal-label">正文</label>
+          <textarea id="notifBody" class="input" rows="4" maxlength="500" placeholder="通知的详细内容…"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeSendNotificationModal()">取消</button>
+        <button class="btn" onclick="submitNotification()">发送</button>
+      </div>
+    </div>`;
+  document.body.appendChild(popup);
+  syncNotifScopeUI();
+  // 人员列表可能尚未加载（旧缓存/首次打开），后台补拉一次并刷新 UI
+  loadAccounts().then(() => {
+    if (document.getElementById("sendNotifModal")) syncNotifScopeUI();
+  });
+}
+
+function closeSendNotificationModal() {
+  const mask = document.getElementById("sendNotifModal");
+  if (mask) mask.remove();
+}
+
+async function submitNotification() {
+  if (!canSendNotification()) { toast("仅云端模式可发通知"); return; }
+  const scope = document.getElementById("notifScope").value;
+  const storeId = document.getElementById("notifStoreId") ? document.getElementById("notifStoreId").value : myStore();
+  const title = (document.getElementById("notifTitle").value || "").trim();
+  const body = (document.getElementById("notifBody").value || "").trim();
+  if (!title) { toast("请填写标题"); return; }
+
+  let selectedIds = [];
+  if (scope === "specific") {
+    selectedIds = Array.from(document.querySelectorAll(".notif-specific-cb:checked")).map((cb) => cb.value);
+  }
+  const targets = computeNotifTargets(scope, storeId, selectedIds);
+  if (targets.length === 0) { toast("没有符合条件的接收人"); return; }
+
+  const senderId = (currentUser && currentUser.id) || null;
+  const senderName = (currentProfile && currentProfile.name)
+    || (currentUser && currentUser.name) || "系统";
+  const rows = targets.map((t) => ({
+    id: uid(),
+    sender_id: senderId,
+    sender_name: senderName,
+    recipient_user_id: t.id,
+    recipient_label: t.name || t.email || "",
+    title: title,
+    body: body,
+    type: "normal",
+    created_at: new Date().toISOString(),
+  }));
+
+  if (MODE !== "cloud") { toast("发通知仅云端模式支持"); return; }
+  const { error } = await sb.from("notifications").insert(rows);
+  if (error) { toast("发送失败：" + error.message); return; }
+  toast(`已发送给 ${targets.length} 人`);
+  closeSendNotificationModal();
+  // 若自己也在范围视角下（不会，已排除自己），无需刷新；接收方下次加载即见
+}
+
+/* 给本门店店长发一条站内通知（fire-and-forget）。
+   project：项目对象（用于取门店）；opts：{title, body, type}
+   只发送给该门店 role=STORE 的店长，排除操作人本人；非云端模式直接跳过。 */
+function dispatchStoreManagerNotice(project, opts) {
+  if (!project) return;
+  if (MODE !== "cloud" || !cloudConfigured()) return;
+  const store = getStore(project.storeId);
+  const storeName = store ? store.name : "未知门店";
+  const me = currentUser && currentUser.id;
+  const excludeSelf = opts.excludeSelf !== false; // 主动操作默认排除自己；系统自动提醒传 false
+  const targets = (cache.accounts || []).filter(
+    (a) => a.role === ROLE.STORE && a.storeId === project.storeId && a.id && (!excludeSelf || a.id !== me)
+  );
+  if (targets.length === 0) return;
+  const senderId = me || null;
+  const senderName = (currentProfile && currentProfile.name) || (currentUser && currentUser.name) || "系统";
+  const rows = targets.map((t) => ({
+    id: uid(),
+    sender_id: senderId,
+    sender_name: senderName,
+    recipient_user_id: t.id,
+    recipient_label: t.name || t.email || "",
+    title: opts.title,
+    body: opts.body,
+    type: opts.type || "project_update",
+    ref_type: "project",
+    ref_id: project.id,
+    created_at: new Date().toISOString(),
+  }));
+  sb.from("notifications").insert(rows)
+    .then(({ error }) => {
+      if (error) console.warn("[notify] 派发店长通知失败：", error.message);
+    })
+    .catch((e) => console.warn("[notify] 派发店长通知异常：", e));
+}
+
+/* 完工后自动派发本门店店长「待验收」站内通知（复用 dispatchStoreManagerNotice）。 */
+function dispatchStoreManagerAcceptanceNotice(project) {
+  if (!project) return;
+  const store = getStore(project.storeId);
+  const storeName = store ? store.name : "未知门店";
+  dispatchStoreManagerNotice(project, {
+    title: "🔔 项目待验收",
+    body: `「${project.name}」（${storeName}）已完成安装，请前往验收。`,
+    type: "acceptance",
+  });
+}
+
+/* 超期未完工：后台定时扫描，给本门店店长发站内通知。
+   触发时机：每次全量同步成功后 + 每 5 分钟前台定时。
+   用 localStorage 记录已通知过的超期项目，避免同一超期反复推送；
+   项目离开超期态（完工/取消/恢复未超时）后自动从记录移除。 */
+const NOTIFIED_OVERDUE_KEY = "notifiedOverdueSet";
+const NOTIFIED_NOTSTARTED_KEY = "notifiedNotStartedSet";
+function getNotifiedSet(key) {
+  try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); }
+  catch (e) { return new Set(); }
+}
+function saveNotifiedSet(key, set) {
+  try { localStorage.setItem(key, JSON.stringify(Array.from(set))); }
+  catch (e) { /* 忽略持久化异常 */ }
+}
+function getNotifiedOverdueSet() { return getNotifiedSet(NOTIFIED_OVERDUE_KEY); }
+function saveNotifiedOverdueSet(set) { saveNotifiedSet(NOTIFIED_OVERDUE_KEY, set); }
+function getNotifiedNotStartedSet() { return getNotifiedSet(NOTIFIED_NOTSTARTED_KEY); }
+function saveNotifiedNotStartedSet(set) { saveNotifiedSet(NOTIFIED_NOTSTARTED_KEY, set); }
+
+/* 后台定时扫描，给【本门店店长】发站内通知。只针对「关联项目所属门店」的店长，不发给其他门店。
+   覆盖两类：
+   ① 超期未完工（施工中/暂停且过了 endTime）
+   ② 忘记开工（预约中且已过约定开工时间仍未开工；跨天则为更强提醒）
+   触发时机：每次全量同步成功后 + 每 5 分钟前台定时。
+   用 localStorage 记录已通知过的项目，避免同一状态反复推送；
+   项目离开对应状态（开工/完工/取消/改期到未来）后自动从记录移除，下次仍可再次提醒。 */
+function scanOverdueAndNotify() {
+  if (MODE !== "cloud" || !cloudConfigured()) return;
+  const now = new Date();
+
+  // ---- ① 超期未完工 ----
+  const overdueSet = getNotifiedOverdueSet();
+  const stillOverdue = new Set();
+  (cache.projects || []).forEach((p) => {
+    if (p.status === STATUS.CANCELLED || isCompleted(p)) return;
+    if (p.status === STATUS.DELAYED || p.status === STATUS.BOOKED) return;
+    if ((p.status === STATUS.WORKING || p.status === STATUS.PAUSED) && p.endTime) {
+      if (now > new Date(p.endTime)) {
+        stillOverdue.add(p.id);
+        if (!overdueSet.has(p.id)) {
+          const store = getStore(p.storeId);
+          const storeName = store ? store.name : "未知门店";
+          dispatchStoreManagerNotice(p, {
+            title: "⏰ 项目超期未完工",
+            body: `「${p.name}」（${storeName}）已超过约定时间仍未完工，请关注。`,
+            type: "overdue",
+            excludeSelf: false, // 系统自动提醒：本门店所有店长都应收到，含当前登录者
+          });
+          overdueSet.add(p.id);
+        }
+      }
+    }
+  });
+  let changed = false;
+  overdueSet.forEach((id) => { if (!stillOverdue.has(id)) { overdueSet.delete(id); changed = true; } });
+  if (changed || stillOverdue.size > 0) saveNotifiedOverdueSet(overdueSet);
+
+  // ---- ② 忘记开工（超时未开工 / 忘记施工）----
+  const notStartedSet = getNotifiedNotStartedSet();
+  const stillNotStarted = new Set();
+  (cache.projects || []).forEach((p) => {
+    if (!isOverdueNotStarted(p)) return; // 仅「预约中 + 未开工 + 已过约定开工时间」
+    stillNotStarted.add(p.id);
+    if (!notStartedSet.has(p.id)) {
+      const store = getStore(p.storeId);
+      const storeName = store ? store.name : "未知门店";
+      const forgot = isForgotWork(p);
+      const appt = fmtDateTime(p.appointmentTime || p.startTime);
+      dispatchStoreManagerNotice(p, {
+        title: forgot ? "🚨 项目忘记开工" : "🚨 项目超时未开工",
+        body: `「${p.name}」（${storeName}）预约 ${appt}${forgot ? "，已跨天仍未开工" : "仍未开工"}，请关注。`,
+        type: "not_started",
+        excludeSelf: false,
+      });
+      notStartedSet.add(p.id);
+    }
+  });
+  changed = false;
+  notStartedSet.forEach((id) => { if (!stillNotStarted.has(id)) { notStartedSet.delete(id); changed = true; } });
+  if (changed || stillNotStarted.size > 0) saveNotifiedNotStartedSet(notStartedSet);
 }
 
 function showWageConfig() {
@@ -20311,6 +20769,198 @@ function renderMine() {
   `;
 }
 
+/* ============ 消息中心 ============ */
+function formatNotifTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const diff = (now.getTime() - d.getTime()) / 1000;
+  if (diff < 60) return "刚刚";
+  if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
+  if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
+  if (diff < 86400 * 7) return Math.floor(diff / 86400) + " 天前";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function renderNotifications() {
+  const el = document.getElementById("notifContent");
+  if (!el) return;
+  if (MODE !== "cloud") {
+    el.innerHTML = `<div class="notif-empty">本地模式下不支持消息中心，请切换到云端模式。</div>`;
+    return;
+  }
+  const list = (cache.notifications || []).slice().sort((a, b) =>
+    new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  if (list.length === 0) {
+    el.innerHTML = `<div class="notif-empty">📭 暂时没有消息</div>`;
+    document.getElementById("btnMarkAllRead").style.display = "none";
+    return;
+  }
+  document.getElementById("btnMarkAllRead").style.display = "inline-block";
+  const sendBtn = document.getElementById("btnSendNotif");
+  if (sendBtn) sendBtn.style.display = canSendNotification() ? "inline-block" : "none";
+  el.innerHTML = `<div class="notif-list">` + list.map((n) => {
+    const unread = !n.readAt;
+    return `<div class="notif-item ${unread ? "unread" : ""}" onclick="markNotificationRead('${n.id}')">
+      <div class="notif-dot"></div>
+      <div class="notif-main">
+        <div class="notif-title">${esc(n.title || "")}</div>
+        ${n.body ? `<div class="notif-body">${esc(n.body)}</div>` : ""}
+        <div class="notif-meta"><span class="notif-sender">${esc(n.senderName || "系统")}</span> · <span>${formatNotifTime(n.createdAt)}</span></div>
+      </div>
+      <button type="button" class="notif-clear" title="清除" onclick="event.stopPropagation(); deleteNotification('${n.id}')">×</button>
+      ${unread ? `<span class="notif-unread-tag">未读</span>` : ""}
+    </div>`;
+  }).join("") + `</div>`;
+  updateNotifBadge();
+}
+
+/* 清除单条通知（本地过滤 + 云端删除） */
+async function deleteNotification(id) {
+  if (!confirm("确定要清除这条通知吗？")) return;
+  const idx = (cache.notifications || []).findIndex((n) => n.id === id);
+  const removed = idx >= 0 ? cache.notifications.splice(idx, 1)[0] : null;
+  renderNotifications();
+  updateNotifBadge();
+  if (MODE === "cloud") {
+    try {
+      const { error } = await sb.from("notifications").delete().eq("id", id);
+      if (error) {
+        console.warn("清除通知失败:", error.message);
+        toast("清除通知失败：" + error.message);
+        // 云端删除失败，回滚本地缓存，避免"刷新又出现"的错觉
+        if (removed) { cache.notifications.splice(idx, 0, removed); renderNotifications(); updateNotifBadge(); }
+      }
+    } catch (e) {
+      console.warn("清除通知异常:", e);
+      toast("清除通知失败，请重试");
+      if (removed) { cache.notifications.splice(idx, 0, removed); renderNotifications(); updateNotifBadge(); }
+    }
+  }
+}
+
+/* 标记单条已读（云端更新 read_at；同时本地缓存同步，避免下次加载前仍显未读） */
+async function markNotificationRead(id) {
+  const item = (cache.notifications || []).find((n) => n.id === id);
+  if (!item || item.readAt) { renderNotifications(); return; }
+  item.readAt = new Date().toISOString();
+  renderNotifications();
+  updateNotifBadge();
+  if (MODE === "cloud") {
+    try {
+      const { error } = await sb.from("notifications").update({ read_at: item.readAt }).eq("id", id);
+      if (error) console.warn("标记已读失败:", error.message);
+    } catch (e) { console.warn("标记已读异常:", e); }
+  }
+}
+
+/* 全部已读 */
+async function markAllNotificationsRead() {
+  const unread = (cache.notifications || []).filter((n) => !n.readAt);
+  if (unread.length === 0) return;
+  const ts = new Date().toISOString();
+  unread.forEach((n) => { n.readAt = ts; });
+  renderNotifications();
+  updateNotifBadge();
+  if (MODE === "cloud") {
+    try {
+      const ids = unread.map((n) => n.id);
+      const { error } = await sb.from("notifications").update({ read_at: ts }).in("id", ids);
+      if (error) console.warn("全部已读失败:", error.message);
+    } catch (e) { console.warn("全部已读异常:", e); }
+  }
+}
+
+/* 桌面端 dropdown 入口跳转（仅桌面显示，避免与移动端底部 tab 重复） */
+function openNotificationsFromMenu() {
+  const dd = document.getElementById("userDropdown");
+  if (dd) dd.classList.add("hidden");
+  if (typeof switchTab === "function") switchTab("notifications");
+}
+
+/* 更新未读红点：移动端 bottom-nav 的 #notifBadge、桌面端 dropdown 的 #notifBadgeMenu、以及用户头像 #notifBadgeAvatar */
+function updateNotifBadge() {
+  const count = (cache.notifications || []).filter((n) => !n.readAt).length;
+  const label = count > 99 ? "99+" : String(count);
+  const badge = document.getElementById("notifBadge");
+  const badgeMenu = document.getElementById("notifBadgeMenu");
+  const badgeAvatar = document.getElementById("notifBadgeAvatar");
+  if (badge) {
+    if (count > 0) { badge.textContent = label; badge.classList.remove("hidden"); }
+    else badge.classList.add("hidden");
+  }
+  if (badgeMenu) {
+    if (count > 0) { badgeMenu.textContent = label; badgeMenu.classList.remove("hidden"); }
+    else badgeMenu.classList.add("hidden");
+  }
+  if (badgeAvatar) {
+    if (count > 0) { badgeAvatar.textContent = label; badgeAvatar.classList.remove("hidden"); }
+    else badgeAvatar.classList.add("hidden");
+  }
+}
+
+/* ============================================================
+ * 桌面消息弹窗（toast）：收到新站内通知时右下角弹出，带发送人头像，
+ * 可「标为已读」直接消除未读红点，或「查看」进入消息中心。
+ * 仅对“本次新到达”的未读消息弹窗（见 applyIncrementalUpdate 的 notifications 分支）。
+ * ============================================================ */
+const NOTIF_TOAST_MS = 8000;
+function showNotifToast(n) {
+  if (!n || n.recipientUserId !== (currentUser && currentUser.id)) return; // 只给自己弹
+  let box = document.getElementById("notifToasts");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "notifToasts";
+    document.body.appendChild(box);
+  }
+  const domId = "toast-" + n.id;
+  if (document.getElementById(domId)) return; // 防重复弹
+  const initial = (n.senderName && n.senderName.trim().charAt(0)) || "系";
+  const el = document.createElement("div");
+  el.className = "notif-toast" + (n.type === "acceptance" ? " notif-toast--acceptance" : "");
+  el.id = domId;
+  el.innerHTML = `
+    <div class="notif-toast__avatar">${esc(initial)}</div>
+    <div class="notif-toast__body" onclick="viewNotifToast('${esc(n.id)}')">
+      <div class="notif-toast__title">${esc(n.title || "")}</div>
+      ${n.body ? `<div class="notif-toast__text">${esc(n.body)}</div>` : ""}
+      <div class="notif-toast__meta">${esc(n.senderName || "系统")} · ${formatNotifTime(n.createdAt)}</div>
+    </div>
+    <div class="notif-toast__actions">
+      <button type="button" class="notif-toast__btn notif-toast__btn--read" onclick="markNotifToastRead('${esc(n.id)}')">标为已读</button>
+      <button type="button" class="notif-toast__btn" onclick="viewNotifToast('${esc(n.id)}')">查看</button>
+    </div>
+    <button type="button" class="notif-toast__close" onclick="dismissNotifToast('${esc(n.id)}')" aria-label="关闭">×</button>
+  `;
+  box.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("notif-toast--show"));
+  const timer = setTimeout(() => dismissNotifToast(n.id), NOTIF_TOAST_MS);
+  el.__autoTimer = timer;
+}
+
+function dismissNotifToast(id) {
+  const el = document.getElementById("toast-" + id);
+  if (!el) return;
+  clearTimeout(el.__autoTimer);
+  el.classList.remove("notif-toast--show");
+  el.classList.add("notif-toast--hide");
+  setTimeout(() => el.remove(), 280);
+}
+
+/* 标为已读：关闭弹窗并消除未读红点（云端同步标记） */
+function markNotifToastRead(id) {
+  dismissNotifToast(id);
+  markNotificationRead(id);
+}
+
+/* 查看：关闭弹窗并跳到消息中心（进入后点击具体消息即标记已读） */
+function viewNotifToast(id) {
+  dismissNotifToast(id);
+  if (typeof switchTab === "function") switchTab("notifications");
+}
+
 function switchTab(name) {
   updateLeavesTabBadge();
   const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
@@ -20377,6 +21027,9 @@ function switchTab(name) {
   }
   if (name === "mine") {
     renderMine();
+  }
+  if (name === "notifications") {
+    renderNotifications();
   }
   if (name === "construction") {
     updateConstructionSelectLabel();
@@ -20728,6 +21381,9 @@ function updateUserDropdownVisibility() {
     if (visible) anyVisible = true;
   });
   section.classList.toggle("hidden", !anyVisible);
+  // 桌面端「发通知」入口：仅总经理 / 门店店长可见
+  const menuSend = document.getElementById("menuSendNotif");
+  if (menuSend) menuSend.classList.toggle("hidden", !canSendNotification());
 }
 
 function applyPermissions() {
@@ -20866,6 +21522,7 @@ function renderActiveTabOnly() {
     case "leaves": renderLeaves(); break;
     case "schedules": renderWorkerSchedules(); break;
     case "mine": renderMine(); break;
+    case "notifications": renderNotifications(); break;
     case "vehicleTrips": renderVehicleTrips(); break;
     default: renderProjects(); break;
   }
@@ -22455,6 +23112,8 @@ function openTimelineActionMenu(taskEl, projectId) {
   if (top + menuRect.height > window.innerHeight - 10) {
     top = taskRect.top - menuRect.height - 6;
   }
+  /* 防止超高菜单翻到上方后顶部跑出屏幕，确保关闭按钮始终可见 */
+  if (top < 10) top = 10;
   /* 确保不超出左侧 */
   if (left < 10) left = 10;
 
@@ -23846,6 +24505,10 @@ async function init() {
     autoReviewAcceptedProjects();
   }, 60000);
 
+  // 超期未完工定时扫描：每 5 分钟提醒本门店店长（与每次全量同步后的扫描互补）
+  if (overdueNotifyTimer) clearInterval(overdueNotifyTimer);
+  overdueNotifyTimer = setInterval(scanOverdueAndNotify, 5 * 60 * 1000);
+
   // 施工中项目定时刷新：仅在有施工中项目时，用 rAF 把重绘移出 interval handler
   // （避免被浏览器标记为长任务），且只重绘与施工计时相关的视图，降低开销
   if (workingProjectsTimer) clearInterval(workingProjectsTimer);
@@ -23877,12 +24540,20 @@ async function init() {
     });
   };
   elapsedMarkerTimer = setInterval(refreshElapsedMarkers, 30000);
+  // 通知轮询兜底：每 30 秒拉一次，确保实时推送未开启时也能自动收到消息并弹消息条
+  if (notifPollTimer) clearInterval(notifPollTimer);
+  notifPollTimer = setInterval(pollNotifications, 30000);
   // 切回页面时立即刷一次（visibilitychange）
   if (!window.__elapsedVisHandler__) {
     window.__elapsedVisHandler__ = () => {
       if (!document.hidden) refreshElapsedMarkers();
     };
     document.addEventListener('visibilitychange', window.__elapsedVisHandler__);
+  }
+  // 切回页面时立即拉一次通知（不等下一个 30 秒轮询）
+  if (!window.__notifVisHandler__) {
+    window.__notifVisHandler__ = () => { if (!document.hidden) pollNotifications(); };
+    document.addEventListener('visibilitychange', window.__notifVisHandler__);
   }
 
   window.addEventListener('beforeunload', () => {
@@ -23905,6 +24576,10 @@ async function init() {
     if (delayedPromotionTimer) {
       clearInterval(delayedPromotionTimer);
       delayedPromotionTimer = null;
+    }
+    if (notifPollTimer) {
+      clearInterval(notifPollTimer);
+      notifPollTimer = null;
     }
   });
 
@@ -24161,7 +24836,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vce79d428";
+  const APP_VERSION = "vf77f4c1d";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

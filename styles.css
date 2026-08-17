@@ -296,6 +296,7 @@ body {
 }
 
 .user-menu-btn {
+  position: relative;
   background: none;
   border: none;
   font-size: 22px;
@@ -307,6 +308,29 @@ body {
 
 .user-menu-btn:hover {
   background: rgba(0,0,0,0.05);
+}
+
+/* 桌面端用户头像未读消息红点 */
+.user-menu-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  border: 1.5px solid #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  pointer-events: none;
+}
+
+.user-menu-badge.hidden {
+  display: none;
 }
 
 .user-dropdown {
@@ -496,6 +520,48 @@ body {
 @media (min-width: 769px) {
   .desktop-only-bg { display: flex; }
 }
+
+/* 桌面端专属入口：消息中心（移动端已有底部「消息」tab，故默认隐藏避免重复） */
+.desktop-only-notif { display: none; }
+@media (min-width: 769px) {
+  .desktop-only-notif { display: flex; }
+}
+
+/* 未读消息红点：移动端底部 tab */
+.bnav-badge {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  font-weight: 700;
+  box-shadow: 0 0 0 2px #fff;
+}
+.bnav-badge.hidden { display: none; }
+
+/* 未读消息红点：桌面端 dropdown */
+.ud-badge {
+  display: inline-block;
+  margin-left: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  font-weight: 700;
+}
+.ud-badge.hidden { display: none; }
 
 .ud-item .dropdown-btn-text {
   flex: 1;
@@ -2044,6 +2110,7 @@ select.input {
 .card-title--with-status {
   display: block;
   overflow: hidden;             /* BFC 包含所有 float，避免父容器高度塌陷 */
+  padding-top: 4px;             /* 给胶囊 pulse 光晕留边距，避免被 overflow 裁掉顶部 */
 }
 
 .card-title--with-status .card-title__right,
@@ -6691,10 +6758,165 @@ table.data.project-hours-diff thead th {
   flex-shrink: 0;
 }
 
+/* ============ 消息中心 ============ */
+.notif-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 16px;
+  max-width: 560px;
+  margin: 0 auto;
+}
+@media (max-width: 768px) {
+  .notif-list { max-width: none; padding: 4px 8px; }
+}
+.notif-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.notif-item:hover { background: #f8fafc; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+.notif-clear {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.04);
+  color: #94a3b8;
+  font-size: 16px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.notif-item:hover .notif-clear { opacity: 1; }
+.notif-clear:hover { background: #fee2e2; color: #dc2626; }
+.notif-clear:active { transform: scale(0.95); }
+.notif-item.unread { background: #eff6ff; border-color: #bfdbfe; }
+.notif-item.unread:hover { background: #e0ecff; }
+.notif-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: transparent; margin-top: 6px; flex-shrink: 0;
+}
+.notif-item.unread .notif-dot { background: #3b82f6; }
+.notif-main { flex: 1; min-width: 0; }
+.notif-title { font-weight: 600; font-size: 14px; color: #1e293b; margin-bottom: 2px; }
+.notif-body { font-size: 13px; color: #475569; line-height: 1.5; word-break: break-word; white-space: pre-wrap; }
+.notif-meta { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+.notif-unread-tag {
+  align-self: center;
+  font-size: 11px; font-weight: 700; color: #fff;
+  background: #3b82f6; padding: 1px 7px; border-radius: 999px; flex-shrink: 0;
+}
+.notif-empty {
+  text-align: center; color: #94a3b8; font-size: 14px;
+  padding: 60px 20px;
+}
+.modal-label { font-weight: 600; font-size: 13px; color: #334155; }
+.notif-check-list {
+  max-height: 220px; overflow: auto;
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.notif-check-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.notif-check-item:hover { background: #f1f5f9; }
+.notif-check-role { margin-left: auto; color: #94a3b8; font-size: 11px; }
+@media (prefers-color-scheme: dark) {
+  .notif-item:hover { background: #1e293b; }
+  .notif-item.unread { background: #1e293b; border-color: #334155; }
+  .notif-title { color: #e2e8f0; }
+  .notif-body { color: #cbd5e1; }
+  .notif-check-item:hover { background: #1e293b; }
+}
+
 .notification-text {
   font-size: 14px;
   color: var(--text);
   line-height: 1.4;
+}
+
+/* 桌面消息弹窗（toast）：收到新站内通知时右下角弹出，带发送人头像 */
+#notifToasts {
+  position: fixed;
+  top: 72px;
+  right: 16px;
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+.notif-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 320px;
+  max-width: 100%;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #3b82f6;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+  padding: 12px 12px 10px;
+  position: relative;
+  transform: translateX(120%);
+  opacity: 0;
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.32s ease;
+}
+.notif-toast--show { transform: translateX(0); opacity: 1; }
+.notif-toast--hide { transform: translateX(120%); opacity: 0; }
+.notif-toast--acceptance { border-left-color: #f59e0b; }
+.notif-toast__avatar {
+  flex: 0 0 auto;
+  width: 38px; height: 38px; border-radius: 50%;
+  background: linear-gradient(135deg, #60a5fa, #2563eb);
+  color: #fff; font-weight: 700; font-size: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3);
+}
+.notif-toast--acceptance .notif-toast__avatar { background: linear-gradient(135deg, #fbbf24, #f59e0b); box-shadow: 0 2px 6px rgba(245, 158, 11, 0.3); }
+.notif-toast__body { flex: 1; min-width: 0; cursor: pointer; padding-right: 18px; }
+.notif-toast__title { font-weight: 700; font-size: 14px; color: #1e293b; margin-bottom: 2px; }
+.notif-toast__text {
+  font-size: 13px; color: #475569; line-height: 1.5;
+  word-break: break-word; white-space: pre-wrap;
+  max-height: 3.2em; overflow: hidden;
+}
+.notif-toast__meta { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+.notif-toast__actions { display: flex; gap: 6px; margin-top: 8px; }
+.notif-toast__btn {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.notif-toast__btn:hover { background: #eef2f7; }
+.notif-toast__btn--read { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; font-weight: 600; }
+.notif-toast__btn--read:hover { background: #dbeafe; }
+.notif-toast__close {
+  position: absolute; top: 6px; right: 8px;
+  border: none; background: none; font-size: 18px; line-height: 1; color: #94a3b8; cursor: pointer;
+}
+.notif-toast__close:hover { color: #475569; }
+@media (max-width: 768px) {
+  #notifToasts { top: 60px; right: 0; left: 0; align-items: center; }
+  .notif-toast { width: calc(100vw - 24px); }
 }
 
 .notification-alert.fade-out {
@@ -6822,6 +7044,7 @@ table.data.project-hours-diff thead th {
 .bnav-icon {
   font-size: 20px;
   line-height: 1.2;
+  position: relative;
 }
 
 .bnav-label {
@@ -9466,6 +9689,9 @@ table.data.project-hours-diff thead th {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08);
   min-width: 280px;
   max-width: 360px;
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0;
   animation: tl-menu-pop 0.15s ease-out;
 }
@@ -9476,6 +9702,9 @@ table.data.project-hours-diff thead th {
 }
 
 .tl-menu-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;

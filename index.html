@@ -81,7 +81,10 @@
           <div id="globalSearchResults" class="search-results"></div>
         </div>
         <span id="syncStatus" class="sync-status" title="本地模式 · 点击立即同步" onclick="manualSync()">💻</span>
-        <button id="userMenu" class="user-menu-btn hidden" aria-label="用户菜单">👤</button>
+        <button id="userMenu" class="user-menu-btn hidden" aria-label="用户菜单">
+          👤
+          <span id="notifBadgeAvatar" class="user-menu-badge hidden">0</span>
+        </button>
       </div>
       <div id="userDropdown" class="user-dropdown hidden">
         <div class="ud-header">
@@ -122,6 +125,12 @@
         <div class="dropdown-item ud-item desktop-only-bg" onclick="openBgReloadSettingsModal()">
           <span class="dropdown-btn-icon">🔄</span><span class="dropdown-btn-text">后台自动刷新</span>
         </div>
+        <div class="dropdown-item ud-item desktop-only-notif" onclick="openNotificationsFromMenu()">
+          <span class="dropdown-btn-icon">🔔</span><span class="dropdown-btn-text">消息中心<span class="ud-badge" id="notifBadgeMenu">0</span></span>
+        </div>
+        <div class="dropdown-item ud-item desktop-only-notif" id="menuSendNotif" onclick="openSendNotification()">
+          <span class="dropdown-btn-icon">📢</span><span class="dropdown-btn-text">发通知</span>
+        </div>
         <div class="dropdown-item ud-item" onclick="showHelp()">
           <span class="dropdown-btn-icon">📖</span><span class="dropdown-btn-text">使用帮助</span>
         </div>
@@ -159,6 +168,10 @@
     <button class="bottom-nav-item" data-tab="workers" title="人员">
       <span class="bnav-icon">👷</span>
       <span class="bnav-label">人员</span>
+    </button>
+    <button class="bottom-nav-item" data-tab="notifications" title="消息">
+      <span class="bnav-icon">🔔<span class="bnav-badge" id="notifBadge">0</span></span>
+      <span class="bnav-label">消息</span>
     </button>
     <button class="bottom-nav-item" data-tab="mine" title="我的">
       <span class="bnav-icon">👤</span>
@@ -490,6 +503,18 @@
     <!-- 我的（移动端聚合页） -->
     <section id="mine" class="tab-panel">
       <div id="mineContent"></div>
+    </section>
+
+    <!-- 消息中心 -->
+    <section id="notifications" class="tab-panel">
+      <div class="section-head">
+        <h2>🔔 消息中心</h2>
+        <div style="display:flex;gap:8px;">
+          <button class="btn" id="btnSendNotif" style="display:none" onclick="openSendNotification()">＋ 发通知</button>
+          <button class="btn" id="btnMarkAllRead" onclick="markAllNotificationsRead()">全部已读</button>
+        </div>
+      </div>
+      <div id="notifContent"></div>
     </section>
 
     <!-- 车辆里程记录 -->
