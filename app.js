@@ -4111,7 +4111,9 @@ async function applyIncrementalUpdate(tableName) {
 let notifPollTimer = null;
 async function pollNotifications() {
   if (MODE !== "cloud" || !cloudConfigured()) return;
-  if (document.hidden) return; // 后台不轮询，省流量
+  // 注意：不再因 document.hidden 跳过轮询。部分内嵌 WebView（如 PAKEPLUS 打包）
+  // 会把页面误判为 hidden，导致前台也永不轮询、消息只能手动刷新才出现。
+  // 后台由系统本身冻结 JS，无需我们手动省；数据量极小，固定 15s 轮询可接受。
   try {
     const nRes = await sb.from("notifications")
       .select("*")
@@ -7944,11 +7946,8 @@ function onProjectStatusChange(status) {
 function setProjectTimeFilter(days) {
   projectTimeFilterDays = days;
 
-  const mobileSel = document.getElementById("projectTimeFilterMobile");
-  if (mobileSel) mobileSel.value = String(days);
-
-  const desktopSel = document.getElementById("projectTimeFilterDesktop");
-  if (desktopSel) desktopSel.value = String(days);
+  const sel = document.getElementById("projectTimeFilter");
+  if (sel) sel.value = String(days);
 
   renderProjects();
 }
@@ -24518,9 +24517,9 @@ async function init() {
     });
   };
   elapsedMarkerTimer = setInterval(refreshElapsedMarkers, 30000);
-  // 通知轮询兜底：每 30 秒拉一次，确保实时推送未开启时也能自动收到消息并弹消息条
+  // 通知轮询兜底：每 15 秒拉一次，确保实时推送未开启时也能自动收到消息并弹消息条
   if (notifPollTimer) clearInterval(notifPollTimer);
-  notifPollTimer = setInterval(pollNotifications, 30000);
+  notifPollTimer = setInterval(pollNotifications, 15000);
   // 切回页面时立即刷一次（visibilitychange）
   if (!window.__elapsedVisHandler__) {
     window.__elapsedVisHandler__ = () => {
@@ -24814,7 +24813,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v60990f35";
+  const APP_VERSION = "v2d985ade";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

@@ -1593,14 +1593,12 @@ body.narrow-view .container {
 /* 项目预约筛选下拉：选项文字居中 */
 #projectStatusFilter,
 #projectStoreFilter,
-#projectTimeFilterMobile,
-#projectTimeFilterDesktop {
+#projectTimeFilter {
   text-align: center;
 }
 #projectStatusFilter option,
 #projectStoreFilter option,
-#projectTimeFilterMobile option,
-#projectTimeFilterDesktop option {
+#projectTimeFilter option {
   text-align: center;
 }
 /* 自定义下拉面板中的选项也居中 */
@@ -1631,11 +1629,11 @@ body.narrow-view .container {
 }
 .project-filter-row #projectStatusFilter,
 .project-filter-row #projectStoreFilter,
-.project-filter-row #projectTimeFilterDesktop {
+.project-filter-row #projectTimeFilter {
   width: 140px;
   flex-shrink: 0;
 }
-.project-filter-row #projectTimeFilterDesktop {
+.project-filter-row #projectTimeFilter {
   width: 110px;
 }
 /* 施工管理筛选 */
@@ -1767,15 +1765,9 @@ body.narrow-view .container {
 .psi-delayed { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
 .psi-delayed:hover, .psi-delayed.active { background: #fee2e2; }
 
-/* 手机端专用：时间筛选下拉（桌面端隐藏原生 select 及其自定义下拉 wrapper） */
-#projectTimeFilterMobile,
-.project-filter-row > .custom-select:has(#projectTimeFilterMobile) {
-  display: none !important;
-}
-
-/* 桌面端：时间筛选下拉（及其自定义下拉 wrapper）默认显示 */
-#projectTimeFilterDesktop,
-.project-filter-row > .custom-select:has(#projectTimeFilterDesktop) {
+/* 时间筛选下拉（原生 select 及其自定义下拉 wrapper）默认显示 */
+#projectTimeFilter,
+.project-filter-row > .custom-select:has(#projectTimeFilter) {
   display: inline-block;
   width: 110px;
   flex-shrink: 0;
@@ -10664,7 +10656,7 @@ table.data.project-hours-diff thead th {
   }
   .project-filter-row #projectStatusFilter,
   .project-filter-row #projectStoreFilter,
-  .project-filter-row #projectTimeFilterMobile,
+  .project-filter-row #projectTimeFilter,
   .project-filter-row > .custom-select {
     width: 100% !important;
     min-width: 0 !important;
@@ -10672,7 +10664,7 @@ table.data.project-hours-diff thead th {
   }
   .project-filter-row #projectStatusFilter,
   .project-filter-row #projectStoreFilter,
-  .project-filter-row #projectTimeFilterMobile {
+  .project-filter-row #projectTimeFilter {
     height: 36px !important;
     padding: 8px 6px !important;
     font-size: 12px !important;
@@ -10685,13 +10677,9 @@ table.data.project-hours-diff thead th {
     padding: 8px 6px !important;
     font-size: 12px !important;
   }
-  #projectTimeFilterMobile,
-  .project-filter-row > .custom-select:has(#projectTimeFilterMobile) {
+  #projectTimeFilter,
+  .project-filter-row > .custom-select:has(#projectTimeFilter) {
     display: block !important;
-  }
-  #projectTimeFilterDesktop,
-  .project-filter-row > .custom-select:has(#projectTimeFilterDesktop) {
-    display: none !important;
   }
 
   /* 手机端：状态指示器去掉「状态」标签，四个 pill 一行排开 */
