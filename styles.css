@@ -2102,7 +2102,7 @@ select.input {
 .card-title--with-status {
   display: block;
   overflow: hidden;             /* BFC 包含所有 float，避免父容器高度塌陷 */
-  padding-top: 4px;             /* 给胶囊 pulse 光晕留边距，避免被 overflow 裁掉顶部 */
+  padding: 4px 4px 0 0;       /* 给胶囊 pulse 光晕留边距，避免被 overflow 裁掉顶和右侧 */
 }
 
 .card-title--with-status .card-title__right,
@@ -6294,12 +6294,14 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 /* 项目工时差异表列宽控制 */
 table.data.project-hours-diff {
   /* 表格最小宽度：保证 17 列都有合理宽度不被压扁；
-     宽屏时 width:100% 自然铺满，窄屏时保持 1500px 触发外层滚动 */
-  min-width: 1410px;
+     使用 fixed 布局让各列严格按下面 width 比例分配，避免被内容或容器撑宽 */
+  min-width: 1330px;
+  table-layout: fixed;
 }
 table.data.project-hours-diff th,
 table.data.project-hours-diff td {
   text-align: center;
+  vertical-align: top;
 }
 table.data.project-hours-diff th {
   font-size: 12px;
@@ -6310,11 +6312,12 @@ table.data.project-hours-diff .col-time { width: 56px; min-width: 56px; }
 table.data.project-hours-diff .col-store { width: 90px; min-width: 90px; max-width: 120px; }
 table.data.project-hours-diff .col-name { width: 120px; min-width: 120px; max-width: 180px; }
 table.data.project-hours-diff .col-status { width: 64px; min-width: 64px; }
+table.data.project-hours-diff .col-status .badge { white-space: nowrap; }
 table.data.project-hours-diff .col-num { width: 44px; min-width: 44px; }
 table.data.project-hours-diff .col-outsourced { width: 72px; min-width: 72px; }
-table.data.project-hours-diff .col-workers { width: 130px; min-width: 130px; max-width: 180px; }
-table.data.project-hours-diff .col-auto { width: 120px; min-width: 120px; max-width: 180px; }
-table.data.project-hours-diff .col-notes { width: 180px; min-width: 180px; max-width: 260px; }
+table.data.project-hours-diff .col-workers { width: 80px; min-width: 80px; max-width: 110px; }
+table.data.project-hours-diff .col-auto { width: 74px; min-width: 74px; max-width: 100px; }
+table.data.project-hours-diff .col-notes { width: 140px; min-width: 140px; max-width: 220px; }
 
 .worker-chip {
   display: inline-flex;
@@ -6335,42 +6338,76 @@ table.data.project-hours-diff .col-notes { width: 180px; min-width: 180px; max-w
 .worker-chip b { font-weight: 600; }
 
 /* 项目工时差异表：施工人员工时、系统自动工时两列内部改为整齐纵列，
-   每个 chip 占一行，姓名左对齐、工时右对齐，看起来像一个小表格 */
+   去背景色块、缩小字号，让行更紧凑、边框更连续。
+   注意：不把 td 本身设成 flex，而是把内容包在 .chip-stack 里做 flex；
+   这样 td 仍参与 table 行高统一计算，行底线不会在不同列断开。 */
 table.data.project-hours-diff td.col-workers.wrap,
 table.data.project-hours-diff td.col-auto.wrap {
+  padding: 0;
+  vertical-align: top;
+  font-size: 11px;
+  line-height: 1.5;
+}
+table.data.project-hours-diff td.col-workers.wrap .chip-stack,
+table.data.project-hours-diff td.col-auto.wrap .chip-stack {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 0;
   align-items: stretch;
-  vertical-align: top;
-  padding: 10px 8px;
+  min-height: 100%;
+  padding: 6px 8px;
+  box-sizing: border-box;
 }
 table.data.project-hours-diff td.col-workers.wrap .worker-chip,
 table.data.project-hours-diff td.col-auto.wrap .worker-chip {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;     /* 人名靠左 */
   align-items: center;
   width: 100%;
   margin: 0;
-  padding: 4px 8px;
+  padding: 2px 0;
   box-sizing: border-box;
+  background: transparent;
+  border-radius: 0;
+  color: var(--text);
 }
-table.data.project-hours-diff td.col-workers.wrap .worker-chip {
-  padding: 3px 6px;
+table.data.project-hours-diff td.col-auto.wrap .worker-chip.auto {
+  color: #b45309; /* 系统自动工时用深色琥珀文字，不再铺黄色背景 */
 }
 table.data.project-hours-diff td.col-workers.wrap .worker-chip b,
 table.data.project-hours-diff td.col-auto.wrap .worker-chip b {
-  min-width: 44px;
+  min-width: 28px;
   text-align: right;
-  background: rgba(255,255,255,0.55);
-  padding: 1px 5px;
-  border-radius: 3px;
-  margin-left: 6px;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  margin-left: auto;            /* 工时强制推到最右，人名自然靠左 */
+  font-weight: 600;
 }
-table.data.project-hours-diff td.col-workers.wrap .worker-chip b {
-  min-width: 36px;
-  padding: 1px 4px;
-  margin-left: 4px;
+/* 空值占位：只保留居中的 "—"，去掉边框/背景，不再形成额外色块 */
+table.data.project-hours-diff td.col-workers.wrap .worker-chip.placeholder,
+table.data.project-hours-diff td.col-auto.wrap .worker-chip.placeholder {
+  justify-content: center;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  font-weight: 400;
+}
+
+/* 工时备注列：更小字号、按相同内容合并显示 */
+table.data.project-hours-diff td.col-notes.wrap {
+  font-size: 11px;
+  line-height: 1.55;
+  padding: 6px 8px;
+  color: var(--text);
+}
+table.data.project-hours-diff td.col-notes.wrap .note-names {
+  color: var(--muted);
+  font-weight: 500;
+}
+table.data.project-hours-diff td.col-notes.wrap .note-sep {
+  color: var(--border);
+  margin: 0 2px;
 }
 
 /* 内容列允许换行 */
@@ -10767,7 +10804,7 @@ table.data.project-hours-diff thead th {
   flex-wrap: wrap;
   gap: 12px;
   margin: 8px 0 6px;
-  align-items: stretch;
+  align-items: flex-start;       /* 各卡片按自身内容高度，不互相拉伸 */
 }
 .veh-dash-grid > .veh-card {
   flex: 1 1 calc(33.333% - 8px);

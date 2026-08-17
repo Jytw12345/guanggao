@@ -17677,6 +17677,9 @@ function initCustomSelect(selectEl) {
   /* 保留原始宽度意图（如工具栏筛选框的 140px），避免改造后宽度异常 */
   if (selectEl.style.width) wrapper.style.width = selectEl.style.width;
 
+  /* 记录原始宽度，供车辆筛选等「展开加宽/选全部缩窄」逻辑使用 */
+  const _csOrigWidth = wrapper.style.width || "";
+
   const trigger = document.createElement("div");
   trigger.className = "cs-trigger";
   trigger.tabIndex = 0;
@@ -17731,6 +17734,10 @@ function initCustomSelect(selectEl) {
         selectEl.value = opt.value;
         selectEl.selectedIndex = idx;
         syncUI();
+        /* 车辆筛选：选「全部车辆」等短文本时自动缩回原始宽度 */
+        if (wrapper.closest(".veh-filter") && _csOrigWidth && (opt.value === "" || !opt.value)) {
+          wrapper.style.width = _csOrigWidth;
+        }
         closeAllCS();
         selectEl.dispatchEvent(new Event("change", { bubbles: true }));
         selectEl.dispatchEvent(new Event("input", { bubbles: true }));
@@ -17819,6 +17826,19 @@ function initCustomSelect(selectEl) {
     addDocListeners();
     _csOpenInstance = wrapper;
 
+    /* 车辆筛选等场景：下拉展开时按选项内容自动加宽，避免长车名被截断 */
+    if (wrapper.closest(".veh-filter")) {
+      let maxW = 0;
+      dropdown.querySelectorAll(".cs-option").forEach(item => {
+        maxW = Math.max(maxW, item.scrollWidth);
+      });
+      const pad = 36; /* 勾选图标 + 内边距 */
+      if (maxW + pad > trigger.offsetWidth) {
+        wrapper.style.width = (maxW + pad) + "px";
+        positionDropdown(); /* 按新宽度重新定位 */
+      }
+    }
+
     /* 滚动到选中项 */
     const selItem = dropdown.querySelector(".cs-option.selected");
     if (selItem) {
@@ -17833,6 +17853,10 @@ function initCustomSelect(selectEl) {
     trigger.setAttribute("aria-expanded", "false");
     dropdown.classList.remove("cs-open");
     removeDocListeners();
+    /* 车辆筛选：关闭下拉时恢复原始宽度（避免展开加宽后残留） */
+    if (wrapper.closest(".veh-filter") && _csOrigWidth) {
+      wrapper.style.width = _csOrigWidth;
+    }
     if (dropdown.parentNode) dropdown.parentNode.removeChild(dropdown);
     if (_csOpenInstance === wrapper) _csOpenInstance = null;
   }
@@ -24839,7 +24863,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v72ae7498";
+  const APP_VERSION = "vde7a3e4b";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -25333,6 +25357,7 @@ function renderVehicleTrips() {
   renderVehicleDashboards();
   renderVehicleSummary();
   populateVtFilters();
+  initCustomSelects(document.getElementById("vtFilterBar"));
   renderVehicleHistory();
 }
 
