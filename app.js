@@ -1890,14 +1890,37 @@ function getCurrentSessionDurationText(p) {
   return "1分钟";
 }
 
-/* 生成项目卡片底部「关键时间」单行摘要 HTML。
+/* 生成项目卡片底部「关键时间」摘要 HTML。
    逐段/历史明细已移入「施工记录」弹窗，卡片底部只保留一眼可见的关键时间点，避免与弹窗重复：
-   - 终态（已完工/已验收/已审核）：显示「完工」时间；
+   - 终态（已完工/已验收/已审核）：第一行显示「开工 → 完工」，第二行显示「施工时长」；
    - 进行中（施工中/已暂停/已延期）或预约中已开工：有恢复史显示「本次施工 X 起」，否则「开工 X 起」；
    - 未开工（无 startedAt/finishedAt）：返回空，容器整体不渲染。 */
-function buildCardActualTimeline(p) {
+function buildCardActualTimeline(p, ctx) {
   if (p.finishedAt) {
-    return `<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--green"></span><span>完工 ${fmtDateTime(p.finishedAt)}</span></div>`;
+    const originalStart = p.originalStartedAt || p.startedAt;
+    const started = originalStart ? fmtDateTime(originalStart) : null;
+    const finished = fmtDateTime(p.finishedAt);
+    const lines = [];
+    lines.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--blue"></span><span>${started ? `开工 ${started} → ` : ""}完工 ${finished}</span></div>`);
+    // 施工时长 = 首次开工到完工的挂钟跨度 - 总暂停时长；暂停>0 时备注暂停多久
+    let durationText = "—";
+    if (originalStart) {
+      const wallHours = Math.max(0, (new Date(p.finishedAt) - new Date(originalStart)) / (1000 * 60 * 60));
+      const pauseHours = (p.pauseHistory || []).reduce((sum, ph) => {
+        if (Number(ph.duration) > 0) return sum + Number(ph.duration);
+        if (ph.resumedAt && ph.pauseAt) {
+          return sum + Math.max(0, (new Date(ph.resumedAt) - new Date(ph.pauseAt)) / (1000 * 60 * 60));
+        }
+        return sum;
+      }, 0);
+      const netHours = Math.max(0, wallHours - pauseHours);
+      durationText = fmtDurationFromHours(netHours);
+      if (pauseHours > 0) {
+        durationText += `（暂停 ${fmtDurationFromHours(pauseHours)}）`;
+      }
+    }
+    lines.push(`<div class="card-timeline__item"><span class="card-timeline__dot card-timeline__dot--orange"></span><span>施工时长 ${durationText}</span></div>`);
+    return lines.join("");
   }
   const hasResumeHistory = !!(p.originalStartedAt && p.startedAt &&
     Math.abs(new Date(p.originalStartedAt).getTime() - new Date(p.startedAt).getTime()) > 60000);
@@ -4309,8 +4332,7 @@ function setSyncStatus(cls, text) {
   // 正确流程：开始同步时显式调用 showSyncing()，数据就绪后调用 recordSyncTime()。
 }
 
-// 同步胶囊图标：全部用内联 SVG，避免手机端 emoji 字体缺失时渲染成「方块」再旋转
-const SVG_SYNC_RING   = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ss-track" cx="12" cy="12" r="9"/><path class="ss-arc" d="M12 3a9 9 0 0 1 9 9"/></svg>';
+// 同步胶囊图标：全部用内联 SVG（或 CSS 脉冲点），避免手机端 emoji 字体缺失时渲染成「方块」
 const SVG_SYNC_CHECK  = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>';
 const SVG_SYNC_CLOCK  = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
 const SVG_SYNC_ALERT  = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5"/><path d="M12 16.6v.4"/><path d="M10.3 4.3 3 17a2 2 0 0 0 1.7 3h14.6A2 2 0 0 0 21 17L13.7 4.3a2 2 0 0 0-3.4 0z"/></svg>';
@@ -4322,7 +4344,7 @@ function showSyncing() {
   if (syncJustTimer) { clearTimeout(syncJustTimer); syncJustTimer = null; }
   el.classList.remove("is-fresh", "is-failed");
   el.classList.add("is-syncing");
-  el.innerHTML = `<span class="sync-ico sync-ico--spin">${SVG_SYNC_RING}</span><span class="sync-txt">同步中…</span>`;
+  el.innerHTML = `<span class="mst-dot"></span><span class="sync-txt">同步中…</span>`;
   el.title = "正在与云端同步…";
   // 兜底：若一直停在进行中（如之后再无完成回调），4 秒后尝试落定为「同步完成」；
   // 但若此刻云端拉取仍在进行中（节流挂起或正在请求），不要强行标完成，保持转圈；
@@ -4345,7 +4367,7 @@ function updateMobileSyncTime() {
   if (!lastSyncTime) {
     if (syncSyncingTimer) { clearTimeout(syncSyncingTimer); syncSyncingTimer = null; }
     el.classList.remove("is-fresh", "is-syncing", "is-failed");
-    el.innerHTML = `<span class="sync-ico">${SVG_SYNC_CLOCK}</span><span class="sync-txt">未同步</span>`;
+    el.innerHTML = `<span class="mst-dot"></span><span class="sync-txt">未同步</span>`;
     el.title = "尚未与云端同步";
     return;
   }
@@ -4354,7 +4376,7 @@ function updateMobileSyncTime() {
     if (syncSyncingTimer) { clearTimeout(syncSyncingTimer); syncSyncingTimer = null; }
     el.classList.remove("is-syncing", "is-failed");
     el.classList.add("is-fresh");
-    el.innerHTML = `<span class="sync-ico">${SVG_SYNC_CHECK}</span><span class="sync-txt">同步完成</span>`;
+    el.innerHTML = `<span class="mst-dot"></span><span class="sync-txt">同步完成</span>`;
     el.title = "同步完成 · 点击立即同步";
     if (!syncJustTimer) {
       syncJustTimer = setTimeout(() => {
@@ -4377,7 +4399,7 @@ function updateMobileSyncTime() {
     const hrs = Math.floor(mins / 60);
     rel = hrs < 24 ? `${hrs} 小时前` : `${Math.floor(hrs / 24)} 天前`;
   }
-  el.innerHTML = `<span class="sync-ico">${SVG_SYNC_CLOCK}</span><span class="sync-txt">同步于 ${t}</span>`;
+  el.innerHTML = `<span class="mst-dot"></span><span class="sync-txt">同步于 ${t}</span>`;
   el.title = `上次同步：${t} · ${rel}`;
 }
 
@@ -7675,7 +7697,7 @@ function renderProjects() {
         <!-- 时间节点：仅在有值时显示。卡片底部只保留关键时间点单行摘要（开工/本次施工/完工），逐段与历史明细见「施工记录」弹窗 -->
         ${(p.startedAt || p.finishedAt) ? `
         <div class="card-timeline">
-          ${buildCardActualTimeline(p)}
+          ${buildCardActualTimeline(p, { est, act, hasActual })}
         </div>` : ""}
 
         ${isAutoReviewed(p) ? `<div class="card-auto-stamp" title="系统自动审核（验收满设定时长后自动审核）">自动审核</div>` : ""}
@@ -20275,6 +20297,9 @@ function initPullToRefresh() {
   const THRESHOLD = 64;   // 触发刷新的下拉距离阈值(px)
   const MAX_PULL = 96;    // 最大下拉位移(px)
   const DAMP = 0.5;       // 阻尼系数，手指位移折半跟随
+  const mainEl = document.querySelector(".container"); // 内容容器：下拉时整体随手指下移，露出空隙（系统级观感）
+  const navEl = document.querySelector(".bottom-nav");  // 底部导航：与内容同步下移，避免短内容 Tab 拖动时底部露缝
+  const REVEAL = 56;      // 释放后内容停留位移(px)，与阈值接近，过渡自然
   let startY = 0, startX = 0, startScroll = 0, pulling = false, lastPull = 0, scrollEl = null, ptrActive = false;
 
   /* 仅在「云端模式 + 数据类界面」启用下拉刷新；本地模式无云端可同步、设置/帮助
@@ -20296,22 +20321,55 @@ function initPullToRefresh() {
 
   const setPull = (px) => {
     lastPull = px;
+    const prog = Math.min(1, px / THRESHOLD);      // 0→1 下拉进度，控制透明度
     el.style.transition = "none";
-    el.style.transform = `translateY(calc(-100% + ${px}px))`;
+    el.style.opacity = prog;
+    el.style.transform = `translateY(${px / 2}px)`; // 图标浮在 header 与内容间空隙中央
+    if (mainEl) {
+      mainEl.style.transition = "none";
+      mainEl.style.transform = `translateY(${px}px)`; // 内容整体随手指下移，露出空隙
+    }
+    if (navEl) {
+      navEl.style.transition = "none";
+      navEl.style.transform = `translateY(${px}px)`;  // 底部导航与内容同步下移，保持整体无缝
+    }
     const ready = px >= THRESHOLD;
     el.classList.toggle("ptr--ready", ready);
+    el.classList.toggle("ptr--pull", px > 4);
     if (textEl) textEl.textContent = ready ? "释放刷新" : "下拉刷新";
   };
   const showRefreshing = () => {
     el.classList.add("ptr--refreshing");
-    el.style.transition = "transform .2s ease";
-    el.style.transform = "translateY(0)";
+    el.classList.remove("ptr--pull");
+    el.style.transition = "transform .2s ease, opacity .2s ease";
+    el.style.transform = `translateY(${REVEAL / 2}px)`;
+    el.style.opacity = 1;
+    if (mainEl) {
+      mainEl.style.transition = "transform .2s ease";
+      mainEl.style.transform = `translateY(${REVEAL}px)`;
+    }
+    if (navEl) {
+      navEl.style.transition = "transform .2s ease";
+      navEl.style.transform = `translateY(${REVEAL}px)`;
+    }
     if (textEl) textEl.textContent = "正在刷新…";
   };
   const hideIdle = () => {
-    el.classList.remove("ptr--refreshing", "ptr--ready");
-    el.style.transition = "transform .25s ease";
-    el.style.transform = "translateY(-100%)";
+    el.classList.remove("ptr--refreshing", "ptr--ready", "ptr--pull");
+    el.style.transition = "transform .25s ease, opacity .25s ease";
+    el.style.transform = "translateY(0)";
+    el.style.opacity = 0;
+    if (mainEl) {
+      mainEl.style.transition = "transform .25s ease";
+      mainEl.style.transform = "translateY(0)";
+      // 动画结束后清掉 transform，避免残留 containing block 影响内部 fixed 定位
+      setTimeout(() => { if (mainEl && !ptrRefreshing) mainEl.style.transform = ""; }, 280);
+    }
+    if (navEl) {
+      navEl.style.transition = "transform .25s ease";
+      navEl.style.transform = "translateY(0)";
+      setTimeout(() => { if (navEl && !ptrRefreshing) navEl.style.transform = ""; }, 280);
+    }
     if (textEl) textEl.textContent = "下拉刷新";
   };
 
@@ -20433,9 +20491,22 @@ async function doPullRefresh() {
   window.scrollTo(0, savedScroll);
   ptrRefreshing = false;
   if (indicator) {
-    indicator.style.transition = "transform .25s ease";
-    indicator.style.transform = "translateY(-100%)";
-    indicator.classList.remove("ptr--refreshing", "ptr--ready");
+    indicator.style.transition = "transform .25s ease, opacity .25s ease";
+    indicator.style.transform = "translateY(0)";
+    indicator.style.opacity = 0;
+    indicator.classList.remove("ptr--refreshing", "ptr--ready", "ptr--pull");
+    const m = document.querySelector(".container");
+    if (m) {
+      m.style.transition = "transform .25s ease";
+      m.style.transform = "translateY(0)";
+      setTimeout(() => { if (m && !ptrRefreshing) m.style.transform = ""; }, 280);
+    }
+    const n = document.querySelector(".bottom-nav");
+    if (n) {
+      n.style.transition = "transform .25s ease";
+      n.style.transform = "translateY(0)";
+      setTimeout(() => { if (n && !ptrRefreshing) n.style.transform = ""; }, 280);
+    }
   }
   if (textEl) textEl.textContent = "下拉刷新";
 }
@@ -23142,7 +23213,7 @@ async function startCloudSession() {
     if (msync) {
       msync.classList.remove("is-syncing", "is-fresh");
       msync.classList.add("is-failed");
-      msync.innerHTML = `<span class="sync-ico">${SVG_SYNC_ALERT}</span><span class="sync-txt">同步失败</span>`;
+      msync.innerHTML = `<span class="mst-dot"></span><span class="sync-txt">同步失败</span>`;
       msync.title = "云端同步失败：" + (e.message || "");
     }
     setSyncStatus("offline", "● 同步失败");
@@ -23930,7 +24001,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v01716cd2";
+  const APP_VERSION = "v8a2f4521";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
@@ -24524,7 +24595,7 @@ function usePanelHtml(v) {
       <div class="veh-panel-rule">—— 用车登记 · ${esc(v.name)} ——</div>
       <div class="veh-quick-fields">
         <div class="form-row">
-          <div class="veh-km-alert">请核对仪表读数，起始公里数务必准确</div>
+          <div class="veh-km-alert">请核对仪表，起始公里数务必准确</div>
           <label>起始公里数 <span class="veh-hint">（整数）</span></label>
           <input type="text" inputmode="numeric" class="input veh-km-edit" id="vtqStart"
                  value="${Number(startKm)}"
@@ -25376,7 +25447,7 @@ function calcQuickMileage() {
   }
   const m = Math.max(0, Math.round(end - start));
   if (m > 400) {
-    preview.textContent = `本次里程：${m.toLocaleString()} km ⚠️ 超过 400，请核对仪表读数`;
+    preview.textContent = `本次里程：${m.toLocaleString()} km ⚠️ 超过 400，请核对仪表`;
     preview.classList.add("warn");
     preview.classList.remove("hint");
     enable(); // 仍允许提交，由确认弹窗二次核对
