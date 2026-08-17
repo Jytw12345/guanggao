@@ -5771,6 +5771,29 @@ body.modal-open {
   color: var(--muted);
 }
 .modal-body { padding: 16px; overscroll-behavior: contain; touch-action: pan-y; }
+
+/* 修改登录密码弹窗 + 密码强度条 */
+.cp-modal { display: flex; flex-direction: column; gap: 6px; }
+.cp-force-note {
+  background: #fffbeb; color: #92400e; border: 1px solid #fcd34d;
+  border-radius: 8px; padding: 10px 12px; font-size: 12.5px; line-height: 1.6; margin-bottom: 6px;
+}
+.cp-label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.cp-err { color: #dc2626; font-size: 12.5px; min-height: 16px; margin-top: 2px; }
+.cp-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+.pwd-strength { margin: 2px 0 4px; }
+.pwd-strength-bar {
+  height: 6px; border-radius: 999px; background: #eef2f7; overflow: hidden;
+}
+.pwd-strength-bar span {
+  display: block; height: 100%; border-radius: 999px;
+  background: #dc2626; transition: width 0.2s ease, background 0.2s ease;
+}
+.pwd-strength.ok .pwd-strength-bar span { background: #f59e0b; }
+.pwd-strength.strong .pwd-strength-bar span { background: #16a34a; }
+.pwd-strength-text { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.pwd-strength.ok .pwd-strength-text { color: #b45309; }
+.pwd-strength.strong .pwd-strength-text { color: #15803d; }
 .modal-footer {
   display: flex;
   justify-content: flex-end;

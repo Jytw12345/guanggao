@@ -3146,7 +3146,7 @@ const repo = {
     if (MODE !== "cloud") return [];
     const { data, error } = await sb.from("profiles").select("*").order("email");
     if (error) { fail(error); return []; }
-    return (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "" }));
+    return (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "", forcePasswordChange: !!(r.force_password_change) }));
   },
   async setProfile(userId, patch) {
     if (MODE !== "cloud") return;
@@ -3154,6 +3154,7 @@ const repo = {
     if ("role" in patch) row.role = patch.role || null;
     if ("storeId" in patch) row.store_id = patch.storeId || null;
     if ("name" in patch) row.name = patch.name || null;
+    if ("forcePasswordChange" in patch) row.force_password_change = !!patch.forcePasswordChange;
     const { error } = await sb.from("profiles").update(row).eq("id", userId);
     if (error) return fail(error);
   },
@@ -19369,7 +19370,7 @@ async function renderAccounts() {
     <div class="detail-block" style="padding:0;overflow:hidden">
       ${MODE === "local" ? `<button class="btn" style="margin-bottom:12px" onclick="addLocalAccount()">添加本地账号</button>` : ""}
       <table class="data">
-        <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>所属门店</th><th>操作</th></tr></thead>
+        <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>所属门店</th>${MODE === "cloud" ? `<th>强制改密</th>` : ""}<th>操作</th></tr></thead>
         <tbody>
           ${accounts.map((a) => `
             <tr>
@@ -19377,6 +19378,10 @@ async function renderAccounts() {
               <td><input type="text" class="input" value="${esc(a.name)}" placeholder="请输入姓名" onchange="changeAccountName('${a.id}', this.value)" /></td>
               <td><select class="input" onchange="changeAccountRole('${a.id}', this.value)">${roleOpts(a.role)}</select></td>
               <td><select class="input" onchange="changeAccountStore('${a.id}', this.value)">${storeOpts(a.storeId)}</select></td>
+              ${MODE === "cloud" ? `
+              <td>
+                <button class="btn btn-small ${a.forcePasswordChange ? "warning" : ""}" onclick="toggleForcePw('${a.id}', ${a.forcePasswordChange ? "true" : "false"})">${a.forcePasswordChange ? "已标记·取消" : "标记强制改密"}</button>
+              </td>` : ""}
               <td>
                 ${a.role === "manager" ? "" : `<button class="btn btn-small" onclick="openUserPermModal('${a.id}', '${esc(a.name || a.email || a.id)}', '${a.role || ""}')">权限</button> `}
                 <button class="btn btn-danger btn-small" onclick="deleteAccount('${a.id}', '${esc(a.email || a.id)}')">删除</button>
@@ -19502,6 +19507,16 @@ async function deleteAccount(id, email) {
       toast("删除云端失败：" + (e.message || "未知错误") + "，已恢复");
       repo.loadAll().then(() => renderAccounts()).catch(() => {});
     });
+}
+
+// 管理员标记/取消「强制该用户修改登录密码」（下次登录弹出不可关闭弹窗）
+async function toggleForcePw(id, current) {
+  if (MODE !== "cloud") { toast("仅云端模式支持"); return; }
+  const next = !current;
+  const { error } = await sb.from("profiles").update({ force_password_change: next }).eq("id", id);
+  if (error) { fail(error); return; }
+  toast(next ? "已标记：该用户下次登录须改密（新密码需 8 位+含大小写字母和数字）" : "已取消强制改密");
+  renderAccounts();
 }
 
 async function addLocalAccount() {
@@ -19831,6 +19846,8 @@ const modal = {
     }
   },
   close() {
+    const closeBtn = document.getElementById("modalClose");
+    if (closeBtn) closeBtn.style.display = "";  // 复位强制改密弹窗隐藏的 ✕
     document.getElementById("modal").classList.add("hidden");
     document.body.classList.remove("modal-open");
     document.documentElement.classList.remove("modal-open");
@@ -20715,6 +20732,12 @@ function renderMine() {
       <div class="mine-list-item" onclick="setAdminPassword()">
         <div class="mine-list-icon" style="background:#fef2f2;color:#dc2626">🔐</div>
         <span class="mine-list-text">管理密码设置${currentProfile?.adminPasswordHash ? "" : "（未设置）"}</span>
+        <span class="mine-list-arrow">›</span>
+      </div>` : ""}
+      ${MODE === "cloud" && cloudConfigured() ? `
+      <div class="mine-list-item" onclick="openChangePasswordModal(false)">
+        <div class="mine-list-icon" style="background:#eff6ff;color:#2563eb">🔑</div>
+        <span class="mine-list-text">修改登录密码</span>
         <span class="mine-list-arrow">›</span>
       </div>` : ""}
       ${isManager() && MODE === "cloud" ? `
@@ -23899,6 +23922,8 @@ async function doSignup() {
   const email = document.getElementById("authEmail").value.trim();
   const password = document.getElementById("authPassword").value;
   if (!email || !password) { showAuthError("请输入邮箱和密码"); return; }
+  const ev = evaluatePassword(password, email, "");
+  if (!ev.ok) { showAuthError("密码不达标（至少 8 位、需同时含大小写字母和数字、禁用连续/重复序列、非常见弱密码）：" + ev.issues.join("、")); return; }
   authSubmitting = true;
   try {
     const { error } = await sb.auth.signUp({ email, password });
@@ -23921,6 +23946,207 @@ async function doLogout() {
     console.error("登出失败:", e);
   } finally {
     location.reload();
+  }
+}
+
+// 密码黑名单（弱密码整串）+ 连续/重复序列库：运行时构建，覆盖 500+ 条弱密码与键盘/数字序列。
+// 弱密码用「整串匹配」（WEAK_PASSWORDS.has(lower)），不会误伤强密码中的片段；序列用「包含检测」。
+function buildPwdBlacklist() {
+  const weak = new Set();
+  const seq = new Set();
+
+  // 1) 精选高频弱密码（真实泄露统计常见）
+  const top = [
+    "123456","12345678","123456789","1234567890","password","passw0rd","p@ssw0rd","password1","password123",
+    "qwerty","qwerty123","qwertyuiop","abc123","abcd1234","111111","000000","222222","666666","888888",
+    "123123","123321","123qwe","a123456","1q2w3e4r","1qaz2wsx","zaq12wsx","q1w2e3r4",
+    "admin","admin123","root","test","test123","test1234","letmein","iloveyou","welcome","welcome1",
+    "sunshine","monkey","dragon","baseball","football","superman","5201314","11111111","00000000",
+    "pass","administrator","guest","user","login","changeme","shadow","master","hello","love","sex","god",
+    "foot","batman","trustno1","whatever","ashley","michael","jennifer","charlie","andrew","matthew","jordan",
+    "tigger","brandon","compaq","cookie","joseph","spider","snoopy","marcus","nicole","chelsea","samuel",
+    "bigdog","hannah","taylor","rassberry","hello123","lovely","jordan23","delete"
+  ];
+  top.forEach((w) => weak.add(w.toLowerCase()));
+
+  // 2) 词根 + 常见后缀变形（覆盖 password123 / admin! / test2024 等）
+  const roots = ["password","pass","admin","root","user","test","welcome","qwerty","abc","abcd","login",
+    "letmein","iloveyou","sunshine","monkey","dragon","baseball","football","superman","master","guest",
+    "hello","love","sex","god","zaq","qaz","1q2w3e4r","1qaz2wsx","123","pokemon","starwars","naruto",
+    "basket","soccer","princess","azerty","battery","flower","orange","silver","gold","maggie","1314","520"];
+  const tails = ["","1","12","123","1234","12345","123456","!","1!","@","#","2023","2024","2025","2026",
+    "01","007","111","888","520","1314",".","2","123!","@123","#2024","!!","..","123."];
+  for (const r of roots) for (const t of tails) {
+    const w = (r + t).toLowerCase();
+    if (w.length >= 4) weak.add(w);
+  }
+
+  // 3) 数字连续（模 10）长度 4-12，从各起点正向/反向
+  for (let len = 4; len <= 12; len++) {
+    for (let st = 0; st < 10; st++) {
+      let a = "", b = "";
+      for (let i = 0; i < len; i++) { a += ((st + i) % 10); b += ((st - i + 10) % 10); }
+      weak.add(a); weak.add(b);
+    }
+  }
+
+  // 4) 重复字符（4-12 连）
+  for (const ch of "0123456789abcdefghijklmnopqrstuvwxyz") {
+    for (let len = 4; len <= 12; len++) weak.add(ch.repeat(len));
+  }
+
+  // 5) 键盘/字母顺序序列：生成长度 4-8 连续子串作为「序列黑名单」
+  const lines = ["qwertyuiop","asdfghjkl","zxcvbnm","abcdefghijklmnopqrstuvwxyz","1234567890"];
+  for (const line of lines) {
+    const rev = line.split("").reverse().join("");
+    for (const L of [line, rev]) {
+      for (let i = 0; i + 4 <= L.length; i++) {
+        for (let j = 4; j <= 8 && i + j <= L.length; j++) seq.add(L.slice(i, i + j));
+      }
+    }
+  }
+
+  return { weak, seq };
+}
+
+// 是否含连续或重复字符序列（如 1234、aaaa、qwer、abcd）
+function hasBadSequence(pwd) {
+  const p = (pwd || "").toLowerCase();
+  if (/(.)\1{3,}/.test(p)) return true;            // 4+ 连续相同字符
+  for (const s of PWD_SEQUENCES) if (p.includes(s)) return true;
+  return false;
+}
+
+const PWD_BL = buildPwdBlacklist();
+const WEAK_PASSWORDS = PWD_BL.weak;
+const PWD_SEQUENCES = PWD_BL.seq;
+
+/**
+ * 评估密码安全性。返回 { score, level, ok, issues, classes }。
+ * 达标标准：至少 8 位 + 同时含大小写字母和数字（符号可选）+ 不在常见弱密码清单（500+ 条）
+ * + 不含连续/重复字符序列（如 1234、aaaa、qwer）+ 不含邮箱前缀/姓名。
+ * 注意：系统无法读取 Supabase 已存密码，故「检测」只在用户输入时实时进行（注册 / 改密码 / 强制改密）。
+ */
+function evaluatePassword(pwd, email, name) {
+  pwd = pwd || "";
+  const issues = [];
+  const hasLower = /[a-z]/.test(pwd);
+  const hasUpper = /[A-Z]/.test(pwd);
+  const hasDigit = /[0-9]/.test(pwd);
+  const hasSymbol = /[^a-zA-Z0-9]/.test(pwd);
+  const classes = [hasLower, hasUpper, hasDigit, hasSymbol].filter(Boolean).length;
+  const lower = pwd.toLowerCase();
+  const seqBad = hasBadSequence(pwd);
+  const weakHit = WEAK_PASSWORDS.has(lower);
+
+  let score = 0;
+  if (pwd.length >= 8) score++;
+  if (pwd.length >= 12) score++;
+  if (pwd.length >= 16) score++;
+  if (classes >= 3) score++;
+  if (classes >= 4) score++;
+  if (pwd.length >= 20) score++;
+  if (!weakHit && !seqBad) score++;
+
+  if (pwd.length < 8) issues.push("至少 8 位");
+  if (!hasLower || !hasUpper || !hasDigit) issues.push("需同时包含大小写字母和数字");
+  if (weakHit) { score = 0; issues.push("该密码在常见弱密码清单中"); }
+  if (seqBad) { score = 0; issues.push("不能包含连续或重复字符序列（如 1234、aaaa、qwer）"); }
+
+  const local = (email || "").split("@")[0].toLowerCase();
+  if (local && local.length >= 3 && lower.includes(local)) issues.push("不能与邮箱前缀相同");
+  const nm = (name || "").trim().toLowerCase();
+  if (nm && nm.length >= 2 && lower.includes(nm)) issues.push("不能包含姓名");
+
+  let level = "弱";
+  if (score >= 6) level = "很强";
+  else if (score >= 4) level = "强";
+  else if (score >= 2) level = "中";
+
+  const ok = pwd.length >= 8
+    && hasLower && hasUpper && hasDigit
+    && !weakHit
+    && !seqBad
+    && !(local && local.length >= 3 && lower.includes(local))
+    && !(nm && nm.length >= 2 && lower.includes(nm));
+
+  return { score, level, ok, issues, classes };
+}
+
+/**
+ * 打开「修改登录密码」弹窗。
+ * forced=true 时为管理员标记的强制改密：不可关闭（隐藏右上角 ✕、遮罩不关、无取消按钮），
+ * 仅「完成修改」或「退出登录」可离开。改密仍需先验证当前密码（公共设备安全）。
+ */
+function openChangePasswordModal(forced) {
+  if (MODE !== "cloud" || !cloudConfigured()) { toast("仅云端模式支持修改登录密码"); return; }
+  const body = `
+    <div class="cp-modal">
+      ${forced ? `<div class="cp-force-note">⚠️ 系统检测到您的登录密码安全性过低，已被管理员要求修改。请设置一个更强的密码后再继续使用（也可选择退出登录）。</div>` : ``}
+      <label class="cp-label">当前密码</label>
+      <input type="password" id="cpCurrent" class="input" placeholder="请输入当前登录密码" autocomplete="current-password" />
+      <label class="cp-label">新密码</label>
+      <input type="password" id="cpNew" class="input" placeholder="至少 8 位，含大小写字母和数字" autocomplete="new-password" oninput="updatePwdStrength()" />
+      <div class="pwd-strength" id="cpStrength"></div>
+      <label class="cp-label">确认新密码</label>
+      <input type="password" id="cpConfirm" class="input" placeholder="再次输入新密码" autocomplete="new-password" oninput="updatePwdStrength()" />
+      <div class="cp-err" id="cpErr"></div>
+      <div class="cp-actions">
+        ${forced ? `<button class="btn" onclick="doLogout()">退出登录</button>` : ``}
+        <button class="btn primary" id="cpSubmit" onclick="submitChangePassword(${forced ? "true" : "false"})">修改密码</button>
+      </div>
+    </div>`;
+  const opts = { hideFooter: true };
+  if (forced) {
+    opts.onOpen = () => { const c = document.getElementById("modalClose"); if (c) c.style.display = "none"; };
+  }
+  modal.open(forced ? "强制修改登录密码" : "修改登录密码", body, opts);
+}
+
+// 实时刷新密码强度条
+function updatePwdStrength() {
+  const pwdEl = document.getElementById("cpNew");
+  const box = document.getElementById("cpStrength");
+  if (!box) return;
+  const pwd = pwdEl ? pwdEl.value : "";
+  if (!pwd) { box.className = "pwd-strength"; box.innerHTML = ""; return; }
+  const ev = evaluatePassword(pwd, currentUser && currentUser.email, currentProfile && currentProfile.name);
+  box.className = "pwd-strength " + (ev.ok ? (ev.score >= 4 ? "strong" : "ok") : "weak");
+  box.innerHTML = `
+    <div class="pwd-strength-bar"><span style="width:${Math.max(15, Math.min(100, ev.score * 20))}%"></span></div>
+    <div class="pwd-strength-text">强度：${ev.level}${ev.issues.length ? "（" + ev.issues.join("、") + "）" : " ✓"}</div>`;
+}
+
+async function submitChangePassword(forced) {
+  const cur = document.getElementById("cpCurrent").value;
+  const pwd = document.getElementById("cpNew").value;
+  const conf = document.getElementById("cpConfirm").value;
+  const err = document.getElementById("cpErr");
+  if (!cur) { err.textContent = "请输入当前密码"; return; }
+  if (!pwd) { err.textContent = "请输入新密码"; return; }
+  if (pwd !== conf) { err.textContent = "两次输入的新密码不一致"; return; }
+  const ev = evaluatePassword(pwd, currentUser && currentUser.email, currentProfile && currentProfile.name);
+  if (!ev.ok) { err.textContent = "密码不达标：" + ev.issues.join("、"); return; }
+  err.textContent = "";
+  const btn = document.getElementById("cpSubmit");
+  btn.disabled = true; btn.textContent = "修改中…";
+  try {
+    // 先重新验证当前密码（公共设备安全：避免他人借已登录状态改密码）
+    const email = (currentUser && currentUser.email) || "";
+    const { error: reErr } = await sb.auth.signInWithPassword({ email, password: cur });
+    if (reErr) { err.textContent = "当前密码错误"; btn.disabled = false; btn.textContent = "修改密码"; return; }
+    const { error } = await sb.auth.updateUser({ password: pwd });
+    if (error) { err.textContent = "修改失败：" + error.message; btn.disabled = false; btn.textContent = "修改密码"; return; }
+    // 清零强制改密标记（自身仅可改该列，由 profiles_self_force_pw 策略保证）
+    try {
+      await sb.from("profiles").update({ force_password_change: false }).eq("id", currentUser.id);
+    } catch (e) { console.warn("清零强制改密标记失败（不影响本次改密）", e); }
+    if (currentProfile) currentProfile.forcePasswordChange = false;
+    modal.close();
+    toast("登录密码已修改" + (forced ? "，现在可以继续使用了" : ""));
+  } catch (e) {
+    err.textContent = "修改异常：" + (e.message || "请重试");
+    btn.disabled = false; btn.textContent = "修改密码";
   }
 }
 
@@ -24007,7 +24233,7 @@ async function startCloudSession() {
 
     // 拿到权威角色档案后校正（角色 / 门店 / 姓名变化则随后用新权限重渲染）
     const { data: prof } = await profilesP;
-    const newProfile = { id: (prof && prof.id) || currentUser.id, role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null, adminPasswordHash: (prof && prof.admin_password_hash) || null };
+    const newProfile = { id: (prof && prof.id) || currentUser.id, role: (prof && prof.role) || null, storeId: (prof && prof.store_id) || null, name: (prof && prof.name) || null, adminPasswordHash: (prof && prof.admin_password_hash) || null, forcePasswordChange: !!(prof && prof.force_password_change) };
     const roleChanged = !!(profBefore && (profBefore.role !== newProfile.role || profBefore.storeId !== newProfile.storeId || profBefore.name !== newProfile.name));
     currentProfile = newProfile;
     applyProfileToUI();
@@ -24048,6 +24274,10 @@ async function startCloudSession() {
       setSyncStatus("offline", "● 离线（本地缓存）");
     }
     hideBootLoader(); // 数据已就绪，收起加载遮罩
+    // 管理员标记的强制改密：登录后弹出不可关闭弹窗（修改后方可继续使用）
+    if (currentProfile && currentProfile.forcePasswordChange) {
+      setTimeout(() => openChangePasswordModal(true), 350);
+    }
     subscribeRealtime();
   } catch (e) {
     console.error("加载云端会话失败:", e);
@@ -24863,7 +25093,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vde7a3e4b";
+  const APP_VERSION = "v62ccb061";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
