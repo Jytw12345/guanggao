@@ -2305,6 +2305,17 @@ let projectTimeFilterDays = 0;
 // 本地模式（单机）：降级为 localStorage 兜底，仅影响本机。
 let WORKING_TIMEOUT_HOURS = (() => { try { const v = Number(localStorage.getItem("workTimeoutHours")); return v > 0 ? v : 12; } catch (_) { return 12; } })();
 
+// 后台自动刷新（模拟杀后台冷启动）阈值，单位：分钟。0 = 关闭（永不自动重载）。
+// 纯单设备/个人偏好，只影响本机行为，存 localStorage，不进云端 app_settings（避免强制全员一致）。
+let BG_RELOAD_MINUTES = (() => {
+  try {
+    const raw = localStorage.getItem("bgReloadMinutes");
+    if (raw === null || raw === "") return 15; // 未设置时默认 15 分钟
+    const v = Number(raw);
+    return isFinite(v) && v >= 0 ? v : 15;
+  } catch (_) { return 15; }
+})();
+
 // 验收后自动审核：验收满该时长(小时)后系统自动审核(REVIEWED)。0 = 关闭。由总经理在「提醒设置」调整。
 // 云端模式：全局部署于 app_settings 表（全员共享）；本地模式：降级 localStorage（仅本机）。
 let AUTO_REVIEW_AFTER_ACCEPT_HOURS = (() => { try { const v = Number(localStorage.getItem("autoReviewAfterAcceptHours")); return v > 0 ? v : 0; } catch (_) { return 0; } })();
@@ -4210,7 +4221,8 @@ function initRealtimeRecovery() {
 function initVisibilityRecovery() {
   const MIN_BACKGROUND_MS = 30000;   // 后台停留超过 30s 才允许自愈，避免短暂切换误触发
   const MAX_RECOVER = 2;             // 单会话自愈上限，防止极端情况下 reload 后仍白屏导致死循环
-  const AUTO_RELOAD_BG_MS = 900000;  // 后台停留 ≥ 15 分钟，回前台主动冷启动（模拟杀后台）
+  // 后台自动刷新阈值：来自个人设置 BG_RELOAD_MINUTES（分钟）。0 = 关闭。
+  const AUTO_RELOAD_BG_MS = BG_RELOAD_MINUTES > 0 ? BG_RELOAD_MINUTES * 60000 : Infinity;
   let lastHiddenAt = 0;
   let recovering = false;            // 防止同一次恢复窗口内重复触发
 
@@ -15679,6 +15691,67 @@ function saveReminderSettings() {
   }
 }
 
+/* ===== 应用设置：后台自动刷新阈值（存 localStorage，仅影响本机） ===== */
+const BG_RELOAD_OPTIONS = [
+  { v: 0, label: "关闭（不自动刷新）" },
+  { v: 5, label: "5 分钟" },
+  { v: 10, label: "10 分钟" },
+  { v: 15, label: "15 分钟（推荐）" },
+  { v: 30, label: "30 分钟" },
+  { v: 60, label: "60 分钟" },
+];
+
+function openBgReloadSettingsModal() {
+  const isMobile = window.innerWidth <= 768;
+  const opts = BG_RELOAD_OPTIONS.map((o) =>
+    `<option value="${o.v}" ${o.v === BG_RELOAD_MINUTES ? "selected" : ""}>${o.label}</option>`
+  ).join("");
+  const popup = document.createElement("div");
+  popup.id = "bgReloadSettingsModal";
+  popup.className = "modal-mask";
+  popup.innerHTML = `
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:${isMobile ? '92%' : '320px'};width:${isMobile ? 'auto' : '320px'};max-height:none;overflow:hidden;">
+      <div class="modal-head">
+        <h3>🔄 后台自动刷新</h3>
+        <button class="modal-close" onclick="closeBgReloadSettingsModal()">×</button>
+      </div>
+      <div class="modal-body" style="padding:14px;">
+        <p style="color:#666;margin-bottom:14px;font-size:12px;line-height:1.6;">
+          应用退到后台（或手机锁屏）超过设定时长后再次打开时，会自动重新加载一次（相当于杀掉后台冷启动）。因为核心文件均已本地缓存，重载很快，且能绕开系统把页面冻结后原地恢复那条较慢的路径。<br/>
+          选「关闭」则永不自动刷新，始终走原地恢复。当前有弹窗或正在填写的表单打开时，会自动跳过本次刷新，不打断输入。
+        </p>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <label style="font-weight:bold;font-size:13px;">后台停留超过多久自动刷新</label>
+          <select id="bgReloadMinutesInput" class="input" style="font-size:14px;padding:8px 10px;width:100%;box-sizing:border-box;">
+            ${opts}
+          </select>
+          <span style="color:#999;font-size:11px;">仅影响本机，不会同步给其他成员。建议 15 分钟：远超过系统约 5 分钟的冻结线，回来必是干净冷启动；又不会在短暂切走时乱刷新。</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeBgReloadSettingsModal()">取消</button>
+        <button class="btn" onclick="saveBgReloadSettings()">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(popup);
+}
+
+function closeBgReloadSettingsModal() {
+  const mask = document.getElementById("bgReloadSettingsModal");
+  if (mask) mask.remove();
+}
+
+function saveBgReloadSettings() {
+  let v = Number(document.getElementById("bgReloadMinutesInput").value);
+  if (!BG_RELOAD_OPTIONS.some((o) => o.v === v)) v = 15; // 兜底非法值
+  BG_RELOAD_MINUTES = v;
+  localStorage.setItem("bgReloadMinutes", String(v));
+  closeBgReloadSettingsModal();
+  toast(v > 0
+    ? ("已保存：后台超过 " + v + " 分钟自动刷新")
+    : "已保存：已关闭后台自动刷新");
+}
+
 function showWageConfig() {
   if (!perm.manageWageConfig()) { toast("权限不足：此功能仅总经理可见"); return; }
   const config = getWageConfig();
@@ -20176,6 +20249,15 @@ function renderMine() {
     </div>
     ` : ""}
 
+    <div class="mine-section-title">应用设置</div>
+    <div class="mine-list">
+      <div class="mine-list-item" onclick="openBgReloadSettingsModal()">
+        <div class="mine-list-icon" style="background:#eff6ff;color:#2563eb">🔄</div>
+        <span class="mine-list-text">后台自动刷新</span>
+        <span class="mine-list-arrow">›</span>
+      </div>
+    </div>
+
     ${MODE === "cloud" ? `<button class="mine-logout" onclick="if(confirm('确定要退出登录吗？'))doLogout()">登出</button>` : ""}
   `;
 }
@@ -24029,7 +24111,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vf76f3dd1";
+  const APP_VERSION = "v5a89b4a1";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

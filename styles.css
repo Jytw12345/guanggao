@@ -491,6 +491,12 @@ body {
   text-align: center;
 }
 
+/* 桌面端专属入口：后台自动刷新（移动端从「我的」进入，故默认隐藏避免重复） */
+.desktop-only-bg { display: none; }
+@media (min-width: 769px) {
+  .desktop-only-bg { display: flex; }
+}
+
 .ud-item .dropdown-btn-text {
   flex: 1;
   text-align: left;
