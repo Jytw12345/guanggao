@@ -6701,6 +6701,59 @@ table.data.project-hours-diff thead th {
   animation: fadeOutRight 0.3s ease-out forwards;
 }
 
+/* 门店店长「待验收」提醒横幅：进入软件时提示，可关闭，带「去验收」快捷入口 */
+.accept-notice {
+  position: fixed;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-12px);
+  z-index: 320;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 520px;
+  max-width: calc(100% - 32px);
+  padding: 12px 14px;
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+  color: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(245, 158, 11, 0.35);
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: none;
+}
+.accept-notice.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+.accept-notice__icon { font-size: 20px; flex-shrink: 0; }
+.accept-notice__text { font-size: 14px; line-height: 1.4; flex: 1; }
+.accept-notice__text b { font-size: 16px; }
+.accept-notice__btn {
+  flex-shrink: 0;
+  border: none;
+  background: rgba(255, 255, 255, 0.92);
+  color: #b45309;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.accept-notice__btn:hover { background: #fff; }
+.accept-notice__close {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.accept-notice__close:hover { color: #fff; }
+
 @keyframes slideInRight {
   from {
     opacity: 0;

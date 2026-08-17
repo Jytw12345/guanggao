@@ -2257,6 +2257,55 @@ function notify(title, message) {
   showNotificationAlert(`${title}：${message}`);
 }
 
+// —— 门店店长「待验收」提醒：进入软件时若有「完成安装未验收」的项目，顶部横幅提示请尽快验收 ——
+function checkStoreAcceptanceNotice() {
+  if (!currentProfile || currentProfile.role !== ROLE.STORE) return;   // 仅门店店长
+  if (sessionStorage.getItem("acceptNoticeShown")) return;            // 本次会话只提示一次
+  // 只统计本门店的「完成安装未验收」项目（店长通常只负责本门店；无绑定门店时不提示，避免误报全公司）
+  const myStoreId = myStore();
+  const pending = (cache.projects || [])
+    .filter(p => p.status === STATUS.DONE && (myStoreId == null || p.storeId === myStoreId));
+  if (pending.length === 0) return;
+  showAcceptanceNotice(pending.length);
+  try { sessionStorage.setItem("acceptNoticeShown", "1"); } catch (_) {}
+}
+function showAcceptanceNotice(n) {
+  if (document.getElementById("acceptNotice")) return;
+  const el = document.createElement("div");
+  el.id = "acceptNotice";
+  el.className = "accept-notice";
+  el.innerHTML =
+    '<span class="accept-notice__icon">📋</span>' +
+    '<span class="accept-notice__text">您有 <b>' + n + '</b> 个项目待验收，请尽快完成验收</span>' +
+    '<button class="accept-notice__btn" onclick="gotoAcceptanceFilter()">去验收</button>' +
+    '<button class="accept-notice__close" onclick="dismissAcceptNotice()" aria-label="关闭">×</button>';
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("show"));
+}
+function dismissAcceptNotice() {
+  const el = document.getElementById("acceptNotice");
+  if (!el) return;
+  el.classList.remove("show");
+  setTimeout(() => el.remove(), 260);
+}
+function gotoAcceptanceFilter() {
+  dismissAcceptNotice();
+  const sel = document.getElementById("projectStatusFilter");
+  if (sel) sel.value = STATUS.DONE;
+  // 店长视角下把门店筛选锁定本门店，确保「去验收」只列出本店待验收项，与提醒数字一致
+  if (currentProfile && currentProfile.role === ROLE.STORE) {
+    const storeSel = document.getElementById("projectStoreFilter");
+    const myId = myStore();
+    if (storeSel && myId) storeSel.value = myId;
+  }
+  const search = document.getElementById("projectSearch");
+  if (search) search.value = "";
+  if (typeof switchTab === "function") switchTab("projects");
+  if (typeof renderProjects === "function") renderProjects();
+  const list = document.getElementById("projectList");
+  if (list) setTimeout(() => list.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+}
+
 function sendNotificationForProjectChange(eventType, project) {
   if (!project) return;
 
@@ -23862,6 +23911,7 @@ async function init() {
   initPullToRefresh(); // 启用移动端自定义下拉刷新（只刷数据、不重载）
   initRealtimeRecovery(); // 回前台 / 网络恢复时补偿同步（Realtime 断开期间的事件不会补发）
   window.__APP_BOOTED__ = true; // 标记初始化完成，供后台恢复白屏自愈使用
+  checkStoreAcceptanceNotice(); // 门店店长进入软件时，若有待验收项目顶部提示
   initVisibilityRecovery();     // 后台冻结/回收恢复失败时自动硬刷新自愈
   setupHourDiffDrag();          // 项目工时差异表：鼠标拖拽横向滚动
 }
@@ -24111,7 +24161,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v6fd9fd55";
+  const APP_VERSION = "vce79d428";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
