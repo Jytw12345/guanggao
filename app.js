@@ -2904,7 +2904,7 @@ const repo = {
         cloudQuery(() => sb.from("internal_tasks").select("*")),
         cloudQuery(() => sb.from("vehicles").select("*")),
         cloudQuery(() => sb.from("notifications").select("*").eq("recipient_user_id", (currentUser && currentUser.id) || "__none__").order("created_at", { ascending: false })),
-        cloudQuery(() => sb.from("profiles").select("*").order("email")),
+        cloudQuery(() => sb.from("user_directory").select("*").order("email")),
       ]);
       const allErrors = [
         { name: "workers", res: wRes },
@@ -4014,7 +4014,7 @@ async function applyIncrementalUpdate(tableName) {
       break;
     }
     case "accounts": {
-      const { data, error } = await sb.from("profiles").select("*").order("email");
+      const { data, error } = await sb.from("user_directory").select("*").order("email");
       if (!error) cache.accounts = (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "" }));
       break;
     }
@@ -15594,6 +15594,28 @@ function renderStats() {
         </table>
       </div>`;
 
+  /* 把 "姓名：备注；姓名：备注；..." 按相同备注合并为 "姓名1、姓名2：备注"，减少重复文本 */
+  function compactNotes(notes) {
+    if (!notes) return "";
+    const raw = String(notes).trim();
+    if (!raw) return "";
+    const groups = {};
+    raw.split(/[;；]/).map(s => s.trim()).filter(Boolean).forEach(part => {
+      const idx = part.indexOf('：') >= 0 ? part.indexOf('：') : part.indexOf(':');
+      if (idx <= 0) return;
+      const name = part.slice(0, idx).trim();
+      const note = part.slice(idx + 1).trim();
+      if (!name || !note) return;
+      groups[note] = groups[note] || new Set();
+      groups[note].add(name);
+    });
+    const entries = Object.entries(groups);
+    if (entries.length === 0) return esc(raw);
+    return entries.map(([note, names]) =>
+      `<span class="note-group"><span class="note-names">${esc(Array.from(names).join('、'))}</span>：<span class="note-text">${esc(note)}</span></span>`
+    ).join('<span class="note-sep">；</span>');
+  }
+
   const projectTable = projRows.length === 0
     ? `<div class="empty">所选月份暂无项目。</div>`
     : `
@@ -15643,10 +15665,10 @@ function renderStats() {
               <td class="col-num" style="color:#3b82f6">${fmtHours(r.levelHours?.中级 || 0)}</td>
               <td class="col-num" style="color:#f59e0b">${fmtHours(r.levelHours?.高级 || 0)}</td>
               <td class="col-num" style="color:#dc2626">${fmtHours(r.levelHours?.特级 || 0)}</td>
-              <td class="col-workers wrap">${workerChips || `<span style="color:var(--muted)">—</span>`}</td>
-              <td class="col-outsourced" style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
-              <td class="col-auto wrap">${autoChips || `<span style="color:var(--muted)">—</span>`}</td>
-              <td class="col-notes wrap">${esc(r.notes) || `<span style="color:var(--muted)">—</span>`}</td>
+            <td class="col-workers wrap"><div class="chip-stack">${workerChips || `<span class="worker-chip placeholder">—</span>`}</div></td>
+            <td class="col-outsourced" style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
+            <td class="col-auto wrap"><div class="chip-stack">${autoChips || `<span class="worker-chip placeholder">—</span>`}</div></td>
+            <td class="col-notes wrap">${compactNotes(r.notes) || `<span style="color:var(--muted)">—</span>`}</td>
             </tr>`;
           }).join("")}
         </tbody>
@@ -15920,14 +15942,14 @@ async function loadAccounts() {
   if (MODE !== "cloud" || !cloudConfigured() || _loadingAccounts) return;
   _loadingAccounts = true;
   try {
-    const { data, error } = await sb.from("profiles").select("*").order("email");
+    const { data, error } = await sb.from("user_directory").select("*").order("email");
     if (!error) {
       cache.accounts = (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "" }));
     } else {
-      console.warn("profiles 读取失败:", error.message);
+      console.warn("user_directory 读取失败:", error.message);
     }
   } catch (e) {
-    console.warn("profiles 读取异常:", e && e.message);
+    console.warn("user_directory 读取异常:", e && e.message);
   } finally {
     _loadingAccounts = false;
   }
@@ -15962,7 +15984,7 @@ function computeNotifTargets(scope, storeId, selectedIds) {
   return list.filter((a) => a.id && a.id !== me);
 }
 
-/* 渲染「指定人员」复选框列表（总经理=全部账号；店长=本门店账号） */
+/* 渲染「指定人员」复选框列表：所有云端账号均可选，发送时 computeNotifTargets 会排除自己 */
 function renderNotifSpecificList() {
   const box = document.getElementById("notifSpecificList");
   if (!box) return;
@@ -16056,6 +16078,7 @@ function openSendNotification() {
       </div>
     </div>`;
   document.body.appendChild(popup);
+  initCustomSelects(popup);
   syncNotifScopeUI();
   // 人员列表可能尚未加载（旧缓存/首次打开），后台补拉一次并刷新 UI
   loadAccounts().then(() => {
@@ -20770,14 +20793,15 @@ function renderNotifications() {
   }
   const list = (cache.notifications || []).slice().sort((a, b) =>
     new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  // 发通知入口始终显示（云端权限允许时），不应因空消息而隐藏
+  const sendBtn = document.getElementById("btnSendNotif");
+  if (sendBtn) sendBtn.style.display = canSendNotification() ? "inline-block" : "none";
   if (list.length === 0) {
     el.innerHTML = `<div class="notif-empty">📭 暂时没有消息</div>`;
     document.getElementById("btnMarkAllRead").style.display = "none";
     return;
   }
   document.getElementById("btnMarkAllRead").style.display = "inline-block";
-  const sendBtn = document.getElementById("btnSendNotif");
-  if (sendBtn) sendBtn.style.display = canSendNotification() ? "inline-block" : "none";
   el.innerHTML = `<div class="notif-list">` + list.map((n) => {
     const unread = !n.readAt;
     return `<div class="notif-item ${unread ? "unread" : ""}" onclick="markNotificationRead('${n.id}')">
@@ -24815,7 +24839,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v3561e84a";
+  const APP_VERSION = "v72ae7498";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
