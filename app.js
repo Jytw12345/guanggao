@@ -15953,10 +15953,10 @@ function computeNotifTargets(scope, storeId, selectedIds) {
   } else if (scope === "store_all") {
     list = (cache.accounts || []).filter((a) => sameSid(a.storeId, storeId));
   } else if (scope === "store_managers") {
-    const sid = isManager() ? storeId : myStore();
+    const sid = storeId || myStore();
     list = (cache.accounts || []).filter((a) => a.role === ROLE.STORE && sameSid(a.storeId, sid));
   } else if (scope === "store_workers") {
-    const sid = isManager() ? storeId : myStore();
+    const sid = storeId || myStore();
     list = (cache.accounts || []).filter((a) => a.role === ROLE.WORKER && sameSid(a.storeId, sid));
   }
   // 去掉自己（不给自己发）
@@ -15983,25 +15983,13 @@ function renderNotifSpecificList() {
     return;
   }
 
-  let emptyMsg = "没有可选人员";
-  let pool = accounts;
-  if (!isManager()) {
-    const sid = myStore();
-    if (!sid) {
-      emptyMsg = "当前账号未分配门店，请联系管理员分配门店";
-    } else {
-      pool = accounts.filter((a) => sameSid(a.storeId, sid));
-      emptyMsg = "该门店暂无其他人员";
-    }
-  }
-
-  box.innerHTML = pool.map((a) => `
+  box.innerHTML = accounts.map((a) => `
     <label class="notif-check-item">
       <input type="checkbox" class="notif-specific-cb" value="${a.id}">
       <span>${esc(a.name || a.email || a.id)}</span>
       <span class="notif-check-role">${a.role === ROLE.STORE ? "店长" : a.role === ROLE.WORKER ? "施工" : a.role === ROLE.MANAGER ? "总经理" : ""}</span>
     </label>`).join("") ||
-    `<div class="notif-empty" style="padding:20px 0;color:#999;">${emptyMsg}</div>`;
+    `<div class="notif-empty" style="padding:20px 0;color:#999;">没有可选人员</div>`;
 }
 
 /* 根据范围显示/隐藏动态区（门店选择、指定人员列表） */
@@ -16009,7 +15997,7 @@ function syncNotifScopeUI() {
   const scope = document.getElementById("notifScope").value;
   const storeRow = document.getElementById("notifStoreRow");
   const specificRow = document.getElementById("notifSpecificRow");
-  const needStore = (isManager() && (scope === "store_all" || scope === "store_managers" || scope === "store_workers"));
+  const needStore = (scope === "store_all" || scope === "store_managers" || scope === "store_workers");
   if (storeRow) storeRow.style.display = needStore ? "flex" : "none";
   if (specificRow) {
     specificRow.style.display = (scope === "specific") ? "block" : "none";
@@ -16021,26 +16009,16 @@ function openSendNotification() {
   if (!canSendNotification()) { toast("仅云端模式可发通知"); return; }
   const isMobile = window.innerWidth <= 768;
 
-  /* 范围选项：按角色给出 */
-  let scopeOpts = "";
-  if (isManager()) {
-    scopeOpts = `
+  /* 范围选项：所有云端登录用户均可向任意范围发通知（不再按角色/门店限制） */
+  const scopeOpts = `
       <option value="all">全部人员</option>
       <option value="store_all">指定门店全部人员</option>
       <option value="managers">全部门店店长</option>
       <option value="workers">全部施工人员</option>
       <option value="specific">指定人员…</option>`;
-  } else {
-    scopeOpts = `
-      <option value="store_managers">本门店店长</option>
-      <option value="store_workers">本门店施工人员</option>
-      <option value="specific">指定人员…</option>`;
-  }
-  /* 门店下拉（仅总经理可跨门店选；店长锁定本门店不可选） */
+  /* 门店下拉：任何用户均可跨门店选（店长也能跨门店发） */
   const stores = (cache.stores || []);
-  const storeOpts = isManager()
-    ? `<option value="">— 选择门店 —</option>` + stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")
-    : stores.filter((s) => s.id === myStore()).map((s) => `<option value="${s.id}" selected>${esc(s.name)}</option>`).join("");
+  const storeOpts = `<option value="">— 选择门店 —</option>` + stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
 
   const popup = document.createElement("div");
   popup.id = "sendNotifModal";
@@ -24836,7 +24814,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vf77f4c1d";
+  const APP_VERSION = "v60990f35";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
