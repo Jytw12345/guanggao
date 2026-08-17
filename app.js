@@ -21428,6 +21428,8 @@ function applyPermissions() {
     internalTasks: perm.viewTask(),
     workers: (perm.viewWorker() || perm.manageOutsourced()) && role != null,
     mine: role != null,
+    // 消息中心仅云端模式存在（消息存 Supabase）；本地模式无消息，隐藏入口
+    notifications: MODE === "cloud" && cloudConfigured(),
   };
   document.querySelectorAll(".bottom-nav-item").forEach((b) => {
     const tab = b.dataset.tab;
@@ -24813,7 +24815,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2d985ade";
+  const APP_VERSION = "v3561e84a";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
