@@ -38,9 +38,13 @@ const SHORT_WORK_WARN_MINUTES = 30;
 // 反向失真守卫（与「虚假施工」对称）：实际在场窗口很短（< SHORT_WORK_WARN_MINUTES 分钟）却填报大量工时（> 此值小时），弹确认拦截。
 const LOGGED_VS_ONSITE_WARN_HOURS = 2;
 
-// 每人每天标准工作量（小时）。用于「工时预警」与「施工人员安排」超限提醒。
-const DAILY_WORK_HOURS = 8;
-// 实际排班中加班常见，单日 10h 以内视为可接受；超过此值才做轻微提醒，避免误报。
+// 每人每天满负荷工时（小时）：上班时段 8:00-18:00 = 10 小时，即「满负荷/不休息」基准。
+// 用于「工时预警」与「施工人员安排」的产能/负荷计算。
+const DAILY_WORK_HOURS = 10;
+// 每人每天轻松工时（小时）：扣除约 2 小时吃饭休息后，实际作业 8 小时视为轻松排班。
+// 日历「正常」状态以此为界，超过此值即进入「满负荷/不休息」或「需要加班」区间。
+const DAILY_WORK_HOURS_EASY = 8;
+// 单人当天工时超过该值（即 > 每人 10 小时）才提示「需要加班」，避免误报。
 // showWorkerSchedule 的对比行、时间线/日历的过载标记均以该值为触发阈值。
 const DAILY_WORK_HOURS_WARN = 10;
 
@@ -1662,9 +1666,10 @@ function getProjectProgress(p, est, act, hasActual, done) {
   }
   
   if (p.startedAt) {
-    const workerCount = (p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1;
+    // 已开工但尚未登记工时：用实际人时 / 预计总工时估算进度。
+    // totalPersonHours 本身已是「挂钟时长 × 在场人数」；est 是预计总工时（人时），无需再除以人数。
     const totalPersonHours = calcProjectActualPersonHours(p);
-    const timeProgress = (totalPersonHours / workerCount / est) * 100;
+    const timeProgress = (totalPersonHours / est) * 100;
     return Math.min(100, Math.max(0, timeProgress));
   }
   
@@ -4749,7 +4754,7 @@ function renderWorkers(dateStr) {
           <div class="worker-hours-row">
             <span class="worker-hours-item"><span class="worker-hours-label">累计工时</span><b>${fmtHours(totalHours)} 小时</b></span>
             <span class="worker-hours-sep"></span>
-            <span class="worker-hours-item"><span class="worker-hours-label">本月工时</span><b class="${monthHours > 208 ? 'text-overload' : ''}">${fmtHours(monthHours)} 小时</b></span>
+            <span class="worker-hours-item"><span class="worker-hours-label">本月工时</span><b class="${monthHours > 260 ? 'text-overload' : ''}">${fmtHours(monthHours)} 小时</b></span>
           </div>
           <div class="card-actions">
             ${perm.editWorker() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button>` : ""}${perm.deleteWorker() ? `<button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
@@ -5001,7 +5006,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
     const leaveBadge = (hasRestRec ? `<span class="tl-lane-rest-badge" title="轮休（周末休息）">🌴</span>` : "")
       + (hasLeaveRec ? `<span class="tl-lane-leave-badge" title="请假">🩹</span>` : "");
     const scheduleBadge = workerSchedules.length > 0 ? `<span class="tl-lane-schedule-badge">${svgCal(12)}</span>` : "";
-    const loadBadge = overloaded ? `<span class="tl-lane-overload-badge" title="工时偏多：当天累计 ${fmtHours(dailyHours)}h，满勤容忍至 ${DAILY_WORK_HOURS_WARN}h">${fmtHours(dailyHours)}h</span>` : "";
+    const loadBadge = overloaded ? `<span class="tl-lane-overload-badge" title="工时偏多：当天累计 ${fmtHours(dailyHours)}h，超过每人满负荷 ${DAILY_WORK_HOURS_WARN}h，需要加班">${fmtHours(dailyHours)}h</span>` : "";
     if (overloaded) overloadNames.push(`${esc(w.name)}（${fmtHours(dailyHours)}h）`);
 
     lanesHtml += `
@@ -5065,7 +5070,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
   }
   
   const overloadBanner = overloadNames.length > 0
-    ? `<div class="tl-overload-banner">工时偏多：${overloadNames.join("、")} 当天累计工时超过可用工时（满勤容忍至 ${DAILY_WORK_HOURS_WARN}h），请留意排班。</div>`
+    ? `<div class="tl-overload-banner">工时偏多：${overloadNames.join("、")} 当天累计工时超过每人满负荷 ${DAILY_WORK_HOURS_WARN}h，需要加班，请留意排班。</div>`
     : "";
 
   return `
@@ -5505,7 +5510,7 @@ function renderScheduleCalendar() {
     const totalItems = combined.length;
     const moreLabel = totalItems > maxShow ? '<div class="sched-cal-more-text">+' + (totalItems - maxShow) + '更多</div>' : "";
 
-    // 工时预警：当天有施工人员累计工时超过其「可用工时」（已扣除请假；标准 8h，满勤容忍到 10h）
+    // 工时预警：当天有施工人员累计工时超过其「满负荷」（已扣除请假；满负荷 10h/人/天）
     const load = dayLoadMap[dateStr] || {};
     const overloaded = Object.keys(load)
       .map(function(wid) { return { w: getWorker(wid), hours: load[wid], wid: wid }; })
@@ -5515,12 +5520,12 @@ function renderScheduleCalendar() {
       });
     const overloadNames = overloaded.map(function(o) { return (o.w ? o.w.name : "未知") + " " + fmtHours(o.hours) + "h"; }).join("、");
     const hasOverload = overloaded.length > 0;
-    const overloadTitle = hasOverload ? ' title="工时偏多：' + esc(overloadNames) + ' 超过当天可用工时（满勤容忍至 ' + DAILY_WORK_HOURS_WARN + 'h/人/天）"' : "";
+    const overloadTitle = hasOverload ? ' title="工时偏多：' + esc(overloadNames) + ' 超过每人满负荷 ' + DAILY_WORK_HOURS_WARN + 'h/天，需要加班"' : "";
 
     const cls = "sched-cal-cell" + (isToday ? " today" : "") + (isSelected ? " selected" : "") + (isWeekend ? " weekend" : "") + (isHolidayDate ? " holiday" : "") + (totalItems > 0 ? " has" : "") + (hasOverload ? " overload" : "");
     cells += '<div class="' + cls + '"' + overloadTitle + ' onclick="selectScheduleDate(\'' + dateStr + '\')">' +
       '<span class="sched-cal-day">' + d + '</span>' +
-      (hasOverload ? '<span class="sched-cal-overload" title="' + esc(overloadNames) + ' 超过当天可用工时（满勤容忍至 ' + DAILY_WORK_HOURS_WARN + 'h）">' + overloaded.length + '</span>' : '') +
+      (hasOverload ? '<span class="sched-cal-overload" title="' + esc(overloadNames) + ' 超过每人满负荷 ' + DAILY_WORK_HOURS_WARN + 'h，需要加班">' + overloaded.length + '</span>' : '') +
       (totalItems > 0 ? '<div class="sched-cal-items">' + itemsHtml + moreLabel + '</div>' : '') +
       (perm.addSchedule() ? '<span class="sched-cal-plus" onclick="event.stopPropagation();newWorkerScheduleForDate(\'' + dateStr + '\')">+</span>' : '') +
       '</div>';
@@ -9918,10 +9923,10 @@ function parseHM(t) {
 }
 
 /* 工人在某天的可用工时（小时），已扣除请假占用：
-   - 无请假：8h
+   - 无请假：10h（满负荷，8:00-18:00）
    - 全天(all)：0h（不计入预警参考）
-   - 上午/下午(morning/afternoon)：4h
-   - 自定义(custom)：8h − 请假时长（按起止时间折算，最低 0） */
+   - 上午/下午(morning/afternoon)：5h
+   - 自定义(custom)：10h − 请假时长（按起止时间折算，最低 0） */
 function getWorkerAvailableHours(dateStr, workerId) {
   const leave = isWorkerOnLeave(workerId, dateStr);
   if (!leave) return DAILY_WORK_HOURS;
@@ -9933,10 +9938,10 @@ function getWorkerAvailableHours(dateStr, workerId) {
   return Math.max(0, DAILY_WORK_HOURS - (e - s) / 60);
 }
 
-/* 工人在某天的工时「告警阈值」：超过即视为偏多。
+/* 工人在某天的工时「告警阈值」：超过即视为需加班。
    - 可用工时 ≤ 0（全天请假）：返回 Infinity，不告警
-   - 满勤(8h)：容忍加班，阈值取 10h（8~10h 视为可接受加班）
-   - 半天/部分请假：按实际可用工时（如 4h） */
+   - 满勤(10h)：阈值取 10h，超过每人 10 小时才提示需要加班
+   - 半天/部分请假：按实际可用工时（如 5h） */
 function getWorkerWarnThreshold(dateStr, workerId) {
   const avail = getWorkerAvailableHours(dateStr, workerId);
   if (avail <= 0) return Infinity;
@@ -10100,7 +10105,7 @@ function getWorkerAssignmentsOnDate(workerId, dateStr) {
 /* 计算某施工人员某天的工作负荷（小时）：
    - 分配到的未完工项目：按「实际分配人数」分摊项目总工时（estimatedHours ÷ 人数）
    - 内部任务（未核销）：预计工时 estHours
-   以「每人每天 8 小时」为基准，超过即视为工时预警。返回该人员当天累计工时（小时）。 */
+   以「每人每天满负荷 10 小时（8:00-18:00）」为基准，超过每人 10 小时才视为需加班。返回该人员当天累计工时（小时）。 */
 function getWorkerDailyHours(dateStr, workerId) {
   if (!workerId || !dateStr) return 0;
   let total = 0;
@@ -10139,9 +10144,8 @@ function fmtTimeOnly(p) {
 
 /* 生成「人员安排详情」里柔和的当日工时对比行（不刺眼）：
    - 全天请假(可用0)：静默灰色 + 「（当天请假）」，不计入预警
-   - ≤ 可用工时：静默灰色（满勤为 8h；半天为 4h）
-   - 可用工时 < 工时 ≤ 满勤 10h：静默灰色 +「含加班」（加班常见，不告警）
-   - > 阈值：柔和琥珀色文字，无背景横幅、无 ⚠️ 图标，仅作轻提示 */
+   - ≤ 满负荷 10h（8:00-18:00）：静默灰色，正常满负荷
+   - > 每人 10h：柔和琥珀色文字 +「（需加班）」，无背景横幅、无 ⚠️ 图标，仅作轻提示 */
 function workerDailyTotalHtml(dateStr, workerId) {
   const hours = getWorkerDailyHours(dateStr, workerId);
   const avail = getWorkerAvailableHours(dateStr, workerId);
@@ -10151,11 +10155,9 @@ function workerDailyTotalHtml(dateStr, workerId) {
     note = "（当天请假）";
   } else if (hours > getWorkerWarnThreshold(dateStr, workerId)) {
     cls += " over";
-    note = "（偏多）";
-  } else if (hours > DAILY_WORK_HOURS) {
-    note = "（含加班）";
+    note = "（需加班）";
   }
-  return `<div class="${cls}">当天累计工时 ${fmtHours(hours)}h / 标准 ${DAILY_WORK_HOURS}h${note}</div>`;
+  return `<div class="${cls}">当天累计工时 ${fmtHours(hours)}h / 满负荷 ${DAILY_WORK_HOURS}h${note}</div>`;
 }
 
 /* 显示安装人员当天已分配的时间段 */
@@ -13534,13 +13536,14 @@ function generateWorkerScheduleDescription(dateStr = null) {
       
       let statusText = p.status;
       let statusColor = "#6b7280";
-      let progress = 0;
-      
-      const now = new Date();
-      const durationMs = pStart && pEnd ? pEnd - pStart : 0;
-      const elapsedMs = pStart ? Math.max(0, now - pStart) : 0;
-      const autoProgress = durationMs > 0 ? Math.min(100, Math.round((elapsedMs / durationMs) * 100)) : 0;
 
+      // 进度统一走 getProjectProgress（工时投入口径），与卡片进度条完全一致；
+      // 预约中未开工时 getProjectProgress 自然返回 0，无需单独处理。
+      const doneP = sumHours(p);
+      const { est: pEst, act: pAct, hasActual: pHas } = hoursDiff(p);
+      let progress = getProjectProgress(p, pEst, pAct, pHas, doneP);
+
+      const now = new Date();
       const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && pEnd && now > pEnd;
       const notStartedOverdue = isOverdueNotStarted(p);
 
@@ -13549,46 +13552,36 @@ function generateWorkerScheduleDescription(dateStr = null) {
           if (isOverdue) {
             statusColor = "#ef4444";
             statusText = isForgotWork(p) ? "忘记施工" : "预约中（已超期）";
-            progress = 0;
           } else if (notStartedOverdue) {
             statusColor = "#ef4444";
             statusText = "逾期未开工";
-            progress = 0;
           } else {
             statusColor = "#3b82f6";
-            progress = now >= pStart ? Math.min(30, autoProgress) : 0;
           }
           break;
         case STATUS.WORKING:
           statusColor = "#f59e0b";
-          progress = Math.max(30, Math.min(90, autoProgress));
           break;
         case STATUS.DONE:
           statusColor = "#10b981";
-          progress = 95;
           break;
         case STATUS.ACCEPTED:
         case STATUS.REVIEWED:
           statusColor = "#06b6d4";
-          progress = 100;
           break;
         case STATUS.PAUSED:
           statusColor = "#f59e0b";
           statusText = "已暂停";
-          progress = Math.max(30, Math.min(90, autoProgress));
           break;
         case STATUS.DELAYED:
           statusColor = "#f59e0b";
           statusText = "已延期";
-          progress = 0;
           break;
         case STATUS.CANCELLED:
           statusColor = "#ef4444";
-          progress = 0;
           break;
         default:
           statusColor = "#6b7280";
-          progress = 0;
       }
       
       const statusActions = [];
@@ -15205,15 +15198,15 @@ function renderStats() {
     storeFilter = myStore();
   }
 
-  // 本月标准工时：每月固定休息4天（每周休1天，不含法定假日）× 每日8小时。
-  // 例：8 月 31 天 − 4 天休息 = 27 个工作日 → 216 小时，而非写死的 40 小时。
+  // 本月标准工时：每月固定休息4天（每周休1天，不含法定假日）× 每日满负荷 10 小时（8:00-18:00）。
+  // 例：8 月 31 天 − 4 天休息 = 27 个工作日 → 270 小时，而非写死的 40 小时。
   const _ms = month ? month.split("-").map(Number) : [];
   const _year = _ms.length === 2 ? _ms[0] : new Date().getFullYear();
   const _mo = _ms.length === 2 ? _ms[1] : (new Date().getMonth() + 1);
   const _daysInMonth = new Date(_year, _mo, 0).getDate();
   const _restDays = 4; // 每月固定休息4天（每周休1天，不含法定假日）
   const workdaysInMonth = Math.max(0, _daysInMonth - _restDays);
-  const monthStandardHours = workdaysInMonth * 8;
+  const monthStandardHours = workdaysInMonth * DAILY_WORK_HOURS;
   
   function isInPeriod(dateStr) {
     if (!month) return true;
@@ -15491,7 +15484,7 @@ function renderStats() {
     const highWorkloadWorkers = internalRows.filter(r => r.hours > monthStandardHours);
 
     if (highWorkloadWorkers.length > 0) {
-      smartAnalysis += `<div class="stats-analysis warning">🔥 <strong>高负荷预警</strong>：${highWorkloadWorkers.map(w => esc(w.name)).join("、")} 本月工时超过 ${monthStandardHours} 小时（按每月休息4天、每日8小时计），建议关注工作强度！</div>`;
+      smartAnalysis += `<div class="stats-analysis warning">🔥 <strong>高负荷预警</strong>：${highWorkloadWorkers.map(w => esc(w.name)).join("、")} 本月工时超过 ${monthStandardHours} 小时（按每月休息4天、每日满负荷10小时计），建议关注工作强度！</div>`;
     }
     
     if (lowEfficiencyWorkers.length > 0) {
@@ -21556,15 +21549,21 @@ function renderCalendar() {
     const more = items.length > 3 ? `<div class="cal-more">+${items.length - 3} 更多</div>` : "";
     const countBadge = items.length ? `<span class="cal-count">${items.length}</span>` : "";
     const totalHours = items.reduce((sum, p) => sum + getProjectDayEstimatedHours(p, ds), 0);
-    /* 工时阈值按当天实际在岗人数动态计算：
-       在岗产能 = 当天未请假施工人员数 × DAILY_WORK_HOURS
-       > 产能 100% → 严重超载(红)；> 产能 80% → 接近满负荷(橙)；其余默认蓝 */
+    /* 日历工时三级口径（按当天实际在岗人数均摊）：
+       轻松容量 = 在岗人数 × 8h（含吃饭休息，正常排班）
+       满负荷   = 在岗人数 × 10h（8:00-18:00，不休息）
+       > 满负荷 → 超载需加班(红)；> 轻松容量 → 满负荷/不休息(橙)；其余为轻松(蓝) */
     const onDutyWorkers = cache.workers.filter(w => !isWorkerOnLeave(w.id, ds)).length;
-    const capacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS;
+    const easyCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS_EASY;
+    const fullCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS;
+    const avgPerPerson = totalHours / Math.max(onDutyWorkers, 1);
     let hoursClass = "cal-hours";
-    if (totalHours > capacity) hoursClass += " danger";
-    else if (totalHours > capacity * 0.8) hoursClass += " warn";
-    const hoursHtml = totalHours > 0 ? `<div class="${hoursClass}" title="当天预约工时 ${fmtHours(totalHours)}h / 在岗产能约 ${fmtHours(capacity)}h">${fmtHours(totalHours)}h</div>` : "";
+    if (totalHours > fullCapacity) hoursClass += " danger";
+    else if (totalHours > easyCapacity) hoursClass += " warn";
+    const hoursTitle = totalHours > 0
+      ? `当天预约 ${fmtHours(totalHours)}h，在岗 ${onDutyWorkers} 人；轻松容量 ${fmtHours(easyCapacity)}h（${DAILY_WORK_HOURS_EASY}h/人），满负荷 ${fmtHours(fullCapacity)}h（${DAILY_WORK_HOURS}h/人）；当前人均 ${fmtHours(avgPerPerson)}h`
+      : "";
+    const hoursHtml = totalHours > 0 ? `<div class="${hoursClass}" title="${hoursTitle}">${fmtHours(totalHours)}h</div>` : "";
     cells += `
       <div class="cal-cell ${items.length ? "has" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""} ${isHolidayDate ? "holiday" : ""}" onclick="selectCalDay('${ds}');">
         <div class="cal-daynum">${day}${countBadge}${holidayIcon}</div>
@@ -21640,32 +21639,20 @@ function renderCalDay() {
     });
   });
 
-  /* 时段重复预约检测：计算每个项目同时段重叠数（含自身），并找出最大并发数。
-   * 仅对具备有效开始/结束时间的项目计算；无结束时间的项目视为"瞬时点"。
-   * 外协任务和已完成项目不参与并发计算。 */
-  const overlapCount = new Array(items.length).fill(0);
-  let maxConcurrency = 0;
-  for (let i = 0; i < items.length; i++) {
-    if (isOutsourced(items[i])) continue;
-    if (isCompleted(items[i])) continue;
-    const si = projectStart(items[i]), ei = projectEnd(items[i]);
-    if (!si) continue;
-    const eiEff = ei || si;
-    let cnt = 1;
-    for (let j = 0; j < items.length; j++) {
-      if (j === i) continue;
-      if (isOutsourced(items[j])) continue;
-      if (isCompleted(items[j])) continue;
-      const sj = projectStart(items[j]), ej = projectEnd(items[j]);
-      if (!sj) continue;
-      const ejEff = ej || sj;
-      if (intervalsOverlap(si, eiEff, sj, ejEff)) cnt++;
-    }
-    overlapCount[i] = cnt;
-    if (cnt > maxConcurrency) maxConcurrency = cnt;
-  }
+  /* 内部人员产能与负荷（日历三级口径）：
+   * 轻松容量 = 当天在岗人数 × DAILY_WORK_HOURS_EASY（8h/人，含休息）；
+   * 满负荷   = 当天在岗人数 × DAILY_WORK_HOURS（10h/人，8:00-18:00）；
+   * 负荷 = 已分配内部人员的项目预计工时 / 满负荷。
+   * 未分配人员或纯外协项目不占用内部产能，不计入负荷。 */
+  const internalHours = items
+    .filter(p => (p.assignedWorkerIds || []).length > 0)
+    .reduce((sum, p) => sum + getProjectDayEstimatedHours(p, calSelectedDate), 0);
+  const onDutyWorkers = cache.workers.filter(w => !isWorkerOnLeave(w.id, calSelectedDate)).length;
+  const easyCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS_EASY;
+  const fullCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS;
+  const loadRatio = fullCapacity > 0 ? internalHours / fullCapacity : 0;
 
-  const rows = items.map((p, idx) => {
+  const rows = items.map((p) => {
     const isDoneOrReviewed = (p.status === STATUS.DONE || p.status === STATUS.REVIEWED || p.status === STATUS.ACCEPTED);
     let workersHtml;
     if (isDoneOrReviewed) {
@@ -21686,13 +21673,13 @@ function renderCalDay() {
     }
     const workerLabel = isDoneOrReviewed ? "施工人员" : "安装人员";
     const { est, act, hasActual } = hoursDiff(p);
-    const concur = overlapCount[idx];
-    const concurTag = concur >= 3
-      ? `<span class="concur-tag danger" title="该时段有 ${concur} 个项目同时预约">⏰ ${concur} 并发</span>`
-      : (concur >= 2 ? `<span class="concur-tag warn" title="该时段有 ${concur} 个项目同时预约">${concur} 并发</span>` : "");
+    const hasWorkerConflict = !isDoneOrReviewed && (p.assignedWorkerIds || []).some(wid => assignConflicts(p, wid).length > 0);
+    const conflictTag = hasWorkerConflict
+      ? `<span class="concur-tag danger" title="该项目存在人员冲突">⚠ 冲突</span>`
+      : "";
     return `
-      <div class="cal-detail-item ${concur >= 3 ? "item-conflict" : ""}">
-        <div class="cal-detail-time">${esc(fmtTimeRange(p))}${concurTag}</div>
+      <div class="cal-detail-item ${hasWorkerConflict ? "item-conflict" : ""}">
+        <div class="cal-detail-time">${esc(fmtTimeRange(p))}${conflictTag}</div>
         <div class="cal-detail-main">
           <div class="cal-detail-title"><b>${esc(p.name)}</b> <span class="badge ${p.status}">${p.status}</span></div>
           <div class="cal-detail-sub">${esc(storeName(p.storeId))} · 客户 ${esc(p.customer || "—")} · 预计 ${fmtHours(est)} / 实际 ${hasActual ? fmtHours(act) : "—"} 小时</div>
@@ -21702,23 +21689,30 @@ function renderCalDay() {
       </div>`;
   }).join("");
 
-  /* 工时超载提示：>40 严重超载需外协；>32 工时排满需全员加班 */
+  /* 工时超载 / 人员冲突提示横幅 */
   const alerts = [];
-  if (totalEst > 40) {
-    alerts.push(`<div class="cal-alert danger">⚠ <b>工时严重超载（${fmtHours(totalEst)}h）</b>：施工人员加班可能都完不成，建议安排外协或拆分到其他日期。</div>`);
-  } else if (totalEst > 32) {
-    alerts.push(`<div class="cal-alert warn">⚠ <b>工时排满（${fmtHours(totalEst)}h）</b>：可能需要全员加班才能完成，请提前协调人员。</div>`);
+  if (internalHours > fullCapacity) {
+    alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，需要加班</b>：已分配 ${fmtHours(internalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（负荷 ${Math.round(loadRatio * 100)}%，超每人 ${DAILY_WORK_HOURS}h），建议安排外协或拆分到其他日期。</div>`);
+  } else if (internalHours > easyCapacity) {
+    alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时满负荷（不休息）</b>：已分配 ${fmtHours(internalHours)}h / 轻松容量 ${fmtHours(easyCapacity)}h（人均 ${fmtHours(internalHours / Math.max(onDutyWorkers, 1))}h），已接近或达到每人 10h 上限，请留意排班。</div>`);
   }
-  if (maxConcurrency >= 3) {
-    alerts.push(`<div class="cal-alert warn">⏰ <b>时段冲突</b>：当天有 <b>${maxConcurrency}</b> 个项目在同一时间段重复预约，可能需要外协或增加人员，建议错峰安排。</div>`);
+  const conflictWorkers = [...new Set(items.flatMap((p) => {
+    if (isCompleted(p)) return [];
+    return (p.assignedWorkerIds || []).filter(wid => assignConflicts(p, wid).length > 0).map(wid => {
+      const w = getWorker(wid);
+      return w ? w.name : wid;
+    });
+  }))];
+  if (conflictWorkers.length > 0) {
+    alerts.push(`<div class="cal-alert warn">⏰ <b>人员冲突</b>：${esc(conflictWorkers.join("、"))} 在同时段被分配到多个项目，建议错峰或调整人员。</div>`);
   }
   const alertsHtml = alerts.length ? `<div class="cal-alerts">${alerts.join("")}</div>` : "";
 
   const workerStatsText = Object.keys(workerHours).length > 0 ? ` · 👷 ${Object.entries(workerHours).map(([name, hours]) => `${esc(name)}${fmtHours(hours)}h`).join("、")}` : "";
-  /* 汇总栏工时数值也按阈值着色 */
+  /* 汇总栏工时数值按内部人员负荷着色 */
   let estColorStyle = "";
-  if (totalEst > 40) estColorStyle = "color:var(--danger)";
-  else if (totalEst > 32) estColorStyle = "color:var(--warn)";
+  if (loadRatio > 1) estColorStyle = "color:var(--danger)";
+  else if (loadRatio > 0.8) estColorStyle = "color:var(--warn)";
   box.innerHTML = `
     <div class="detail-block">
       <h3>${svgCal(18)} ${esc(calSelectedDate)}（当天 ${items.length} 个预约）</h3>
@@ -21847,7 +21841,21 @@ function renderTimelineInDetail() {
     return (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
            startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
   }).length;
-  
+
+  /* 内部人员产能与负荷（与列表式视图同一口径） */
+  const onDutyWorkers = cache.workers.filter(w => !isWorkerOnLeave(w.id, calSelectedDate)).length;
+  const easyCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS_EASY;
+  const fullCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS;
+  const loadRatio = fullCapacity > 0 ? statInternalHours / fullCapacity : 0;
+
+  // 工时超载 / 人员冲突提示横幅（与列表式视图对齐）
+  const alerts = [];
+  if (statInternalHours > fullCapacity) {
+    alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，需要加班</b>：已分配 ${fmtHours(statInternalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（负荷 ${Math.round(loadRatio * 100)}%，超每人 ${DAILY_WORK_HOURS}h），建议安排外协或拆分到其他日期。</div>`);
+  } else if (statInternalHours > easyCapacity) {
+    alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时满负荷（不休息）</b>：已分配 ${fmtHours(statInternalHours)}h / 轻松容量 ${fmtHours(easyCapacity)}h（人均 ${fmtHours(statInternalHours / Math.max(onDutyWorkers, 1))}h），已接近或达到每人 10h 上限，请留意排班。</div>`);
+  }
+
   const conflictInfo = {};
   let statConflict = 0;
   items.forEach((p) => {
@@ -21867,6 +21875,11 @@ function renderTimelineInDetail() {
       conflictInfo[p.id] = conflictWorkers;
     }
   });
+  if (statConflict > 0) {
+    const conflictWorkers = [...new Set(Object.values(conflictInfo).flat())].join('、');
+    alerts.push(`<div class="cal-alert warn">⏰ <b>人员冲突</b>：${esc(conflictWorkers)} 在同时段被分配到多个项目，建议错峰或调整人员。</div>`);
+  }
+  const alertsHtml = alerts.length ? `<div class="cal-alerts">${alerts.join("")}</div>` : "";
 
   let timelineHtml = "";
   if (!items.length) {
@@ -22035,14 +22048,15 @@ function renderTimelineInDetail() {
     timelineHtml = `
       <div class="timeline-container timeline-horizontal">
         <div class="tl-stats">
-          <span class="tl-stat-item"><span class="tl-stat-label">总预计工时</span><span class="tl-stat-value ${statEstHours > 40 ? 'danger' : statEstHours > 32 ? 'warn' : ''}">${fmtHours(statEstHours)}h</span></span>
-          <span class="tl-stat-item"><span class="tl-stat-label">施工人员工时</span><span class="tl-stat-value ${statInternalHours > 40 ? 'danger' : statInternalHours > 32 ? 'warn' : ''}">${fmtHours(statInternalHours)}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">总预计工时</span><span class="tl-stat-value ${loadRatio > 1 ? 'danger' : loadRatio > 0.8 ? 'warn' : ''}">${fmtHours(statEstHours)}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">施工人员工时</span><span class="tl-stat-value ${loadRatio > 1 ? 'danger' : loadRatio > 0.8 ? 'warn' : ''}">${fmtHours(statInternalHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">外协工时</span><span class="tl-stat-value outsourced">${fmtHours(statOutsourcedHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">外协人员</span><span class="tl-stat-value outsourced">${statOutsourcedWorkers}人</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">实际工时</span><span class="tl-stat-value">${fmtHours(statActHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">加班项目</span><span class="tl-stat-value ${statOvertime > 0 ? 'warn' : ''}">${statOvertime}个</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">人员冲突</span><span class="tl-stat-value ${statConflict > 0 ? 'danger' : ''}">${statConflict > 0 ? statConflict + '个 (' + [...new Set(Object.values(conflictInfo).flat())].join('、') + ')' : statConflict + '个'}</span></span>
         </div>
+        ${alertsHtml}
         <div class="tl-legend">
           <span class="tl-legend-item"><span class="tl-legend-box work"></span>工作时间 8:00-18:00</span>
           <span class="tl-legend-item"><span class="tl-legend-box overtime"></span>加班区（需协调）</span>
@@ -24001,7 +24015,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc6a1d490";
+  const APP_VERSION = "v64415577";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

@@ -8534,7 +8534,7 @@ table.data.project-hours-diff thead th {
   border-radius: 999px;
   width: fit-content;
 }
-/* 工时排满：>32h，橙色提醒可能需全员加班 */
+/* 满负荷/不休息：人均 > 8h（超过轻松容量），橙色提醒 */
 .cal-hours.warn {
   color: #fff;
   background: var(--warn);
@@ -8542,7 +8542,7 @@ table.data.project-hours-diff thead th {
   border-radius: 999px;
   width: fit-content;
 }
-/* 工时严重超载：>40h，深红提醒可能需外协 */
+/* 严重超载：人均 > 10h（超过满负荷），深红提醒可能需外协/加班 */
 .cal-hours.danger {
   color: #fff;
   background: var(--danger);
