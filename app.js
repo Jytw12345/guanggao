@@ -16181,9 +16181,19 @@ function dispatchStoreManagerAcceptanceNotice(project) {
 /* 超期未完工：后台定时扫描，给本门店店长发站内通知。
    触发时机：每次全量同步成功后 + 每 5 分钟前台定时。
    用 localStorage 记录已通知过的超期项目，避免同一超期反复推送；
-   项目离开超期态（完工/取消/恢复未超时）后自动从记录移除。 */
+   项目离开超期态（完工/取消/恢复未超时）后自动从记录移除。
+   ★ 云端去重锁：发通知前先查 notifications 表，防止多设备/多用户重复发送（localStorage 只防同设备）。 */
 const NOTIFIED_OVERDUE_KEY = "notifiedOverdueSet";
 const NOTIFIED_NOTSTARTED_KEY = "notifiedNotStartedSet";
+/** 云端去重：查询 notifications 表，检查指定项目+类型在最近 N 分钟内是否已有通知。返回 Promise<boolean> */
+async function hasRecentCloudNotification(projectId, notifType, windowMinutes) {
+  windowMinutes = windowMinutes || 60;
+  try {
+    const since = new Date(Date.now() - windowMinutes * 60000).toISOString();
+    const { data } = await sb.from("notifications").select("id").eq("ref_id", projectId).eq("ref_type", "project").eq("type", notifType).gte("created_at", since).limit(1);
+    return !!(data && data.length > 0);
+  } catch (_) { return false; } // 查询失败不阻塞，宁可重复不可遗漏
+}
 function getNotifiedSet(key) {
   try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); }
   catch (e) { return new Set(); }
@@ -16204,33 +16214,33 @@ function saveNotifiedNotStartedSet(set) { saveNotifiedSet(NOTIFIED_NOTSTARTED_KE
    触发时机：每次全量同步成功后 + 每 5 分钟前台定时。
    用 localStorage 记录已通知过的项目，避免同一状态反复推送；
    项目离开对应状态（开工/完工/取消/改期到未来）后自动从记录移除，下次仍可再次提醒。 */
-function scanOverdueAndNotify() {
+async function scanOverdueAndNotify() {
   if (MODE !== "cloud" || !cloudConfigured()) return;
   const now = new Date();
 
   // ---- ① 超期未完工 ----
   const overdueSet = getNotifiedOverdueSet();
   const stillOverdue = new Set();
-  (cache.projects || []).forEach((p) => {
-    if (p.status === STATUS.CANCELLED || isCompleted(p)) return;
-    if (p.status === STATUS.DELAYED || p.status === STATUS.BOOKED) return;
-    if ((p.status === STATUS.WORKING || p.status === STATUS.PAUSED) && p.endTime) {
-      if (now > new Date(p.endTime)) {
-        stillOverdue.add(p.id);
-        if (!overdueSet.has(p.id)) {
-          const store = getStore(p.storeId);
-          const storeName = store ? store.name : "未知门店";
-          dispatchStoreManagerNotice(p, {
-            title: "⏰ 项目超期未完工",
-            body: `「${p.name}」（${storeName}）已超过约定时间仍未完工，请关注。`,
-            type: "overdue",
-            excludeSelf: false, // 系统自动提醒：本门店所有店长都应收到，含当前登录者
-          });
-          overdueSet.add(p.id);
-        }
-      }
-    }
+  const overdueProjects = (cache.projects || []).filter((p) => {
+    if (p.status === STATUS.CANCELLED || isCompleted(p)) return false;
+    if (p.status === STATUS.DELAYED || p.status === STATUS.BOOKED) return false;
+    return (p.status === STATUS.WORKING || p.status === STATUS.PAUSED) && p.endTime && (now > new Date(p.endTime));
   });
+  for (const p of overdueProjects) {
+    stillOverdue.add(p.id);
+    if (overdueSet.has(p.id)) continue; // 本地已发过
+    // ★ 云端去重：60 分钟内已有人发过则跳过（跨设备/跨用户防重复）
+    if (await hasRecentCloudNotification(p.id, "overdue", 60)) { overdueSet.add(p.id); continue; }
+    const store = getStore(p.storeId);
+    const storeName = store ? store.name : "未知门店";
+    dispatchStoreManagerNotice(p, {
+      title: "⏰ 项目超期未完工",
+      body: `「${p.name}」（${storeName}）已超过约定时间仍未完工，请关注。`,
+      type: "overdue",
+      excludeSelf: false,
+    });
+    overdueSet.add(p.id);
+  }
   let changed = false;
   overdueSet.forEach((id) => { if (!stillOverdue.has(id)) { overdueSet.delete(id); changed = true; } });
   if (changed || stillOverdue.size > 0) saveNotifiedOverdueSet(overdueSet);
@@ -16238,23 +16248,24 @@ function scanOverdueAndNotify() {
   // ---- ② 忘记开工（超时未开工 / 忘记施工）----
   const notStartedSet = getNotifiedNotStartedSet();
   const stillNotStarted = new Set();
-  (cache.projects || []).forEach((p) => {
-    if (!isOverdueNotStarted(p)) return; // 仅「预约中 + 未开工 + 已过约定开工时间」
+  const notStartedProjects = (cache.projects || []).filter((p) => isOverdueNotStarted(p));
+  for (const p of notStartedProjects) {
     stillNotStarted.add(p.id);
-    if (!notStartedSet.has(p.id)) {
-      const store = getStore(p.storeId);
-      const storeName = store ? store.name : "未知门店";
-      const forgot = isForgotWork(p);
-      const appt = fmtDateTime(p.appointmentTime || p.startTime);
-      dispatchStoreManagerNotice(p, {
-        title: forgot ? "🚨 项目忘记开工" : "🚨 项目超时未开工",
-        body: `「${p.name}」（${storeName}）预约 ${appt}${forgot ? "，已跨天仍未开工" : "仍未开工"}，请关注。`,
-        type: "not_started",
-        excludeSelf: false,
-      });
-      notStartedSet.add(p.id);
-    }
-  });
+    if (notStartedSet.has(p.id)) continue;
+    // ★ 云端去重
+    if (await hasRecentCloudNotification(p.id, "not_started", 60)) { notStartedSet.add(p.id); continue; }
+    const store = getStore(p.storeId);
+    const storeName = store ? store.name : "未知门店";
+    const forgot = isForgotWork(p);
+    const appt = fmtDateTime(p.appointmentTime || p.startTime);
+    dispatchStoreManagerNotice(p, {
+      title: forgot ? "🚨 项目忘记开工" : "🚨 项目超时未开工",
+      body: `「${p.name}」（${storeName}）预约 ${appt}${forgot ? "，已跨天仍未开工" : "仍未开工"}，请关注。`,
+      type: "not_started",
+      excludeSelf: false,
+    });
+    notStartedSet.add(p.id);
+  }
   changed = false;
   notStartedSet.forEach((id) => { if (!stillNotStarted.has(id)) { notStartedSet.delete(id); changed = true; } });
   if (changed || stillNotStarted.size > 0) saveNotifiedNotStartedSet(notStartedSet);
@@ -19367,9 +19378,9 @@ async function renderAccounts() {
     cache.stores.map((s) => `<option value="${s.id}" ${cur === s.id ? "selected" : ""}>${esc(s.name)}</option>`).join("");
 
   box.innerHTML = `
-    <div class="detail-block" style="padding:0;overflow:hidden">
+    <div class="detail-block" style="padding:0;overflow-x:auto;-webkit-overflow-scrolling:touch">
       ${MODE === "local" ? `<button class="btn" style="margin-bottom:12px" onclick="addLocalAccount()">添加本地账号</button>` : ""}
-      <table class="data">
+      <table class="data accounts-table">
         <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>所属门店</th>${MODE === "cloud" ? `<th>强制改密</th>` : ""}<th>操作</th></tr></thead>
         <tbody>
           ${accounts.map((a) => `
@@ -25093,7 +25104,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v62ccb061";
+  const APP_VERSION = "vc96a652a";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

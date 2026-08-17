@@ -6189,6 +6189,20 @@ table.data td.wrap {
 table.data tr:last-child td { border-bottom: none; }
 table.data tfoot td { font-weight: 600; background: #fafafa; }
 
+/* 账号管理表格列宽 */
+.accounts-table th:nth-child(1),
+.accounts-table td:nth-child(1) { width: 180px; min-width: 140px; max-width: 240px; } /* 邮箱 */
+.accounts-table th:nth-child(2),
+.accounts-table td:nth-child(2) { width: 80px; min-width: 60px; max-width: 100px; } /* 姓名 */
+.accounts-table th:nth-child(3),
+.accounts-table td:nth-child(3) { width: 80px; min-width: 70px; } /* 角色 */
+.accounts-table th:nth-child(4),
+.accounts-table td:nth-child(4) { width: 110px; min-width: 90px; max-width: 140px; } /* 所属门店 */
+.accounts-table th:nth-child(5),
+.accounts-table td:nth-child(5) { width: 90px; min-width: 80px; } /* 强制改密 */
+.accounts-table th:nth-child(6),
+.accounts-table td:nth-child(6) { width: 80px; min-width: 70px; } /* 操作 */
+
 /* 店面预约统计表美化 */
 .store-stats-table th,
 .store-stats-table td { text-align: left; }
