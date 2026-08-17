@@ -1901,10 +1901,21 @@ select.input {
   .card-grid { align-items: start; }
 }
 
-/* 桌面端：仅项目预约卡片设最小高度，避免同行矮卡过矮、参差明显；
-   施工人员、请假等轻量卡片按内容自适应，防止被硬撑出大量空白 */
+/* 桌面端：项目预约卡片统一行高 + 按钮沉底；
+   同一行卡片拉齐到最高卡片高度(stretch)，操作按钮始终贴在卡片底部(margin-top:auto)。
+   施工人员、请假等轻量卡片按内容自适应，不在此列。 */
 @media (min-width: 769px) {
-  #projectList.card-grid .card { min-height: 420px; }
+  #projectList.card-grid {
+    align-items: stretch;       /* 同行卡片等高，不再各按自身内容高度 */
+  }
+  #projectList.card-grid .card {
+    display: flex;
+    flex-direction: column;
+    min-height: 300px;          /* 仍保留最小高度下限，防止极短内容卡过矮 */
+  }
+  #projectList.card-grid .card-actions {
+    margin-top: auto;           /* 按钮沉底：吸收上方剩余空间 */
+  }
 }
 
 /* ===== 项目卡片：整体升级 ===== */
