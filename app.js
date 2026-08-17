@@ -4210,7 +4210,7 @@ function initRealtimeRecovery() {
 function initVisibilityRecovery() {
   const MIN_BACKGROUND_MS = 30000;   // 后台停留超过 30s 才允许自愈，避免短暂切换误触发
   const MAX_RECOVER = 2;             // 单会话自愈上限，防止极端情况下 reload 后仍白屏导致死循环
-  const AUTO_RELOAD_BG_MS = 3600000; // 后台停留 ≥ 1 小时，回前台主动冷启动（模拟杀后台）
+  const AUTO_RELOAD_BG_MS = 900000;  // 后台停留 ≥ 15 分钟，回前台主动冷启动（模拟杀后台）
   let lastHiddenAt = 0;
   let recovering = false;            // 防止同一次恢复窗口内重复触发
 
@@ -24029,7 +24029,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vb7d87066";
+  const APP_VERSION = "vf76f3dd1";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
