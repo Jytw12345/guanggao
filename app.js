@@ -4208,10 +4208,21 @@ function initRealtimeRecovery() {
    4) 事件覆盖：visibilitychange(回前台) / pageshow(persisted, bfcache) / freeze+resume(Page Lifecycle)。
    5) 未登录态(无 currentUser 且非本地模式)主动跳过，避免对登录页误触发。 */
 function initVisibilityRecovery() {
-  const MIN_BACKGROUND_MS = 30000; // 后台停留超过 30s 才允许自愈，避免短暂切换误触发
-  const MAX_RECOVER = 2;           // 单会话自愈上限，防止极端情况下 reload 后仍白屏导致死循环
+  const MIN_BACKGROUND_MS = 30000;   // 后台停留超过 30s 才允许自愈，避免短暂切换误触发
+  const MAX_RECOVER = 2;             // 单会话自愈上限，防止极端情况下 reload 后仍白屏导致死循环
+  const AUTO_RELOAD_BG_MS = 3600000; // 后台停留 ≥ 1 小时，回前台主动冷启动（模拟杀后台）
   let lastHiddenAt = 0;
-  let recovering = false;          // 防止同一次恢复窗口内重复触发
+  let recovering = false;            // 防止同一次恢复窗口内重复触发
+
+  // 硬刷新兜底：绕过 HTTP 缓存重新加载，由 SW 缓存优先策略兜底秒开；
+  // 带次数上限防死循环（极端情况 reload 后仍白屏则放弃，避免无限 reload 烧电）。
+  const hardReload = () => {
+    let count = 0;
+    try { count = parseInt(sessionStorage.getItem("pwaRecoverCount") || "0", 10) || 0; } catch (_) {}
+    if (count >= MAX_RECOVER) { recovering = false; return; }
+    try { sessionStorage.setItem("pwaRecoverCount", String(count + 1)); } catch (_) {}
+    window.location.reload(true);
+  };
 
   const uiLost = () => {
     const panels = document.querySelectorAll(".tab-panel");
@@ -4231,8 +4242,16 @@ function initVisibilityRecovery() {
     }
     // 修复：手机 PWA 后台回前台如果 bootLoader 仍可见（卡在数据加载中），及时收起避免「卡第一屏」
     hideBootLoader();
-    if (!uiLost()) return;                          // 界面正常，无需处理
     const bg = lastHiddenAt ? Date.now() - lastHiddenAt : Infinity;
+    // 长时间后台：即便界面没丢，也主动冷启动（模拟杀后台）。
+    // 效果等同手动杀进程重开——因 SW 缓存，重载很快，且能避开「冻结后原地 resume 的慢 / 卡会话」。
+    // 护栏：有弹窗/表单打开时不打断，等下次回前台再判断，避免误丢正在填的内容。
+    if (isFinite(bg) && bg >= AUTO_RELOAD_BG_MS && !document.querySelector(".modal-mask.show")) {
+      recovering = true;
+      hardReload();
+      return;
+    }
+    if (!uiLost()) return;                          // 界面正常，无需处理
     if (bg < MIN_BACKGROUND_MS) return;             // 刚切走就回来，多为误判，不自愈
     recovering = true;
 
@@ -4242,12 +4261,7 @@ function initVisibilityRecovery() {
     // 第二层：确认是否真的恢复；仍丢失则硬刷新兜底（带次数上限防死循环）
     setTimeout(() => {
       if (!uiLost()) { recovering = false; return; } // 原地重渲成功，无需 reload
-      let count = 0;
-      try { count = parseInt(sessionStorage.getItem("pwaRecoverCount") || "0", 10) || 0; } catch (_) {}
-      if (count >= MAX_RECOVER) { recovering = false; return; } // 已达上限，放弃自愈，避免死循环
-      try { sessionStorage.setItem("pwaRecoverCount", String(count + 1)); } catch (_) {}
-      // 硬刷新：绕过 HTTP 缓存重新加载，由 SW 缓存优先策略兜底秒开
-      window.location.reload(true);
+      hardReload();
     }, 350);
   };
 
@@ -24015,7 +24029,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v64415577";
+  const APP_VERSION = "vb7d87066";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
