@@ -1264,10 +1264,11 @@ function projectSegOnDate(p, ds) {
   return getBookedSegments(p).find((s) => s.date === ds) || null;
 }
 
-/* 计算项目在某一天的「预计工时（人小时）」。
-   跨天项目按当天 workSegments 分段的时长 × 施工人数；
-   单日项目或无分段时回退到 p.estimatedHours。
-   用于日历、详情面板、工时异常检测，避免把总工时重复堆到每一天。 */
+/* 计算项目在某一天的「预计工时（人·小时）」——全 App 唯一的「按天预计工时」入口。
+   跨天项目按当天 workSegments 分段的时长 × 施工人数；单日项目/无分段时回退到 p.estimatedHours（此时总=当天）。
+   用于日历、详情面板、工时异常检测，避免把总工时重复堆到每一天。
+   数据语义约定：p.estimatedHours 是「项目总预算工时（人·小时合计）」，不是「每日工时」。
+   任何需要「当天/每人」预计工时的地方都必须走本函数，严禁直接用 estimatedHours 除以天数或人数，否则会重演 13.3h 误报。 */
 function getProjectDayEstimatedHours(p, ds) {
   if (!p) return 0;
   const seg = ds ? projectSegOnDate(p, ds) : null;
@@ -1749,13 +1750,50 @@ function sumWorkLogsHours(p) {
   return (p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0);
 }
 
+/* 判断一条 workLog 是否为「系统自动生成」。优先用结构化标记 auto:true（新建日志具备），
+   兼容旧数据（备注以「自动·」开头）。避免仅靠备注文本前缀识别（用户手改备注即失效）。 */
+function isAutoLog(l) {
+  if (!l) return false;
+  if (l.auto === true) return true;
+  return typeof l.note === "string" && l.note.indexOf("自动·") === 0;
+}
+
 /* 项目在某一天（ds=YYYY-MM-DD）已登记的实际人·小时。
    仅取 workLogs 中 date===ds 的条目求和（每次暂停/延期/减人/完工/手动登记都按天落袋）。
    用于「工时统计」的当天实际工时，与 getProjectDayEstimatedHours（当天计划）口径对齐，
    避免用 calcProjectActualPersonHours（项目累计）与当天计划对比导致「超出/节省」失真。 */
+/* 某工人在某天「当前已施工工时（实时）」：取其在场时段与 [当天00:00, 此刻] 的重叠部分。
+   用于施工中项目当天实际工时的实时估算（workLogs 要暂停才落袋，未暂停时不补会显示为0）。 */
+function getWorkerDayLiveHours(p, wid, ds) {
+  const periods = buildWorkerPeriods(p, wid);
+  if (!periods.length) return 0;
+  const dayStart = new Date(ds + "T00:00:00");
+  const now = new Date();
+  const dayEnd = new Date(ds + "T23:59:59.999");
+  const cap = now < dayEnd ? now : dayEnd;
+  let sum = 0;
+  periods.forEach((pr) => {
+    const s = new Date(pr.start);
+    const e = pr.end ? new Date(pr.end) : now; // 未闭合时段按此刻截断
+    const ovS = s > dayStart ? s : dayStart;
+    const ovE = e < cap ? e : cap;
+    if (ovE > ovS) sum += (ovE - ovS) / (1000 * 60 * 60);
+  });
+  return Math.round(sum * 10) / 10;
+}
+
+/* 项目在某一天已登记的实际人·小时。
+   仅取 workLogs 中 date===ds 的条目求和（每次暂停/延期/减人/完工/手动登记都按天落袋）。
+   施工中且查询日=今天时，再补「当前会话实时工时」（workLogs 要暂停才落袋，否则当天实际=0，
+   会使工时统计「实际 vs 计划」反向误报"省N工时"）。
+   用于「工时统计」的当天实际工时，与 getProjectDayEstimatedHours（当天计划）口径对齐。 */
 function getProjectDayActualHours(p, ds) {
   if (!p || !ds) return 0;
-  return (p.workLogs || []).reduce((s, l) => (l.date === ds ? s + (Number(l.hours) || 0) : s), 0);
+  let total = (p.workLogs || []).reduce((s, l) => (l.date === ds ? s + (Number(l.hours) || 0) : s), 0);
+  if (p.status === STATUS.WORKING && p.startedAt && ds === todayStr()) {
+    getOccupiedWorkerKeys(p).forEach((wid) => { total += getWorkerDayLiveHours(p, wid, ds); });
+  }
+  return Math.round(total * 10) / 10;
 }
 
 function calcProjectActualPersonHours(p) {
@@ -7512,7 +7550,13 @@ function isFakeWorking(p) {
   if (p.status !== STATUS.WORKING || !p.startedAt) return false;
   const start = new Date(p.startedAt);
   if (isNaN(start.getTime())) return false;
-  return (Date.now() - start.getTime()) > FAKE_WORKING_HOURS * 3600 * 1000;
+  // 未满 24h 不升级（由「连续施工/跨夜未完工」等 milder 提示覆盖）
+  if ((Date.now() - start.getTime()) <= FAKE_WORKING_HOURS * 3600 * 1000) return false;
+  // 已登记过实际工时，或中途暂停过 → 视为真实在施工，不误报「虚假施工」
+  // （修：原逻辑只看挂钟>24h，导致合法长周期/一直在施工的项目必被挂虚假施工）
+  if (sumWorkLogsHours(p) > 0) return false;
+  if ((p.pauseHistory || []).length > 0) return false;
+  return true;
 }
 /* 暂停超时：返回与「暂停于 yyyy-mm-dd hh:mm」同款小字（走 .card-reason__time 样式，无胶囊） */
 function pausedTooLongTimeHtml(p) {
@@ -10479,7 +10523,7 @@ async function assignWorker(pid) {
         const choice = await showWorkerConflictDialog(crossConflicts, p.name, { verb: "追加该施工人员" });
         if (choice === 'cancel' || !choice) return;
         if (choice === 'remove') {
-          await removeConflictingWorkersFromPrevProjects(crossConflicts, p.assignedWorkerIds.concat(wid));
+          await removeConflictingWorkersFromPrevProjects(crossConflicts, new Set([...getOccupiedWorkerKeys(p), wid]));
         }
       }
     }
@@ -10584,14 +10628,15 @@ async function saveOutsourcedWorkers(pid, names) {
             workerName: name,
             hours: autoHours,
             date: dateKey(now),
-            note: `自动·外协移除 · ${autoHours}h`,
-            level: "中级",
-            workType: "",
-            isOutsourced: true,
-            createdAt: nowStr
-          };
-          await repo.addWorkLog(pid, workLog);
-          removedAutoTotal += autoHours;
+        note: `自动·外协移除 · ${autoHours}h`,
+        level: "中级",
+        workType: "",
+        isOutsourced: true,
+        auto: true,
+        createdAt: nowStr
+      };
+      await repo.addWorkLog(pid, workLog);
+      removedAutoTotal += autoHours;
         }
       }
     }
@@ -10706,6 +10751,7 @@ async function removeOutsourcedWorker(pid, name) {
           level: "中级",
           workType: "",
           isOutsourced: true,
+          auto: true,
           createdAt: nowStr
         };
         await repo.addWorkLog(pid, workLog);
@@ -10777,6 +10823,7 @@ async function unassignWorker(pid, wid) {
           level: "中级",
           workType: "",
           isOutsourced: false,
+          auto: true,
           createdAt: nowStr
         };
 
@@ -10859,6 +10906,7 @@ async function settleCurrentWorkers(p, untilTime, reason) {
         level: "中级",
         workType: "",
         isOutsourced: item.outsourced,
+        auto: true,
         createdAt: nowStr
       };
       await repo.addWorkLog(p.id, log);
@@ -10917,41 +10965,54 @@ function optimisticApplyAndSync(id, patch, toastMsg) {
     .catch((e) => console.warn("[sync] 状态变更后台同步失败：", e));
 }
 
-/* 查找即将开工项目的施工人员是否在「其它正在施工」的项目中。
+/* 取项目「当前占用」的施工人员标识集合：内部人员用 assignedWorkerIds，外协用 outsourcedWorkers（加 "outsourced:" 前缀）。
+   用于跨项目冲突检测——同一标识出现在两个「正在施工」的项目即冲突（含外协）。 */
+function getOccupiedWorkerKeys(p) {
+  const keys = new Set();
+  (p.assignedWorkerIds || []).forEach(w => { if (w) keys.add(w); });
+  (p.outsourcedWorkers || "").split(",").map(n => n.trim()).filter(n => n).forEach(n => keys.add("outsourced:" + n));
+  return keys;
+}
+
+/* 施工人员标识 → 显示名（内部取档案姓名，外协取去掉前缀的姓名） */
+function workerKeyName(wid) {
+  if (typeof wid === "string" && wid.indexOf("outsourced:") === 0) return wid.slice("outsourced:".length);
+  return (getWorker(wid) && getWorker(wid).name) || wid;
+}
+
+/* 查找即将开工项目的施工人员是否在「其它正在施工」的项目中（含外协）。
    仅统计 status===WORKING 的项目；已暂停(PAUSED)/已延期(DELAYED)不计冲突（人员未实际占用，可并行开工）。
    重叠判断改用「实际施工时间」：其它在施项目的占用区间 = startedAt → 现在（此刻仍在施工=此刻占用），
-   与「现在开工」的新项目在「此刻」必然重叠，故共享工人即视为冲突；
-   修掉「老项目一直施工、但预约起止已过期、与新项目预约不重叠」导致的漏判。 */
+   与「现在开工」的新项目在「此刻」必然重叠，故共享工人即视为冲突。 */
 function findWorkerActiveProjectConflicts(project) {
-  const myWorkers = project.assignedWorkerIds || [];
-  if (!myWorkers.length) return [];
+  const myKeys = getOccupiedWorkerKeys(project);
+  if (myKeys.size === 0) return [];
   const conflicts = [];
   const myStart = new Date();
   const myEnd = projectEnd(project) || new Date(Date.now() + 24 * 3600 * 1000);
   (cache.projects || []).forEach(other => {
     if (other.id === project.id) return;
     if (other.status !== STATUS.WORKING) return; // 仅「正在施工」算冲突
-    const shared = (other.assignedWorkerIds || []).filter(wid => myWorkers.includes(wid));
+    const shared = [...getOccupiedWorkerKeys(other)].filter(k => myKeys.has(k));
     if (!shared.length) return;
-    // 其它在施项目此刻真实占用该工人（占用区间 startedAt → 现在），与「现在开工」的新项目在「此刻」重叠
+    // 其它在施项目此刻真实占用该人员（占用区间 startedAt → 现在），与「现在开工」的新项目在「此刻」重叠
     const os = other.startedAt ? new Date(other.startedAt) : projectStart(other);
     const oe = new Date();
     if (!(os <= myEnd && oe >= myStart)) return;
-    const names = shared.map(wid => (getWorker(wid) && getWorker(wid).name) || wid);
+    const names = shared.map(workerKeyName);
     conflicts.push({ project: other, workerIds: shared, workers: names });
   });
   return conflicts;
 }
 
-/* 查找某工人在「其它正在施工」项目中是否存在（用于向已开工项目追加工人时的冲突检测） */
+/* 查找某工人在「其它正在施工」项目中是否存在（用于向已开工项目追加工人时的冲突检测，含外协） */
 function findActiveProjectConflictForWorker(excludePid, wid) {
   const conflicts = [];
   (cache.projects || []).forEach(other => {
     if (other.id === excludePid) return;
     if (other.status !== STATUS.WORKING) return;
-    if (!((other.assignedWorkerIds || []).includes(wid))) return;
-    const name = (getWorker(wid) && getWorker(wid).name) || wid;
-    conflicts.push({ project: other, workerIds: [wid], workers: [name] });
+    if (!getOccupiedWorkerKeys(other).has(wid)) return;
+    conflicts.push({ project: other, workerIds: [wid], workers: [workerKeyName(wid)] });
   });
   return conflicts;
 }
@@ -10987,19 +11048,23 @@ function showWorkerConflictDialog(conflicts, projectName, opts) {
   });
 }
 
-/* 把冲突工人从「之前项目」移除（只动该工人，项目本身保持施工中，不误伤其他工人） */
-async function removeConflictingWorkersFromPrevProjects(conflicts, myWorkerIds) {
+/* 把冲突人员从「之前项目」移除（只动冲突的人，项目本身保持施工中，不误伤其他人员）。
+   内部人员走 unassignWorker 正确结算在场工时并落袋 workLog；外协走 removeOutsourcedWorker（同样落袋结算）。
+   修：原实现只从 assignedWorkerIds 摘除，未结算该人员最后一段 open 工时，导致原项目少算工时。 */
+async function removeConflictingWorkersFromPrevProjects(conflicts, myWorkerKeys) {
   for (const c of conflicts) {
     const prev = c.project;
-    const shared = (c.workerIds || []).filter(wid => myWorkerIds.includes(wid));
+    const shared = (c.workerIds || []).filter(k => myWorkerKeys.has(k));
     if (!shared.length) continue;
-    const prevIds = prev.assignedWorkerIds || [];
-    const newIds = prevIds.filter(wid => !shared.includes(wid));
-    // 注：assignedWorkerNames 为历史遗留死字段，显示从不依赖它，仅维护 ids 即可
-    await repo.patchProject(prev.id, { assignedWorkerIds: newIds });
-    optimisticApplyAndSync(prev.id, { assignedWorkerIds: newIds }, "");
+    for (const wid of shared) {
+      if (typeof wid === "string" && wid.indexOf("outsourced:") === 0) {
+        await removeOutsourcedWorker(prev.id, wid.slice("outsourced:".length));
+      } else {
+        await unassignWorker(prev.id, wid);
+      }
+    }
   }
-  toast("已将冲突工人从之前项目移除");
+  toast("已将冲突人员从之前项目移除");
 }
 
 async function updateProjectStatus(id, newStatus) {
@@ -11054,7 +11119,7 @@ async function updateProjectStatus(id, newStatus) {
       }
       if (choice === 'remove') {
         /* 只把冲突工人从之前项目移除，之前项目保持施工中，不影响其他工人；之后继续在当前项目开工 */
-        await removeConflictingWorkersFromPrevProjects(conflicts, p.assignedWorkerIds || []);
+        await removeConflictingWorkersFromPrevProjects(conflicts, getOccupiedWorkerKeys(p));
       }
       /* choice === 'proceed'：两项目都保留该工人，仍同时开工 */
     }
@@ -12789,7 +12854,7 @@ function editWorkLog(pid, lid) {
       const level = document.getElementById("editLevel").value;
       const inputNote = document.getElementById("editNote").value.trim();
       const originalNote = log.note || "";
-      const wasAutoNote = originalNote.startsWith("自动·");
+      const wasAutoNote = isAutoLog(log);
       const originalType = log.isOutsourced ? "outsourced" : "internal";
       const hasChanged =
         workerId !== log.workerId ||
@@ -14727,7 +14792,8 @@ function openCompleteProjectForm(id) {
                 level: level,
                 workType: type,
                 date: dateStr,
-                note: note || null
+                note: note || null,
+                auto: !!(note && note.indexOf("自动·") === 0)
               });
             }
           });
@@ -14751,7 +14817,8 @@ function openCompleteProjectForm(id) {
                 workType: type,
                 date: dateStr,
                 note: note || null,
-                isOutsourced: true
+                isOutsourced: true,
+                auto: !!(note && note.indexOf("自动·") === 0)
               });
             }
           });
@@ -15345,7 +15412,7 @@ function collectProjectStats() {
       } else {
         const autoLogs = (p.workLogs || []).filter(l => {
           if (workerFilter && l.workerId !== workerFilter) return false;
-          return l.note && l.note.startsWith("自动·");
+          return isAutoLog(l);
         });
         autoLogs.forEach(l => {
           autoWorkerHours.push({ name: l.workerName || "未知", hours: Number(l.hours) || 0 });
@@ -15403,7 +15470,7 @@ function collectProjectStats() {
         .filter(l => l.note && l.note.trim() && (!workerFilter || l.workerId === workerFilter))
         .map(l => {
           let note = l.note.trim();
-          if (note.startsWith("自动·")) note = "自动·";
+          if (isAutoLog(l)) note = "自动·";
           return { name: l.workerName || "未知", note };
         });
       const allAuto = noteLogs.length > 0 && noteLogs.every(l => l.note === "自动·");
@@ -25226,7 +25293,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2f0b7cf9";
+  const APP_VERSION = "vf145029b";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
