@@ -1200,7 +1200,30 @@ function getBookedSegments(p) {
     if (out.length) return out;
   }
   const s = projectStart(p), e = projectEnd(p);
-  if (s && e && e > s) return [{ date: dateKey(s), start: s, end: e, startHM: hmOf(s), endHM: hmOf(e) }];
+  if (s && e && e > s) {
+    const ONE_DAY = 24 * 3600 * 1000;
+    const startHM = hmOf(s), endHM = hmOf(e);
+    // 单日 / 跨午夜（跨度 ≤1 个日历日）或作息本身跨午夜（如 22:00~02:00）的跨天项目：
+    // 保持原单段（date 标起始日），避免末日边界错乱。
+    if (e - s <= ONE_DAY || endHM <= startHM) {
+      return [{ date: dateKey(s), start: s, end: e, startHM, endHM }];
+    }
+    // 标准作息跨多个日历日（如 08:00~18:00 连干 4 天）：拆成逐日分段。
+    // 使时间线/日历逐日显示，且「每日施工窗口」「工时告警」按真实当日时段计算，
+    // 不再把整段总工时堆到起始日、也不再重复报给每一天。
+    const startDay = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    const endDay = new Date(e.getFullYear(), e.getMonth(), e.getDate());
+    const out = [];
+    for (let d = new Date(startDay); d <= endDay; d = new Date(d.getTime() + ONE_DAY)) {
+      const isFirst = d.getTime() === startDay.getTime();
+      const isLast = d.getTime() === endDay.getTime();
+      const dk = dateKey(d);
+      const segStart = isFirst ? s : new Date(`${dk}T${startHM}`);
+      const segEnd = isLast ? e : new Date(`${dk}T${endHM}`);
+      out.push({ date: dk, start: segStart, end: segEnd, startHM: hmOf(segStart), endHM: hmOf(segEnd) });
+    }
+    return out;
+  }
   return [];
 }
 
@@ -1715,43 +1738,64 @@ function fmtHoursNum(n) {
 }
 
 /* 计算项目实际人工工时（人·小时）。
-   - 未开工/预约中/取消：0
-   - 已完工/已验收/已审核：优先以 actualHours/workLogs 真实工时为准；无记录时 fallback 到 accumulatedWorkHours
-   - 已暂停/已延期：accumulatedWorkHours 已在状态变更时结算
-   - 施工中：accumulatedWorkHours + 本次恢复后持续到现在的时长
-   历史数据若缺少 accumulatedWorkHours，则退化为按起止锚点与暂停历史推算。 */
+   统一以 workLogs 为已结算真源：每次暂停/延期/完工都会按「每人实际在场时段」结算并写入 workLog，
+   因此 workLogs 之和即正确的人·小时，不受中途增减人员影响。
+   - 已完工/已验收/已审核：优先 actualHours（完工汇总/手动修正）→ workLogs
+   - 已暂停/已延期/已取消：workLogs 为真值；存量无 workLogs 数据再 fallback 到 挂钟×人数
+   - 施工中：已结算 workLogs（此前暂停/延期）+ 当前会话估算（按当前在场人数）
+   说明：accumulatedWorkHours 是「单人挂钟累计」，仅用于完工弹窗"已施工时长"展示，
+        不再参与人·小时计算（历史上 ×workerCount 的写法在中途增减人员时会算错）。 */
+function sumWorkLogsHours(p) {
+  return (p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0);
+}
+
+/* 项目在某一天（ds=YYYY-MM-DD）已登记的实际人·小时。
+   仅取 workLogs 中 date===ds 的条目求和（每次暂停/延期/减人/完工/手动登记都按天落袋）。
+   用于「工时统计」的当天实际工时，与 getProjectDayEstimatedHours（当天计划）口径对齐，
+   避免用 calcProjectActualPersonHours（项目累计）与当天计划对比导致「超出/节省」失真。 */
+function getProjectDayActualHours(p, ds) {
+  if (!p || !ds) return 0;
+  return (p.workLogs || []).reduce((s, l) => (l.date === ds ? s + (Number(l.hours) || 0) : s), 0);
+}
+
 function calcProjectActualPersonHours(p) {
   if (!p || !p.startedAt) return 0;
 
-  // 已完工/已验收/已审核：优先采用真实登记工时（完工时 actualHours 已汇总 workLogs）
+  // 已完工/已验收/已审核：优先采用 actualHours（完工时由 workLogs 汇总，或手动修正）
   if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) {
     const fromActual = Number(p.actualHours) || 0;
     if (fromActual > 0) return fromActual;
-    const fromLogs = (p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0);
+    const fromLogs = sumWorkLogsHours(p);
     if (fromLogs > 0) return fromLogs;
   }
 
   const workerCount = Math.max(1, (p.assignedWorkerIds || []).length);
 
-  // 已结束/暂停/延期/取消：accumulatedWorkHours 已在状态变更时结算
-  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.PAUSED, STATUS.DELAYED, STATUS.CANCELLED].includes(p.status)) {
+  // 已暂停/已延期/已取消：workLogs 为真值（每次结算已按每人实际在场写入）；存量无 workLogs 再 fallback
+  if ([STATUS.PAUSED, STATUS.DELAYED, STATUS.CANCELLED].includes(p.status)) {
+    const fromLogs = sumWorkLogsHours(p);
+    if (fromLogs > 0) return fromLogs;
     const acc = Number(p.accumulatedWorkHours) || 0;
     if (acc > 0) return acc * workerCount;
   }
 
-  // 施工中：累计 + 当前会话
+  // 施工中：已结算 workLogs（此前暂停/延期）+ 当前会话估算（按当前在场人数）
   if (p.status === STATUS.WORKING) {
+    const fromLogs = sumWorkLogsHours(p);
     const acc = Number(p.accumulatedWorkHours) || 0;
     const sessionStart = p.resumedAt || p.startedAt;
-    const now = new Date();
     let currentHours = 0;
     if (sessionStart) {
-      currentHours = Math.max(0, (now - new Date(sessionStart)) / (1000 * 60 * 60));
+      currentHours = Math.max(0, (new Date() - new Date(sessionStart)) / (1000 * 60 * 60));
+    }
+    // 已有结算记录或尚无挂钟累计时，用 workLogs + 当前会话（人·小时），避免把挂钟当单人值重复乘人数
+    if (fromLogs > 0 || acc === 0) {
+      return fromLogs + currentHours * workerCount;
     }
     return (acc + currentHours) * workerCount;
   }
 
-  // 兜底：按起止锚点计算（兼容无 accumulatedWorkHours 的历史数据）
+  // 兜底：按起止锚点计算（兼容无 workLogs / accumulatedWorkHours 的历史数据）
   const end = getProjectEffectiveEndTime(p);
   if (!end || isNaN(end)) return 0;
   const start = new Date(p.startedAt);
@@ -5605,28 +5649,21 @@ function renderScheduleCalendar() {
   };
   cache.projects.forEach(function(p) {
     if (isCompleted(p)) return;
-    const est = Number(p.estimatedHours) || 0;
-    if (est <= 0) return;
     const people = Math.max(1, (p.assignedWorkerIds || []).length);
     const segs = getBookedSegments(p);
     if (!segs.length) return;
-    // 跨天项目：按每日施工时段实际时长把预估工时分摊到各天（避免全部堆到第1天误报 overload）；
-    // 单天项目：整段估工记在第1天（与旧逻辑一致）。
-    let dayShares;
-    if (segs.length > 1) {
-      const totalDur = segs.reduce(function(a, s) { return a + (s.end - s.start); }, 0);
-      dayShares = segs.map(function(s) {
-        return { ds: s.date, perDay: totalDur > 0 ? est * (s.end - s.start) / totalDur : est / segs.length };
-      });
-    } else {
-      dayShares = [{ ds: segs[0].date, perDay: est }];
-    }
-    dayShares.forEach(function(share) {
-      const per = share.perDay / people;
+    // 月视图「工时偏多」告警，与 getProjectDayEstimatedHours / 人数 保持同一口径：
+    // 每人当天被占用的工时 = 当天施工窗口时长（08:00-18:00 即 10h）。
+    // 不再按 estimatedHours 总预算比例分摊，避免「总预算 160h > 4 天 capacity 120h」时每天给每人标黄。
+    segs.forEach(function(s) {
+      if (!s || !s.date || !s.start || !s.end || s.end <= s.start) return;
+      const ds = s.date;
+      const segHours = (s.end - s.start) / (1000 * 60 * 60);
+      const per = segHours; // 每人 = 窗口时长
       (p.assignedWorkerIds || []).forEach(function(wid) {
         // 全天请假(可用工时0)不计入预警参考；半天/部分请假按可用工时折算
-        if (getWorkerAvailableHours(wid, share.ds) <= 0) return;
-        addLoad(share.ds, wid, per);
+        if (getWorkerAvailableHours(wid, ds) <= 0) return;
+        addLoad(ds, wid, per);
       });
     });
   });
@@ -10283,7 +10320,8 @@ function getWorkerAssignmentsOnDate(workerId, dateStr) {
 }
 
 /* 计算某施工人员某天的工作负荷（小时）：
-   - 分配到的未完工项目：按「实际分配人数」分摊项目总工时（estimatedHours ÷ 人数）
+   - 分配到的未完工项目：按「当天施工窗口时长」计算（getProjectDayEstimatedHours ÷ 人数；
+     与月视图/时间线/详情页「当天预计工时」口径一致，不再按总 estimatedHours 分摊）
    - 内部任务（未核销）：预计工时 estHours
    以「每人每天满负荷 10 小时（8:00-18:00）」为基准，超过每人 10 小时才视为需加班。返回该人员当天累计工时（小时）。 */
 function getWorkerDailyHours(dateStr, workerId) {
@@ -10433,7 +10471,19 @@ async function assignWorker(pid) {
       toast(`${w ? w.name : "该人员"} 在此时间段已有日程安排，无法分配！\n日程：${scheduleConflict.title}（${scheduleConflict.startDate} ${scheduleConflict.startTime || "全天"} ~ ${scheduleConflict.endDate} ${scheduleConflict.endTime || "全天"}）`);
       return;
     }
-    
+
+    /* 向「正在施工」的项目追加工人时，若该工人已在其它在施项目，给出冲突提示（暂停/延期项目不计冲突） */
+    if (p.status === STATUS.WORKING) {
+      const crossConflicts = findActiveProjectConflictForWorker(p.id, wid);
+      if (crossConflicts.length) {
+        const choice = await showWorkerConflictDialog(crossConflicts, p.name, { verb: "追加该施工人员" });
+        if (choice === 'cancel' || !choice) return;
+        if (choice === 'remove') {
+          await removeConflictingWorkersFromPrevProjects(crossConflicts, p.assignedWorkerIds.concat(wid));
+        }
+      }
+    }
+
     const conflicts = assignConflicts(p, wid);
     if (conflicts.length) {
       const w = getWorker(wid);
@@ -10534,7 +10584,7 @@ async function saveOutsourcedWorkers(pid, names) {
             workerName: name,
             hours: autoHours,
             date: dateKey(now),
-            note: `系统自动计算：从添加外协到移除共${autoHours}小时`,
+            note: `自动·外协移除 · ${autoHours}h`,
             level: "中级",
             workType: "",
             isOutsourced: true,
@@ -10652,7 +10702,7 @@ async function removeOutsourcedWorker(pid, name) {
           workerName: name.trim(),
           hours: autoHours,
           date: dateKey(now),
-          note: `系统自动计算：从添加外协到移除共${autoHours}小时`,
+          note: `自动·外协移除 · ${autoHours}h`,
           level: "中级",
           workType: "",
           isOutsourced: true,
@@ -10723,7 +10773,7 @@ async function unassignWorker(pid, wid) {
           workerName: worker ? worker.name : "未知",
           hours: autoHours,
           date: dateKey(now),
-          note: `系统自动计算：从${fmtDateTime(p.startedAt)}到${fmtDateTime(nowStr)}，共${autoHours}小时`,
+          note: `自动·移除 ${fmtTime(p.startedAt)}-${fmtTime(nowStr)} · ${autoHours}h`,
           level: "中级",
           workType: "",
           isOutsourced: false,
@@ -10805,7 +10855,7 @@ async function settleCurrentWorkers(p, untilTime, reason) {
         workerName: item.name,
         hours: autoHours,
         date: dateKey(nowStr),
-        note: `系统自动计算·${label} ${periodDesc} · 共${autoHours}h`,
+        note: `自动·${label} ${periodDesc} · ${autoHours}h`,
         level: "中级",
         workType: "",
         isOutsourced: item.outsourced,
@@ -10867,25 +10917,41 @@ function optimisticApplyAndSync(id, patch, toastMsg) {
     .catch((e) => console.warn("[sync] 状态变更后台同步失败：", e));
 }
 
-/**
- * 查找即将开工项目的施工人员是否在「其它正在施工」的项目中。
- * 仅统计 status===WORKING 的项目；已暂停(PAUSED)/已延期(DELAYED)不计冲突（人员未实际占用，可并行开工）。
- */
+/* 查找即将开工项目的施工人员是否在「其它正在施工」的项目中。
+   仅统计 status===WORKING 的项目；已暂停(PAUSED)/已延期(DELAYED)不计冲突（人员未实际占用，可并行开工）。
+   重叠判断改用「实际施工时间」：其它在施项目的占用区间 = startedAt → 现在（此刻仍在施工=此刻占用），
+   与「现在开工」的新项目在「此刻」必然重叠，故共享工人即视为冲突；
+   修掉「老项目一直施工、但预约起止已过期、与新项目预约不重叠」导致的漏判。 */
 function findWorkerActiveProjectConflicts(project) {
   const myWorkers = project.assignedWorkerIds || [];
   if (!myWorkers.length) return [];
   const conflicts = [];
-  const ps = projectStart(project), pe = projectEnd(project);
+  const myStart = new Date();
+  const myEnd = projectEnd(project) || new Date(Date.now() + 24 * 3600 * 1000);
   (cache.projects || []).forEach(other => {
     if (other.id === project.id) return;
     if (other.status !== STATUS.WORKING) return; // 仅「正在施工」算冲突
     const shared = (other.assignedWorkerIds || []).filter(wid => myWorkers.includes(wid));
     if (!shared.length) return;
-    // 仅当两项目时间确实重叠才算冲突，避免「上周未点完工的老项目」误报
-    const os = projectStart(other), oe = projectEnd(other);
-    if (ps && pe && os && oe && !(os < pe && oe > ps)) return;
+    // 其它在施项目此刻真实占用该工人（占用区间 startedAt → 现在），与「现在开工」的新项目在「此刻」重叠
+    const os = other.startedAt ? new Date(other.startedAt) : projectStart(other);
+    const oe = new Date();
+    if (!(os <= myEnd && oe >= myStart)) return;
     const names = shared.map(wid => (getWorker(wid) && getWorker(wid).name) || wid);
     conflicts.push({ project: other, workerIds: shared, workers: names });
+  });
+  return conflicts;
+}
+
+/* 查找某工人在「其它正在施工」项目中是否存在（用于向已开工项目追加工人时的冲突检测） */
+function findActiveProjectConflictForWorker(excludePid, wid) {
+  const conflicts = [];
+  (cache.projects || []).forEach(other => {
+    if (other.id === excludePid) return;
+    if (other.status !== STATUS.WORKING) return;
+    if (!((other.assignedWorkerIds || []).includes(wid))) return;
+    const name = (getWorker(wid) && getWorker(wid).name) || wid;
+    conflicts.push({ project: other, workerIds: [wid], workers: [name] });
   });
   return conflicts;
 }
@@ -10901,17 +10967,18 @@ function resolveWorkerConflict(choice) {
   if (r) r(choice);
 }
 
-function showWorkerConflictDialog(conflicts, projectName) {
+function showWorkerConflictDialog(conflicts, projectName, opts) {
+  const verb = (opts && opts.verb) || "开工";
   return new Promise((resolve) => {
     _workerConflictResolver = resolve;
     const list = conflicts.map(c =>
       `<li style="margin:4px 0;"><b>${esc(c.project.name)}</b> — ${esc(c.workers.join("、"))}</li>`
     ).join("");
     const html = `
-      <p style="margin:0 0 8px;color:#374151;">以下施工人员正在其它项目中施工中。你要在 <b>${esc(projectName)}</b> 开工，如何处理该工人？</p>
+      <p style="margin:0 0 8px;color:#374151;">以下施工人员正在其它项目中施工中。你要在 <b>${esc(projectName)}</b> ${verb}，如何处理该工人？</p>
       <ul style="margin:0 0 14px;padding-left:18px;color:#b45309;font-size:13px;">${list}</ul>
       <div style="display:flex;flex-direction:column;gap:8px;">
-        <button class="btn primary" onclick="resolveWorkerConflict('remove')">把该工人从之前项目移除后开工</button>
+        <button class="btn primary" onclick="resolveWorkerConflict('remove')">把该工人从之前项目移除</button>
         <button class="btn" onclick="resolveWorkerConflict('proceed')">仍要同时开工（两项目都保留）</button>
         <button class="btn" onclick="resolveWorkerConflict('cancel')" style="color:#9ca3af;">取消</button>
       </div>
@@ -12308,8 +12375,8 @@ async function addWorkLog(id) {
   const hoursInput = document.getElementById("logHours").value;
   const date = document.getElementById("logDate").value;
   const noteRaw = document.getElementById("logNote").value.trim();
-  // 手动登记工时默认标记，与自动化施工计时（备注含「系统自动计算」）区分
-  const note = noteRaw ? `${noteRaw} [手动填写]` : "[手动填写]";
+  // 手动登记工时默认标记，与自动化施工计时（备注以「自动·」开头）区分
+  const note = noteRaw ? `${noteRaw} [手动]` : "[手动]";
   const level = document.getElementById("logLevel").value;
   const workType = document.getElementById("logWorkType").value;
   
@@ -12614,7 +12681,7 @@ function openAllocSlider() {
       }
       const logs = raw.filter((r) => r.hours > 0).map((r) => ({
         workerId: w.workerId, workerName: w.workerName, hours: r.hours, date,
-        note: `按占比分配(${r.t} ${Math.round((r.hours / total) * 100)}%)`,
+        note: `占比(${r.t} ${Math.round((r.hours / total) * 100)}%)`,
         level: WORK_TYPE_LEVEL[r.t] || "中级", workType: r.t, isOutsourced: w.isOutsourced,
       }));
       if (logs.length === 0) { toast("请至少设置一个作业类型的工时"); return false; }
@@ -12722,7 +12789,7 @@ function editWorkLog(pid, lid) {
       const level = document.getElementById("editLevel").value;
       const inputNote = document.getElementById("editNote").value.trim();
       const originalNote = log.note || "";
-      const wasAutoNote = originalNote.startsWith("系统自动计算");
+      const wasAutoNote = originalNote.startsWith("自动·");
       const originalType = log.isOutsourced ? "outsourced" : "internal";
       const hasChanged =
         workerId !== log.workerId ||
@@ -13596,9 +13663,10 @@ function generateWorkerScheduleDescription(dateStr = null) {
     const totalEstimatedHours = allTodayProjects.reduce((sum, p) => {
       return sum + getProjectDayEstimatedHours(p, dateStrFormatted);
     }, 0);
-    // 实际人·小时：统一用 calcProjectActualPersonHours，已暂停/延期的项目会停在暂停点，不再继续计时
+    // 实际人·小时：取「当天」已登记的工时（getProjectDayActualHours），与上面「当天计划」口径对齐；
+    // 不再用 calcProjectActualPersonHours（项目累计，会把跨天项目的全部历史工时堆进当天，导致虚增「超出」）。
     const totalActualPersonHours = allTodayProjects.reduce((sum, p) => {
-      return sum + calcProjectActualPersonHours(p);
+      return sum + getProjectDayActualHours(p, dateStrFormatted);
     }, 0);
     // 节省工时：仅已完工项目中「实际 < 计划」的部分累计
     const savedHours = allTodayProjects.reduce((sum, p) => {
@@ -14536,7 +14604,7 @@ function openCompleteProjectForm(id) {
         } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled && !shortWorkWarning) {
           // 正常完工：按实际施工时长自动填入；不足 0.1h 或极短施工(shortWorkWarning) 不预填，避免填入无意义/不可靠小数
           segHours = autoHours.toFixed(1);
-          segNote = "系统自动计算";
+          segNote = "自动·完工";
         } else {
           // 其余边界（疑似忘点完工 / 跨天提前 / 极短施工）：留空，提示手动填写真实工时
           segNote = forgottenInfo ? "⚠️请填真实工时" : "（请手动填写实际工时）";
@@ -14593,7 +14661,7 @@ function openCompleteProjectForm(id) {
           segNote = `✅ 已结清 ${oLoggedHours.toFixed(1)}h（上次暂停），本次完工不自动填`;
         } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled && !shortWorkWarning) {
           segHours = autoHours.toFixed(1);
-          segNote = "系统自动计算";
+          segNote = "自动·完工";
         } else {
           segNote = forgottenInfo ? "⚠️请填真实工时" : "（请手动填写实际工时）";
         }
@@ -14762,7 +14830,7 @@ function openCompleteProjectForm(id) {
         }
 
         p.status = STATUS.DONE;
-        p.actualHours = totalHours;
+        // p.actualHours 在下方合并 workLogs 后统一重算（含跨天已结算工时，避免只算完工当天漏算）
         p.finishedAt = nowStr;
         p.accumulatedWorkHours = totalWorkHours;
         p.workSessions = workSessions;
@@ -14783,6 +14851,8 @@ function openCompleteProjectForm(id) {
         const newLogKeys = new Set(newLogs.map(l => `${l.workerId}_${l.date}`));
         const preservedLogs = (p.workLogs || []).filter(l => !newLogKeys.has(`${l.workerId}_${l.date}`));
         p.workLogs = [...preservedLogs, ...newLogs];
+        // 实际工时 = 全部 workLogs 之和（含之前按天结算的工时），与工资/统计口径保持一致
+        p.actualHours = p.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0);
 
         if (MODE === "cloud" && cloudConfigured()) {
           await sb.from("work_logs").delete().eq("project_id", id).eq("date", dateStr);
@@ -15037,6 +15107,8 @@ function collectStats() {
       const logMonth = monthKey(l.date);
       if (!isInPeriod(l.date)) return;
       if (workerFilter && l.workerId !== workerFilter) return;
+      // 不计入工资的返工/保修工时（reworkCycles[].payable=false 或免费保修）不进工资核算
+      if (!isReworkLogPayable(p, l)) return;
       const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
       const key = l.workerId || l.workerName || l.id;
       if (!rows[key]) {
@@ -15273,7 +15345,7 @@ function collectProjectStats() {
       } else {
         const autoLogs = (p.workLogs || []).filter(l => {
           if (workerFilter && l.workerId !== workerFilter) return false;
-          return l.note && l.note.includes("系统自动计算");
+          return l.note && l.note.startsWith("自动·");
         });
         autoLogs.forEach(l => {
           autoWorkerHours.push({ name: l.workerName || "未知", hours: Number(l.hours) || 0 });
@@ -15331,12 +15403,12 @@ function collectProjectStats() {
         .filter(l => l.note && l.note.trim() && (!workerFilter || l.workerId === workerFilter))
         .map(l => {
           let note = l.note.trim();
-          if (note.includes("系统自动计算")) note = "系统自动计算";
+          if (note.startsWith("自动·")) note = "自动·";
           return { name: l.workerName || "未知", note };
         });
-      const allAuto = noteLogs.length > 0 && noteLogs.every(l => l.note === "系统自动计算");
+      const allAuto = noteLogs.length > 0 && noteLogs.every(l => l.note === "自动·");
       const notes = allAuto
-        ? "系统自动计算"
+        ? "自动·"
         : noteLogs.map(l => l.name + "：" + l.note).join("；");
       return {
         id: p.id,
@@ -17238,7 +17310,7 @@ function showVerifyModal(id) {
         </div>
         
         <div style="margin-bottom:16px;">
-          <label style="font-size:14px;font-weight:bold;color:#333;">📊 系统自动计算工时</label>
+          <label style="font-size:14px;font-weight:bold;color:#333;">📊 自动计算工时</label>
           <div style="font-size:13px;color:#3b82f6;margin-top:4px;">${task.calculatedHours !== undefined ? esc(task.calculatedHours) + '小时' : '未计算'}</div>
         </div>
         
@@ -25154,7 +25226,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v23ed7985";
+  const APP_VERSION = "v2f0b7cf9";
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
