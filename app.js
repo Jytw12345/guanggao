@@ -20834,6 +20834,80 @@ async function importOutsourcedWorker(row) {
 /* ============================================================
  * 我的页面（移动端聚合）
  * ============================================================ */
+/* ============ 版本信息：状态查询 + 关于弹窗（「我的」页版本块 / 用户菜单「关于/版本」入口共用） ============ */
+// 查询当前 PWA 版本状态并刷新到页面元素：
+//   #mineVersionBadge —— 显示当前版本号（我的页版本块右侧）
+//   #verStatusBox    —— 显示详细状态（关于弹窗内）
+// 状态优先级：有新版本待应用(waiting) > 正在下载(installing) > 首次接管中 > 已是最新 / 版本不一致
+function refreshVersionStatus() {
+  const badge = document.getElementById("mineVersionBadge");
+  const box = document.getElementById("verStatusBox");
+  const appVer = (typeof window.__APP_VERSION__ !== "undefined" && window.__APP_VERSION__) || "";
+  if (badge) badge.textContent = appVer || "—";
+  if (!box) return;
+  const reg = window.__swRegistration || null;
+  const ask = (typeof window.__askSwVersion === "function") ? window.__askSwVersion : null;
+  const setState = (html) => { box.innerHTML = html; };
+
+  // 1) 有新版本已下载（等用户点「立即更新」）
+  if (reg && reg.waiting) {
+    if (ask) {
+      ask(reg.waiting, (v) => {
+        setState(`<span style="color:#b45309;">🚀 新版本 <b>${esc(v || "待定")}</b> 已下载，点击下方「立即更新」重启应用即可生效。</span>`);
+      });
+    } else {
+      setState(`<span style="color:#b45309;">🚀 新版本已下载，点击下方「立即更新」重启应用即可生效。</span>`);
+    }
+    return;
+  }
+  // 2) 正在下载新版本
+  if (reg && reg.installing) {
+    setState(`<span style="color:#64748b;">⏳ 正在下载新版本，请稍候…</span>`);
+    return;
+  }
+  // 3) 非 PWA 环境（file:// 直接打开等）
+  if (!reg || !navigator.serviceWorker || !navigator.serviceWorker.controller) {
+    setState(`<span style="color:#94a3b8;">首次打开尚未完成更新检测，稍后自动刷新。</span>`);
+    setTimeout(refreshVersionStatus, 3000);
+    return;
+  }
+  // 4) 无 waiting：对比「运行中的 SW 缓存版本」与「页面版本」，两者不一致说明页面跑的是旧缓存
+  if (ask) {
+    ask(navigator.serviceWorker.controller, (cv) => {
+      if (cv && appVer && cv !== appVer) {
+        setState(`<span style="color:#dc2626;">⚠️ 缓存版本 ${esc(cv)} 与当前页面 ${esc(appVer)} 不一致，请点「立即更新」强制刷新加载。</span>`);
+      } else {
+        setState(`<span style="color:#059669;">✅ 已是最新版本 <b>${esc(appVer || "—")}</b></span>`);
+      }
+    });
+  } else {
+    setState(`<span style="color:#059669;">✅ 已是最新版本 <b>${esc(appVer || "—")}</b></span>`);
+  }
+}
+
+// 关于/版本弹窗：显示版本号、运行模式、更新状态 + 检查更新 / 立即更新
+function showVersionModal() {
+  const appVer = (typeof window.__APP_VERSION__ !== "undefined" && window.__APP_VERSION__) || "";
+  const mode = (typeof MODE !== "undefined") ? (MODE === "cloud" ? "☁️ 云端模式" : "💻 本地模式") : "";
+  const html = `
+    <div style="font-size:13px;line-height:1.9;color:#374151;">
+      <div class="detail-row"><span class="detail-label">📦 当前版本</span><span class="detail-value"><b>${esc(appVer || "—")}</b></span></div>
+      <div class="detail-row"><span class="detail-label">🌐 运行模式</span><span class="detail-value">${mode}</span></div>
+      <div class="detail-row" style="align-items:flex-start;"><span class="detail-label" style="padding-top:2px;">🔍 更新状态</span><span class="detail-value" id="verStatusBox" style="flex:1;">…</span></div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn" onclick="(window.__checkAppUpdate ? window.__checkAppUpdate() : toast('非 PWA 环境，无法检查更新'))">🔄 检查更新</button>
+        <button class="btn primary" onclick="(window.__applyAppUpdate ? window.__applyAppUpdate() : toast('非 PWA 环境，无法立即更新'))">⚡ 立即更新</button>
+      </div>
+      <div style="margin-top:12px;font-size:11px;color:#9ca3af;line-height:1.6;">
+        版本号由发布工具按文件内容自动计算。每次发布新版本后，应用会在后台自动检测，
+        出现更新提示时点「立即更新」即可生效。
+      </div>
+    </div>
+  `;
+  modal.open("ℹ️ 关于 / 版本信息", html, { hideFooter: true, closeOnMask: true });
+  setTimeout(refreshVersionStatus, 50);
+}
+
 function renderMine() {
   const box = document.getElementById("mineContent");
   if (!box) return;
@@ -20978,8 +21052,19 @@ function renderMine() {
       </div>
     </div>
 
+    <div class="mine-section-title">应用信息</div>
+    <div class="mine-list">
+      <div class="mine-list-item" onclick="showVersionModal()">
+        <div class="mine-list-icon" style="background:#f0f9ff;color:#0891b2">ℹ️</div>
+        <span class="mine-list-text">版本信息</span>
+        <span class="mine-list-arrow" id="mineVersionBadge" style="color:#64748b;font-size:12px;">…</span>
+      </div>
+    </div>
+
     ${MODE === "cloud" ? `<button class="mine-logout" onclick="if(confirm('确定要退出登录吗？'))doLogout()">登出</button>` : ""}
   `;
+  // 填充版本号（SW 注册完成后会自动再刷新一次状态）
+  try { refreshVersionStatus(); } catch (e) {}
 }
 
 /* ============ 消息中心 ============ */
@@ -25264,6 +25349,37 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     applyAppUpdate();
   }
 
+  // —— 对外接口（供「我的」页版本块 / 关于弹窗 / 用户菜单调用）——
+
+  // 询问某个 SW 实例（controller 或 waiting）的真实版本号
+  function askSwVersion(sw, cb) {
+    try {
+      const ch = new MessageChannel();
+      ch.port1.onmessage = (ev) => { const v = ev.data && ev.data.version; cb && cb(v || null); };
+      sw.postMessage({ type: "GET_VERSION" }, [ch.port2]);
+    } catch (_) { cb && cb(null); }
+  }
+  window.__askSwVersion = askSwVersion;
+  window.__applyAppUpdate = applyAppUpdate;
+
+  // 手动检查更新：触发 SW update()，有新版本则自动弹更新横幅（倒计时更新）
+  window.__checkAppUpdate = () => {
+    const reg = swRegistration;
+    if (!reg) {
+      toast("当前为直接打开页面（非 PWA 安装模式），无法检查更新");
+      return;
+    }
+    reg.update().then(() => {
+      // 新版本下载后会走 updatefound → installed → promptUpdateBanner 自动弹横幅；
+      // 若已是最新（无 waiting/installing），稍等确认后提示
+      setTimeout(() => {
+        if (reg.waiting || reg.installing) return; // 横幅/状态会自动显示
+        toast("已是最新版本");
+        try { refreshVersionStatus(); } catch (e) {}
+      }, 1500);
+    }).catch(() => toast("检查更新失败，请检查网络后重试"));
+  };
+
   // 更新完成回执：重载后告知用户「刚才的重新加载是版本更新」，消除"闪退"错觉
   function showUpdatedNotice() {
     let flag = null;
@@ -25293,12 +25409,15 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vf145029b";
+  const APP_VERSION = "vece0d641";
+  // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
+  window.__APP_VERSION__ = APP_VERSION;
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;
     navigator.serviceWorker.register("sw.js").then((registration) => {
       swRegistration = registration;
+      window.__swRegistration = registration; // 暴露给全局（版本信息弹窗 / 我的页版本块）
       registration.update();
       // 即使页面长时间不关，也每分钟检查一次是否有新版本上传到云端
       setInterval(() => registration.update(), 60000);
@@ -25360,6 +25479,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
         // 普通 controllerchange（如首次激活）不刷新，避免误刷。
         if (updateRequested) hardReloadNow();
       });
+
+      // SW 接管后刷新一次版本状态（「我的」页版本块 / 关于弹窗徽标）
+      try { refreshVersionStatus(); } catch (e) {}
     }).catch((err) => console.warn("Service Worker 注册失败", err));
 
     // 更新完成后回执：重载后告诉用户这是版本更新，不是异常
