@@ -6227,6 +6227,7 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 .store-stats-table .ss-dist { min-width: 130px; }
 .store-stats-table .ss-hours { color: #334155; }
 .store-stats-table .ss-diff { font-weight: 600; white-space: nowrap; }
+.store-stats-table .ss-fulfill { white-space: nowrap; min-width: 64px; }
 .ss-bar {
   display: flex;
   height: 14px;
@@ -6303,6 +6304,40 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 }
 .ss-in-month { background: #f8fafc; }
 .ss-in-month:hover { background: #eff6ff !important; }
+
+/* 门店关联项目弹窗：卡片式明细 */
+.ss-project-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+.ss-project-card.ss-in-month {
+  background: #f8fafc;
+  border-color: #bfdbfe;
+}
+.ss-project-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ss-project-card__header a {
+  font-weight: 600;
+  color: var(--primary);
+  text-decoration: none;
+}
+.ss-project-card__header a:hover { text-decoration: underline; }
+.ss-project-card .ss-status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 /* 角色权限配置表 */
 .perm-table {

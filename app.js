@@ -8548,8 +8548,8 @@ async function saveQuickEditProjectTime(id) {
     toast("已更新施工安排");
 
     const changes = [];
-    if (p.appointmentTime !== payload.appointmentTime) changes.push(`预约时间: ${p.appointmentTime || "无"} -> ${payload.appointmentTime}`);
-    if (p.endTime !== payload.endTime) changes.push(`结束时间: ${p.endTime || "无"} -> ${payload.endTime}`);
+    if (p.appointmentTime !== payload.appointmentTime) changes.push(`预约时间: ${fmtDateTime(p.appointmentTime) || "无"} -> ${fmtDateTime(payload.appointmentTime)}`);
+    if (p.endTime !== payload.endTime) changes.push(`结束时间: ${fmtDateTime(p.endTime) || "无"} -> ${fmtDateTime(payload.endTime)}`);
     if (p.estimatedHours !== payload.estimatedHours) changes.push(`预计工时: ${p.estimatedHours || 0} -> ${payload.estimatedHours}`);
     if (p.workerCount !== payload.workerCount) changes.push(`施工人数: ${p.workerCount || 1} -> ${payload.workerCount}`);
     if (changes.length > 0) {
@@ -8768,8 +8768,8 @@ async function saveProject(id) {
       if (existing.customer !== payload.customer) changes.push(`客户: ${existing.customer || "无"} -> ${payload.customer || "无"}`);
       if (existing.phone !== payload.phone) changes.push(`电话: ${existing.phone || "无"} -> ${payload.phone || "无"}`);
       if (existing.address !== payload.address) changes.push(`地址: ${existing.address || "无"} -> ${payload.address || "无"}`);
-      if (existing.appointmentTime !== payload.appointmentTime) changes.push(`预约时间: ${existing.appointmentTime || "无"} -> ${payload.appointmentTime}`);
-      if (existing.endTime !== payload.endTime) changes.push(`结束时间: ${existing.endTime || "无"} -> ${payload.endTime}`);
+      if (existing.appointmentTime !== payload.appointmentTime) changes.push(`预约时间: ${fmtDateTime(existing.appointmentTime) || "无"} -> ${fmtDateTime(payload.appointmentTime)}`);
+      if (existing.endTime !== payload.endTime) changes.push(`结束时间: ${fmtDateTime(existing.endTime) || "无"} -> ${fmtDateTime(payload.endTime)}`);
       if (existing.estimatedHours !== payload.estimatedHours) changes.push(`预计工时: ${existing.estimatedHours || 0} -> ${payload.estimatedHours}`);
       if (existing.workerCount !== payload.workerCount) changes.push(`施工人数: ${existing.workerCount || 1} -> ${payload.workerCount}`);
       if (existing.status !== payload.status) changes.push(`状态: ${existing.status || "无"} -> ${payload.status}`);
@@ -8781,7 +8781,7 @@ async function saveProject(id) {
       const changeDetail = changes.length > 0 ? changes.join("; ") : "无字段变更";
       logOperation("PROJECT_EDIT", name, `ID: ${id}, 变更: ${changeDetail}`);
     } else if (!id) {
-      logOperation("PROJECT_CREATE", name, `客户: ${payload.customer || "无"}, 电话: ${payload.phone || "无"}, 地址: ${payload.address || "无"}, 预约时间: ${payload.appointmentTime}, 预计工时: ${payload.estimatedHours}小时, 施工人数: ${payload.workerCount}, 门店: ${storeName(payload.storeId) || "无"}`);
+      logOperation("PROJECT_CREATE", name, `客户: ${payload.customer || "无"}, 电话: ${payload.phone || "无"}, 地址: ${payload.address || "无"}, 预约时间: ${fmtDateTime(payload.appointmentTime)}, 预计工时: ${payload.estimatedHours}小时, 施工人数: ${payload.workerCount}, 门店: ${storeName(payload.storeId) || "无"}`);
     }
 
     // 通知依赖最新缓存（新建项目需 loadAll 后才进缓存），后台同步完成后再发
@@ -11297,9 +11297,12 @@ async function pauseProject(id) {
   
   const form = `
     <div class="form-row">
-      <label><span style="color:#f59e0b;">📝</span> 暂停原因（可选）</label>
+      <label><span style="color:#f59e0b;">📝</span> 暂停原因（选择「其他」须填写不少于3个字的实际原因）</label>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-        ${pauseReasons.map(r => `<button class="btn small" onclick="document.getElementById('pauseReasonInput').value='${esc(r)}'">${esc(r)}</button>`).join("")}
+        ${pauseReasons.map(r => r === "其他"
+          ? `<button class="btn small" onclick="var i=document.getElementById('pauseReasonInput');i.dataset.choseOther='1';i.value='';i.placeholder='请输入其他具体原因（不少于3个字）';i.focus();">${esc(r)}</button>`
+          : `<button class="btn small" onclick="document.getElementById('pauseReasonInput').value='${esc(r)}'">${esc(r)}</button>`
+        ).join("")}
       </div>
       <input type="text" id="pauseReasonInput" class="input" placeholder="选择快速原因或手动输入..." />
     </div>
@@ -11312,9 +11315,14 @@ async function pauseProject(id) {
       cancelText: "取消",
       onConfirm: () => {
         if (resolved) return;
-        resolved = true;
         const input = document.getElementById("pauseReasonInput");
         const value = input ? input.value.trim() : "";
+        // 选择「其他」时必须填写实际原因，且不少于 3 个字
+        if (input && (input.dataset.choseOther === "1" || value === "其他") && value.length < 3) {
+          toast("选择「其他」时，请填写不少于3个字的实际原因");
+          return false;
+        }
+        resolved = true;
         resolve(value);
         return true;
       },
@@ -15825,6 +15833,63 @@ function renderStats() {
       </table>
     </div>`;
 
+  // ===== 调度履约概览（放在工时统计页最底部，店长/经理均可见，按当前筛选范围计） =====
+  const ON_TIME_GRACE_MIN = 30; // 开工偏差在 ±30 分钟内视为准时
+  const startedProjects = allProjects.filter(p => p.startedAt && p.appointmentTime);
+  let onTimeCount = 0, totalDevMs = 0;
+  startedProjects.forEach(p => {
+    const dev = new Date(p.startedAt).getTime() - new Date(p.appointmentTime).getTime();
+    totalDevMs += dev;
+    if (Math.abs(dev) <= ON_TIME_GRACE_MIN * 60000) onTimeCount++;
+  });
+  const onTimeRate = startedProjects.length ? Math.round(onTimeCount / startedProjects.length * 100) : 0;
+  const avgDevMin = startedProjects.length ? Math.round(totalDevMs / startedProjects.length / 60000) : 0;
+  const totalCount = allProjects.length;
+  const doneCount = allProjects.filter(p => ['已完工', '已验收', '已审核'].includes(p.status)).length;
+  const completionRate = totalCount ? Math.round(doneCount / totalCount * 100) : 0;
+  const delayedCount = allProjects.filter(p => p.status === '已延期' || (p.delayCount || 0) > 0).length;
+  const delayRate = totalCount ? Math.round(delayedCount / totalCount * 100) : 0;
+  const lateRowsAll = startedProjects
+    .filter(p => Math.abs(new Date(p.startedAt).getTime() - new Date(p.appointmentTime).getTime()) > ON_TIME_GRACE_MIN * 60000)
+    .sort((a, b) => Math.abs(new Date(b.startedAt).getTime() - new Date(b.appointmentTime).getTime()) - Math.abs(new Date(a.startedAt).getTime() - new Date(a.appointmentTime).getTime()));
+  const lateRowHtml = (p) => {
+    const dev = Math.round((new Date(p.startedAt).getTime() - new Date(p.appointmentTime).getTime()) / 60000);
+    const late = dev > 0;
+    return `<tr>
+      <td>${esc(p.name)}</td>
+      <td>${fmtDateTime(p.appointmentTime)}</td>
+      <td>${fmtDateTime(p.startedAt)}</td>
+      <td style="color:${late ? '#ef4444' : '#f59e0b'};font-weight:600">${late ? '晚' : '早'}${Math.abs(dev)}分</td>
+    </tr>`;
+  };
+  const shownRows = lateRowsAll.slice(0, 20);
+  const hiddenRows = lateRowsAll.slice(20);
+  const rateColor = (r) => r >= 90 ? '#10b981' : (r >= 75 ? '#f59e0b' : '#ef4444');
+  const fulfillmentHtml = `
+    <h3 class="stats-subhead">🚦 调度履约概览</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px">
+      <div class="stat-card"><div class="num" style="color:${rateColor(onTimeRate)}">${onTimeRate}%</div><div class="lbl">开工准点率(${onTimeCount}/${startedProjects.length})</div></div>
+      <div class="stat-card"><div class="num" style="color:${Math.abs(avgDevMin) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${avgDevMin > 0 ? '+' : ''}${avgDevMin}分</div><div class="lbl">平均开工偏差</div></div>
+      <div class="stat-card"><div class="num" style="color:${rateColor(completionRate)}">${completionRate}%</div><div class="lbl">完工率(${doneCount}/${totalCount})</div></div>
+      <div class="stat-card"><div class="num" style="color:${delayRate > 0 ? '#ef4444' : '#64748b'}">${delayRate}%</div><div class="lbl">延期率(${delayedCount})</div></div>
+    </div>
+    ${lateRowsAll.length ? `
+      <div class="detail-block" style="padding:0;overflow:hidden;margin-top:4px">
+        <table class="data">
+          <thead><tr><th>项目</th><th>预约开工</th><th>实际开工</th><th>偏差</th></tr></thead>
+          <tbody id="fulfillBody">
+            ${shownRows.map(lateRowHtml).join("")}
+          </tbody>
+          ${hiddenRows.length ? `<tbody id="fulfillHidden" style="display:none">${hiddenRows.map(lateRowHtml).join("")}</tbody>` : ""}
+        </table>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:6px;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:12px">仅列出偏差超过 ±${ON_TIME_GRACE_MIN} 分钟的项目（共 ${lateRowsAll.length} 条${hiddenRows.length ? "，已显示前 20 条" : ""}）</span>
+        ${hiddenRows.length ? `<button id="fulfillToggleBtn" class="btn small" onclick="__fulfillToggle()">展开全部 (${hiddenRows.length} 条)</button>` : ""}
+      </div>
+    ` : `<div class="empty" style="padding:12px">所选范围内所有开工项目均在 ±${ON_TIME_GRACE_MIN} 分钟内准时开工 🎉</div>`}
+  `;
+
   let smartAnalysis = "";
   if (rows.length > 0 && perm.viewGlobalStats()) {
     const lowEfficiencyWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
@@ -15856,7 +15921,21 @@ function renderStats() {
       <h3 class="stats-subhead">📐 项目工时差异（预计 vs 实际）</h3>
       ${projectTable}`;
   }
+  // 调度履约概览：追加到工时统计页最底部
+  if (typeof fulfillmentHtml === "string" && fulfillmentHtml) {
+    document.getElementById("statsTable").innerHTML += fulfillmentHtml;
+  }
   initCustomSelects(document.getElementById("stats"));
+}
+
+// 调度履约概览：展开/收起偏差明细的隐藏行
+function __fulfillToggle() {
+  const hb = document.getElementById("fulfillHidden");
+  const btn = document.getElementById("fulfillToggleBtn");
+  if (!hb) return;
+  const expanded = hb.style.display !== "none";
+  hb.style.display = expanded ? "none" : "";
+  if (btn) btn.textContent = expanded ? `展开全部 (${hb.children.length} 条)` : "收起";
 }
 
 function getWageConfig() {
@@ -19088,6 +19167,32 @@ function collectStoreStats() {
   });
 }
 
+/* 按门店计算调度履约指标：开工准点率 / 平均偏差 / 完工率 / 延期率
+ * storeId 传 null 表示「全部门店合计」；month 为 "YYYY-MM" 或 ""（全部）。
+ * 与工时统计页「调度履约概览」共用同一口径（ON_TIME_GRACE_MIN = 30）。 */
+function storeFulfillment(storeId, month) {
+  const list = cache.projects.filter(p =>
+    (!month || monthKey(p.appointmentTime) === month) &&
+    (storeId === null || (p.storeId || "") === storeId)
+  );
+  const ON_TIME_GRACE_MIN = 30; // 开工偏差在 ±30 分钟内视为准时
+  const started = list.filter(p => p.startedAt && p.appointmentTime);
+  let onTime = 0, devMs = 0;
+  started.forEach(p => {
+    const dev = new Date(p.startedAt).getTime() - new Date(p.appointmentTime).getTime();
+    devMs += dev;
+    if (Math.abs(dev) <= ON_TIME_GRACE_MIN * 60000) onTime++;
+  });
+  const onTimeRate = started.length ? Math.round(onTime / started.length * 100) : 0;
+  const avgDev = started.length ? Math.round(devMs / started.length / 60000) : 0;
+  const total = list.length;
+  const done = list.filter(p => ['已完工', '已验收', '已审核'].includes(p.status)).length;
+  const completion = total ? Math.round(done / total * 100) : 0;
+  const delayed = list.filter(p => p.status === '已延期' || (p.delayCount || 0) > 0).length;
+  const delayRate = total ? Math.round(delayed / total * 100) : 0;
+  return { onTimeRate, avgDev, completion, delayRate, startedCount: started.length, total };
+}
+
 function renderStoreStats() {
   const box = document.getElementById("storeStatsTable");
   if (!box) return;
@@ -19113,6 +19218,10 @@ function renderStoreStats() {
     }).join("");
     return `<div class="ss-bar">${segs}</div>`;
   };
+  const ON_TIME_GRACE_MIN = 30; // 开工偏差在 ±30 分钟内视为准时
+  const rateColor = (r) => r >= 90 ? '#10b981' : (r >= 75 ? '#f59e0b' : '#ef4444');
+  const tfFulfill = storeFulfillment(null, month);
+
   box.innerHTML = `
     <div class="detail-block" style="padding:0;overflow:hidden">
       <div class="ss-legend">
@@ -19127,10 +19236,16 @@ function renderStoreStats() {
             <th class="ss-num ss-hours">预计工时</th>
             <th class="ss-num ss-hours">实际工时</th>
             <th class="ss-num ss-diff">差异</th>
+            <th class="ss-num ss-fulfill">开工准点率</th>
+            <th class="ss-num ss-fulfill">平均偏差</th>
+            <th class="ss-num ss-fulfill">完工率</th>
+            <th class="ss-num ss-fulfill">延期率</th>
           </tr>
         </thead>
         <tbody>
-          ${rows.map((r, i) => `
+          ${rows.map((r, i) => {
+            const f = storeFulfillment(r.id, month);
+            return `
             <tr>
               <td class="ss-store">
                 <span class="ss-rank ${i === 0 ? 'ss-rank--top' : ''}">${i + 1}</span>
@@ -19142,7 +19257,12 @@ function renderStoreStats() {
               <td class="ss-num ss-hours">${fmtHours(r.recordedEst)}</td>
               <td class="ss-num ss-hours">${fmtHours(r.act)}</td>
               <td class="ss-num ss-diff" style="color:${diffColor(r.recordedDiff)}">${diffArrow(r.recordedDiff)} ${fmtSignedDiff(r.recordedDiff)}</td>
-            </tr>`).join("")}
+              <td class="ss-num ss-fulfill" style="color:${rateColor(f.onTimeRate)}">${f.startedCount ? f.onTimeRate + '%' : '—'}</td>
+              <td class="ss-num ss-fulfill" style="color:${Math.abs(f.avgDev) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${f.startedCount ? (f.avgDev > 0 ? '+' : '') + f.avgDev + '分' : '—'}</td>
+              <td class="ss-num ss-fulfill" style="color:${rateColor(f.completion)}">${f.total ? f.completion + '%' : '—'}</td>
+              <td class="ss-num ss-fulfill" style="color:${f.delayRate > 0 ? '#ef4444' : '#64748b'}">${f.total ? f.delayRate + '%' : '—'}</td>
+            </tr>`;
+          }).join("")}
         </tbody>
         <tfoot>
           <tr>
@@ -19152,6 +19272,10 @@ function renderStoreStats() {
             <td class="ss-num ss-hours">${fmtHours(tot.est)}</td>
             <td class="ss-num ss-hours">${fmtHours(tot.act)}</td>
             <td class="ss-num ss-diff" style="color:${diffColor(tot.diff)}">${diffArrow(tot.diff)} ${fmtSignedDiff(tot.diff)}</td>
+            <td class="ss-num ss-fulfill" style="color:${rateColor(tfFulfill.onTimeRate)}">${tfFulfill.startedCount ? tfFulfill.onTimeRate + '%' : '—'}</td>
+            <td class="ss-num ss-fulfill" style="color:${Math.abs(tfFulfill.avgDev) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${tfFulfill.startedCount ? (tfFulfill.avgDev > 0 ? '+' : '') + tfFulfill.avgDev + '分' : '—'}</td>
+            <td class="ss-num ss-fulfill" style="color:${rateColor(tfFulfill.completion)}">${tfFulfill.total ? tfFulfill.completion + '%' : '—'}</td>
+            <td class="ss-num ss-fulfill" style="color:${tfFulfill.delayRate > 0 ? '#ef4444' : '#64748b'}">${tfFulfill.total ? tfFulfill.delayRate + '%' : '—'}</td>
           </tr>
         </tfoot>
       </table>
@@ -19166,9 +19290,13 @@ function buildStoreDetailSheet(wb, sheetName, projects) {
     { header: "门店", key: "store", width: 18 },
     { header: "项目名称", key: "name", width: 28 },
     { header: "客户", key: "client", width: 16 },
+    { header: "电话", key: "phone", width: 14 },
+    { header: "地址", key: "address", width: 26 },
     { header: "状态", key: "status", width: 10 },
-    { header: "预约日期", key: "appointmentDate", width: 12 },
-    { header: "预约时间", key: "appointmentTime", width: 12 },
+    { header: "预约时间", key: "appointment", width: 16 },
+    { header: "实际开工", key: "startedAt", width: 16 },
+    { header: "完工时间", key: "finishedAt", width: 16 },
+    { header: "开工偏差", key: "deviation", width: 14 },
     { header: "预计工时", key: "est", width: 11 },
     { header: "实际工时", key: "act", width: 11 },
     { header: "差异", key: "diff", width: 11 },
@@ -19182,20 +19310,40 @@ function buildStoreDetailSheet(wb, sheetName, projects) {
     cell.alignment = { horizontal: "center", vertical: "middle" };
   });
   detailSheet.views = [{ state: "frozen", ySplit: 1 }];
+  const ON_TIME_GRACE_MIN = 30; // 与店面统计页一致：开工偏差 ±30 分钟内视为准时
   projects.forEach((p) => {
     const h = hoursDiff(p);
     const workers = (p.assignedWorkerIds || [])
       .map((wid) => (getWorker(wid) && getWorker(wid).name) || wid)
       .filter(Boolean)
       .join(", ");
-    const appt = p.appointmentTime ? new Date(p.appointmentTime) : null;
+    // 开工偏差：实际开工 − 预约时间，±30 分钟内算准时
+    let deviation = "—", devColor = "FF64748B";
+    if (p.startedAt && p.appointmentTime) {
+      const devMin = Math.round((new Date(p.startedAt).getTime() - new Date(p.appointmentTime).getTime()) / 60000);
+      const abs = Math.abs(devMin);
+      if (abs <= ON_TIME_GRACE_MIN) {
+        deviation = `准时(${devMin > 0 ? "+" : ""}${devMin}分)`;
+        devColor = "FF10B981";
+      } else if (devMin > 0) {
+        deviation = `晚${abs}分`;
+        devColor = "FFEF4444";
+      } else {
+        deviation = `早${abs}分`;
+        devColor = "FFF59E0B";
+      }
+    }
     const row = detailSheet.addRow({
       store: storeName(p.storeId),
       name: p.name || "未命名",
-      client: p.clientName || "",
+      client: p.customer || "",
+      phone: p.phone || "",
+      address: p.address || "",
       status: p.status || "—",
-      appointmentDate: appt ? fmtDate(p.appointmentTime) : "",
-      appointmentTime: appt ? `${String(appt.getHours()).padStart(2, "0")}:${String(appt.getMinutes()).padStart(2, "0")}` : "",
+      appointment: p.appointmentTime ? fmtExcelApptTime(p.appointmentTime) : "",
+      startedAt: p.startedAt ? fmtExcelRelativeTime(p.startedAt, p.appointmentTime) : "",
+      finishedAt: p.finishedAt ? fmtExcelRelativeTime(p.finishedAt, p.appointmentTime) : "",
+      deviation,
       est: h.hasActual ? h.est : (h.est > 0 ? h.est : ""),
       act: h.hasActual ? h.act : "",
       diff: h.hasActual ? h.diff : "",
@@ -19204,6 +19352,8 @@ function buildStoreDetailSheet(wb, sheetName, projects) {
     row.getCell("est").alignment = { horizontal: "right" };
     row.getCell("act").alignment = { horizontal: "right" };
     row.getCell("diff").alignment = { horizontal: "right" };
+    row.getCell("deviation").alignment = { horizontal: "center" };
+    row.getCell("deviation").font = { color: { argb: devColor } };
     if (h.hasActual) {
       const diffStyle = diffExcelStyle(h.diff);
       const diffCell = row.getCell("diff");
@@ -19214,6 +19364,36 @@ function buildStoreDetailSheet(wb, sheetName, projects) {
     }
   });
   return detailSheet;
+}
+
+/* 店面统计导出用时间格式：预约时间不带年份；相对时间同一天只显示时分，不同天带月日（跨年补年份） */
+function fmtExcelApptTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${m}-${day} ${h}:${min}`;
+}
+function fmtExcelRelativeTime(iso, baseIso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const base = baseIso ? new Date(baseIso) : null;
+  const h = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  if (base && !isNaN(base.getTime()) && d.getFullYear() === base.getFullYear() && d.getMonth() === base.getMonth() && d.getDate() === base.getDate()) {
+    return `${h}:${min}`;
+  }
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  if (base && d.getFullYear() === base.getFullYear()) {
+    return `${m}-${day} ${h}:${min}`;
+  }
+  const y = d.getFullYear();
+  return `${y}-${m}-${day} ${h}:${min}`;
 }
 
 /* Excel 工作表名：最长 31 字符，禁用 \ / * ? : [ ]，且不重复 */
@@ -19238,6 +19418,8 @@ async function exportStoreStats() {
   const month = monthInput ? monthInput.value : "";
   const monthLabel = month || "全部";
   const statuses = Object.values(STATUS);
+  // 与店面统计页一致的配色：≥90% 绿、≥75% 黄、否则红
+  const rateColor = (r) => r >= 90 ? 'FF10B981' : (r >= 75 ? 'FFF59E0B' : 'FFEF4444');
 
   // 与首页统计口径一致的项目明细（按预约时间所属月份）
   const detailProjects = cache.projects.filter((p) => {
@@ -19260,7 +19442,11 @@ async function exportStoreStats() {
       ...statuses.map((s) => ({ header: s, key: s, width: 10 })),
       { header: "预计工时(已登记)", key: "recordedEst", width: 16 },
       { header: "实际工时(已登记)", key: "act", width: 16 },
-      { header: "差异", key: "diff", width: 12 }
+      { header: "差异", key: "diff", width: 12 },
+      { header: "开工准点率", key: "onTimeRate", width: 12 },
+      { header: "平均偏差(分)", key: "avgDev", width: 12 },
+      { header: "完工率", key: "completion", width: 10 },
+      { header: "延期率", key: "delayRate", width: 10 }
     ];
 
     const headerFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
@@ -19272,13 +19458,18 @@ async function exportStoreStats() {
     });
 
     rows.forEach((r) => {
+      const f = storeFulfillment(r.id, month);
       const row = summarySheet.addRow({
         name: r.name,
         count: r.count,
         ...Object.fromEntries(statuses.map((s) => [s, r.byStatus[s] || 0])),
         recordedEst: r.recordedEst,
         act: r.act,
-        diff: r.recordedDiff
+        diff: r.recordedDiff,
+        onTimeRate: f.startedCount ? `${f.onTimeRate}%` : "—",
+        avgDev: f.startedCount ? `${f.avgDev > 0 ? "+" : ""}${f.avgDev}` : "—",
+        completion: f.total ? `${f.completion}%` : "—",
+        delayRate: f.total ? `${f.delayRate}%` : "—"
       });
       row.getCell("count").alignment = { horizontal: "right" };
       statuses.forEach((s) => row.getCell(s).alignment = { horizontal: "right" });
@@ -19291,6 +19482,25 @@ async function exportStoreStats() {
       if (sumDiffStyle.bg) {
         sumDiffCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: sumDiffStyle.bg } };
       }
+      // 履约指标配色（与店面统计页一致）
+      const setFulfillColor = (key, value, isNegativeBad) => {
+        const cell = row.getCell(key);
+        cell.alignment = { horizontal: "right" };
+        if (value === "—") return;
+        const num = parseInt(String(value).replace(/[+%]/g, ""), 10);
+        if (key === "avgDev") {
+          const bad = Math.abs(num) > 30;
+          cell.font = { color: { argb: bad ? "FFEF4444" : "FF64748B" } };
+        } else if (key === "delayRate") {
+          cell.font = { color: { argb: num > 0 ? "FFEF4444" : "FF64748B" } };
+        } else {
+          cell.font = { color: { argb: rateColor(num) } };
+        }
+      };
+      setFulfillColor("onTimeRate", f.startedCount ? `${f.onTimeRate}%` : "—");
+      setFulfillColor("avgDev", f.startedCount ? `${f.avgDev > 0 ? "+" : ""}${f.avgDev}` : "—");
+      setFulfillColor("completion", f.total ? `${f.completion}%` : "—");
+      setFulfillColor("delayRate", f.total ? `${f.delayRate}%` : "—");
     });
 
     // 合计行
@@ -19313,6 +19523,31 @@ async function exportStoreStats() {
     if (totalDiffStyle.bg) {
       totalDiffCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: totalDiffStyle.bg } };
     }
+    // 合计行的履约指标：直接取全部门店聚合（非各行相加）
+    const tfFulfill = storeFulfillment(null, month);
+    const setTotalFulfillColor = (key, value, isDelay) => {
+      const cell = totalRow.getCell(key);
+      cell.alignment = { horizontal: "right" };
+      cell.font = { bold: true };
+      if (value === "—") return;
+      const num = parseInt(String(value).replace(/[+%]/g, ""), 10);
+      if (key === "avgDev") {
+        const bad = Math.abs(num) > 30;
+        cell.font = { bold: true, color: { argb: bad ? "FFEF4444" : "FF64748B" } };
+      } else if (key === "delayRate") {
+        cell.font = { bold: true, color: { argb: num > 0 ? "FFEF4444" : "FF64748B" } };
+      } else {
+        cell.font = { bold: true, color: { argb: rateColor(num) } };
+      }
+    };
+    totalRow.getCell("onTimeRate").value = tfFulfill.startedCount ? `${tfFulfill.onTimeRate}%` : "—";
+    totalRow.getCell("avgDev").value = tfFulfill.startedCount ? `${tfFulfill.avgDev > 0 ? "+" : ""}${tfFulfill.avgDev}` : "—";
+    totalRow.getCell("completion").value = tfFulfill.total ? `${tfFulfill.completion}%` : "—";
+    totalRow.getCell("delayRate").value = tfFulfill.total ? `${tfFulfill.delayRate}%` : "—";
+    setTotalFulfillColor("onTimeRate", totalRow.getCell("onTimeRate").value);
+    setTotalFulfillColor("avgDev", totalRow.getCell("avgDev").value);
+    setTotalFulfillColor("completion", totalRow.getCell("completion").value);
+    setTotalFulfillColor("delayRate", totalRow.getCell("delayRate").value);
 
     /* ---------- Sheet 2：项目明细（合并，按筛选月份） ---------- */
     buildStoreDetailSheet(wb, "项目明细", detailProjects);
@@ -19371,32 +19606,74 @@ function showStoreProjects(storeId, storeNameParam, monthFilter) {
     const statusOrder = { "进行中": 0, "施工中": 0, "预约中": 1, "待施工": 1, "已暂停": 2, "暂停": 2, "已延期": 3, "已完工": 4, "已完成": 4, "已验收": 5, "已审核": 6, "已取消": 7 };
     projs.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
 
-    const rows = projs.map((p) => {
+    const cards = projs.map((p) => {
       const inMonth = monthKey(p.appointmentTime) === monthFilter;
       const st = p.status || "—";
       /* 状态颜色：统一走 statusStyle（单一来源），避免各处硬编码漂移 */
       const cs = statusStyle(st);
-      const sc = `${cs.bg};color:${cs.fg}`;
+      const sc = `background:${cs.bg};color:${cs.fg}`;
       const h = hoursDiff(p);
-      const fmtH = (v) => v > 0 ? Math.round(v * 10) / 10 + "h" : "";
-      const hoursText = h.hasActual ? fmtH(h.act) : (h.est > 0 ? fmtH(h.est) + "(预)" : "—");
-      /* 日期格式化：ISO → MM-DD（仅日期） */
-      const fmtDate = (s) => { if (!s) return ""; try { const d = new Date(s); if (isNaN(d.getTime())) return s; const m = String(d.getMonth()+1).padStart(2,"0"); const dd = String(d.getDate()).padStart(2,"0"); return `${m}-${dd}`; } catch(e) { return s; } };
-      const dStart = fmtDate(p.startDate || p.appointmentTime || "");
-      const dEnd = fmtDate(p.endDate);
+      const fmtH = (v) => v > 0 ? Math.round(v * 10) / 10 + "h" : "—";
+      const estText = fmtH(h.est);
+      const actText = h.hasActual ? fmtH(h.act) : "—";
+      const diffText = h.hasActual && h.est > 0
+        ? `<span style="color:${diffColor(h.diff)};font-weight:600;margin-left:4px">${h.diff > 0 ? "+" : ""}${h.diff.toFixed(1)}h</span>`
+        : "";
+      const workers = (p.assignedWorkerIds || [])
+        .map((wid) => (getWorker(wid) && getWorker(wid).name) || wid)
+        .filter(Boolean);
+      // 开工偏差：实际开工 − 预约开工（分钟）；±30 分钟内视为准时
+      const ON_TIME_GRACE_MIN = 30;
+      let devMin = null;
+      if (p.startedAt && p.appointmentTime) {
+        devMin = Math.round((new Date(p.startedAt).getTime() - new Date(p.appointmentTime).getTime()) / 60000);
+      }
+      let devHtml = "—";
+      if (devMin !== null) {
+        if (Math.abs(devMin) <= ON_TIME_GRACE_MIN) {
+          devHtml = `<span style="color:#10b981;font-weight:600">准时（误差 ${devMin > 0 ? "+" : ""}${devMin}分）</span>`;
+        } else {
+          devHtml = `<span style="color:${devMin > 0 ? "#ef4444" : "#f59e0b"};font-weight:600">${devMin > 0 ? "晚" : "早"}${Math.abs(devMin)}分</span>`;
+        }
+      }
       const monthTag = showAll && inMonth ? `<span class="ss-month-tag" title="属于统计月份 ${monthFilter}">当月</span>` : "";
-      return `<tr class="${inMonth ? 'ss-in-month' : ''}">
-        <td><a href="javascript:void(0)" onclick="modal.close(); openProjectFromCard('${p.id}')" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(p.name || "未命名")}</a>${monthTag}</td>
-        <td>${esc(p.clientName || "—")}</td>
-        <td><span style="display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:600;background:${sc};white-space:nowrap">${esc(st)}</span></td>
-        <td style="white-space:nowrap">${esc(dStart)}${dEnd ? `<br><small style="color:#94a3b8">${esc(dEnd)}</small>` : ""}</td>
-        <td style="text-align:right;white-space:nowrap;font-weight:500;color:#334155">${hoursText}</td>
-      </tr>`;
+      return `
+      <div class="ss-project-card ${inMonth ? 'ss-in-month' : ''}">
+        <div class="ss-project-card__header">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
+            <a href="javascript:void(0)" onclick="modal.close(); openProjectFromCard('${p.id}')" style="color:var(--primary);font-weight:600;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name || "未命名")}</a>
+            ${monthTag}
+          </div>
+          <span class="ss-status-badge" style="${sc}">${esc(st)}</span>
+        </div>
+        <div class="schedule-progress-detail-grid" style="margin-top:8px;font-size:12px">
+          ${p.customer ? `<div class="detail-row"><span class="detail-label">👤 客户</span><span class="detail-value">${esc(p.customer)}</span></div>` : ""}
+          ${p.phone ? `<div class="detail-row"><span class="detail-label">📞 电话</span><a class="detail-value" href="javascript:void(0)" data-tel="${esc(p.phone)}" onclick="event.stopPropagation(); callPhone(event)">${esc(p.phone)}</a></div>` : ""}
+          ${p.address ? `<div class="detail-row"><span class="detail-label">📍 地址</span><span class="detail-value">${esc(p.address)}</span></div>` : ""}
+          <div class="detail-row"><span class="detail-label">🕐 预约</span><span class="detail-value">${p.appointmentTime ? fmtDateTime(p.appointmentTime) : "—"}</span></div>
+          ${p.startedAt ? `<div class="detail-row"><span class="detail-label">🚀 开工</span><span class="detail-value">${fmtDateTime(p.startedAt)}</span></div>` : ""}
+          ${devMin !== null ? `<div class="detail-row"><span class="detail-label">⏰ 开工偏差</span><span class="detail-value">${devHtml}</span></div>` : ""}
+          ${p.finishedAt ? `<div class="detail-row"><span class="detail-label">🏁 完工</span><span class="detail-value">${fmtDateTime(p.finishedAt)}</span></div>` : ""}
+          ${workers.length ? `<div class="detail-row"><span class="detail-label">👷 人员</span><span class="detail-value">${esc(workers.join(", "))}</span></div>` : ""}
+          <div class="detail-row"><span class="detail-label">⏱ 工时</span><span class="detail-value">预计 ${estText} / 实际 ${actText}${diffText}</span></div>
+        </div>
+      </div>`;
     }).join("");
 
     const summary = hasFilter
       ? `当月 <b style="color:#2563eb">${inMonthCount}</b> 个 · 全部 <b>${allProjs.length}</b> 个`
       : `全部 <b>${allProjs.length}</b> 个项目`;
+
+    // 开工偏差汇总：准时 / 晚开工 / 早开工（按当前展示范围）
+    const startedList = projs.filter((p) => p.startedAt && p.appointmentTime);
+    let onTimeN = 0, lateN = 0, earlyN = 0;
+    startedList.forEach((p) => {
+      const d = Math.round((new Date(p.startedAt).getTime() - new Date(p.appointmentTime).getTime()) / 60000);
+      if (Math.abs(d) <= 30) onTimeN++; else if (d > 0) lateN++; else earlyN++;
+    });
+    const devSummary = startedList.length
+      ? ` · 准时 <b style="color:#10b981">${onTimeN}</b> · 晚开工 <b style="color:#ef4444">${lateN}</b> · 早开工 <b style="color:#f59e0b">${earlyN}</b>`
+      : "";
 
     const toggle = hasFilter ? `
       <div class="ss-toggle-group" role="tablist">
@@ -19407,14 +19684,11 @@ function showStoreProjects(storeId, storeNameParam, monthFilter) {
     const content = `
       <div style="padding:4px 0">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap">
-          <span style="font-size:13px;color:#64748b"><b style="color:#1f2937">${esc(sName)}</b> · ${summary}</span>
+          <span style="font-size:13px;color:#64748b"><b style="color:#1f2937">${esc(sName)}</b> · ${summary}${devSummary}</span>
           ${toggle}
         </div>
-        <div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:8px">
-          <table class="data" style="margin:0;font-size:12px">
-            <thead><tr><th>项目名称</th><th>客户</th><th>状态</th><th>日期</th><th style="text-align:right">工时</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
+        <div style="max-height:60vh;overflow-y:auto;padding-right:2px">
+          ${cards}
         </div>
       </div>`;
 
@@ -25409,7 +25683,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vece0d641";
+  const APP_VERSION = "ve0de6cd3";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
