@@ -14330,6 +14330,10 @@ function openCompleteProjectForm(id) {
   const lastSeg = isCrossDay ? bookedSegs[bookedSegs.length - 1] : null;
   const crossDayEarlyInfo = isCrossDay && lastSeg && new Date() < lastSeg.end;
 
+  // 已暂停/已延期的项目：上次暂停时已结算过部分工时，系统自动估算可能不准确，
+  // 需在外协/内部两个块都用到，故在函数级声明（而非嵌入 if (workers.length > 0) 块内）。
+  const projectAlreadySettled = (p.status === STATUS.PAUSED || p.status === STATUS.DELAYED) && !!p.startedAt;
+
   const assignedWorkerIds = p.assignedWorkerIds || [];
   const allWorkerIds = new Set([...assignedWorkerIds]);
   
@@ -14600,9 +14604,9 @@ function openCompleteProjectForm(id) {
       allAutoHours[workerId] = Math.round(rtHours * 10) / 10;
     });
     window._completeWorkerAutoHours = allAutoHours;
-    
-    // 疑似忘点完工 / 跨天提前完工 / 已暂停或已延期完工：系统自动估算的工时不可靠，禁止用滑块自动分配，只能逐人手动填写
-    const projectAlreadySettled = (p.status === STATUS.PAUSED || p.status === STATUS.DELAYED) && !!p.startedAt;
+
+    // 疑似忘点完工 / 跨天提前完工 / 极短施工：系统自动估算的工时不可靠，禁止用滑块自动分配，只能逐人手动填写
+    // 注意：projectAlreadySettled 已在函数开头声明（外协块也要用，避开块作用域 ReferenceError）。
     if (!forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled && !shortWorkWarning) {
       const defaultAlloc = [0, 0, 80, 20];
       const sliderRows = WORK_TYPES.map((t, i) => {
@@ -25683,7 +25687,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "ve0de6cd3";
+  const APP_VERSION = "v44bef9fe";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
