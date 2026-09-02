@@ -980,6 +980,141 @@ function copyPhone(digits) {
   }
 }
 
+/* ---------- 自定义右键菜单（替代浏览器默认菜单） ---------- */
+let _ctxMenuEl = null;
+let _ctxMenuOutside = null;
+
+function hideContextMenu() {
+  if (_ctxMenuEl) { _ctxMenuEl.remove(); _ctxMenuEl = null; }
+  if (_ctxMenuOutside) {
+    document.removeEventListener("click", _ctxMenuOutside, true);
+    document.removeEventListener("contextmenu", _ctxMenuOutside, true);
+    _ctxMenuOutside = null;
+  }
+}
+
+// 弹出自定义右键菜单。items: [{label, icon, onClick, danger, disabled, separator}]
+function showContextMenu(x, y, items) {
+  hideContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "ctx-menu";
+  for (const it of items) {
+    if (it.separator) {
+      const sep = document.createElement("div");
+      sep.className = "ctx-menu__sep";
+      menu.appendChild(sep);
+      continue;
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ctx-menu__item" + (it.danger ? " ctx-menu__item--danger" : "");
+    btn.innerHTML = `${it.icon ? `<span class="ctx-menu__ico">${it.icon}</span>` : ""}<span>${esc(it.label)}</span>`;
+    if (it.disabled) {
+      btn.classList.add("ctx-menu__item--disabled");
+      btn.disabled = true;
+    } else {
+      btn.onclick = () => {
+        hideContextMenu();
+        try { it.onClick && it.onClick(); } catch (err) { console.error(err); }
+      };
+    }
+    menu.appendChild(btn);
+  }
+  document.body.appendChild(menu);
+  _ctxMenuEl = menu;
+  // 视口裁剪：菜单超出右/下边界时反向贴边
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let nx = x, ny = y;
+  if (nx + mw > window.innerWidth - 8) nx = Math.max(8, window.innerWidth - mw - 8);
+  if (ny + mh > window.innerHeight - 8) ny = Math.max(8, window.innerHeight - mh - 8);
+  menu.style.left = nx + "px";
+  menu.style.top = ny + "px";
+  // 延迟注册外部点击/再次右键关闭，避免本次右键立即触发关闭
+  _ctxMenuOutside = (e) => { if (_ctxMenuEl && !_ctxMenuEl.contains(e.target)) hideContextMenu(); };
+  setTimeout(() => {
+    document.addEventListener("click", _ctxMenuOutside, true);
+    document.addEventListener("contextmenu", _ctxMenuOutside, true);
+  }, 0);
+}
+
+// 合成一个能被 callPhone 消费的伪事件（复用拨号 + 兜底复制逻辑）
+function makePhoneEvent(tel) {
+  return {
+    preventDefault() {},
+    currentTarget: { getAttribute: (k) => (k === "data-tel" ? tel : "") },
+  };
+}
+
+// 复制文本到剪贴板（带降级）
+function copyText(text, okMsg) {
+  if (!text) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => toast(okMsg || "已复制"), () => toast(text));
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); } catch (_) {}
+      document.body.removeChild(ta);
+      toast(okMsg || "已复制");
+    }
+  } catch (e) { toast(text); }
+}
+
+// 项目卡片右键菜单（按权限/状态裁剪）
+function buildProjectMenu(p) {
+  const items = [];
+  items.push({ label: "查看详情 / 施工管理", icon: "🔧", onClick: () => openProjectFromCard(p.id) });
+  if (perm.editProject(p)) items.push({ label: "编辑项目", icon: "✏️", onClick: () => editProject(p.id) });
+  if ((perm.editAppointment(p) || perm.editHours(p)) && !isAppointmentLocked(p))
+    items.push({ label: "快速改期", icon: "📅", onClick: () => quickEditProjectTime(p.id) });
+  if (p.phone) items.push({ label: "打电话", icon: "📞", onClick: () => callPhone(makePhoneEvent(p.phone)) });
+  if (p.address) items.push({ label: "复制地址", icon: "📋", onClick: () => copyText(p.address, "已复制地址") });
+  items.push({ separator: true });
+  if (perm.deleteProject(p)) items.push({ label: "删除项目", icon: "🗑️", danger: true, onClick: () => deleteProject(p.id) });
+  return items;
+}
+
+// 非项目区域的通用右键菜单
+function buildAppMenu() {
+  const items = [];
+  const ae = document.activeElement;
+  const editable = ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable);
+  if (editable) {
+    items.push({ label: "剪切", icon: "✂️", onClick: () => document.execCommand("cut") });
+    items.push({ label: "复制", icon: "📋", onClick: () => document.execCommand("copy") });
+    items.push({ label: "粘贴", icon: "📥", onClick: () => document.execCommand("paste") });
+    items.push({ separator: true });
+  }
+  items.push({ label: "刷新数据", icon: "🔄", onClick: () => {
+    if (repo && repo.loadAll) { repo.loadAll().then(() => renderAll()).catch(() => {}); toast("已刷新"); }
+  } });
+  items.push({ label: "回到顶部", icon: "⬆️", onClick: () => window.scrollTo({ top: 0, behavior: "smooth" }) });
+  return items;
+}
+
+// 全局绑定：屏蔽浏览器默认右键菜单，改为 App 自己的菜单
+function bindContextMenu() {
+  document.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    const cardEl = e.target.closest(".card[data-id], [data-project-id]");
+    if (cardEl) {
+      const pid = cardEl.getAttribute("data-id") || cardEl.getAttribute("data-project-id");
+      const p = pid ? getProject(pid) : null;
+      if (p) {
+        if (typeof closeTimelineActionMenu === "function") closeTimelineActionMenu();
+        showContextMenu(e.clientX, e.clientY, buildProjectMenu(p));
+        return;
+      }
+    }
+    showContextMenu(e.clientX, e.clientY, buildAppMenu());
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideContextMenu(); });
+  window.addEventListener("scroll", hideContextMenu, true);
+  window.addEventListener("resize", hideContextMenu);
+}
+
 function safeJsonParse(str, defaultValue = null) {
   if (!str || typeof str !== "string") return defaultValue;
   try {
@@ -1197,7 +1332,12 @@ function getBookedSegments(p) {
       if (en <= st) en = new Date(en.getTime() + 24 * 3600 * 1000); // 跨午夜：结束时间顺延至次日
       out.push({ date: s.date, start: st, end: en, startHM: s.start, endHM: s.end });
     }
-    if (out.length) return out;
+    if (out.length) {
+      // 按日期+开始时间升序，保证首段=最早施工日（历史/手动乱序的 workSegments 也能正确显示，
+      // 避免 fmtTimeRange、formatCrossDaySegmentsCompact、编辑表单 slice(1) 把首末日算反）。
+      out.sort((a, b) => `${a.date}${a.startHM}`.localeCompare(`${b.date}${b.startHM}`));
+      return out;
+    }
   }
   const s = projectStart(p), e = projectEnd(p);
   if (s && e && e > s) {
@@ -5173,7 +5313,7 @@ function renderWorkerScheduleHtml(dateStr, workerId = null) {
         const nightCls = bar.night ? " timeline-task-night" : "";
         const namePrefix = bar.night ? "🌙 " : "";
         tasksHtml += `
-          <div class="timeline-task timeline-task-${statusClass}${feasClass}${nightCls}" title="${esc(timeStr)}" style="left:${left}px; width:${safeWidth}px; height:48px;">
+          <div class="timeline-task timeline-task-${statusClass}${feasClass}${nightCls}" data-project-id="${esc(p.id)}" title="${esc(timeStr)}" style="left:${left}px; width:${safeWidth}px; height:48px;">
             <div class="timeline-task-header">
               <span class="timeline-task-name" style="font-size:11px;">${statusIcon} ${namePrefix}${esc(p.name)}</span>
             </div>
@@ -7832,7 +7972,7 @@ function renderProjects() {
     });
     
     return `
-      <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed || isForgotWorkFlag) ? "card-overdue" + ((overnight || isForgotWorkFlag) ? " card-overdue--overnight" : "") : ""}${isPausedTooLong ? " card-overdue--paused" : ""}" data-status="${esc(p.status)}">
+      <div class="card ${(isOverdue || isPending || workingTooLong || isOvertimeWorking || isDelayed || isForgotWorkFlag) ? "card-overdue" + ((overnight || isForgotWorkFlag) ? " card-overdue--overnight" : "") : ""}${isPausedTooLong ? " card-overdue--paused" : ""}" data-status="${esc(p.status)}" data-id="${esc(p.id)}">
         <div class="card-status-bar"></div>
         <div class="card-title card-title--with-status">
           <div class="card-title__right">
@@ -8437,6 +8577,9 @@ async function saveQuickEditProjectTime(id) {
 
   // 跨天施工：收集所有分段（第1天 + 额外天），每段结束需晚于开始
   const segs = (typeof readAllSegments === "function") ? readAllSegments() : [];
+  // 按日期+开始时间升序排序，确保「开始时间」取最早一段（如新增 9/1 早于原 9/2 时自动前移），
+  // 同时让存储的 workSegments 与「第1天」标签顺序一致。
+  segs.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
   let fullTime, fullEnd, totalBookedHours, segPayload = null;
 
   if (segs.length > 1) {
@@ -8580,6 +8723,9 @@ async function saveProject(id) {
 
   // 跨天施工：收集所有分段（第1天 + 额外天）。结束 ≤ 开始 视为次日凌晨(合法跨天夜间施工)，相等=非法
   const segs = readAllSegments();
+  // 按日期+开始时间升序排序：新增更早的日期（如 9/1 早于原 9/2）时，开始时间自动前移为该最早段，
+  // 存储的 workSegments 也据此排序，保证「第1天」标签与最早施工日一致。
+  segs.sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
   if (!segs.length) { toast("请填写预约时间"); return; }
   for (const s of segs) {
     const st = new Date(`${s.date}T${s.start}`);
@@ -22959,7 +23105,7 @@ function renderCalendar() {
       const isRepair = (p.repairOrders || []).some(ro => ro && ro.status === "待维修");
       const dotClass = isRepair ? "repair" : (STATUS_DOT[p.status] || "");
       const prefix = isRepair ? "🔧" : "";
-      return `<div class="cal-ev"><span class="dot ${dotClass}"></span>${prefix}${esc(p.name)}</div>`;
+      return `<div class="cal-ev" data-project-id="${esc(p.id)}"><span class="dot ${dotClass}"></span>${prefix}${esc(p.name)}</div>`;
     }).join("");
     const more = items.length > 3 ? `<div class="cal-more">+${items.length - 3} 更多</div>` : "";
     const countBadge = items.length ? `<span class="cal-count">${items.length}</span>` : "";
@@ -25255,6 +25401,7 @@ function setupHourDiffDrag() {
 async function init() {
   injectStatusBadgeStyles(); // 状态色单一来源：注入 .badge.<状态> 规则
   bindEvents();
+  bindContextMenu(); // 自定义右键菜单（替代浏览器默认菜单）
   registerSubmitGuards();
   loadCustomDrivers();
 
@@ -25687,7 +25834,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v44bef9fe";
+  const APP_VERSION = "v536d07ed";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
