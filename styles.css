@@ -5508,6 +5508,31 @@ textarea.input { resize: vertical; min-height: 50px; }
   margin-bottom: 5px;
 }
 
+/* 项目进度跟踪展开详情里的照片画廊 */
+.schedule-progress-photos {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e5e7eb;
+}
+.schedule-progress-photos .cos-section--readonly h4 {
+  font-size: 13px;
+  margin: 8px 0 6px;
+}
+.schedule-progress-photos .cos-grid {
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+}
+.schedule-progress-photos .cos-thumb {
+  height: 72px;
+}
+.schedule-progress-photos .cos-photos-head--readonly {
+  flex-wrap: wrap;
+}
+.schedule-progress-photos .cos-download-all {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
 .leave-calendar-day {
   width: 60px;
   text-align: center;
@@ -13826,3 +13851,136 @@ table.data.project-hours-diff thead th {
 .ctx-menu__item--disabled { color: #94a3b8; cursor: default; }
 .ctx-menu__item--disabled:hover { background: none; }
 .ctx-menu__sep { height: 1px; background: #eef2f7; margin: 5px 4px; }
+
+/* ===== 项目照片（施工图 / 完成图）===== */
+.cos-photos-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.cos-cat-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #475569;
+  cursor: pointer;
+  user-select: none;
+}
+.cos-cat { width: 15px; height: 15px; accent-color: #0ea5e9; cursor: pointer; }
+.cos-download-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid #0ea5e9;
+  background: #fff;
+  color: #0ea5e9;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.cos-download-all:hover { background: #0ea5e9; color: #fff; }
+.cos-photos-head--readonly { margin-bottom: 4px; }
+.cos-section { border-left: 4px solid #0ea5e9; }
+.cos-count { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 4px; }
+.cos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.cos-thumb {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f1f5f9;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cos-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cos-thumb__ph { color: var(--muted); font-size: 13px; padding: 6px; text-align: center; }
+.cos-thumb.is-error { border-color: #fca5a5; }
+.cos-thumb__err {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: #dc2626; color: #fff; font-size: 11px; text-align: center; padding: 2px 0;
+}
+.cos-thumb__del {
+  position: absolute; top: 4px; right: 4px;
+  width: 20px; height: 20px; line-height: 18px; text-align: center;
+  border: none; border-radius: 50%;
+  background: rgba(15, 23, 42, 0.6); color: #fff; font-size: 12px; cursor: pointer;
+}
+.cos-thumb__del:hover { background: #dc2626; }
+.cos-thumb__dl {
+  position: absolute; top: 4px; right: 28px;
+  width: 20px; height: 20px; line-height: 18px; text-align: center;
+  border: none; border-radius: 50%;
+  background: rgba(15, 23, 42, 0.6); color: #fff; font-size: 12px; cursor: pointer;
+}
+.cos-thumb__dl:hover { background: #0ea5e9; }
+.cos-thumb__prog {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: #e2e8f0;
+}
+.cos-thumb__bar { height: 100%; width: 0; background: #0ea5e9; transition: width .15s linear; }
+.cos-add {
+  display: flex; align-items: center; justify-content: center;
+  aspect-ratio: 1 / 1;
+  border: 1.5px dashed #cbd5e1; border-radius: 10px;
+  background: #f8fafc; color: #475569; font-size: 13px; cursor: pointer;
+}
+.cos-add:hover { border-color: #0ea5e9; color: #0ea5e9; }
+
+/* 弹窗内只读照片画廊 */
+.cos-section--readonly { border-left-color: #94a3b8; margin-top: 10px; }
+.cos-section--readonly h4 { font-size: 13px; color: #475569; margin: 0 0 8px; font-weight: 600; }
+.cos-thumb--readonly { cursor: zoom-in; }
+.cos-thumb--readonly:hover { border-color: #0ea5e9; }
+.cos-img--err { opacity: .5; background: #fee2e2; }
+
+/* 项目卡片预览块里的照片数量徽标 */
+.proj-content-preview__badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11px; font-weight: 500; color: #0ea5e9;
+  background: #e0f2fe; border-radius: 999px; padding: 2px 8px; margin-left: 6px;
+}
+
+/* 全屏看图灯箱 */
+.cos-lightbox {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(15, 23, 42, 0.92);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.cos-lightbox img { max-width: 100%; max-height: 86vh; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+.cos-lightbox__tip { color: #cbd5e1; font-size: 12px; margin-top: 12px; }
+.cos-lightbox__dl {
+  position: absolute; top: 18px; right: 18px;
+  border: none; border-radius: 8px; cursor: pointer;
+  background: #0ea5e9; color: #fff; font-size: 14px; padding: 8px 14px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.35);
+}
+.cos-lightbox__dl:hover { background: #0284c7; }
+.cos-lightbox__nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 48px; height: 48px; border: none; border-radius: 50%; cursor: pointer;
+  background: rgba(15, 23, 42, 0.55); color: #fff; font-size: 28px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 16px rgba(0,0,0,.35); user-select: none;
+}
+.cos-lightbox__nav:hover { background: rgba(14, 165, 233, 0.85); }
+.cos-lightbox__prev { left: 18px; }
+.cos-lightbox__next { right: 18px; }
+.cos-lightbox__counter {
+  position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.55); color: #e2e8f0; font-size: 13px;
+  padding: 5px 12px; border-radius: 999px; letter-spacing: .5px;
+}

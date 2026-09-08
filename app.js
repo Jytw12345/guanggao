@@ -300,6 +300,9 @@ const CAP = {
   VEHICLE_TRIP_ADD: "vehicle_trip_add",
   VEHICLE_TRIP_DELETE: "vehicle_trip_delete",
   VEHICLE_MANAGE: "vehicle_manage",
+  PHOTO_UPLOAD: "photo_upload",
+  PHOTO_DELETE: "photo_delete",
+  PHOTO_DOWNLOAD: "photo_download",
 };
 
 /* 权限项的中文说明（角色权限配置页逐行展示，顺序即展示顺序） */
@@ -375,6 +378,9 @@ const CAP_LABEL = {
   manage_wage_config: "管理工时单价",
   repair_complete: "完成维修",
   rework_project: "返工项目",
+  photo_upload: "上传照片",
+  photo_delete: "删除照片",
+  photo_download: "下载/导出照片",
 };
 
 /* 权限项分组（角色权限配置页与个性权限弹窗按组展示，方便勾选） */
@@ -390,6 +396,7 @@ const CAP_GROUPS = [
   { label: "个人日程", caps: ["schedule_view","schedule_view_all","schedule_add","schedule_edit_own","schedule_edit_all","schedule_delete_own","schedule_delete_all"] },
   { label: "内部任务", caps: ["task_view","task_add","task_start","task_complete","task_delete","task_verify","internal_work_log"] },
   { label: "车辆里程", caps: ["vehicle_view","vehicle_trip_add","vehicle_trip_delete","vehicle_manage"] },
+  { label: "照片管理", caps: ["photo_upload","photo_delete","photo_download"] },
 ];
 
 /* 默认权限模板（与 SQL seed 一致）；云端会用 role_permissions 表覆盖 */
@@ -414,6 +421,7 @@ const DEFAULT_ROLE_PERMS = {
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
     import_data: false, view_operation_logs: false,
     repair_create: true, repair_complete: false, rework_project: true,
+    photo_upload: true, photo_delete: true, photo_download: true,
     schedule_view: true, schedule_view_all: true, schedule_add: true, schedule_edit_own: true, schedule_edit_all: true, schedule_delete_own: true, schedule_delete_all: true,
     task_view: true, task_add: true, task_start: true, task_complete: true, task_delete: true, task_verify: true,
     internal_work_log: false,
@@ -435,6 +443,7 @@ const DEFAULT_ROLE_PERMS = {
     view_stats_global: false, view_stats_store: false,
     manage_stores: false, manage_wage_config: false,
     repair_create: false, repair_complete: true, rework_project: false,
+    photo_upload: true, photo_delete: true, photo_download: true,
     manage_outsourced: false,
     project_edit_appointment_own: false, project_edit_appointment_all: false, project_edit_hours_own: false, project_edit_hours_all: false,
     project_edit_worklog_own: false, project_edit_worklog_all: false,
@@ -584,6 +593,10 @@ const perm = {
   manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT),
   manageMakeup: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_BATCH_ROTATIONAL),
   viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
+  // 照片管理三权分立：上传/删除受「已审核锁定」约束（审核后不可篡改现场证据），下载无此约束
+  photoUpload: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD),
+  photoDelete: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE),
+  photoDownload: () => can(CAP.PHOTO_DOWNLOAD),
 };
 
 function isReviewed(p) {
@@ -2711,6 +2724,11 @@ const mapProject = (r) => ({
   reworkOf: r.rework_of || r.reworkOf || null,
   reworkContent: r.rework_content || r.reworkContent || "",
   reworkPayable: r.rework_payable === false ? false : true, // 返工工时是否计入工资，默认计入
+  projectPhotos: (r.project_photos || r.projectPhotos)
+    ? (typeof (r.project_photos || r.projectPhotos) === "string"
+        ? safeJsonParse(r.project_photos || r.projectPhotos, null)
+        : (r.project_photos || r.projectPhotos))
+    : null,
 });
 
 const projectToRow = (p) => ({
@@ -7720,6 +7738,551 @@ async function openProjectFromCard(id, opts = {}) {
   gotoConstruction(id, opts);
 }
 
+/* ============================================================
+ * 项目照片（施工图 / 完成图）—— 腾讯云 COS 云端存储
+ * 前端持登录态调 cos-sign Edge Function 拿预签名 PUT URL，直传 COS；
+ * 元数据（key/url...）存 projects.project_photos(jsonb)，不放大对象进 Postgres。
+ * ========================================================== */
+
+// 把对象键转成安全的 DOM id（去掉 / . 等非法字符）
+function cosSafeId(key) {
+  return String(key).replace(/[^a-zA-Z0-9]/g, "_");
+}
+
+// 归一化照片数据，确保挂回项目对象，便于渲染与保存
+function normalizePhotos(p) {
+  let ph = (p && (p.projectPhotos || p.project_photos)) || null;
+  if (!ph || typeof ph !== "object") ph = {};
+  if (!Array.isArray(ph.plan)) ph.plan = [];
+  if (!Array.isArray(ph.material)) ph.material = [];
+  if (!Array.isArray(ph.site)) ph.site = [];
+  if (!Array.isArray(ph.completion)) ph.completion = [];
+  if (p) p.projectPhotos = ph;
+  return ph;
+}
+
+// 私有桶：按 key 缓存签名下载 URL（避免每张图重复请求），并缓存 host 供离线 fallback
+let _cosViewCache = {};
+let _cosViewHost = "";
+try { _cosViewHost = localStorage.getItem("cosViewHost") || ""; } catch (_) {}
+
+// 批量换取预签名 URL。action=put 用于上传直传，action=get 用于私有桶下载查看
+async function cosGetSignedUrls(items, action = "put") {
+  if (MODE !== "cloud") throw new Error("离线模式不支持上传到云存储，请联网后重试");
+  const { data, error } = await sb.functions.invoke("cos-sign", { body: { action, items } });
+  if (error) throw new Error(error.message || "签名失败");
+  if (!data || !Array.isArray(data.items)) throw new Error("签名返回异常");
+  return data.items; // [{key,url,host}]
+}
+
+// 批量换取签名下载 URL（私有桶查看用），结果按 key 缓存到内存；断网时依赖 SW 已缓存图片
+async function cosGetViewUrls(keys) {
+  const result = {};
+  if (!keys || !keys.length) return result;
+  keys.forEach((k) => { if (_cosViewCache[k]) result[k] = _cosViewCache[k]; });
+  const need = keys.filter((k) => !_cosViewCache[k]);
+  if (need.length && MODE === "cloud") {
+    try {
+      const { data, error } = await sb.functions.invoke("cos-sign", {
+        body: { action: "get", items: need.map((k) => ({ key: k })) },
+      });
+      if (!error && data && Array.isArray(data.items)) {
+        data.items.forEach((it) => {
+          if (it.key && it.url) { _cosViewCache[it.key] = it.url; result[it.key] = it.url; }
+        });
+        if (data.host) {
+          _cosViewHost = data.host;
+          try { localStorage.setItem("cosViewHost", data.host); } catch (_) {}
+        }
+      }
+    } catch (_) { /* 断网：依赖已缓存/已下载的 SW 缓存图片 */ }
+  }
+  return result;
+}
+
+// XHR PUT 上传（带进度），COS 预签名 URL 无需额外签名头
+function putFileToCos(putUrl, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", putUrl, true);
+    xhr.setRequestHeader("Content-Type", file.type || "image/jpeg");
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+    }
+    xhr.onload = () => {
+      (xhr.status >= 200 && xhr.status < 300)
+        ? resolve()
+        : reject(new Error("HTTP " + xhr.status));
+    };
+    xhr.onerror = () => reject(new Error("网络错误"));
+    xhr.send(file);
+  });
+}
+
+// 把照片元数据落库（云端走 patchProject，本地走 saveLocal）
+async function saveProjectPhotos(projectId, photos) {
+  const clean = (arr) =>
+    (arr || [])
+      .map((it) => ({
+        key: it.key,
+        url: it.url || "",
+        name: it.name || "",
+        size: it.size || 0,
+        by: it.by || "",
+        at: it.at || Date.now(),
+      }))
+      .filter((it) => it.key);
+  const payload = {
+    plan: clean(photos.plan),
+    material: clean(photos.material),
+    site: clean(photos.site),
+    completion: clean(photos.completion),
+  };
+  const p = getProject(projectId);
+  if (p) p.projectPhotos = payload;
+  if (MODE === "cloud") {
+    await repo.patchProject(projectId, { project_photos: JSON.stringify(payload) });
+  } else {
+    saveLocal();
+  }
+}
+
+// 重新渲染照片区（挂接在施工管理详情底部的 #cosPhotosWrap）
+function refreshPhotosUI(p) {
+  const wrap = document.getElementById("cosPhotosWrap");
+  if (!wrap || !p) return;
+  wrap.innerHTML = renderProjectPhotosHtml(p);
+  fillPhotoImages(p);
+}
+
+// 渲染 现场图 / 施工图及物料 / 完成效果图 三个画廊块
+// 施工图及物料（kind="__pm"）合并展示 plan + material，但保留每张图原始 kind 以便删除
+// 权限：上传=photo_upload、删除=photo_delete、下载(单张/ZIP)=photo_download，三者独立，与项目编辑权限解耦
+function renderProjectPhotosHtml(p) {
+  const photos = normalizePhotos(p);
+  const canUpload = perm.photoUpload(p) || isManager();
+  const canDelete = perm.photoDelete(p) || isManager();
+  const canDownload = perm.photoDownload(p) || isManager();
+  const block = (title, kind) => {
+    let items;
+    if (kind === "__pm") {
+      items = [
+        ...photos.plan.map((it) => ({ ...it, _kind: "plan" })),
+        ...photos.material.map((it) => ({ ...it, _kind: "material" })),
+      ];
+    } else {
+      items = photos[kind] || [];
+    }
+    const blockKeys = items.filter((it) => it.key).map((it) => it.key);
+    const thumbs = items
+      .map((it, i) => {
+        const sid = cosSafeId(it.key);
+        const realKind = it._kind || kind;
+        const prog = it.uploading
+          ? `<div class="cos-thumb__prog"><div class="cos-thumb__bar" id="cos-prog-${sid}" style="width:0%"></div></div>`
+          : "";
+        const img = it.uploading
+          ? `<div class="cos-thumb__ph">⏳ 上传中</div>`
+          : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}">`;
+        const err = it.error ? `<div class="cos-thumb__err">失败</div>` : "";
+        const dnBtn = canDownload
+          ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
+          : "";
+        const del = canDelete
+          ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeCosPhoto('${esc(p.id)}','${realKind}','${esc(it.key)}')">✕</button>`
+          : "";
+        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, i)})">${img}${prog}${err}${dnBtn}${del}</div>`;
+      })
+      .join("");
+    const addBtn = canUpload
+      ? `<button type="button" class="cos-add" onclick="document.getElementById('cosFile_${kind}_${esc(p.id)}').click()">＋ 添加${title}</button><input id="cosFile_${kind}_${esc(p.id)}" type="file" accept="image/*" multiple class="hidden" onchange="handleCosFiles(this,'${esc(p.id)}','${kind}')">`
+      : "";
+    return `<div class="detail-block cos-section">
+      <h3>${title} <span class="cos-count">${items.length}</span></h3>
+      <div class="cos-grid">${thumbs}${addBtn}</div>
+    </div>`;
+  };
+  const hasAny =
+    photos.plan.length + photos.material.length + photos.site.length + photos.completion.length > 0;
+  const head = hasAny && canDownload
+    ? `<div class="cos-photos-head">
+        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="site" checked> 现场图</label>
+        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="pm" checked> 施工图及物料</label>
+        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="completion" checked> 完成效果图</label>
+        <button type="button" class="cos-download-all" onclick="downloadAllProjectPhotos('${esc(p.id)}', this)">⬇ 下载选中（打包 ZIP）</button>
+      </div>`
+    : "";
+  return (
+    head +
+    block("现场图", "site") +
+    block("施工图及物料", "__pm") +
+    block("完成效果图", "completion")
+  );
+}
+
+// 选择文件后触发上传（支持多选、逐张进度）
+async function handleCosFiles(input, projectId, kind) {
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (!files.length) return;
+  const p = getProject(projectId);
+  if (!p) return;
+  const photos = normalizePhotos(p);
+  const storeKind = kind === "__pm" ? "plan" : kind; // 展示合并标记 → 实际存 plan
+
+  const prepared = files.map((file) => {
+    let ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (!ext) ext = "jpg";
+    const key = `projects/${projectId}/${storeKind}/${uid()}.${ext}`;
+    const item = {
+      key,
+      url: "",
+      name: file.name,
+      size: file.size,
+      by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "匿名",
+      at: Date.now(),
+      uploading: true,
+    };
+    photos[storeKind].push(item);
+    return { file, item };
+  });
+  refreshPhotosUI(p);
+
+  try {
+    const signed = await cosGetSignedUrls(
+      prepared.map((x) => ({ key: x.item.key, contentType: x.file.type || "image/jpeg" })),
+    );
+    const map = {};
+    signed.forEach((s) => (map[s.key] = s));
+    for (const { file, item } of prepared) {
+      const s = map[item.key];
+      if (!s) {
+        item.uploading = false;
+        item.error = true;
+        refreshPhotosUI(p);
+        continue;
+      }
+      try {
+        await putFileToCos(s.url, file, (pct) => {
+          const bar = document.getElementById("cos-prog-" + cosSafeId(item.key));
+          if (bar) bar.style.width = pct + "%";
+        });
+        // 私有桶：不持久化会过期的签名 URL，仅存裸 key，查看时实时换签名 GET URL
+        item.url = "";
+        item.uploading = false;
+        item.error = false;
+        refreshPhotosUI(p);
+        await saveProjectPhotos(projectId, photos);
+      } catch (e) {
+        item.uploading = false;
+        item.error = true;
+        toast("上传失败：" + (e.message || e));
+        refreshPhotosUI(p);
+      }
+    }
+  } catch (e) {
+    toast("获取上传授权失败：" + (e.message || e));
+    prepared.forEach(({ item }) => {
+      item.uploading = false;
+      item.error = true;
+    });
+    refreshPhotosUI(p);
+  }
+}
+
+// 删除某张照片（仅元数据；COS 上的对象保留，避免误删现场证据，可按需加彻底删除）
+async function removeCosPhoto(projectId, kind, key) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const photos = normalizePhotos(p);
+  photos[kind] = (photos[kind] || []).filter((it) => it.key !== key);
+  p.projectPhotos = photos;
+  await saveProjectPhotos(projectId, photos);
+  refreshPhotosUI(p);
+}
+
+// 通过 Supabase Edge Function（cos-proxy）取 COS 对象字节，绕过私有桶的 CORS 限制。
+// 任意来源（含 file:// / 本地脚手架）都能用，不需要在 COS 控制台配跨域。
+async function getCosProxyBlob(key) {
+  if (MODE !== "cloud" || !sb || !key) return null;
+  try {
+    const { data } = await sb.auth.getSession();
+    const token = (data && data.session && data.session.access_token) || window.APP_CONFIG.SUPABASE_ANON_KEY;
+    const url = `${window.APP_CONFIG.SUPABASE_URL}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}`;
+    const resp = await fetch(url, {
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    });
+    if (resp.ok) return await resp.blob();
+  } catch (_) {}
+  return null;
+}
+
+// 取单张照片字节：优先走代理；若代理不可用，回退直连签名 URL（需 COS 已配 GET 跨域）
+async function fetchCosObjectBlob(key) {
+  const proxy = await getCosProxyBlob(key);
+  if (proxy) return proxy;
+  const map = await cosGetViewUrls([key]);
+  const url = map[key] || "";
+  if (!url) return null;
+  try {
+    const r = await fetch(url);
+    if (r.ok) return await r.blob();
+  } catch (_) {}
+  return null;
+}
+
+// 打包下载某项目照片为单个 ZIP（支持在弹窗内勾选类别）
+async function downloadAllProjectPhotos(projectId, btn) {
+  if (!(perm.photoDownload() || isManager())) { toast("无照片下载权限"); return; }
+  const p = getProject(projectId);
+  if (!p) return;
+  // 读取当前弹窗内勾选的类别
+  const head = btn ? btn.closest(".cos-photos-head") : null;
+  const sel = head
+    ? [...head.querySelectorAll("input.cos-cat:checked")].map((c) => c.value)
+    : ["site", "pm", "completion"];
+  if (!sel.length) { toast("请至少勾选一类照片"); return; }
+
+  const photos = normalizePhotos(p);
+  const items = [];
+  if (sel.includes("site")) (photos.site || []).forEach((it) => it.key && items.push({ key: it.key, folder: "现场图", name: it.name }));
+  if (sel.includes("pm")) [...(photos.plan || []), ...(photos.material || [])].forEach((it) => it.key && items.push({ key: it.key, folder: "施工图及物料", name: it.name }));
+  if (sel.includes("completion")) (photos.completion || []).forEach((it) => it.key && items.push({ key: it.key, folder: "完成效果图", name: it.name }));
+  if (!items.length) { toast("所勾选的类别暂无照片"); return; }
+  if (typeof JSZip === "undefined") { toast("打包组件未加载，请刷新页面后重试"); return; }
+  if (MODE !== "cloud") { toast("打包下载需联网获取云端照片"); return; }
+
+  toast(`正在准备打包（${items.length} 张）…`);
+  const zip = new JSZip();
+  const used = {}; // 各文件夹内文件名去重
+  let ok = 0, fail = 0;
+  for (const it of items) {
+    try {
+      const blob = await fetchCosObjectBlob(it.key);
+      if (!blob) { fail++; continue; }
+      let fname = (it.name && it.name.trim()) || it.key.split("/").pop() || "image.jpg";
+      const bucket = (used[it.folder] = used[it.folder] || {});
+      if (bucket[fname]) {
+        const dot = fname.lastIndexOf(".");
+        const base = dot > 0 ? fname.slice(0, dot) : fname;
+        const ext = dot > 0 ? fname.slice(dot) : "";
+        let i = 2;
+        while (bucket[base + "_" + i + ext]) i++;
+        fname = base + "_" + i + ext;
+      }
+      bucket[fname] = true;
+      zip.folder(it.folder).file(fname, blob);
+      ok++;
+    } catch (e) {
+      fail++;
+      console.warn("打包单张失败:", it.key, e);
+    }
+  }
+  if (!ok) {
+    toast("照片获取失败：请确认已部署 cos-proxy，或在 COS 配置了 GET 跨域");
+    return;
+  }
+  if (fail) toast(`已打包 ${ok} 张，${fail} 张获取失败`);
+
+  try {
+    toast("正在生成压缩包…");
+    const content = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+    const d = new Date();
+    const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+    const safeName = (p.name || "项目").replace(/[\\/:*?"<>|]/g, "_").slice(0, 40);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(content);
+    a.download = `${safeName}_照片_${ymd}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 8000);
+    toast("打包完成，已开始下载");
+  } catch (e) {
+    toast("打包失败：" + (e.message || e));
+  }
+}
+
+// 全屏看图灯箱
+// 根据 key 在已加载项目里找回原始文件名（供下载命名）
+function findPhotoName(key) {
+  if (!key) return "";
+  for (const p of (cache.projects || [])) {
+    const ph = p.projectPhotos || p.project_photos;
+    if (!ph) continue;
+    for (const k of ["plan", "material", "site", "completion"]) {
+      const arr = ph[k];
+      if (!Array.isArray(arr)) continue;
+      const it = arr.find((x) => x.key === key);
+      if (it && it.name) return it.name;
+    }
+  }
+  return "";
+}
+
+// 下载照片：优先走代理取字节（绕过 COS 私有桶 CORS），文件名正确；
+// 表单内本地暂存图(url 为 blob: 地址)直接下载。代理/签名均失败再回退新标签打开。
+async function downloadCosPhoto(key, url, name) {
+  if (!(perm.photoDownload() || isManager())) { toast("无照片下载权限"); return; }
+  const fname = name || (key ? key.split("/").pop() : "image.jpg");
+  // 本地暂存图（blob:）直接下载
+  if (url && url.startsWith("blob:")) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return;
+  }
+  toast("正在准备下载…");
+  const blob = key ? await fetchCosObjectBlob(key) : null;
+  if (blob) {
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
+    return;
+  }
+  // 兜底：本地暂存裸 URL 或新标签打开
+  if (url) {
+    try {
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const b = await resp.blob();
+        const objUrl = URL.createObjectURL(b);
+        const a = document.createElement("a");
+        a.href = objUrl;
+        a.download = fname;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(objUrl), 5000);
+        return;
+      }
+    } catch (_) {}
+    window.open(url, "_blank");
+    return;
+  }
+  toast("下载需要联网获取授权");
+}
+
+// ---- 灯箱翻页状态（按分类内的 key 列表）----
+let _cosLbList = null;
+let _cosLbIdx = 0;
+
+// 生成缩略图 onclick 里传给 openCosLightboxByKey 的「分类内 key 列表」参数
+function _cosLbArg(keys, idx) {
+  if (!keys || !keys.length) return "";
+  const arr = keys.map((k) => `'${String(k).replace(/'/g, "\\'")}'`).join(",");
+  return `, [${arr}], ${idx}`;
+}
+
+// 取某 key 的查看 URL（优先缓存，否则现取签名 URL，断网回退裸 URL）
+async function cosLightboxLoadKey(key) {
+  let url = _cosViewCache[key] || "";
+  if (!url) {
+    try {
+      const m = await cosGetViewUrls([key]);
+      url = m[key] || (_cosViewHost ? `https://${_cosViewHost}/${key}` : "");
+    } catch (_) {
+      url = _cosViewHost ? `https://${_cosViewHost}/${key}` : "";
+    }
+  }
+  return url;
+}
+
+function openCosLightbox(url, key, name) {
+  if (!url) return;
+  let el = document.getElementById("cosLightbox");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "cosLightbox";
+    document.body.appendChild(el);
+  }
+  // 翻页会重复进入本函数，先清掉旧键盘监听，避免累加
+  if (window._cosLightboxKey) document.removeEventListener("keydown", window._cosLightboxKey);
+  const canDl = perm.photoDownload() || isManager();
+  const dlBtn = canDl && (key || url)
+    ? `<button type="button" class="cos-lightbox__dl" onclick="event.stopPropagation();downloadCosPhoto('${esc(key || "")}','${esc(url || "")}','${esc(name || "")}')">⬇ 下载</button>`
+    : "";
+  const multi = Array.isArray(_cosLbList) && _cosLbList.length > 1;
+  const counter = multi ? `<div class="cos-lightbox__counter">${_cosLbIdx + 1} / ${_cosLbList.length}</div>` : "";
+  const prev = multi ? `<button type="button" class="cos-lightbox__nav cos-lightbox__prev" onclick="event.stopPropagation();cosLightboxGo(-1)" aria-label="上一张">‹</button>` : "";
+  const next = multi ? `<button type="button" class="cos-lightbox__nav cos-lightbox__next" onclick="event.stopPropagation();cosLightboxGo(1)" aria-label="下一张">›</button>` : "";
+  const onKey = (e) => {
+    if (e.key === "Escape") closeCosLightbox();
+    else if (multi && e.key === "ArrowLeft") cosLightboxGo(-1);
+    else if (multi && e.key === "ArrowRight") cosLightboxGo(1);
+  };
+  window._cosLightboxKey = onKey;
+  el.className = "cos-lightbox";
+  el.onclick = () => closeCosLightbox();
+  el.innerHTML = `${prev}${next}${counter}<img src="${esc(url)}" alt=""><div class="cos-lightbox__tip">点击任意处关闭（Esc）${multi ? " · ←/→ 翻页" : ""}</div>${dlBtn}`;
+  document.addEventListener("keydown", onKey);
+}
+
+// 在分类内翻页（循环）
+async function cosLightboxGo(delta) {
+  if (!Array.isArray(_cosLbList) || _cosLbList.length < 2) return;
+  const n = _cosLbList.length;
+  _cosLbIdx = (_cosLbIdx + delta + n) % n;
+  const key = _cosLbList[_cosLbIdx];
+  const url = await cosLightboxLoadKey(key);
+  openCosLightbox(url, key, findPhotoName(key));
+}
+function closeCosLightbox() {
+  const el = document.getElementById("cosLightbox");
+  if (el) el.remove();
+  if (window._cosLightboxKey) {
+    document.removeEventListener("keydown", window._cosLightboxKey);
+    window._cosLightboxKey = null;
+  }
+}
+
+// 把画廊里所有 <img> 的 data-cos-key 填入签名下载 URL（私有桶查看用）。
+// 优先用已缓存签名 URL；其次用遗留的公开 URL（老公开桶数据）；再回退裸 URL 触发 SW 缓存命中。
+async function fillPhotoImages(p) {
+  if (!p) return;
+  const photos = normalizePhotos(p);
+  const keys = [];
+  ["plan", "material", "site", "completion"].forEach((k) => {
+    (photos[k] || []).forEach((it) => it.key && keys.push(it.key));
+  });
+  const viewMap = await cosGetViewUrls(keys);
+  const imgs = document.querySelectorAll('#cosPhotosWrap img[data-cos-key]');
+  imgs.forEach((img) => {
+    const k = img.getAttribute("data-cos-key");
+    const legacy = img.getAttribute("data-legacy-url") || ""; // 老公开桶遗留的裸 URL
+    const signed = viewMap[k] || "";
+    const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
+    img.src = legacy || signed || fallback;
+    img.onerror = () => { img.classList.add("cos-img--err"); };
+  });
+}
+
+// 按 key 打开大图：优先用已缓存/现取签名 URL，断网回退裸 URL（配合 SW 离线缓存）
+// list/idx 可选：传入后灯箱支持「按分类内翻页」（←/→ 或左右箭头按钮）
+async function openCosLightboxByKey(key, name, list, idx) {
+  if (!key) return;
+  if (Array.isArray(list) && list.length) {
+    _cosLbList = list;
+    _cosLbIdx = Math.max(0, Math.min(Number(idx) || 0, list.length - 1));
+  } else {
+    _cosLbList = null;
+    _cosLbIdx = 0;
+  }
+  const url = await cosLightboxLoadKey(key);
+  const nm = name || findPhotoName(key);
+  openCosLightbox(url, key, nm);
+}
+
 /* 请假/轮休半天提示：根据 startType/endType 生成「（上午）」「（下午）」
    「（上午~下午）」或自定义时段的「（08:00-12:00）」；全天（all/all）返回空串。 */
 function leaveHalfDayHint(r) {
@@ -8228,6 +8791,15 @@ function projectForm(p = {}) {
   // 仅拥有「修改预约时间/工时」等子权限的用户打开表单时，这些字段只读，避免越权。
   // 注意：这里用「终态锁」而非「预约锁」——开工后基本信息仍可编辑，只锁预约时间与工时。
   const basicDisabled = !!p.id && (isProjectLocked(p) || !perm.editProject(p));
+  // 初始化表单照片工作集（现场图 / 施工图及物料 两类，预约时即可添加）；新建项目默认可添加
+  const isNewForm = !p.id;
+  window._formPhotos = JSON.parse(JSON.stringify(normalizePhotos(p)));
+  window._formPhotoPerms = {
+    planMaterial: isNewForm || perm.photoUpload(p) || isManager(),
+    site: isNewForm || perm.photoUpload(p) || isManager(),
+    canDelete: isNewForm || perm.photoDelete(p) || isManager(),
+    canDownload: perm.photoDownload() || isManager(),
+  };
   const selectedStore = p.storeId || (storeLocked ? myStore() : "");
   const storeOpts = `<option value="">未指定门店</option>` +
     cache.stores.map((s) =>
@@ -8351,6 +8923,7 @@ function projectForm(p = {}) {
       <label><span style="color:#6b7280;">💬</span> 注意事项</label>
       <textarea class="input" id="pNote" placeholder="施工注意事项、特殊要求等" style="min-height:50px;" ${basicDisabled ? "disabled" : ""}>${esc(p.note || "")}</textarea>
     </div>
+    <div id="pPhotosWrap" style="margin-top:10px;"></div>
     <input type="hidden" id="pStatus" value="${p.status || STATUS.BOOKED}" />
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
@@ -8362,14 +8935,17 @@ function toggleWorkChip(el) {
   el.closest(".work-chip").classList.toggle("work-chip--on", el.checked);
 }
 
-/* 渲染「施工内容 + 注意事项」只读预览块，供施工管理页、进度跟踪展开详情复用 */
+/* 渲染「施工内容 + 注意事项 + 图片资料」只读预览块，供施工管理页、进度跟踪展开详情复用 */
 function renderProjectContentPreview(p) {
   const hasWC = p.workContent && p.workContent.length;
   const note = (p.note || "").trim();
-  if (!hasWC && !note) return "";
+  const photos = normalizePhotos(p);
+  const photoCount = photos.plan.length + photos.material.length + photos.site.length + photos.completion.length;
+  if (!hasWC && !note && !photoCount) return "";
+  const photoBadge = photoCount ? `<span class="proj-content-preview__badge">📷 ${photoCount}张</span>` : "";
   return `
-    <div class="proj-content-preview" onclick="event.stopPropagation(); showProjectContent('${p.id}')" title="点击查看完整施工内容与注意事项">
-      <div class="proj-content-preview__title">🛠️ 施工内容</div>
+    <div class="proj-content-preview" onclick="event.stopPropagation(); showProjectContent('${p.id}')" title="点击查看完整施工内容、注意事项与图片资料">
+      <div class="proj-content-preview__title">🛠️ 施工内容 ${photoBadge}</div>
       ${hasWC ? `<div class="proj-content-preview__chips">${p.workContent.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("")}</div>` : `<div class="proj-content-preview__empty">未填写施工内容</div>`}
       ${note ? `<div class="proj-content-preview__note">💬 ${esc(note)}</div>` : ""}
     </div>
@@ -8380,6 +8956,12 @@ function showProjectContent(id) {
   const p = getProject(id);
   if (!p) return;
   const wc = p.workContent || [];
+  const photos = normalizePhotos(p);
+  const hasAnyPhoto =
+    photos.plan.length || photos.material.length || photos.site.length || photos.completion.length;
+  const photoSection = hasAnyPhoto
+    ? renderProjectContentPhotos(p, photos)
+    : `<div class="hint" style="margin-top:12px;">暂无现场图 / 施工图及物料 / 完成效果图</div>`;
   const html = `
     <div class="proj-content-detail">
       <div class="proj-content-detail__label">🛠️ 施工内容</div>
@@ -8389,8 +8971,191 @@ function showProjectContent(id) {
         </div>` : `<div class="hint">未填写施工内容</div>`}
       <div class="proj-content-detail__label" style="margin-top:16px;">💬 注意事项</div>
       <div class="proj-content-detail__note">${linkifyPhones(p.note)}</div>
+      <div class="proj-content-detail__label" style="margin-top:18px;">📷 图片资料</div>
+      ${photoSection}
     </div>`;
   modal.open(`${p.name} · 施工内容`, html, { closeOnMask: true });
+  if (hasAnyPhoto) fillProjectContentPhotos(p);
+}
+
+// 在项目卡片「施工内容 + 注意事项」弹窗内渲染只读照片画廊
+function renderProjectContentPhotos(p, photos, allowDownload = true) {
+  const canDownload = allowDownload && (perm.photoDownload(p) || isManager());
+  const block = (title, arr) => {
+    if (!arr || !arr.length) return "";
+    const blockKeys = arr.filter((it) => it.key).map((it) => it.key);
+    const items = arr.map((it, i) => {
+      const sid = cosSafeId(it.key);
+      const dnBtn = canDownload
+        ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
+        : "";
+      return `<div class="cos-thumb cos-thumb--readonly" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, i)})">
+        <img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}">
+        ${dnBtn}
+      </div>`;
+    }).join("");
+    return `<div class="cos-section cos-section--readonly">
+      <h4>${title} <span class="cos-count">${arr.length}</span></h4>
+      <div class="cos-grid">${items}</div>
+    </div>`;
+  };
+  const hasAny =
+    (photos.site || []).length + (photos.plan || []).length + (photos.material || []).length + (photos.completion || []).length > 0;
+  const head = hasAny && canDownload
+    ? `<div class="cos-photos-head cos-photos-head--readonly">
+        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="site" checked> 现场图</label>
+        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="pm" checked> 施工图及物料</label>
+        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="completion" checked> 完成效果图</label>
+        <button type="button" class="cos-download-all" onclick="downloadAllProjectPhotos('${esc(p.id)}', this)">⬇ 下载选中（打包 ZIP）</button>
+      </div>`
+    : "";
+  return (
+    head +
+    block("现场图", photos.site) +
+    block("施工图及物料", [...photos.plan, ...photos.material]) +
+    block("完成效果图", photos.completion)
+  );
+}
+
+// 为弹窗内的只读照片填充签名下载 URL
+async function fillProjectContentPhotos(p, rootSelector = ".proj-content-detail") {
+  const photos = normalizePhotos(p);
+  const keys = [];
+  ["plan", "material", "site", "completion"].forEach((k) => {
+    (photos[k] || []).forEach((it) => it.key && keys.push(it.key));
+  });
+  if (!keys.length) return;
+  const viewMap = await cosGetViewUrls(keys);
+  document.querySelectorAll(`${rootSelector} img[data-cos-key]`).forEach((img) => {
+    const k = img.getAttribute("data-cos-key");
+    const legacy = img.getAttribute("data-legacy-url") || "";
+    const signed = viewMap[k] || "";
+    const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
+    img.src = legacy || signed || fallback;
+    img.onerror = () => { img.classList.add("cos-img--err"); };
+  });
+}
+
+/* ===== 项目表单内联照片（现场图 / 施工图及物料）：预约/建项时即可添加 =====
+ * 采用「工作集」暂存：表单打开时把项目照片深拷贝到 window._formPhotos；
+ * 选取文件先以本地 objectURL 预览（新项目尚无 id），保存项目拿到 id 后再上传 COS 并写回 project_photos。
+ */
+function renderFormPhotos() {
+  const wrap = document.getElementById("pPhotosWrap");
+  if (!wrap) return;
+  const fp = window._formPhotos || { plan: [], material: [], site: [], completion: [] };
+  const perms = window._formPhotoPerms || { planMaterial: true, site: true, canDelete: true, canDownload: true };
+  const block = (title, items, kind, canEdit) => {
+    const thumbs = (items || []).map((it) => {
+      const sid = cosSafeId(it.key || it.url || it.name || Math.random().toString());
+      const realKey = it._kind || kind;
+      const img = it.url
+        ? `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}">`
+        : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}">`;
+      const del = perms.canDelete
+        ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeFormPhoto('${realKey}','${esc(it.key || it.url || it.name)}')">✕</button>`
+        : "";
+      const dn = perms.canDownload
+        ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key || "")}','${esc(it.url || "")}','${esc(it.name || "")}')">⬇</button>`
+        : "";
+      return `<div class="cos-thumb" id="cos-item-${sid}">${img}${dn}${del}</div>`;
+    }).join("");
+    const addBtn = canEdit
+      ? `<button type="button" class="cos-add" onclick="document.getElementById('cosFormFile_${kind}').click()">＋ 添加${title}</button><input id="cosFormFile_${kind}" type="file" accept="image/*" multiple class="hidden" onchange="formStagePhotos(this,'${kind}')">`
+      : "";
+    return `<div class="detail-block cos-section">
+      <h3>${title} <span class="cos-count">${items ? items.length : 0}</span></h3>
+      <div class="cos-grid">${thumbs}${addBtn}</div>
+    </div>`;
+  };
+  const pmItems = [
+    ...(fp.plan || []).map((it) => ({ ...it, _kind: "plan" })),
+    ...(fp.material || []).map((it) => ({ ...it, _kind: "material" })),
+  ];
+  wrap.innerHTML =
+    block("现场图", fp.site, "site", perms.site) +
+    block("施工图及物料", pmItems, "plan", perms.planMaterial);
+  fillFormPhotos();
+}
+
+// 选择文件：暂存到工作集（带本地预览 URL），保存时再上传
+function formStagePhotos(input, kind) {
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (!files.length) return;
+  if (!window._formPhotos) window._formPhotos = { plan: [], material: [], site: [], completion: [] };
+  const by = (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "匿名";
+  files.forEach((file) => {
+    window._formPhotos[kind].push({
+      key: "", file, url: URL.createObjectURL(file), name: file.name, size: file.size, by, at: Date.now(), _staged: true,
+    });
+  });
+  renderFormPhotos();
+}
+
+// 从工作集删除某张照片（暂存项或已有项）
+function removeFormPhoto(kind, keyOrId) {
+  const fp = window._formPhotos;
+  if (!fp) return;
+  fp[kind] = (fp[kind] || []).filter((it) => (it.key || it.url || it.name) !== keyOrId);
+  renderFormPhotos();
+}
+
+// 为表单内已有照片（私有桶）填充签名下载 URL（仅处理已有 key 的非暂存项）
+async function fillFormPhotos() {
+  const fp = window._formPhotos;
+  if (!fp) return;
+  const keys = [];
+  ["plan", "material", "site", "completion"].forEach((k) => {
+    (fp[k] || []).forEach((it) => { if (it.key && !it._staged) keys.push(it.key); });
+  });
+  if (!keys.length) return;
+  const viewMap = await cosGetViewUrls(keys);
+  document.querySelectorAll('#pPhotosWrap img[data-cos-key]').forEach((img) => {
+    const k = img.getAttribute("data-cos-key");
+    const legacy = img.getAttribute("data-legacy-url") || "";
+    const signed = viewMap[k] || "";
+    const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
+    img.src = legacy || signed || fallback;
+    img.onerror = () => img.classList.add("cos-img--err");
+  });
+}
+
+// 保存项目后调用：把工作集里暂存的照片上传到 COS 并写回 project_photos
+async function uploadFormPhotos(projectId) {
+  const fp = window._formPhotos;
+  window._formPhotos = null;
+  if (!fp) return;
+  if (MODE !== "cloud") { toast("离线模式暂不支持上传照片，请联网后重试"); return; }
+  const staged = [];
+  ["plan", "site"].forEach((k) => {
+    (fp[k] || []).forEach((it) => { if (it._staged && it.file) staged.push({ kind: k, it }); });
+  });
+  if (!staged.length) return;
+  try {
+    const reqItems = staged.map(({ kind, it }) => {
+      const ext = (it.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+      const key = `projects/${projectId}/${kind}/${uid()}.${ext}`;
+      it.key = key;
+      return { key, contentType: it.file.type || "image/jpeg" };
+    });
+    const signed = await cosGetSignedUrls(reqItems);
+    const map = {};
+    signed.forEach((s) => (map[s.key] = s));
+    for (const { it } of staged) {
+      const s = map[it.key];
+      if (s) await putFileToCos(s.url, it.file);
+    }
+    const photos = { plan: [], material: [], site: [], completion: [] };
+    ["plan", "material", "site", "completion"].forEach((k) => {
+      (fp[k] || []).forEach((it) => {
+        if (it.key) photos[k].push({ key: it.key, url: it.url || "", name: it.name, size: it.size, by: it.by, at: it.at });
+      });
+    });
+    await repo.patchProject(projectId, { project_photos: JSON.stringify(photos) });
+  } catch (e) {
+    toast("照片上传失败：" + (e.message || e));
+  }
 }
 
 function switchAssignTab(btn) {
@@ -8422,12 +9187,12 @@ function switchAssignType(btn) {
 function newProject() { 
   window._estDirty = false;
   modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED })); 
-  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); }, 100); 
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); }, 100); 
 }
 function editProject(id) { 
   window._estDirty = false;
   modal.open("编辑项目", projectForm(getProject(id))); 
-  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); }, 100); 
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); }, 100); 
 }
 
 /* 快速修改项目预约时间/工时/人数 */
@@ -8894,6 +9659,8 @@ async function saveProject(id) {
   try {
     const saved = await repo.saveProject(payload, id);
     const savedId = (saved && saved.id) || id;
+    // 表单内暂存的现场图 / 施工图及物料：保存项目拿到 id 后立即上传 COS 并写回 project_photos
+    await uploadFormPhotos(savedId);
     // 乐观反馈：写入成功后立即关弹窗 + 提示，loadAll 改为后台静默同步，
     // 避免云端全量刷新（12+ 表）导致按钮「保存中…」卡 2-4 秒。
     modal.close();
@@ -10283,6 +11050,20 @@ function renderConstruction() {
       ` : `<p class="hint" style="margin:0">暂无验收信息。</p>`)}
     </div>` : ``}
   `;
+
+  // 项目照片（施工图 / 完成图）——COS 云端存储，挂接在施工管理详情末尾
+  try {
+    let photosWrap = document.getElementById("cosPhotosWrap");
+    if (!photosWrap) {
+      photosWrap = document.createElement("div");
+      photosWrap.id = "cosPhotosWrap";
+      box.appendChild(photosWrap);
+    }
+    refreshPhotosUI(p);
+  } catch (e) {
+    console.warn("渲染项目照片失败:", e);
+  }
+
   initCustomSelects(document.getElementById("construction"));
 }
 
@@ -12697,6 +13478,13 @@ function toggleProgressDetail(headerEl) {
   detail.style.display = isHidden ? 'block' : 'none';
   icon.style.transform = isHidden ? 'rotate(90deg)' : 'rotate(0deg)';
   icon.textContent = isHidden ? '▼' : '▶';
+  if (isHidden) {
+    const pid = headerEl.dataset.pid;
+    if (pid) {
+      const p = getProject(pid);
+      if (p) fillProjectContentPhotos(p, `#progDetail-${pid}`);
+    }
+  }
 }
 
 /* 施工人员安排卡片：点击标题栏折叠/展开详情（默认折叠，用 .collapsed 类控制） */
@@ -14098,6 +14886,9 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const statusClass = isOverdue ? 'overdue' : `status-${p.status}`;
 
       /* 构建展开详情内容 */
+      const progressPhotos = normalizePhotos(p);
+      const hasProgressPhotos = progressPhotos.plan.length + progressPhotos.material.length + progressPhotos.site.length + progressPhotos.completion.length > 0;
+      const progressPhotoSection = hasProgressPhotos ? renderProjectContentPhotos(p, progressPhotos, false) : "";
       const estHours = Number(p.estimatedHours) || 0;
       const actualFromLogs = (p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0);
       const actualHours = actualFromLogs > 0 ? actualFromLogs : (Number(p.actualHours) || 0);
@@ -14161,6 +14952,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
               ${(() => { const info = getProjectPausedTooLongInfo(p); return info ? `<div class="detail-row"><span class="detail-label">⏸ 已暂停</span><span class="detail-value" style="font-weight:600;">${esc(info.text)}</span></div>` : ''; })()}
               ${p.delayReason ? `<div class="detail-row"><span class="detail-label">⏰ 延期原因</span><span class="detail-value" style="color:#f59e0b;">${esc(p.delayReason)}</span></div>` : ''}
             </div>
+            ${progressPhotoSection ? `<div class="schedule-progress-photos" id="progPhotos-${esc(p.id)}">${progressPhotoSection}</div>` : ""}
             ${workLogEntries.length > 0 ? `
             <div class="schedule-progress-detail-logs">
               <div class="detail-log-title">📋 最近工时记录（显示最近 ${Math.min(workLogEntries.length, 5)} 条，共 ${(p.workLogs||[]).length} 条）</div>
@@ -14462,6 +15254,7 @@ function openCompleteProjectForm(id) {
   const p0 = getProject(id);
   if (!p0 || !perm.completeConstruction(p0)) { toast("权限不足：无法完成安装"); return; }
   window._openingCompleteProject = id;
+  window._completeFormFiles = [];
   try {
   const p = getProject(id);
   if (!p) {
@@ -14913,6 +15706,16 @@ function openCompleteProjectForm(id) {
     });
   }
   
+  const canUploadCompletion = perm.photoUpload(p0) || isManager();
+  if (canUploadCompletion) {
+    form += `<div class="form-row" style="grid-column:1/-1;">
+      <label>上传完工图</label>
+      <div id="completePhotosWrap" class="cos-grid"></div>
+      <input type="file" id="completePhotoInput" accept="image/*" multiple class="hidden" onchange="stageCompletePhotos(this)">
+      <button type="button" class="btn small" onclick="document.getElementById('completePhotoInput').click()" style="margin-top:8px;">＋ 添加完工图</button>
+    </div>`;
+  }
+  
   form += `<div class="form-row" style="grid-column:1/-1;">
     <label>项目备注</label>
     <textarea id="projectNote" rows="3" class="input" placeholder="请输入项目备注..."></textarea>
@@ -14925,7 +15728,7 @@ function openCompleteProjectForm(id) {
   modal.open("完成项目 - 填写工时", form, {
     confirmText: "确认完工",
     cancelText: "取消",
-    onClose: () => { window._openingCompleteProject = null; },
+    onClose: () => { window._openingCompleteProject = null; window._completeFormFiles = []; },
     onConfirm: async () => {
       if (window._savingCompleteProject) return false;
       window._savingCompleteProject = true;
@@ -15110,6 +15913,19 @@ function openCompleteProjectForm(id) {
         // 完工后自动派发本门店店长「待验收」站内通知（仅云端模式生效，fire-and-forget 不阻塞 UI）
         dispatchStoreManagerAcceptanceNotice(p);
 
+        // 上传用户在完工弹窗里选择的完工图（确认完工后再上传，避免用户取消后留下垃圾文件）
+        const completionFiles = window._completeFormFiles || [];
+        if (completionFiles.length) {
+          try {
+            await uploadCompletionPhotos(id, completionFiles);
+            toast(`已上传 ${completionFiles.length} 张完工图`);
+          } catch (e) {
+            console.error("上传完工图失败:", e);
+            toast("项目已完工，但完工图上传失败：" + (e.message || e));
+          }
+        }
+        window._completeFormFiles = [];
+
         // 内存 p 已就地更新为 DONE + 新 workLogs，立即反馈；云端全量 loadAll 改后台静默执行
         renderConstruction();
         toast(`项目已完工，总工时：${totalHours.toFixed(1)} 工时`);
@@ -15131,6 +15947,72 @@ function openCompleteProjectForm(id) {
     toast("打开完工表单失败：" + (error.message || "请重试"));
     window._openingCompleteProject = null;
   }
+}
+
+// 在完工弹窗里暂存用户选择的完工图文件，确认完工后再统一上传
+function stageCompletePhotos(input) {
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (!files.length) return;
+  window._completeFormFiles = window._completeFormFiles || [];
+  window._completeFormFiles.push(...files);
+  renderCompletePhotosStaging();
+}
+
+function renderCompletePhotosStaging() {
+  const wrap = document.getElementById("completePhotosWrap");
+  if (!wrap) return;
+  const files = window._completeFormFiles || [];
+  wrap.innerHTML = files.map((f, i) => {
+    const sid = cosSafeId(f.name + "_" + i);
+    return `<div class="cos-thumb" id="cos-complete-${sid}">
+      <img src="${URL.createObjectURL(f)}" loading="lazy" alt="${esc(f.name)}">
+      <button type="button" class="cos-thumb__del" title="移除" onclick="removeCompletePhoto(${i})">✕</button>
+    </div>`;
+  }).join("");
+}
+
+function removeCompletePhoto(idx) {
+  const files = window._completeFormFiles || [];
+  if (idx < 0 || idx >= files.length) return;
+  files.splice(idx, 1);
+  window._completeFormFiles = files;
+  renderCompletePhotosStaging();
+}
+
+// 将完工弹窗里暂存的完工图上传到 COS completion 分类并写入 project_photos
+async function uploadCompletionPhotos(projectId, files) {
+  const p = getProject(projectId);
+  if (!p) return;
+  const photos = normalizePhotos(p);
+  if (!files || !files.length) return;
+  const prepared = files.map((file) => {
+    const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const key = `projects/${projectId}/completion/${uid()}.${ext || "jpg"}`;
+    return { file, key };
+  });
+  const signed = await cosGetSignedUrls(
+    prepared.map(({ file, key }) => ({ key, contentType: file.type || "image/jpeg" }))
+  );
+  const map = {};
+  signed.forEach((s) => { if (s && s.key) map[s.key] = s; });
+  for (const { file, key } of prepared) {
+    const s = map[key];
+    if (!s || !s.url) {
+      console.warn("未获取到上传授权:", key);
+      continue;
+    }
+    await putFileToCos(s.url, file);
+    photos.completion.push({
+      key,
+      url: "",
+      name: file.name,
+      size: file.size,
+      by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "匿名",
+      at: Date.now(),
+    });
+  }
+  await saveProjectPhotos(projectId, photos);
 }
 
 function openAcceptance(id) {
@@ -25834,7 +26716,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v536d07ed";
+  const APP_VERSION = "v98e915ae";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

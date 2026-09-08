@@ -3,8 +3,9 @@
 // - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
 //   用户点「立即更新」或下次打开即生效。
 // 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
-const CACHE = "ad-install-v536d07ed";
-const VERSION = "v536d07ed";
+const CACHE = "ad-install-v98e915ae";
+const VERSION = "v98e915ae";
+const COS_CACHE = "ad-install-cos-" + VERSION; // 腾讯云 COS 图片运行时缓存，支持现场离线看图
 
 const ASSETS = [
   "./",
@@ -13,6 +14,7 @@ const ASSETS = [
   "./app.js",
   "./config.js",
   "./vendor/supabase.min.js",
+  "./vendor/jszip.min.js",
   "./manifest.webmanifest",
   "./help.html",
   "./icons/icon-192.png",
@@ -81,10 +83,18 @@ const OFFLINE_FALLBACK = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset=
 
 self.addEventListener("fetch", (e) => {
   const req = e.request;
-  if (req.method !== "GET") return;
+  if (req.method !== "GET") return; // PUT 上传等不拦截，直接走网络
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;
-  e.respondWith(handleFetch(req));
+  if (url.origin === self.location.origin) {
+    e.respondWith(handleFetch(req));
+    return;
+  }
+  // 腾讯云 COS 图片：跨域 GET，做缓存优先，支持现场离线看图
+  if (url.hostname.endsWith("myqcloud.com")) {
+    e.respondWith(handleCosImage(req));
+    return;
+  }
+  // 其它跨域 GET（如 Supabase）不拦截
 });
 
 async function handleFetch(req) {
@@ -122,6 +132,34 @@ async function handleFetch(req) {
       });
     }
     // 子资源（js/css 等）加载失败且无缓存：返回空响应，由页面自行处理
+    return new Response("", { status: 504, statusText: "offline" });
+  }
+}
+
+// 腾讯云 COS 图片：缓存优先（现场弱网/离线可看图），网络可达时顺带回源更新
+async function handleCosImage(req) {
+  let cache = null;
+  try { cache = await caches.open(COS_CACHE); } catch (_) { cache = null; }
+  // 归一化缓存键：去掉签名 query（q-sign-*），同一对象的不同签名 URL 命中同一份缓存，离线可看
+  const u = new URL(req.url);
+  const normReq = new Request(u.origin + u.pathname);
+  if (cache) {
+    try {
+      const hit = await cache.match(normReq);
+      if (hit) return hit;
+    } catch (_) { /* 读取异常继续回源 */ }
+  }
+  try {
+    const res = await fetch(req); // 仍用带签名的原始 URL 回源
+    if (cache) { try { cache.put(normReq, res.clone()); } catch (_) { /* 写入失败不影响本次 */ } }
+    return res;
+  } catch (_) {
+    if (cache) {
+      try {
+        const hit = await cache.match(normReq);
+        if (hit) return hit;
+      } catch (_) {}
+    }
     return new Response("", { status: 504, statusText: "offline" });
   }
 }
