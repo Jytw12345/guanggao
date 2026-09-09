@@ -7893,7 +7893,7 @@ function renderProjectPhotosHtml(p) {
         const del = canDelete
           ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeCosPhoto('${esc(p.id)}','${realKind}','${esc(it.key)}')">✕</button>`
           : "";
-        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, i)})">${img}${prog}${err}${dnBtn}${del}</div>`;
+        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">${img}${prog}${err}${dnBtn}${del}</div>`;
       })
       .join("");
     const addBtn = canUpload
@@ -7975,9 +7975,13 @@ async function handleCosFiles(input, projectId, kind) {
         item.error = false;
         refreshPhotosUI(p);
         await saveProjectPhotos(projectId, photos);
+        // saveProjectPhotos 内部会把 p.projectPhotos 换成「清洗后」新对象（丢失 uploading 等临时态）。
+        // 重新指回本地 photos，确保后续 refreshPhotosUI 仍能正确显示其余待传图的「上传中」动画。
+        p.projectPhotos = photos;
       } catch (e) {
         item.uploading = false;
         item.error = true;
+        p.projectPhotos = photos;
         toast("上传失败：" + (e.message || e));
         refreshPhotosUI(p);
       }
@@ -7988,6 +7992,7 @@ async function handleCosFiles(input, projectId, kind) {
       item.uploading = false;
       item.error = true;
     });
+    p.projectPhotos = photos;
     refreshPhotosUI(p);
   }
 }
@@ -8177,9 +8182,12 @@ async function downloadCosPhoto(key, url, name) {
 let _cosLbList = null;
 let _cosLbIdx = 0;
 
-// 生成缩略图 onclick 里传给 openCosLightboxByKey 的「分类内 key 列表」参数
-function _cosLbArg(keys, idx) {
-  if (!keys || !keys.length) return "";
+// 生成缩略图 onclick 里传给 openCosLightboxByKey 的「分类内 key 列表」参数。
+// 按当前 key 在列表中查找索引（而非外部传入 i），即便某类图里夹着缺 key 的项也不会跳错图。
+function _cosLbArg(keys, currentKey) {
+  if (!keys || !keys.length || !currentKey) return "";
+  const idx = keys.indexOf(currentKey);
+  if (idx < 0) return "";
   const arr = keys.map((k) => `'${String(k).replace(/'/g, "\\'")}'`).join(",");
   return `, [${arr}], ${idx}`;
 }
@@ -8989,7 +8997,7 @@ function renderProjectContentPhotos(p, photos, allowDownload = true) {
       const dnBtn = canDownload
         ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
         : "";
-      return `<div class="cos-thumb cos-thumb--readonly" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, i)})">
+      return `<div class="cos-thumb cos-thumb--readonly" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">
         <img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}">
         ${dnBtn}
       </div>`;
@@ -26716,7 +26724,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v98e915ae";
+  const APP_VERSION = "v50b35c5b";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
