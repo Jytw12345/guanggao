@@ -13944,7 +13944,13 @@ table.data.project-hours-diff thead th {
 .cos-section--readonly h4 { font-size: 13px; color: #475569; margin: 0 0 8px; font-weight: 600; }
 .cos-thumb--readonly { cursor: zoom-in; }
 .cos-thumb--readonly:hover { border-color: #0ea5e9; }
-.cos-img--err { opacity: .5; background: #fee2e2; }
+.cos-img--err { opacity: .2; background: #fee2e2; }
+.cos-thumb__errtxt {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #dc2626; font-size: 12px; font-weight: 500;
+  text-align: center; padding: 6px; pointer-events: none;
+}
 
 /* 项目卡片预览块里的照片数量徽标 */
 .proj-content-preview__badge {
@@ -13960,7 +13966,19 @@ table.data.project-hours-diff thead th {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 24px;
 }
-.cos-lightbox img { max-width: 100%; max-height: 86vh; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+.cos-lightbox img { max-width: 100%; max-height: 86vh; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); cursor: zoom-in; transform-origin: center center; will-change: transform; user-select: none; -webkit-user-drag: none; }
+.cos-lightbox__zoom {
+  position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(15, 23, 42, 0.6); padding: 6px 12px; border-radius: 999px;
+}
+.cos-lightbox__zoombtn {
+  min-width: 32px; height: 32px; border: none; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12); color: #fff; font-size: 18px; line-height: 1; cursor: pointer;
+}
+.cos-lightbox__zoombtn:hover { background: #0ea5e9; }
+.cos-lightbox__zoombtn.cos-lightbox__zoomreset { border-radius: 16px; padding: 0 12px; font-size: 13px; }
+.cos-lightbox__zoomval { color: #e2e8f0; font-size: 13px; min-width: 46px; text-align: center; }
 .cos-lightbox__tip { color: #cbd5e1; font-size: 12px; margin-top: 12px; }
 .cos-lightbox__dl {
   position: absolute; top: 18px; right: 18px;
@@ -13983,4 +14001,8 @@ table.data.project-hours-diff thead th {
   position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
   background: rgba(15, 23, 42, 0.55); color: #e2e8f0; font-size: 13px;
   padding: 5px 12px; border-radius: 999px; letter-spacing: .5px;
+}
+.cos-lightbox__img--err { display: none; }
+.cos-lightbox__tip--err {
+  color: #fca5a5; font-weight: 500; margin-top: 12px; text-align: center;
 }

@@ -3293,8 +3293,12 @@ const repo = {
         // 云端为空（首次部署）：用内置种子补齐，保证界面与历史里程记录一致
         if ((cache.vehicles || []).length === 0 && MODE === "cloud") {
           cache.vehicles = SEED_VEHICLES.map((v) => ({ ...v }));
-          Promise.all(SEED_VEHICLES.map((v) => repo.saveVehicle(v)))
-            .catch((e) => console.warn("[sync] vehicles 种子写入失败：", e && e.message));
+          // 仅车辆管理员(vehicle_manage)或经理才把种子写回云端；施工人员等低权限账号无该权限，
+          // 写云端会被 RLS 拒绝并弹「云端操作失败」，此处跳过即可（本地已用种子展示，不影响使用）。
+          if (perm.vehicleManage() || isManager()) {
+            Promise.all(SEED_VEHICLES.map((v) => repo.saveVehicle(v)))
+              .catch((e) => console.warn("[sync] vehicles 种子写入失败：", e && e.message));
+          }
         }
       } else {
         console.warn("vehicles 表读取失败（可能尚未创建）:", vRes.error.message);
@@ -7749,6 +7753,39 @@ function cosSafeId(key) {
   return String(key).replace(/[^a-zA-Z0-9]/g, "_");
 }
 
+// 根据 MIME 推导文件扩展名；file.name 无扩展名时避免把整段名字当扩展名。
+function extFromMime(type, nameExt = "") {
+  const map = {
+    "image/jpeg": "jpg", "image/jpg": "jpg",
+    "image/png": "png", "image/gif": "gif",
+    "image/webp": "webp", "image/bmp": "bmp",
+    "image/svg+xml": "svg",
+    "image/heic": "heic", "image/heif": "heif",
+  };
+  const t = (type || "").toLowerCase();
+  if (map[t]) return map[t];
+  const n = (nameExt || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/^(jpg|jpeg|png|gif|webp|bmp|svg|heic|heif)$/.test(n)) return n === "jpeg" ? "jpg" : n;
+  return "";
+}
+
+// 浏览器普遍不支持预览 HEIC/HEIF；上传前给出提示，避免用户以为「上传成功却打不开」是 bug。
+function isUnsupportedImageType(type) {
+  return /^(image\/heic|image\/heif)$/i.test(type || "");
+}
+
+// 缩略图加载失败时给出明确提示，而不是只显示浏览器默认的破碎图标。
+function onCosImgError(img, name) {
+  if (!img) return;
+  img.classList.add("cos-img--err");
+  if (img.nextElementSibling && img.nextElementSibling.classList.contains("cos-thumb__errtxt")) return;
+  const tip = document.createElement("div");
+  tip.className = "cos-thumb__errtxt";
+  tip.title = name || "图片加载失败";
+  tip.textContent = "无法预览";
+  img.parentElement.appendChild(tip);
+}
+
 // 归一化照片数据，确保挂回项目对象，便于渲染与保存
 function normalizePhotos(p) {
   let ph = (p && (p.projectPhotos || p.project_photos)) || null;
@@ -7885,7 +7922,7 @@ function renderProjectPhotosHtml(p) {
           : "";
         const img = it.uploading
           ? `<div class="cos-thumb__ph">⏳ 上传中</div>`
-          : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}">`;
+          : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`;
         const err = it.error ? `<div class="cos-thumb__err">失败</div>` : "";
         const dnBtn = canDownload
           ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
@@ -7933,8 +7970,11 @@ async function handleCosFiles(input, projectId, kind) {
   const storeKind = kind === "__pm" ? "plan" : kind; // 展示合并标记 → 实际存 plan
 
   const prepared = files.map((file) => {
-    let ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (!ext) ext = "jpg";
+    const nameExt = (file.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    let ext = extFromMime(file.type, nameExt) || "jpg";
+    if (isUnsupportedImageType(file.type)) {
+      toast(`「${file.name || "某张图片"}」为 HEIC/HEIF 格式，部分浏览器（含 PakePlus 打包应用）无法直接预览，建议先转换为 JPG/PNG 再上传`);
+    }
     const key = `projects/${projectId}/${storeKind}/${uid()}.${ext}`;
     const item = {
       key,
@@ -8182,6 +8222,72 @@ async function downloadCosPhoto(key, url, name) {
 let _cosLbList = null;
 let _cosLbIdx = 0;
 
+// ---- 灯箱缩放/平移状态 ----
+let _cosZoom = 1;
+let _cosPanX = 0, _cosPanY = 0;
+let _cosDrag = null;
+let _cosLbMove = null, _cosLbUp = null;
+
+// 应用缩放 + 平移变换到灯箱图片
+function cosLightboxApplyTransform() {
+  const img = document.querySelector("#cosLightbox img");
+  if (!img) return;
+  img.style.transform = `translate(${_cosPanX}px, ${_cosPanY}px) scale(${_cosZoom})`;
+  img.style.cursor = _cosZoom > 1 ? "grab" : "zoom-in";
+}
+function cosLightboxUpdateZoomLabel() {
+  const z = document.querySelector("#cosLightbox .cos-lightbox__zoomval");
+  if (z) z.textContent = Math.round(_cosZoom * 100) + "%";
+}
+// 还原到 1x 并居中（每次打开/翻页调用）
+function cosLightboxResetView() {
+  _cosZoom = 1; _cosPanX = 0; _cosPanY = 0;
+  cosLightboxApplyTransform(); cosLightboxUpdateZoomLabel();
+}
+function cosLightboxZoomBy(f) {
+  _cosZoom = Math.min(5, Math.max(0.5, _cosZoom * f));
+  cosLightboxApplyTransform(); cosLightboxUpdateZoomLabel();
+}
+function cosLightboxWheel(e) {
+  e.preventDefault();
+  cosLightboxZoomBy(e.deltaY < 0 ? 1.15 : 1 / 1.15);
+}
+function cosLightboxDown(e) {
+  if (_cosZoom <= 1) return;
+  _cosDrag = { x: e.clientX, y: e.clientY, px: _cosPanX, py: _cosPanY };
+  const img = document.querySelector("#cosLightbox img");
+  if (img) img.style.cursor = "grabbing";
+}
+function cosLightboxDbl() {
+  if (_cosZoom > 1) cosLightboxResetView();
+  else { _cosZoom = 2.5; _cosPanX = 0; _cosPanY = 0; cosLightboxApplyTransform(); cosLightboxUpdateZoomLabel(); }
+}
+// 点击图片：放大状态下不关闭（防误触），1x 时关闭灯箱
+function cosLightboxImgClick(e) {
+  e.stopPropagation();
+  if (_cosZoom <= 1) closeCosLightbox();
+}
+// 给灯箱图片绑定滚轮/拖拽/双击交互；翻页重建时先清旧的 document 监听避免叠加
+function cosLightboxInitInteractions(img) {
+  img.addEventListener("mousedown", cosLightboxDown);
+  img.addEventListener("wheel", cosLightboxWheel, { passive: false });
+  img.addEventListener("dblclick", cosLightboxDbl);
+  if (_cosLbMove) {
+    document.removeEventListener("mousemove", _cosLbMove);
+    document.removeEventListener("mouseup", _cosLbUp);
+  }
+  _cosLbMove = (e) => {
+    if (_cosDrag) {
+      _cosPanX = _cosDrag.px + (e.clientX - _cosDrag.x);
+      _cosPanY = _cosDrag.py + (e.clientY - _cosDrag.y);
+      cosLightboxApplyTransform();
+    }
+  };
+  _cosLbUp = () => { _cosDrag = null; const im = document.querySelector("#cosLightbox img"); if (im) im.style.cursor = _cosZoom > 1 ? "grab" : "zoom-in"; };
+  document.addEventListener("mousemove", _cosLbMove);
+  document.addEventListener("mouseup", _cosLbUp);
+}
+
 // 生成缩略图 onclick 里传给 openCosLightboxByKey 的「分类内 key 列表」参数。
 // 按当前 key 在列表中查找索引（而非外部传入 i），即便某类图里夹着缺 key 的项也不会跳错图。
 function _cosLbArg(keys, currentKey) {
@@ -8216,6 +8322,8 @@ function openCosLightbox(url, key, name) {
   }
   // 翻页会重复进入本函数，先清掉旧键盘监听，避免累加
   if (window._cosLightboxKey) document.removeEventListener("keydown", window._cosLightboxKey);
+  // 每次打开/翻页重置缩放与平移
+  cosLightboxResetView();
   const canDl = perm.photoDownload() || isManager();
   const dlBtn = canDl && (key || url)
     ? `<button type="button" class="cos-lightbox__dl" onclick="event.stopPropagation();downloadCosPhoto('${esc(key || "")}','${esc(url || "")}','${esc(name || "")}')">⬇ 下载</button>`
@@ -8224,6 +8332,13 @@ function openCosLightbox(url, key, name) {
   const counter = multi ? `<div class="cos-lightbox__counter">${_cosLbIdx + 1} / ${_cosLbList.length}</div>` : "";
   const prev = multi ? `<button type="button" class="cos-lightbox__nav cos-lightbox__prev" onclick="event.stopPropagation();cosLightboxGo(-1)" aria-label="上一张">‹</button>` : "";
   const next = multi ? `<button type="button" class="cos-lightbox__nav cos-lightbox__next" onclick="event.stopPropagation();cosLightboxGo(1)" aria-label="下一张">›</button>` : "";
+  // 缩放控制条：‑／百分比／＋／还原
+  const zoomCtl = `<div class="cos-lightbox__zoom">
+    <button type="button" class="cos-lightbox__zoombtn" onclick="event.stopPropagation();cosLightboxZoomBy(1/1.3)" aria-label="缩小">－</button>
+    <span class="cos-lightbox__zoomval">100%</span>
+    <button type="button" class="cos-lightbox__zoombtn" onclick="event.stopPropagation();cosLightboxZoomBy(1.3)" aria-label="放大">＋</button>
+    <button type="button" class="cos-lightbox__zoombtn cos-lightbox__zoomreset" onclick="event.stopPropagation();cosLightboxResetView()">还原</button>
+  </div>`;
   const onKey = (e) => {
     if (e.key === "Escape") closeCosLightbox();
     else if (multi && e.key === "ArrowLeft") cosLightboxGo(-1);
@@ -8232,7 +8347,14 @@ function openCosLightbox(url, key, name) {
   window._cosLightboxKey = onKey;
   el.className = "cos-lightbox";
   el.onclick = () => closeCosLightbox();
-  el.innerHTML = `${prev}${next}${counter}<img src="${esc(url)}" alt=""><div class="cos-lightbox__tip">点击任意处关闭（Esc）${multi ? " · ←/→ 翻页" : ""}</div>${dlBtn}`;
+  el.innerHTML = `${prev}${next}${counter}` +
+    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="this.classList.add('cos-lightbox__img--err');if(this.nextElementSibling){this.nextElementSibling.className='cos-lightbox__tip cos-lightbox__tip--err';this.nextElementSibling.textContent='无法预览此图片，可能是浏览器不支持的格式（如 HEIC/HEIF）'})">` +
+    `${zoomCtl}` +
+    `<div class="cos-lightbox__tip">点击空白关闭 · 滚轮/双击缩放 · 拖拽平移${multi ? " · ←/→ 翻页" : ""}</div>${dlBtn}`;
+  // 绑定图片交互（滚轮/拖拽/双击）
+  const img = el.querySelector("img");
+  if (img) cosLightboxInitInteractions(img);
+  cosLightboxUpdateZoomLabel();
   document.addEventListener("keydown", onKey);
 }
 
@@ -8252,6 +8374,13 @@ function closeCosLightbox() {
     document.removeEventListener("keydown", window._cosLightboxKey);
     window._cosLightboxKey = null;
   }
+  // 移除拖拽监听，避免多次打开后 document 监听叠加
+  if (_cosLbMove) {
+    document.removeEventListener("mousemove", _cosLbMove);
+    document.removeEventListener("mouseup", _cosLbUp);
+    _cosLbMove = null; _cosLbUp = null;
+  }
+  _cosDrag = null;
 }
 
 // 把画廊里所有 <img> 的 data-cos-key 填入签名下载 URL（私有桶查看用）。
@@ -8271,7 +8400,7 @@ async function fillPhotoImages(p) {
     const signed = viewMap[k] || "";
     const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
     img.src = legacy || signed || fallback;
-    img.onerror = () => { img.classList.add("cos-img--err"); };
+    img.onerror = () => onCosImgError(img, img.alt);
   });
 }
 
@@ -8998,7 +9127,7 @@ function renderProjectContentPhotos(p, photos, allowDownload = true) {
         ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
         : "";
       return `<div class="cos-thumb cos-thumb--readonly" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">
-        <img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}">
+        <img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">
         ${dnBtn}
       </div>`;
     }).join("");
@@ -9040,7 +9169,7 @@ async function fillProjectContentPhotos(p, rootSelector = ".proj-content-detail"
     const signed = viewMap[k] || "";
     const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
     img.src = legacy || signed || fallback;
-    img.onerror = () => { img.classList.add("cos-img--err"); };
+    img.onerror = () => onCosImgError(img, img.alt);
   });
 }
 
@@ -9058,8 +9187,8 @@ function renderFormPhotos() {
       const sid = cosSafeId(it.key || it.url || it.name || Math.random().toString());
       const realKey = it._kind || kind;
       const img = it.url
-        ? `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}">`
-        : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}">`;
+        ? `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`
+        : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`;
       const del = perms.canDelete
         ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeFormPhoto('${realKey}','${esc(it.key || it.url || it.name)}')">✕</button>`
         : "";
@@ -9142,7 +9271,11 @@ async function uploadFormPhotos(projectId) {
   if (!staged.length) return;
   try {
     const reqItems = staged.map(({ kind, it }) => {
-      const ext = (it.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+      const nameExt = (it.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const ext = extFromMime(it.file.type, nameExt) || "jpg";
+      if (isUnsupportedImageType(it.file.type)) {
+        toast(`「${it.name || "某张图片"}」为 HEIC/HEIF 格式，部分浏览器无法直接预览，建议先转换为 JPG/PNG 再上传`);
+      }
       const key = `projects/${projectId}/${kind}/${uid()}.${ext}`;
       it.key = key;
       return { key, contentType: it.file.type || "image/jpeg" };
@@ -26724,7 +26857,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v50b35c5b";
+  const APP_VERSION = "vbdaf3057";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
