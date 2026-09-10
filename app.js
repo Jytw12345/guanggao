@@ -300,8 +300,12 @@ const CAP = {
   VEHICLE_TRIP_ADD: "vehicle_trip_add",
   VEHICLE_TRIP_DELETE: "vehicle_trip_delete",
   VEHICLE_MANAGE: "vehicle_manage",
-  PHOTO_UPLOAD: "photo_upload",
-  PHOTO_DELETE: "photo_delete",
+  PHOTO_UPLOAD_SITE: "photo_upload_site",
+  PHOTO_DELETE_SITE: "photo_delete_site",
+  PHOTO_UPLOAD_PM: "photo_upload_pm",
+  PHOTO_DELETE_PM: "photo_delete_pm",
+  PHOTO_UPLOAD_COMPLETION: "photo_upload_completion",
+  PHOTO_DELETE_COMPLETION: "photo_delete_completion",
   PHOTO_DOWNLOAD: "photo_download",
 };
 
@@ -378,9 +382,13 @@ const CAP_LABEL = {
   manage_wage_config: "管理工时单价",
   repair_complete: "完成维修",
   rework_project: "返工项目",
-  photo_upload: "上传照片",
-  photo_delete: "删除照片",
-  photo_download: "下载/导出照片",
+  photo_upload_site: "上传现场图",
+  photo_delete_site: "删除现场图",
+  photo_upload_pm: "上传施工图",
+  photo_delete_pm: "删除施工图",
+  photo_upload_completion: "上传完工图",
+  photo_delete_completion: "删除完工图",
+  photo_download: "打包下载照片",
 };
 
 /* 权限项分组（角色权限配置页与个性权限弹窗按组展示，方便勾选） */
@@ -396,7 +404,7 @@ const CAP_GROUPS = [
   { label: "个人日程", caps: ["schedule_view","schedule_view_all","schedule_add","schedule_edit_own","schedule_edit_all","schedule_delete_own","schedule_delete_all"] },
   { label: "内部任务", caps: ["task_view","task_add","task_start","task_complete","task_delete","task_verify","internal_work_log"] },
   { label: "车辆里程", caps: ["vehicle_view","vehicle_trip_add","vehicle_trip_delete","vehicle_manage"] },
-  { label: "照片管理", caps: ["photo_upload","photo_delete","photo_download"] },
+  { label: "照片管理", caps: ["photo_upload_site","photo_delete_site","photo_upload_pm","photo_delete_pm","photo_upload_completion","photo_delete_completion","photo_download"] },
 ];
 
 /* 默认权限模板（与 SQL seed 一致）；云端会用 role_permissions 表覆盖 */
@@ -421,7 +429,7 @@ const DEFAULT_ROLE_PERMS = {
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
     import_data: false, view_operation_logs: false,
     repair_create: true, repair_complete: false, rework_project: true,
-    photo_upload: true, photo_delete: true, photo_download: true,
+    photo_upload_site: true, photo_delete_site: true, photo_upload_pm: true, photo_delete_pm: true, photo_upload_completion: true, photo_delete_completion: true, photo_download: true,
     schedule_view: true, schedule_view_all: true, schedule_add: true, schedule_edit_own: true, schedule_edit_all: true, schedule_delete_own: true, schedule_delete_all: true,
     task_view: true, task_add: true, task_start: true, task_complete: true, task_delete: true, task_verify: true,
     internal_work_log: false,
@@ -443,7 +451,7 @@ const DEFAULT_ROLE_PERMS = {
     view_stats_global: false, view_stats_store: false,
     manage_stores: false, manage_wage_config: false,
     repair_create: false, repair_complete: true, rework_project: false,
-    photo_upload: true, photo_delete: true, photo_download: true,
+    photo_upload_site: true, photo_delete_site: true, photo_upload_pm: true, photo_delete_pm: true, photo_upload_completion: true, photo_delete_completion: true, photo_download: true,
     manage_outsourced: false,
     project_edit_appointment_own: false, project_edit_appointment_all: false, project_edit_hours_own: false, project_edit_hours_all: false,
     project_edit_worklog_own: false, project_edit_worklog_all: false,
@@ -594,8 +602,12 @@ const perm = {
   manageMakeup: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_BATCH_ROTATIONAL),
   viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
   // 照片管理三权分立：上传/删除受「已审核锁定」约束（审核后不可篡改现场证据），下载无此约束
-  photoUpload: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD),
-  photoDelete: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE),
+  photoUploadSite: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_SITE),
+  photoDeleteSite: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_SITE),
+  photoUploadPm: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_PM),
+  photoDeletePm: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_PM),
+  photoUploadCompletion: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_COMPLETION),
+  photoDeleteCompletion: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_COMPLETION),
   photoDownload: () => can(CAP.PHOTO_DOWNLOAD),
 };
 
@@ -7906,13 +7918,17 @@ function refreshPhotosUI(p) {
 
 // 渲染 现场图 / 施工图及物料 / 完成效果图 三个画廊块
 // 施工图及物料（kind="__pm"）合并展示 plan + material，但保留每张图原始 kind 以便删除
-// 权限：上传=photo_upload、删除=photo_delete、下载(单张/ZIP)=photo_download，三者独立，与项目编辑权限解耦
+// 权限：上传/删除按分类（现场/施工/完工）独立，下载(单张/ZIP)=photo_download，与项目编辑权限解耦
 function renderProjectPhotosHtml(p) {
   const photos = normalizePhotos(p);
-  const canUpload = perm.photoUpload(p) || isManager();
-  const canDelete = perm.photoDelete(p) || isManager();
   const canDownload = perm.photoDownload(p) || isManager();
   const block = (title, kind) => {
+    // 按分类映射细粒度权限：site / pm(施工图及物料) / completion(完成效果图)
+    const cat = kind === "__pm" ? "pm" : kind;
+    const canUpload =
+      (cat === "site" ? perm.photoUploadSite(p) : cat === "pm" ? perm.photoUploadPm(p) : perm.photoUploadCompletion(p)) || isManager();
+    const canDelete =
+      (cat === "site" ? perm.photoDeleteSite(p) : cat === "pm" ? perm.photoDeletePm(p) : perm.photoDeleteCompletion(p)) || isManager();
     let items;
     if (kind === "__pm") {
       items = [
@@ -8361,6 +8377,16 @@ function cosLightboxInitInteractions(img) {
       _cosPanX = tState.px + dx;
       _cosPanY = tState.py + dy;
       cosLightboxApplyTransform();
+    } else if (tState.mode === "pan" && _cosZoom <= 1 && e.touches.length === 1) {
+      // 1x 未放大：横向滑动跟手反馈，松手判定翻页（仅在横向为主时）
+      const t = e.touches[0];
+      const dx = t.clientX - tState.sx;
+      const dy = t.clientY - tState.sy;
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) { moved = true; if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; } }
+      if (Math.abs(dx) > Math.abs(dy)) {
+        _cosPanX = dx; // 跟手偏移，松手要么翻页、要么回弹归零
+        cosLightboxApplyTransform();
+      }
     } else if (tState.mode === "pinch" && e.touches.length === 2) {
       const d = dist2(e.touches);
       if (d > 0 && tState.sd > 0) {
@@ -8374,8 +8400,19 @@ function cosLightboxInitInteractions(img) {
   }, { passive: false });
 
   img.addEventListener("touchend", (e) => {
-    if (e.touches.length === 0) tState = null;
+    if (e.touches.length > 0) { tState = null; return; } // 仍有一指按住（如双指松了一指）
+    // 单指松手：1x 时若横向滑动超过阈值则翻页，否则回弹
+    if (tState && tState.mode === "pan" && _cosZoom <= 1) {
+      const dx = _cosPanX; // 1x 时 _cosPanX 即滑动位移
+      if (Math.abs(dx) > 55) {
+        cosLightboxGo(dx < 0 ? 1 : -1); // 左滑下一张，右滑上一张
+        moved = true;
+      } else {
+        cosLightboxResetView(); // 回弹归零
+      }
+    }
     if (moved && closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+    tState = null;
   });
 }
 
@@ -8441,7 +8478,7 @@ function openCosLightbox(url, key, name) {
   el.innerHTML = `${prev}${next}${counter}` +
     `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="this.classList.add('cos-lightbox__img--err');if(this.nextElementSibling){this.nextElementSibling.className='cos-lightbox__tip cos-lightbox__tip--err';this.nextElementSibling.textContent='无法预览此图片，可能是浏览器不支持的格式（如 HEIC/HEIF）'})">` +
     `${zoomCtl}` +
-    `<div class="cos-lightbox__tip">点击空白关闭 · 滚轮/双击缩放 · 拖拽平移${multi ? " · ←/→ 翻页" : ""}</div>${dlBtn}`;
+    `<div class="cos-lightbox__tip">点击空白关闭 · 双击/滚轮缩放 · 拖拽平移${multi ? " · 左右滑动翻页" : ""}</div>${dlBtn}`;
   // 绑定图片交互（滚轮/拖拽/双击）
   const img = el.querySelector("img");
   if (img) cosLightboxInitInteractions(img);
@@ -9023,9 +9060,10 @@ function projectForm(p = {}) {
   const isNewForm = !p.id;
   window._formPhotos = JSON.parse(JSON.stringify(normalizePhotos(p)));
   window._formPhotoPerms = {
-    planMaterial: isNewForm || perm.photoUpload(p) || isManager(),
-    site: isNewForm || perm.photoUpload(p) || isManager(),
-    canDelete: isNewForm || perm.photoDelete(p) || isManager(),
+    siteUpload: isNewForm || perm.photoUploadSite(p) || isManager(),
+    pmUpload: isNewForm || perm.photoUploadPm(p) || isManager(),
+    siteDelete: isNewForm || perm.photoDeleteSite(p) || isManager(),
+    pmDelete: isNewForm || perm.photoDeletePm(p) || isManager(),
     canDownload: perm.photoDownload() || isManager(),
   };
   const selectedStore = p.storeId || (storeLocked ? myStore() : "");
@@ -9274,15 +9312,15 @@ function renderFormPhotos() {
   const wrap = document.getElementById("pPhotosWrap");
   if (!wrap) return;
   const fp = window._formPhotos || { plan: [], material: [], site: [], completion: [] };
-  const perms = window._formPhotoPerms || { planMaterial: true, site: true, canDelete: true, canDownload: true };
-  const block = (title, items, kind, canEdit) => {
+  const perms = window._formPhotoPerms || { siteUpload: true, pmUpload: true, siteDelete: true, pmDelete: true, canDownload: true };
+  const block = (title, items, kind, canUpload, canDelete) => {
     const thumbs = (items || []).map((it) => {
       const sid = cosSafeId(it.key || it.url || it.name || Math.random().toString());
       const realKey = it._kind || kind;
       const img = it.url
         ? `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`
         : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`;
-      const del = perms.canDelete
+      const del = canDelete
         ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeFormPhoto('${realKey}','${esc(it.key || it.url || it.name)}')">✕</button>`
         : "";
       const dn = perms.canDownload
@@ -9290,7 +9328,7 @@ function renderFormPhotos() {
         : "";
       return `<div class="cos-thumb" id="cos-item-${sid}">${img}${dn}${del}</div>`;
     }).join("");
-    const addBtn = canEdit
+    const addBtn = canUpload
       ? `<button type="button" class="cos-add" onclick="document.getElementById('cosFormFile_${kind}').click()">＋ 添加${title}</button><input id="cosFormFile_${kind}" type="file" accept="image/*" multiple class="hidden" onchange="formStagePhotos(this,'${kind}')">`
       : "";
     return `<div class="detail-block cos-section">
@@ -9303,8 +9341,8 @@ function renderFormPhotos() {
     ...(fp.material || []).map((it) => ({ ...it, _kind: "material" })),
   ];
   wrap.innerHTML =
-    block("现场图", fp.site, "site", perms.site) +
-    block("施工图及物料", pmItems, "plan", perms.planMaterial);
+    block("现场图", fp.site, "site", perms.siteUpload, perms.siteDelete) +
+    block("施工图及物料", pmItems, "plan", perms.pmUpload, perms.pmDelete);
   fillFormPhotos();
 }
 
@@ -15951,7 +15989,7 @@ function openCompleteProjectForm(id) {
     });
   }
   
-  const canUploadCompletion = perm.photoUpload(p0) || isManager();
+  const canUploadCompletion = perm.photoUploadCompletion(p0) || isManager();
   if (canUploadCompletion) {
     form += `<div class="form-row" style="grid-column:1/-1;">
       <label>上传完工图</label>
@@ -26961,7 +26999,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v53ea18ab";
+  const APP_VERSION = "v3548a8de";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

@@ -13974,10 +13974,10 @@ table.data.project-hours-diff thead th {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 24px;
 }
-.cos-lightbox img { max-width: 100%; max-height: 86vh; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); cursor: zoom-in; transform-origin: center center; will-change: transform; user-select: none; -webkit-user-drag: none; }
+.cos-lightbox img { max-width: 100%; max-height: 86vh; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,.5); cursor: zoom-in; transform-origin: center center; will-change: transform; user-select: none; -webkit-user-drag: none; position: relative; z-index: 1; }
 .cos-lightbox__zoom {
   position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; z-index: 20;
   background: rgba(15, 23, 42, 0.6); padding: 6px 12px; border-radius: 999px;
 }
 .cos-lightbox__zoombtn {
@@ -13989,7 +13989,7 @@ table.data.project-hours-diff thead th {
 .cos-lightbox__zoomval { color: #e2e8f0; font-size: 13px; min-width: 46px; text-align: center; }
 .cos-lightbox__tip { color: #cbd5e1; font-size: 12px; margin-top: 12px; }
 .cos-lightbox__dl {
-  position: absolute; top: 18px; right: 18px;
+  position: absolute; top: 18px; right: 18px; z-index: 20;
   border: none; border-radius: 8px; cursor: pointer;
   background: #0ea5e9; color: #fff; font-size: 14px; padding: 8px 14px;
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
@@ -14000,13 +14000,13 @@ table.data.project-hours-diff thead th {
   width: 48px; height: 48px; border: none; border-radius: 50%; cursor: pointer;
   background: rgba(15, 23, 42, 0.55); color: #fff; font-size: 28px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 4px 16px rgba(0,0,0,.35); user-select: none;
+  box-shadow: 0 4px 16px rgba(0,0,0,.35); user-select: none; z-index: 20;
 }
 .cos-lightbox__nav:hover { background: rgba(14, 165, 233, 0.85); }
-.cos-lightbox__prev { left: 18px; }
-.cos-lightbox__next { right: 18px; }
+.cos-lightbox__prev { left: 12px; }
+.cos-lightbox__next { right: 12px; }
 .cos-lightbox__counter {
-  position: absolute; top: 18px; left: 50%; transform: translateX(-50%);
+  position: absolute; top: 18px; left: 50%; transform: translateX(-50%); z-index: 20;
   background: rgba(15, 23, 42, 0.55); color: #e2e8f0; font-size: 13px;
   padding: 5px 12px; border-radius: 999px; letter-spacing: .5px;
 }
