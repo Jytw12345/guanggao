@@ -7860,7 +7860,11 @@ function onCosImgError(img, name, key) {
       const t = parent.querySelector(".cos-thumb__errtxt");
       if (t) {
         if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
-          t.textContent = "登录失效";
+          // 调试阶段：显示完整 401 信息（含 Edge Function 返回的 code/body），便于定位 PakePlus 电脑版差异
+          let detail = msg.includes("401") ? msg : `[401] ${msg}`;
+          if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
+          t.textContent = (detail || "登录失效").slice(0, 100);
+          t.title = detail;
         } else if (msg.includes("代理加载失败")) {
           const m = msg.match(/\[(\d+)\]/);
           t.textContent = `代理失败[${m ? m[1] : "?"}]`;
@@ -8690,7 +8694,10 @@ async function cosLightboxTryRecover(img, key, name) {
       tip.className = "cos-lightbox__tip cos-lightbox__tip--err";
       // 把具体错误友好地展示出来，便于定位是登录态/网络/Edge Function 哪层问题
       if (msg.includes("未获取到登录令牌") || msg.includes("401")) {
-        tip.textContent = "登录态失效，请重新登录后再试";
+        // 调试阶段：显示完整 401 信息（含 Edge Function 返回的 code/body），便于定位 PakePlus 电脑版差异
+        let detail = msg.includes("401") ? msg : `[401] ${msg}`;
+        if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
+        tip.textContent = (detail || "登录态失效，请重新登录后再试").slice(0, 200);
       } else if (msg.includes("403")) {
         tip.textContent = "无权限访问该图片";
       } else if (msg.includes("代理加载失败")) {
@@ -27302,7 +27309,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "veed8eeba";
+  const APP_VERSION = "v0d2cb87e";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
