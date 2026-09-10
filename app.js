@@ -8161,22 +8161,112 @@ async function removeCosPhoto(projectId, kind, key) {
 
 // 通过 Supabase Edge Function（cos-proxy）取 COS 对象字节，绕过私有桶的 CORS 限制。
 // 失败时 throw Error（带状态码/状态文本），便于上层给出具体提示。
+// 注意：PakePlus 等 WebView2 环境中，sb.auth.getSession() 可能拿不到有效 token，
+// 但 sb.functions.invoke / sb.from 能正常从 supabase 内部 storage 取到 token 并自动刷新。
+// 因此优先用 sb.functions.invoke 调用 cos-proxy；失败时尝试 refreshSession 后重试。
 async function getCosProxyBlob(key) {
   if (MODE !== "cloud") throw new Error("代理不可用（非云端模式）");
   if (!sb) throw new Error("代理不可用（Supabase 未初始化）");
   if (!key) throw new Error("缺少图片 key");
-  const { data } = await sb.auth.getSession();
-  const token = data && data.session && data.session.access_token;
-  if (!token) throw new Error("未获取到登录令牌，请重新登录");
-  const url = `${window.APP_CONFIG.SUPABASE_URL}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}`;
-  const resp = await fetch(url, {
-    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`代理加载失败 [${resp.status}] ${text || resp.statusText}`);
+
+  const isAuthError = (msg) => /401|未登录|登录态|令牌|token|jwt|auth/i.test(String(msg || ""));
+
+  // 优先用 supabase-js 官方 invoke：自动带 Authorization、自动刷新过期 token，
+  // 与 cos-sign / sb.from 走同一条 session 通道，在 PakePlus 中更稳定。
+  async function viaInvoke() {
+    const { data, error } = await sb.functions.invoke("cos-proxy", {
+      body: { key },
+      responseType: "blob",
+    });
+    if (error) throw error;
+    if (!data || !(data instanceof Blob)) throw new Error("代理返回格式异常");
+    return data;
   }
-  return await resp.blob();
+
+  // 备用：手动 fetch（兼容旧版 supabase-js 或不支持 responseType 的环境）
+  async function viaManualFetch() {
+    const token = await _getSupabaseAccessToken();
+    if (!token) throw new Error("未获取到登录令牌，请重新登录");
+    const url = `${window.APP_CONFIG.SUPABASE_URL}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}`;
+    const resp = await fetch(url, {
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new Error(`代理加载失败 [${resp.status}] ${text || resp.statusText}`);
+    }
+    return await resp.blob();
+  }
+
+  async function tryOnce() {
+    try {
+      return await viaInvoke();
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e);
+      // 旧版 supabase-js 可能不支持 responseType，直接走手动 fetch
+      if (msg.includes("responseType") || msg.includes("not supported") || msg.includes("Unknown responseType")) {
+        return await viaManualFetch();
+      }
+      throw e;
+    }
+  }
+
+  try {
+    return await tryOnce();
+  } catch (e) {
+    const msg = String(e && e.message ? e.message : e);
+    if (isAuthError(msg)) {
+      // 401 时尝试主动刷新一次 session，再重试
+      try {
+        const { error: refreshErr } = await sb.auth.refreshSession();
+        if (refreshErr) console.warn("refreshSession 失败：", refreshErr);
+      } catch (refreshEx) {
+        console.warn("refreshSession 异常：", refreshEx);
+      }
+      try {
+        return await tryOnce();
+      } catch (e2) {
+        const msg2 = String(e2 && e2.message ? e2.message : e2);
+        if (isAuthError(msg2)) {
+          throw new Error("登录态失效，请重新登录后再试 [401]");
+        }
+        throw e2;
+      }
+    }
+    throw e;
+  }
+}
+
+// 多路尝试获取当前 supabase access_token：
+// getSession() → 解析 localStorage 中 supabase 默认缓存 → refreshSession() 兜底。
+async function _getSupabaseAccessToken() {
+  if (!sb) return null;
+  try {
+    const { data } = await sb.auth.getSession();
+    if (data && data.session && data.session.access_token) return data.session.access_token;
+  } catch (_) {}
+  try {
+    const raw = localStorage.getItem("sb-" + window.APP_CONFIG.SUPABASE_URL.split("//")[1].split(".")[0] + "-auth-token");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.access_token) return parsed.access_token;
+    }
+  } catch (_) {}
+  // 通用兜底：扫描 localStorage 中所有 sb-*-auth-token 键
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && /^sb-.*-auth-token$/.test(k)) {
+        const parsed = JSON.parse(localStorage.getItem(k) || "null");
+        if (parsed && parsed.access_token) return parsed.access_token;
+      }
+    }
+  } catch (_) {}
+  try {
+    const { data, error } = await sb.auth.refreshSession();
+    if (!error && data && data.session && data.session.access_token) return data.session.access_token;
+  } catch (_) {}
+  return null;
 }
 
 // 取单张照片字节：优先走代理；若代理失败，回退直连签名 URL（仅适合已配 CORS 的环境）
@@ -27153,7 +27243,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vf62e6db1";
+  const APP_VERSION = "v6d2ac422";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
