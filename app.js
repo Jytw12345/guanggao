@@ -8288,7 +8288,8 @@ async function getCosProxyBlob(key) {
       } catch (e2) {
         const msg2 = String(e2 && e2.message ? e2.message : e2);
         if (isAuthError(msg2)) {
-          throw new Error("登录态失效，请重新登录后再试 [401]");
+          // 把 Edge Function 返回的完整 body 也带出来，便于诊断
+          throw new Error("登录态失效，请重新登录后再试 [401] | " + msg2);
         }
         throw e2;
       }
@@ -27309,7 +27310,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v0d2cb87e";
+  const APP_VERSION = "vacf58439";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
