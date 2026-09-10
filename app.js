@@ -8201,10 +8201,18 @@ async function getCosProxyBlob(key) {
       const { data: sessionData } = await sb.auth.getSession();
       token = sessionData && sessionData.session && sessionData.session.access_token;
     } catch (_) {}
-    const headers = token ? { Authorization: "Bearer " + token } : undefined;
+    const headers = {};
+    if (token) {
+      headers["Authorization"] = "Bearer " + token;
+      // 仅在 WebView2 环境（PakePlus 桌面版）显式声明走 Edge Function 的 PostgREST fallback 校验，
+      // 正常浏览器/手机不带此头，Edge Function 严格走 auth.getUser()。
+      const isWebView2 = /WebView2|wv\)/i.test(navigator.userAgent || "");
+      if (isWebView2) headers["X-Proxy-Fallback"] = "1";
+    }
+    const headersArg = Object.keys(headers).length ? headers : undefined;
     const { data, error, response } = await sb.functions.invoke("cos-proxy", {
       body: { key },
-      headers,
+      headers: headersArg,
     });
     if (error) {
       let detail = error.name ? `[${error.name}] ${error.message || ""}` : String(error.message || error);
@@ -27310,7 +27318,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vacf58439";
+  const APP_VERSION = "v13a81e10";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
