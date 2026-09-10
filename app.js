@@ -8476,7 +8476,7 @@ function openCosLightbox(url, key, name) {
   el.className = "cos-lightbox";
   el.onclick = () => closeCosLightbox();
   el.innerHTML = `${prev}${next}${counter}` +
-    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="this.classList.add('cos-lightbox__img--err');if(this.nextElementSibling){this.nextElementSibling.className='cos-lightbox__tip cos-lightbox__tip--err';this.nextElementSibling.textContent='无法预览此图片，可能是浏览器不支持的格式（如 HEIC/HEIF）'})">` +
+    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="this.classList.add('cos-lightbox__img--err');if(this.nextElementSibling){this.nextElementSibling.className='cos-lightbox__tip cos-lightbox__tip--err';this.nextElementSibling.textContent='无法预览此图片，可能是浏览器不支持的格式（如 HEIC/HEIF）'}">` +
     `${zoomCtl}` +
     `<div class="cos-lightbox__tip">点击空白关闭 · 双击/滚轮缩放 · 拖拽平移${multi ? " · 左右滑动翻页" : ""}</div>${dlBtn}`;
   // 绑定图片交互（滚轮/拖拽/双击）
@@ -9317,9 +9317,12 @@ function renderFormPhotos() {
     const thumbs = (items || []).map((it) => {
       const sid = cosSafeId(it.key || it.url || it.name || Math.random().toString());
       const realKey = it._kind || kind;
-      const img = it.url
-        ? `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`
-        : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`;
+      const isStagedHeic = it._staged && it.file && isUnsupportedImageType(it.file.type);
+      const img = isStagedHeic
+        ? `<div class="cos-thumb__ph">HEIC<br>将转 JPG 上传</div>`
+        : (it.url
+          ? `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`
+          : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`);
       const del = canDelete
         ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeFormPhoto('${realKey}','${esc(it.key || it.url || it.name)}')">✕</button>`
         : "";
@@ -16248,8 +16251,11 @@ function renderCompletePhotosStaging() {
   const files = window._completeFormFiles || [];
   wrap.innerHTML = files.map((f, i) => {
     const sid = cosSafeId(f.name + "_" + i);
+    const inner = isUnsupportedImageType(f.type)
+      ? `<div class="cos-thumb__ph">HEIC<br>将转 JPG 上传</div>`
+      : `<img src="${URL.createObjectURL(f)}" loading="lazy" alt="${esc(f.name)}">`;
     return `<div class="cos-thumb" id="cos-complete-${sid}">
-      <img src="${URL.createObjectURL(f)}" loading="lazy" alt="${esc(f.name)}">
+      ${inner}
       <button type="button" class="cos-thumb__del" title="移除" onclick="removeCompletePhoto(${i})">✕</button>
     </div>`;
   }).join("");
@@ -16269,17 +16275,34 @@ async function uploadCompletionPhotos(projectId, files) {
   if (!p) return;
   const photos = normalizePhotos(p);
   if (!files || !files.length) return;
-  const prepared = files.map((file) => {
-    const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
-    const key = `projects/${projectId}/completion/${uid()}.${ext || "jpg"}`;
-    return { file, key };
-  });
+  // 与详情页/表单一致：HEIC/HEIF 自动转 JPEG，扩展名按 MIME 推导；失败按原格式上传
+  const hasHeic = files.some((f) => isUnsupportedImageType(f.type));
+  if (hasHeic) toast("正在将 HEIC/HEIF 完工图转为 JPEG，以便各端都能预览…");
+  const prepared = [];
+  for (const file of files) {
+    let realFile = file;
+    let realName = file.name;
+    if (isUnsupportedImageType(file.type)) {
+      try {
+        const jpg = await convertHeicToJpeg(file);
+        realFile = jpg;
+        realName = jpg.name;
+      } catch (e) {
+        console.warn("完工图 HEIC 转换失败，按原格式上传：", e);
+        toast("有 HEIC 完工图本地转换失败，已按原格式上传（可能仍无法在线预览）");
+      }
+    }
+    const nameExt = (realName.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const ext = extFromMime(realFile.type, nameExt) || "jpg";
+    const key = `projects/${projectId}/completion/${uid()}.${ext}`;
+    prepared.push({ file: realFile, key, name: realName });
+  }
   const signed = await cosGetSignedUrls(
     prepared.map(({ file, key }) => ({ key, contentType: file.type || "image/jpeg" }))
   );
   const map = {};
   signed.forEach((s) => { if (s && s.key) map[s.key] = s; });
-  for (const { file, key } of prepared) {
+  for (const { file, key, name } of prepared) {
     const s = map[key];
     if (!s || !s.url) {
       console.warn("未获取到上传授权:", key);
@@ -16289,7 +16312,7 @@ async function uploadCompletionPhotos(projectId, files) {
     photos.completion.push({
       key,
       url: "",
-      name: file.name,
+      name,
       size: file.size,
       by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "匿名",
       at: Date.now(),
@@ -26999,7 +27022,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v3548a8de";
+  const APP_VERSION = "v4ac56fe5";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
