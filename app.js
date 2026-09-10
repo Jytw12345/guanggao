@@ -7855,6 +7855,20 @@ function onCosImgError(img, name, key) {
     }
   }).catch((e) => {
     console.warn("缩略图代理加载失败：", e);
+    const msg = String(e && e.message ? e.message : e);
+    if (parent) {
+      const t = parent.querySelector(".cos-thumb__errtxt");
+      if (t) {
+        if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
+          t.textContent = "登录失效";
+        } else if (msg.includes("代理加载失败")) {
+          const m = msg.match(/\[(\d+)\]/);
+          t.textContent = `代理失败[${m ? m[1] : "?"}]`;
+        } else if (msg.includes("网络") || msg.includes("fetch")) {
+          t.textContent = "网络错误";
+        }
+      }
+    }
   });
 }
 
@@ -8146,25 +8160,32 @@ async function removeCosPhoto(projectId, kind, key) {
 }
 
 // 通过 Supabase Edge Function（cos-proxy）取 COS 对象字节，绕过私有桶的 CORS 限制。
-// 任意来源（含 file:// / 本地脚手架）都能用，不需要在 COS 控制台配跨域。
+// 失败时 throw Error（带状态码/状态文本），便于上层给出具体提示。
 async function getCosProxyBlob(key) {
-  if (MODE !== "cloud" || !sb || !key) return null;
-  try {
-    const { data } = await sb.auth.getSession();
-    const token = (data && data.session && data.session.access_token) || window.APP_CONFIG.SUPABASE_ANON_KEY;
-    const url = `${window.APP_CONFIG.SUPABASE_URL}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}`;
-    const resp = await fetch(url, {
-      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
-    });
-    if (resp.ok) return await resp.blob();
-  } catch (_) {}
-  return null;
+  if (MODE !== "cloud") throw new Error("代理不可用（非云端模式）");
+  if (!sb) throw new Error("代理不可用（Supabase 未初始化）");
+  if (!key) throw new Error("缺少图片 key");
+  const { data } = await sb.auth.getSession();
+  const token = data && data.session && data.session.access_token;
+  if (!token) throw new Error("未获取到登录令牌，请重新登录");
+  const url = `${window.APP_CONFIG.SUPABASE_URL}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}`;
+  const resp = await fetch(url, {
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`代理加载失败 [${resp.status}] ${text || resp.statusText}`);
+  }
+  return await resp.blob();
 }
 
-// 取单张照片字节：优先走代理；若代理不可用，回退直连签名 URL（需 COS 已配 GET 跨域）
+// 取单张照片字节：优先走代理；若代理失败，回退直连签名 URL（仅适合已配 CORS 的环境）
 async function fetchCosObjectBlob(key) {
-  const proxy = await getCosProxyBlob(key);
-  if (proxy) return proxy;
+  try {
+    return await getCosProxyBlob(key);
+  } catch (e) {
+    console.warn("代理取图失败，回退直连：", e);
+  }
   const map = await cosGetViewUrls([key]);
   const url = map[key] || "";
   if (!url) return null;
@@ -8521,12 +8542,22 @@ async function cosLightboxTryRecover(img, key, name) {
     const msg = String(e && e.message ? e.message : e);
     if (tip) {
       tip.className = "cos-lightbox__tip cos-lightbox__tip--err";
-      if (msg.includes("heic2any") || msg.includes("转码库")) {
+      // 把具体错误友好地展示出来，便于定位是登录态/网络/Edge Function 哪层问题
+      if (msg.includes("未获取到登录令牌") || msg.includes("401")) {
+        tip.textContent = "登录态失效，请重新登录后再试";
+      } else if (msg.includes("403")) {
+        tip.textContent = "无权限访问该图片";
+      } else if (msg.includes("代理加载失败")) {
+        const m = msg.match(/\[(\d+)\]\s*(.*)/);
+        const code = m ? m[1] : "";
+        const txt = m ? m[2] : "";
+        tip.textContent = `代理加载失败[${code || "?"}] ${txt || ""}`.trim();
+      } else if (msg.includes("网络") || msg.includes("fetch") || msg.includes("Failed")) {
+        tip.textContent = "网络错误，无法连接到代理";
+      } else if (msg.includes("heic2any") || msg.includes("转码库")) {
         tip.textContent = "HEIC 转码库未加载，请下载原图查看";
       } else if (msg.includes("转码") || msg.includes("HEIC")) {
         tip.textContent = "HEIC 转码失败，请下载原图查看";
-      } else if (msg.includes("无法获取原图") || msg.includes("401") || msg.includes("403")) {
-        tip.textContent = "代理加载失败，请检查登录态或网络";
       } else {
         tip.textContent = "无法预览，请下载原图查看";
       }
@@ -27122,7 +27153,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v056e4412";
+  const APP_VERSION = "vf62e6db1";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
