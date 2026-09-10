@@ -26,6 +26,7 @@ const SOURCES = [
   "config.js",
   "vendor/supabase.min.js",
   "vendor/jszip.min.js",
+  "vendor/heic2any.min.js",
   "exceljs.min.js",
   "help.html",
   "manifest.webmanifest",

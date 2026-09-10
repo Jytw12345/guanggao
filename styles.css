@@ -13857,34 +13857,42 @@ table.data.project-hours-diff thead th {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   margin-bottom: 12px;
+}
+.cos-cats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
 }
 .cos-cat-label {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
-  color: #475569;
+  font-size: 12px;
+  color: #64748b;
   cursor: pointer;
   user-select: none;
 }
-.cos-cat { width: 15px; height: 15px; accent-color: #0ea5e9; cursor: pointer; }
+.cos-cat { width: 14px; height: 14px; accent-color: #0ea5e9; cursor: pointer; }
 .cos-download-all {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border: 1px solid #0ea5e9;
-  background: #fff;
-  color: #0ea5e9;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
   border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
-  transition: background .15s, color .15s;
+  transition: background .15s, color .15s, border-color .15s;
+  white-space: nowrap;
 }
-.cos-download-all:hover { background: #0ea5e9; color: #fff; }
+.cos-download-all:hover { background: #f1f5f9; color: #334155; border-color: #cbd5e1; }
 .cos-photos-head--readonly { margin-bottom: 4px; }
 .cos-section { border-left: 4px solid #0ea5e9; }
 .cos-count { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 4px; }

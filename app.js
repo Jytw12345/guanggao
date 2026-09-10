@@ -7774,6 +7774,16 @@ function isUnsupportedImageType(type) {
   return /^(image\/heic|image\/heif)$/i.test(type || "");
 }
 
+// 将 HEIC/HEIF 转成 JPEG（浏览器普遍支持），返回新的 File（type=image/jpeg，扩展名 .jpg）。
+// 依赖 vendor/heic2any.min.js（wasm 内联、离线可用）。转换失败抛错，由调用方降级按原格式上传。
+async function convertHeicToJpeg(file, quality = 0.92) {
+  if (typeof heic2any !== "function") throw new Error("缺少 heic2any 转换库");
+  let out = await heic2any({ blob: file, toType: "image/jpeg", quality });
+  if (Array.isArray(out)) out = out[0]; // burst 序列只取第一张
+  const base = (file.name || "image").replace(/\.[^.]+$/, "");
+  return new File([out], base + ".jpg", { type: "image/jpeg" });
+}
+
 // 缩略图加载失败时给出明确提示，而不是只显示浏览器默认的破碎图标。
 function onCosImgError(img, name) {
   if (!img) return;
@@ -7921,7 +7931,7 @@ function renderProjectPhotosHtml(p) {
           ? `<div class="cos-thumb__prog"><div class="cos-thumb__bar" id="cos-prog-${sid}" style="width:0%"></div></div>`
           : "";
         const img = it.uploading
-          ? `<div class="cos-thumb__ph">⏳ 上传中</div>`
+          ? `<div class="cos-thumb__ph">⏳ 处理中</div>`
           : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}')">`;
         const err = it.error ? `<div class="cos-thumb__err">失败</div>` : "";
         const dnBtn = canDownload
@@ -7945,10 +7955,12 @@ function renderProjectPhotosHtml(p) {
     photos.plan.length + photos.material.length + photos.site.length + photos.completion.length > 0;
   const head = hasAny && canDownload
     ? `<div class="cos-photos-head">
-        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="site" checked> 现场图</label>
-        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="pm" checked> 施工图及物料</label>
-        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="completion" checked> 完成效果图</label>
-        <button type="button" class="cos-download-all" onclick="downloadAllProjectPhotos('${esc(p.id)}', this)">⬇ 下载选中（打包 ZIP）</button>
+        <div class="cos-cats">
+          <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="site" checked> 现场</label>
+          <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="pm" checked> 施工</label>
+          <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="completion" checked> 完成</label>
+        </div>
+        <button type="button" class="cos-download-all" onclick="downloadAllProjectPhotos('${esc(p.id)}', this)" title="打包下载选中的照片">打包 ZIP</button>
       </div>`
     : "";
   return (
@@ -7972,9 +7984,6 @@ async function handleCosFiles(input, projectId, kind) {
   const prepared = files.map((file) => {
     const nameExt = (file.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     let ext = extFromMime(file.type, nameExt) || "jpg";
-    if (isUnsupportedImageType(file.type)) {
-      toast(`「${file.name || "某张图片"}」为 HEIC/HEIF 格式，部分浏览器（含 PakePlus 打包应用）无法直接预览，建议先转换为 JPG/PNG 再上传`);
-    }
     const key = `projects/${projectId}/${storeKind}/${uid()}.${ext}`;
     const item = {
       key,
@@ -7991,12 +8000,32 @@ async function handleCosFiles(input, projectId, kind) {
   refreshPhotosUI(p);
 
   try {
+    // 1) HEIC/HEIF 自动转 JPEG（浏览器才能预览）；失败则按原格式上传
+    const hasHeic = prepared.some((x) => isUnsupportedImageType(x.file.type));
+    if (hasHeic) toast("正在将 HEIC/HEIF 图片转为 JPEG，以便各端都能预览…");
+    for (const { file, item } of prepared) {
+      if (!isUnsupportedImageType(file.type)) continue;
+      try {
+        const jpg = await convertHeicToJpeg(file);
+        // 用 .jpg 重算 key，避免 .heic key 配上 jpg 内容导致预览异常
+        const uidPart = item.key.split("/").pop().replace(/\.[^.]+$/, "");
+        item.key = `projects/${projectId}/${storeKind}/${uidPart}.jpg`;
+        item.name = jpg.name;
+        item._convertedFile = jpg; // const file 不可重赋值，转换结果暂存此处
+        refreshPhotosUI(p);
+      } catch (e) {
+        console.warn("HEIC 转换失败，按原格式上传：", e);
+        toast("有 HEIC 图片本地转换失败，已按原格式上传（可能仍无法在线预览）");
+      }
+    }
+    // 2) 拿预签名 URL（用转换后的文件类型）
     const signed = await cosGetSignedUrls(
-      prepared.map((x) => ({ key: x.item.key, contentType: x.file.type || "image/jpeg" })),
+      prepared.map((x) => ({ key: x.item.key, contentType: (x.item._convertedFile || x.file).type || "image/jpeg" })),
     );
     const map = {};
     signed.forEach((s) => (map[s.key] = s));
     for (const { file, item } of prepared) {
+      const realFile = item._convertedFile || file;
       const s = map[item.key];
       if (!s) {
         item.uploading = false;
@@ -8005,7 +8034,7 @@ async function handleCosFiles(input, projectId, kind) {
         continue;
       }
       try {
-        await putFileToCos(s.url, file, (pct) => {
+        await putFileToCos(s.url, realFile, (pct) => {
           const bar = document.getElementById("cos-prog-" + cosSafeId(item.key));
           if (bar) bar.style.width = pct + "%";
         });
@@ -8013,6 +8042,7 @@ async function handleCosFiles(input, projectId, kind) {
         item.url = "";
         item.uploading = false;
         item.error = false;
+        delete item._convertedFile;
         refreshPhotosUI(p);
         await saveProjectPhotos(projectId, photos);
         // saveProjectPhotos 内部会把 p.projectPhotos 换成「清洗后」新对象（丢失 uploading 等临时态）。
@@ -8021,6 +8051,7 @@ async function handleCosFiles(input, projectId, kind) {
       } catch (e) {
         item.uploading = false;
         item.error = true;
+        delete item._convertedFile;
         p.projectPhotos = photos;
         toast("上传失败：" + (e.message || e));
         refreshPhotosUI(p);
@@ -8262,13 +8293,14 @@ function cosLightboxDbl() {
   if (_cosZoom > 1) cosLightboxResetView();
   else { _cosZoom = 2.5; _cosPanX = 0; _cosPanY = 0; cosLightboxApplyTransform(); cosLightboxUpdateZoomLabel(); }
 }
-// 点击图片：放大状态下不关闭（防误触），1x 时关闭灯箱
+// 点击图片：放大状态下不关闭（防误触），1x 时关闭灯箱（桌面端走合成 click）
 function cosLightboxImgClick(e) {
   e.stopPropagation();
   if (_cosZoom <= 1) closeCosLightbox();
 }
-// 给灯箱图片绑定滚轮/拖拽/双击交互；翻页重建时先清旧的 document 监听避免叠加
+// 给灯箱图片绑定桌面+移动端交互：滚轮/拖拽/双击 + 移动端捏合缩放/单指平移/双击
 function cosLightboxInitInteractions(img) {
+  // —— 桌面端 ——
   img.addEventListener("mousedown", cosLightboxDown);
   img.addEventListener("wheel", cosLightboxWheel, { passive: false });
   img.addEventListener("dblclick", cosLightboxDbl);
@@ -8286,6 +8318,65 @@ function cosLightboxInitInteractions(img) {
   _cosLbUp = () => { _cosDrag = null; const im = document.querySelector("#cosLightbox img"); if (im) im.style.cursor = _cosZoom > 1 ? "grab" : "zoom-in"; };
   document.addEventListener("mousemove", _cosLbMove);
   document.addEventListener("mouseup", _cosLbUp);
+
+  // —— 移动端触摸：捏合缩放 + 单指平移 + 双击放大/还原 ——
+  const dist2 = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  let tState = null;     // { mode:'pan'|'pinch', ... }
+  let lastTap = 0;
+  let moved = false;
+  let closeTimer = null;
+
+  img.addEventListener("touchstart", (e) => {
+    e.preventDefault(); // 接管手势，阻止页面滚动/双击选中/合成 click
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      tState = { mode: "pan", sx: t.clientX, sy: t.clientY, px: _cosPanX, py: _cosPanY };
+      moved = false;
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        // 双击：放大/还原；取消 pending 关闭
+        cosLightboxDbl();
+        lastTap = 0;
+      } else {
+        lastTap = now;
+        if (_cosZoom <= 1) {
+          // 移动端单指轻点（1x）延迟关闭，留时间窗给双击
+          closeTimer = setTimeout(() => { if (_cosZoom <= 1 && !moved) closeCosLightbox(); }, 280);
+        }
+      }
+    } else if (e.touches.length === 2) {
+      tState = { mode: "pinch", sd: dist2(e.touches), sz: _cosZoom };
+      moved = true; // 双指操作，松开不触发点击关闭
+    }
+  }, { passive: false });
+
+  img.addEventListener("touchmove", (e) => {
+    if (!tState) return;
+    e.preventDefault();
+    if (tState.mode === "pan" && _cosZoom > 1 && e.touches.length === 1) {
+      const t = e.touches[0];
+      const dx = t.clientX - tState.sx, dy = t.clientY - tState.sy;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) { moved = true; if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; } }
+      _cosPanX = tState.px + dx;
+      _cosPanY = tState.py + dy;
+      cosLightboxApplyTransform();
+    } else if (tState.mode === "pinch" && e.touches.length === 2) {
+      const d = dist2(e.touches);
+      if (d > 0 && tState.sd > 0) {
+        let nz = tState.sz * (d / tState.sd);
+        nz = Math.min(5, Math.max(0.5, nz));
+        _cosZoom = nz;
+        cosLightboxApplyTransform();
+        cosLightboxUpdateZoomLabel();
+      }
+    }
+  }, { passive: false });
+
+  img.addEventListener("touchend", (e) => {
+    if (e.touches.length === 0) tState = null;
+    if (moved && closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+  });
 }
 
 // 生成缩略图 onclick 里传给 openCosLightboxByKey 的「分类内 key 列表」参数。
@@ -9140,10 +9231,12 @@ function renderProjectContentPhotos(p, photos, allowDownload = true) {
     (photos.site || []).length + (photos.plan || []).length + (photos.material || []).length + (photos.completion || []).length > 0;
   const head = hasAny && canDownload
     ? `<div class="cos-photos-head cos-photos-head--readonly">
-        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="site" checked> 现场图</label>
-        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="pm" checked> 施工图及物料</label>
-        <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="completion" checked> 完成效果图</label>
-        <button type="button" class="cos-download-all" onclick="downloadAllProjectPhotos('${esc(p.id)}', this)">⬇ 下载选中（打包 ZIP）</button>
+        <div class="cos-cats">
+          <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="site" checked> 现场</label>
+          <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="pm" checked> 施工</label>
+          <label class="cos-cat-label"><input type="checkbox" class="cos-cat" value="completion" checked> 完成</label>
+        </div>
+        <button type="button" class="cos-download-all" onclick="downloadAllProjectPhotos('${esc(p.id)}', this)" title="打包下载选中的照片">打包 ZIP</button>
       </div>`
     : "";
   return (
@@ -9270,12 +9363,23 @@ async function uploadFormPhotos(projectId) {
   });
   if (!staged.length) return;
   try {
+    // HEIC/HEIF 自动转 JPEG（浏览器才能预览）；失败则按原格式上传
+    const hasHeic = staged.some(({ it }) => isUnsupportedImageType(it.file.type));
+    if (hasHeic) toast("正在将 HEIC/HEIF 图片转为 JPEG，以便各端都能预览…");
+    for (const { it } of staged) {
+      if (!isUnsupportedImageType(it.file.type)) continue;
+      try {
+        const jpg = await convertHeicToJpeg(it.file);
+        it.file = jpg;
+        it.name = jpg.name;
+      } catch (e) {
+        console.warn("HEIC 转换失败，按原格式上传：", e);
+        toast("有 HEIC 图片本地转换失败，已按原格式上传（可能仍无法在线预览）");
+      }
+    }
     const reqItems = staged.map(({ kind, it }) => {
       const nameExt = (it.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       const ext = extFromMime(it.file.type, nameExt) || "jpg";
-      if (isUnsupportedImageType(it.file.type)) {
-        toast(`「${it.name || "某张图片"}」为 HEIC/HEIF 格式，部分浏览器无法直接预览，建议先转换为 JPG/PNG 再上传`);
-      }
       const key = `projects/${projectId}/${kind}/${uid()}.${ext}`;
       it.key = key;
       return { key, contentType: it.file.type || "image/jpeg" };
@@ -26857,7 +26961,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vbdaf3057";
+  const APP_VERSION = "v53ea18ab";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
