@@ -8190,20 +8190,37 @@ async function getCosProxyBlob(key) {
   // 只能根据响应 Content-Type 自动解析；cos-proxy 已统一返回 application/octet-stream，
   // 因此 data 会被自动解析为 Blob。
   async function viaInvoke() {
+    // PakePlus 电脑版 WebView2 中，sb.functions.invoke 似乎不会自动带有效 token，
+    // 因此显式从 sb.auth.getSession() 取 token 并放到 headers 里；sb.functions.invoke 会合并 headers。
+    let token = null;
+    try {
+      const { data: sessionData } = await sb.auth.getSession();
+      token = sessionData && sessionData.session && sessionData.session.access_token;
+    } catch (_) {}
+    const headers = token ? { Authorization: "Bearer " + token } : undefined;
     const { data, error, response } = await sb.functions.invoke("cos-proxy", {
       body: { key },
+      headers,
     });
     if (error) {
       let detail = error.name ? `[${error.name}] ${error.message || ""}` : String(error.message || error);
-      // 把 Edge Function 返回的 HTTP 状态、code、body 也带出来，便于 PakePlus 诊断
+      // 把 Edge Function 返回的 HTTP 状态、body 也带出来，便于 PakePlus 诊断
       try {
         const ctx = error.context;
-        if (ctx) {
+        if (ctx && typeof ctx.text === "function") {
           const parts = [detail];
           if (ctx.status) parts.push(`status=${ctx.status}`);
           if (ctx.statusText) parts.push(ctx.statusText);
-          const body = typeof ctx.body === "string" ? ctx.body : (ctx.json ? JSON.stringify(ctx.json) : "");
-          if (body) parts.push(String(body).slice(0, 160));
+          let bodyText = "";
+          try {
+            const ct = (ctx.headers && ctx.headers.get("content-type")) || "";
+            if (ct.includes("application/json")) {
+              bodyText = JSON.stringify(await ctx.json());
+            } else {
+              bodyText = await ctx.text();
+            }
+          } catch (_) {}
+          if (bodyText) parts.push(String(bodyText).slice(0, 180));
           detail = parts.join(" | ");
         }
       } catch (_) {}
@@ -27285,7 +27302,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v8f5a8809";
+  const APP_VERSION = "veed8eeba";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
