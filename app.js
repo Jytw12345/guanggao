@@ -7796,16 +7796,25 @@ async function convertHeicToJpeg(file, quality = 0.92) {
   return new File([out], base + ".jpg", { type: "image/jpeg" });
 }
 
+// 根据 key 或文件名猜测是否为 HEIC/HEIF（含微信导出 mmeexport* 无扩展名的情况）
+function isHeicKeyOrName(key, name) {
+  const s = String(key || name || "").toLowerCase();
+  if (/\.(heic|heif)\b/.test(s)) return true;
+  if (/^mmeexport\d+/i.test(String(name || ""))) return true;
+  return false;
+}
+
 // 缩略图加载失败时给出明确提示，而不是只显示浏览器默认的破碎图标。
 function onCosImgError(img, name) {
   if (!img) return;
   img.classList.add("cos-img--err");
-  if (img.nextElementSibling && img.nextElementSibling.classList.contains("cos-thumb__errtxt")) return;
+  const parent = img.parentElement;
+  if (parent && parent.querySelector(".cos-thumb__errtxt")) return;
   const tip = document.createElement("div");
   tip.className = "cos-thumb__errtxt";
   tip.title = name || "图片加载失败";
-  tip.textContent = "无法预览";
-  img.parentElement.appendChild(tip);
+  tip.textContent = isHeicKeyOrName(img.getAttribute("data-cos-key"), name) ? "HEIC 无法预览" : "无法预览";
+  if (parent) parent.appendChild(tip);
 }
 
 // 归一化照片数据，确保挂回项目对象，便于渲染与保存
@@ -8440,6 +8449,38 @@ async function cosLightboxLoadKey(key) {
   return url;
 }
 
+// 灯箱大图加载失败时，对疑似 HEIC/HEIF 尝试前端转码为 JPG 预览（PakePlus/WebView2 不支持 HEIC）。
+// 成功则替换为 blob URL，失败保留错误提示。设 heicTried 标志防止重复转码。
+async function cosLightboxTryRecover(img, key, name) {
+  if (!img || img.dataset.heicTried === "1") return;
+  img.dataset.heicTried = "1";
+  if (!isHeicKeyOrName(key, name)) return;
+  const box = img.closest(".cos-lightbox");
+  const tip = box ? box.querySelector(".cos-lightbox__tip") : null;
+  if (tip) {
+    tip.className = "cos-lightbox__tip cos-lightbox__tip--err";
+    tip.textContent = "正在将 HEIC 转换为 JPG…";
+  }
+  try {
+    const blob = await getCosProxyBlob(key);
+    if (!blob) throw new Error("无法获取原图");
+    const jpg = await convertHeicToJpeg(blob);
+    const url = URL.createObjectURL(jpg);
+    img.src = url;
+    img.classList.remove("cos-lightbox__img--err");
+    if (tip) {
+      tip.className = "cos-lightbox__tip";
+      tip.textContent = "HEIC 已转码为 JPG 预览（点击空白关闭）";
+    }
+  } catch (e) {
+    console.warn("灯箱 HEIC 转码失败：", e);
+    if (tip) {
+      tip.className = "cos-lightbox__tip cos-lightbox__tip--err";
+      tip.textContent = "HEIC 转码失败，请下载原图查看";
+    }
+  }
+}
+
 function openCosLightbox(url, key, name) {
   if (!url) return;
   let el = document.getElementById("cosLightbox");
@@ -8476,7 +8517,7 @@ function openCosLightbox(url, key, name) {
   el.className = "cos-lightbox";
   el.onclick = () => closeCosLightbox();
   el.innerHTML = `${prev}${next}${counter}` +
-    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="this.classList.add('cos-lightbox__img--err');if(this.nextElementSibling){this.nextElementSibling.className='cos-lightbox__tip cos-lightbox__tip--err';this.nextElementSibling.textContent='无法预览此图片，可能是浏览器不支持的格式（如 HEIC/HEIF）'}">` +
+    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="const tip=this.closest('.cos-lightbox')&&this.closest('.cos-lightbox').querySelector('.cos-lightbox__tip');this.classList.add('cos-lightbox__img--err');if(tip){tip.className='cos-lightbox__tip cos-lightbox__tip--err';tip.textContent='无法预览此图片，可能是浏览器不支持的格式（如 HEIC/HEIF）'};cosLightboxTryRecover(this,'${esc(key)}','${esc(name)}')">` +
     `${zoomCtl}` +
     `<div class="cos-lightbox__tip">点击空白关闭 · 双击/滚轮缩放 · 拖拽平移${multi ? " · 左右滑动翻页" : ""}</div>${dlBtn}`;
   // 绑定图片交互（滚轮/拖拽/双击）
@@ -27022,7 +27063,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v4ac56fe5";
+  const APP_VERSION = "v924124bb";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
