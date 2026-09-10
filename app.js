@@ -7867,10 +7867,10 @@ function onCosImgError(img, name, key) {
         } else if (msg.includes("网络") || msg.includes("fetch")) {
           t.textContent = "网络错误";
         } else {
-          // 调试阶段：显示具体错误名+信息，便于定位 PakePlus 电脑版差异
+          // 调试阶段：显示完整错误信息（含 status/body），便于定位 PakePlus 电脑版差异
           let detail = msg;
           if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
-          t.textContent = (detail || "代理失败").slice(0, 60);
+          t.textContent = (detail || "代理失败").slice(0, 100);
           t.title = detail;
         }
       }
@@ -8194,7 +8194,19 @@ async function getCosProxyBlob(key) {
       body: { key },
     });
     if (error) {
-      const detail = error.name ? `[${error.name}] ${error.message || ""}` : String(error.message || error);
+      let detail = error.name ? `[${error.name}] ${error.message || ""}` : String(error.message || error);
+      // 把 Edge Function 返回的 HTTP 状态、code、body 也带出来，便于 PakePlus 诊断
+      try {
+        const ctx = error.context;
+        if (ctx) {
+          const parts = [detail];
+          if (ctx.status) parts.push(`status=${ctx.status}`);
+          if (ctx.statusText) parts.push(ctx.statusText);
+          const body = typeof ctx.body === "string" ? ctx.body : (ctx.json ? JSON.stringify(ctx.json) : "");
+          if (body) parts.push(String(body).slice(0, 160));
+          detail = parts.join(" | ");
+        }
+      } catch (_) {}
       throw new Error(detail || "调用 cos-proxy 失败");
     }
     if (!data || !isBlobLike(data)) {
@@ -8676,10 +8688,10 @@ async function cosLightboxTryRecover(img, key, name) {
       } else if (msg.includes("转码") || msg.includes("HEIC")) {
         tip.textContent = "HEIC 转码失败，请下载原图查看";
       } else {
-        // 调试阶段：把具体错误信息显示出来，便于定位 PakePlus 电脑版差异
+        // 调试阶段：把完整错误信息显示出来（含 status/body），便于定位 PakePlus 电脑版差异
         let detail = msg;
         if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
-        tip.textContent = (detail || "无法预览，请下载原图查看").slice(0, 120);
+        tip.textContent = (detail || "无法预览，请下载原图查看").slice(0, 200);
       }
     }
   }
@@ -27273,7 +27285,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va9fc0221";
+  const APP_VERSION = "v8f5a8809";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
