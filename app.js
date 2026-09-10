@@ -8173,17 +8173,26 @@ async function getCosProxyBlob(key) {
 
   // 优先用 supabase-js 官方 invoke：自动带 Authorization、自动刷新过期 token，
   // 与 cos-sign / sb.from 走同一条 session 通道，在 PakePlus 中更稳定。
+  // 注意：supabase-js@2.112.3 的 functions.invoke 不支持 responseType 选项，
+  // 只能根据响应 Content-Type 自动解析；cos-proxy 已统一返回 application/octet-stream，
+  // 因此 data 会被自动解析为 Blob。
   async function viaInvoke() {
-    const { data, error } = await sb.functions.invoke("cos-proxy", {
+    const { data, error, response } = await sb.functions.invoke("cos-proxy", {
       body: { key },
-      responseType: "blob",
     });
     if (error) throw error;
     if (!data || !(data instanceof Blob)) throw new Error("代理返回格式异常");
+    // 用 Edge Function 透传的原始 Content-Type 恢复 blob.type，便于后续 HEIC/JPG 判断
+    try {
+      const origCt = response && response.headers && response.headers.get("X-Original-Content-Type");
+      if (origCt && (!data.type || data.type === "application/octet-stream")) {
+        Object.defineProperty(data, "type", { value: origCt, writable: false, configurable: true });
+      }
+    } catch (_) {}
     return data;
   }
 
-  // 备用：手动 fetch（兼容旧版 supabase-js 或不支持 responseType 的环境）
+  // 备用：手动 fetch（兼容 supabase-js 内部异常 fallback）
   async function viaManualFetch() {
     const token = await _getSupabaseAccessToken();
     if (!token) throw new Error("未获取到登录令牌，请重新登录");
@@ -8203,8 +8212,8 @@ async function getCosProxyBlob(key) {
       return await viaInvoke();
     } catch (e) {
       const msg = String(e && e.message ? e.message : e);
-      // 旧版 supabase-js 可能不支持 responseType，直接走手动 fetch
-      if (msg.includes("responseType") || msg.includes("not supported") || msg.includes("Unknown responseType")) {
+      // invoke 失败（如网络/解析异常）fallback 到手动 fetch
+      if (/Failed to send|fetch|network|格式异常|Unexpected/i.test(msg)) {
         return await viaManualFetch();
       }
       throw e;
@@ -27243,7 +27252,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v6d2ac422";
+  const APP_VERSION = "v2fa84877";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
