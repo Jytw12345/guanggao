@@ -7796,12 +7796,27 @@ async function convertHeicToJpeg(file, quality = 0.92) {
   return new File([out], base + ".jpg", { type: "image/jpeg" });
 }
 
-// 根据 key 或文件名猜测是否为 HEIC/HEIF（含微信导出 mmeexport* 无扩展名的情况）
+// 根据 key 或文件名猜测是否为 HEIC/HEIF（仅扩展名；微信 mmeexport* 无扩展名不再瞎猜）
 function isHeicKeyOrName(key, name) {
-  const s = String(key || name || "").toLowerCase();
-  if (/\.(heic|heif)\b/.test(s)) return true;
-  if (/^mmeexport\d+/i.test(String(name || ""))) return true;
-  return false;
+  return /\.(heic|heif)\b/i.test(String(key || name || ""));
+}
+
+// 读取文件头判断真实格式（HEIC/HEIF 在 offset 4 处有 'ftyp'，且 major brand 为 heic/mif1 等）
+async function isHeicBlob(blob) {
+  if (!blob) return false;
+  const t = (blob.type || "").toLowerCase();
+  if (t === "image/heic" || t === "image/heif") return true;
+  try {
+    const buf = await blob.slice(0, 20).arrayBuffer();
+    const arr = new Uint8Array(buf);
+    if (arr.length < 12) return false;
+    const ftyp = String.fromCharCode(arr[4], arr[5], arr[6], arr[7]);
+    if (ftyp !== "ftyp") return false;
+    const brand = String.fromCharCode(...arr.slice(8, 12));
+    return /^(heic|heix|hevc|heim|heis|hevm|hevs|mif1|msf1)$/i.test(brand);
+  } catch (e) {
+    return false;
+  }
 }
 
 // 缩略图加载失败时给出明确提示，并尝试经 cos-proxy 代理取 blob 显示（PakePlus/WebView2 常无法直连 COS）。
@@ -7819,7 +7834,7 @@ function onCosImgError(img, name, key) {
   // 云端模式：直连失败后，用 Supabase 域名代理拉取字节并转为 blob URL 显示（绕过 WebView2 对 myqcloud 的限制）。
   if (MODE !== "cloud" || !k || img.dataset.proxyTried === "1") return;
   img.dataset.proxyTried = "1";
-  getCosProxyBlob(k).then((blob) => {
+  getCosProxyBlob(k).then(async (blob) => {
     if (!blob) return;
     const url = URL.createObjectURL(blob);
     img.src = url;
@@ -7828,11 +7843,19 @@ function onCosImgError(img, name, key) {
       const t = parent.querySelector(".cos-thumb__errtxt");
       if (t) t.remove();
     }
-    // HEIC blob 在 WebView2 里仍可能无法解码，用 heic2any 兜底再转一次
-    if (isHeicKeyOrName(k, name) && typeof heic2any === "function") {
-      convertHeicToJpeg(blob).then((jpg) => { img.src = URL.createObjectURL(jpg); }).catch(() => {});
+    // 真实 HEIC blob 在 WebView2 里无法解码，用 heic2any 兜底再转一次；
+    // 微信 mmeexport* 无扩展名可能是 JPEG，不能靠文件名瞎猜。
+    if (typeof heic2any === "function" && await isHeicBlob(blob)) {
+      try {
+        const jpg = await convertHeicToJpeg(blob);
+        img.src = URL.createObjectURL(jpg);
+      } catch (e) {
+        console.warn("缩略图 HEIC 转码失败：", e);
+      }
     }
-  }).catch(() => {});
+  }).catch((e) => {
+    console.warn("缩略图代理加载失败：", e);
+  });
 }
 
 // 归一化照片数据，确保挂回项目对象，便于渲染与保存
@@ -8468,21 +8491,22 @@ async function cosLightboxLoadKey(key) {
 }
 
 // 灯箱大图加载失败时，先尝试经 cos-proxy 代理取 blob URL 显示（PakePlus/WebView2 常无法直连 COS）。
-// 若原图是 HEIC/HEIF，再用 heic2any 转 JPG。设 recoverTried 标志防止重复。
+// 若原图真实格式是 HEIC/HEIF，再用 heic2any 转 JPG。设 recoverTried 标志防止重复。
 async function cosLightboxTryRecover(img, key, name) {
   if (!img || img.dataset.recoverTried === "1" || !key) return;
   img.dataset.recoverTried = "1";
   const box = img.closest(".cos-lightbox");
   const tip = box ? box.querySelector(".cos-lightbox__tip") : null;
   if (tip) {
-    tip.className = "cos-lightbox__tip cos-lightbox__tip--err";
-    tip.textContent = isHeicKeyOrName(key, name) ? "正在将 HEIC 转换为 JPG…" : "正在通过代理加载…";
+    tip.className = "cos-lightbox__tip";
+    tip.textContent = "正在通过代理加载…";
   }
   try {
     let blob = await getCosProxyBlob(key);
     if (!blob) throw new Error("无法获取原图");
-    // HEIC 需要再转一次才能在 WebView2 里显示
-    if (isHeicKeyOrName(key, name) && typeof heic2any === "function") {
+    if (await isHeicBlob(blob)) {
+      if (typeof heic2any !== "function") throw new Error("缺少 heic2any 转码库");
+      if (tip) tip.textContent = "检测到 HEIC，正在转码为 JPG…";
       blob = await convertHeicToJpeg(blob);
     }
     const url = URL.createObjectURL(blob);
@@ -8490,13 +8514,22 @@ async function cosLightboxTryRecover(img, key, name) {
     img.classList.remove("cos-lightbox__img--err");
     if (tip) {
       tip.className = "cos-lightbox__tip";
-      tip.textContent = isHeicKeyOrName(key, name) ? "HEIC 已转码为 JPG 预览（点击空白关闭）" : "已加载（点击空白关闭）";
+      tip.textContent = "已加载（点击空白关闭）";
     }
   } catch (e) {
     console.warn("灯箱代理加载失败：", e);
+    const msg = String(e && e.message ? e.message : e);
     if (tip) {
       tip.className = "cos-lightbox__tip cos-lightbox__tip--err";
-      tip.textContent = isHeicKeyOrName(key, name) ? "HEIC 转码失败，请下载原图查看" : "无法预览，请下载原图查看";
+      if (msg.includes("heic2any") || msg.includes("转码库")) {
+        tip.textContent = "HEIC 转码库未加载，请下载原图查看";
+      } else if (msg.includes("转码") || msg.includes("HEIC")) {
+        tip.textContent = "HEIC 转码失败，请下载原图查看";
+      } else if (msg.includes("无法获取原图") || msg.includes("401") || msg.includes("403")) {
+        tip.textContent = "代理加载失败，请检查登录态或网络";
+      } else {
+        tip.textContent = "无法预览，请下载原图查看";
+      }
     }
   }
 }
@@ -8538,7 +8571,7 @@ function openCosLightbox(url, key, name) {
   el.className = "cos-lightbox";
   el.onclick = () => closeCosLightbox();
   el.innerHTML = `${prev}${next}${counter}` +
-    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="const tip=this.closest('.cos-lightbox')&&this.closest('.cos-lightbox').querySelector('.cos-lightbox__tip');this.classList.add('cos-lightbox__img--err');if(tip){tip.className='cos-lightbox__tip cos-lightbox__tip--err';tip.textContent='无法预览此图片，可能是浏览器不支持的格式（如 HEIC/HEIF）'};cosLightboxTryRecover(this,'${esc(key)}','${esc(name)}')">` +
+    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="const tip=this.closest('.cos-lightbox')&&this.closest('.cos-lightbox').querySelector('.cos-lightbox__tip');this.classList.add('cos-lightbox__img--err');if(tip){tip.className='cos-lightbox__tip cos-lightbox__tip--err';tip.textContent='无法预览，尝试通过代理加载…'};cosLightboxTryRecover(this,'${esc(key)}','${esc(name)}')">` +
     `${zoomCtl}` +
     `<div class="cos-lightbox__tip">点击空白关闭 · 双击/滚轮缩放 · 拖拽平移${multi ? " · 左右滑动翻页" : ""}</div>${dlBtn}`;
   // 绑定图片交互（滚轮/拖拽/双击）
@@ -27089,7 +27122,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vf265434a";
+  const APP_VERSION = "v056e4412";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
