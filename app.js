@@ -7866,6 +7866,12 @@ function onCosImgError(img, name, key) {
           t.textContent = `代理失败[${m ? m[1] : "?"}]`;
         } else if (msg.includes("网络") || msg.includes("fetch")) {
           t.textContent = "网络错误";
+        } else {
+          // 调试阶段：显示具体错误名+信息，便于定位 PakePlus 电脑版差异
+          let detail = msg;
+          if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
+          t.textContent = (detail || "代理失败").slice(0, 60);
+          t.title = detail;
         }
       }
     }
@@ -8159,6 +8165,13 @@ async function removeCosPhoto(projectId, kind, key) {
   refreshPhotosUI(p);
 }
 
+// 判断一个值是否为 Blob/File 对象。
+// WebView2/某些 PakePlus 环境中，不同 JS context 创建的 Blob 会导致 `instanceof Blob` 失效，
+// 因此用特征判断（size/type/slice）更稳。
+function isBlobLike(v) {
+  return v && typeof v === "object" && typeof v.size === "number" && typeof v.type === "string" && typeof v.slice === "function";
+}
+
 // 通过 Supabase Edge Function（cos-proxy）取 COS 对象字节，绕过私有桶的 CORS 限制。
 // 失败时 throw Error（带状态码/状态文本），便于上层给出具体提示。
 // 注意：PakePlus 等 WebView2 环境中，sb.auth.getSession() 可能拿不到有效 token，
@@ -8180,8 +8193,13 @@ async function getCosProxyBlob(key) {
     const { data, error, response } = await sb.functions.invoke("cos-proxy", {
       body: { key },
     });
-    if (error) throw error;
-    if (!data || !(data instanceof Blob)) throw new Error("代理返回格式异常");
+    if (error) {
+      const detail = error.name ? `[${error.name}] ${error.message || ""}` : String(error.message || error);
+      throw new Error(detail || "调用 cos-proxy 失败");
+    }
+    if (!data || !isBlobLike(data)) {
+      throw new Error(`代理返回格式异常: ${data === null ? "null" : typeof data} size=${data && data.size} type=${data && data.type}`);
+    }
     // 用 Edge Function 透传的原始 Content-Type 恢复 blob.type，便于后续 HEIC/JPG 判断
     try {
       const origCt = response && response.headers && response.headers.get("X-Original-Content-Type");
@@ -8658,7 +8676,10 @@ async function cosLightboxTryRecover(img, key, name) {
       } else if (msg.includes("转码") || msg.includes("HEIC")) {
         tip.textContent = "HEIC 转码失败，请下载原图查看";
       } else {
-        tip.textContent = "无法预览，请下载原图查看";
+        // 调试阶段：把具体错误信息显示出来，便于定位 PakePlus 电脑版差异
+        let detail = msg;
+        if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
+        tip.textContent = (detail || "无法预览，请下载原图查看").slice(0, 120);
       }
     }
   }
@@ -27252,7 +27273,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2fa84877";
+  const APP_VERSION = "va9fc0221";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
