@@ -7819,27 +7819,47 @@ async function isHeicBlob(blob) {
   }
 }
 
+// 通知 SW 丢弃某个对象在 COS 运行时缓存里的条目。
+// 浏览器对 <img> 的跨域请求是 no-cors，SW 拿到的响应是 opaque，无法判断成败，
+// 所以一次 403（多为过期签名）也会被缓存下来；此后带新签名的请求会一直命中这份坏缓存，
+// 表现为该照片「每次预览都先失败、再靠代理救回来」。失败时主动失效即可自愈。
+function invalidateCosCache(key) {
+  try {
+    const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+    if (!sw || !key || !_cosViewHost) return;
+    sw.postMessage({ type: "COS_CACHE_DELETE", url: `https://${_cosViewHost}/${key}` });
+  } catch (_) {}
+}
+
 // 缩略图加载失败时给出明确提示，并尝试经 cos-proxy 代理取 blob 显示（PakePlus/WebView2 常无法直连 COS）。
 function onCosImgError(img, name, key) {
   if (!img) return;
   img.classList.add("cos-img--err");
   const parent = img.parentElement;
-  if (parent && parent.querySelector(".cos-thumb__errtxt")) return;
   const k = key || img.getAttribute("data-cos-key") || "";
-  const tip = document.createElement("div");
-  tip.className = "cos-thumb__errtxt";
-  tip.title = name || "图片加载失败";
-  tip.textContent = isHeicKeyOrName(k, name) ? "HEIC 无法预览" : "无法预览";
-  if (parent) parent.appendChild(tip);
-  // 云端模式：直连失败后，用 Supabase 域名代理拉取字节并转为 blob URL 显示（绕过 WebView2 对 myqcloud 的限制）。
-  if (MODE !== "cloud" || !k || img.dataset.proxyTried === "1") return;
+  // 还能走代理兜底时，先显示「加载中…」，不要再闪一下「无法预览」让人误以为图片坏了
+  const canRecover = MODE === "cloud" && !!k && img.dataset.proxyTried !== "1";
+  let tip = parent ? parent.querySelector(".cos-thumb__errtxt") : null;
+  if (!tip && parent) {
+    tip = document.createElement("div");
+    tip.className = "cos-thumb__errtxt";
+    parent.appendChild(tip);
+  }
+  if (tip) {
+    tip.title = name || "图片加载失败";
+    tip.textContent = canRecover ? "加载中…" : (isHeicKeyOrName(k, name) ? "HEIC 无法预览" : "无法预览");
+  }
+  if (!canRecover) return; // 代理已试过仍失败（或非云端模式）：保留错误态，不再重复请求
+  console.warn("[cos] 直连失败，转代理兜底：", k, img.currentSrc || img.src);
+  invalidateCosCache(k); // 清掉可能被缓存的失败响应，让下次直连能真正命中新图
   img.dataset.proxyTried = "1";
   getCosProxyBlob(k).then(async (blob) => {
-    if (!blob) return;
+    if (!blob) throw new Error("代理返回空数据");
     const url = URL.createObjectURL(blob);
     img.src = url;
     img.classList.remove("cos-img--err");
-    if (parent) {
+    if (tip) tip.remove();
+    else if (parent) {
       const t = parent.querySelector(".cos-thumb__errtxt");
       if (t) t.remove();
     }
@@ -7882,6 +7902,19 @@ function onCosImgError(img, name, key) {
   });
 }
 
+// 给照片 <img> 设置直连 URL。顺序固定为「新签名 URL → 遗留公开 URL → 裸 URL 碰 SW 缓存」：
+// 遗留的 it.url 是早期公开桶地址，桶转私有后必然 403；若把它排在最前（历史 bug），
+// 这批老照片每次预览都会先闪「无法预览」，再等代理几秒后捞回来。
+// 三个都拿不到时不要再赋空串（会去请求当前页面地址再解码失败），直接进失败兜底走代理。
+function setCosImgSrc(img, signed, legacy, fallback) {
+  const url = signed || legacy || fallback;
+  if (!url) {
+    onCosImgError(img, img.alt, img.getAttribute("data-cos-key") || "");
+    return;
+  }
+  img.src = url;
+}
+
 // 归一化照片数据，确保挂回项目对象，便于渲染与保存
 function normalizePhotos(p) {
   let ph = (p && (p.projectPhotos || p.project_photos)) || null;
@@ -7895,9 +7928,31 @@ function normalizePhotos(p) {
 }
 
 // 私有桶：按 key 缓存签名下载 URL（避免每张图重复请求），并缓存 host 供离线 fallback
-let _cosViewCache = {};
+// 注意：cos-sign 的 GET 签名有效期只有 1h（见 supabase/functions/cos-sign），
+// 缓存必须带过期时间，否则长时间不刷新的会话里会一直拿「过期签名」直连 →
+// 403 → 缩略图先显示「无法预览」，几秒后才被代理兜底救回来。
+let _cosViewCache = {}; // key -> { url, exp }（exp 为毫秒时间戳，0 表示无过期信息）
 let _cosViewHost = "";
 try { _cosViewHost = localStorage.getItem("cosViewHost") || ""; } catch (_) {}
+
+const COS_URL_SAFETY_MS = 60 * 1000;        // 提前 1 分钟视为过期，避免临界点请求失败
+const COS_URL_FALLBACK_TTL_MS = 50 * 60 * 1000; // 解析不出签名时间时的兜底有效期
+
+// 从预签名 URL 的 q-sign-time=<起>;<止> 里解析真实过期时间（毫秒），失败返回 0
+function cosUrlExpiry(url) {
+  const m = /q-sign-time=(\d+)(?:;|%3B)(\d+)/i.exec(String(url || ""));
+  if (!m) return 0;
+  const end = Number(m[2]);
+  return end > 0 ? end * 1000 : 0;
+}
+
+// 取缓存里的签名 URL；已过期则顺手清掉，返回空串让调用方重新签名
+function cosCachedUrl(key) {
+  const it = _cosViewCache[key];
+  if (!it) return "";
+  if (it.exp && Date.now() >= it.exp) { delete _cosViewCache[key]; return ""; }
+  return it.url || "";
+}
 
 // 批量换取预签名 URL。action=put 用于上传直传，action=get 用于私有桶下载查看
 async function cosGetSignedUrls(items, action = "put") {
@@ -7912,8 +7967,8 @@ async function cosGetSignedUrls(items, action = "put") {
 async function cosGetViewUrls(keys) {
   const result = {};
   if (!keys || !keys.length) return result;
-  keys.forEach((k) => { if (_cosViewCache[k]) result[k] = _cosViewCache[k]; });
-  const need = keys.filter((k) => !_cosViewCache[k]);
+  keys.forEach((k) => { const u = cosCachedUrl(k); if (u) result[k] = u; });
+  const need = keys.filter((k) => !cosCachedUrl(k));
   if (need.length && MODE === "cloud") {
     try {
       const { data, error } = await sb.functions.invoke("cos-sign", {
@@ -7921,7 +7976,11 @@ async function cosGetViewUrls(keys) {
       });
       if (!error && data && Array.isArray(data.items)) {
         data.items.forEach((it) => {
-          if (it.key && it.url) { _cosViewCache[it.key] = it.url; result[it.key] = it.url; }
+          if (it.key && it.url) {
+            const exp = (cosUrlExpiry(it.url) || (Date.now() + COS_URL_FALLBACK_TTL_MS)) - COS_URL_SAFETY_MS;
+            _cosViewCache[it.key] = { url: it.url, exp };
+            result[it.key] = it.url;
+          }
         });
         if (data.host) {
           _cosViewHost = data.host;
@@ -8658,7 +8717,7 @@ function _cosLbArg(keys, currentKey) {
 
 // 取某 key 的查看 URL（优先缓存，否则现取签名 URL，断网回退裸 URL）
 async function cosLightboxLoadKey(key) {
-  let url = _cosViewCache[key] || "";
+  let url = cosCachedUrl(key);
   if (!url) {
     try {
       const m = await cosGetViewUrls([key]);
@@ -8681,6 +8740,7 @@ async function cosLightboxTryRecover(img, key, name) {
     tip.className = "cos-lightbox__tip";
     tip.textContent = "正在通过代理加载…";
   }
+  invalidateCosCache(key); // 顺手清掉 SW 里可能缓存的失败响应，下次直连即恢复
   try {
     let blob = await getCosProxyBlob(key);
     if (!blob) throw new Error("无法获取原图");
@@ -8767,7 +8827,7 @@ function openCosLightbox(url, key, name) {
   el.className = "cos-lightbox";
   el.onclick = () => closeCosLightbox();
   el.innerHTML = `${prev}${next}${counter}` +
-    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="const tip=this.closest('.cos-lightbox')&&this.closest('.cos-lightbox').querySelector('.cos-lightbox__tip');this.classList.add('cos-lightbox__img--err');if(tip){tip.className='cos-lightbox__tip cos-lightbox__tip--err';tip.textContent='无法预览，尝试通过代理加载…'};cosLightboxTryRecover(this,'${esc(key)}','${esc(name)}')">` +
+    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="const tip=this.closest('.cos-lightbox')&&this.closest('.cos-lightbox').querySelector('.cos-lightbox__tip');this.classList.add('cos-lightbox__img--err');if(tip){tip.className='cos-lightbox__tip cos-lightbox__tip--err';tip.textContent='图片加载中…'};cosLightboxTryRecover(this,'${esc(key)}','${esc(name)}')">` +
     `${zoomCtl}` +
     `<div class="cos-lightbox__tip">点击空白关闭 · 双击/滚轮缩放 · 拖拽平移${multi ? " · 左右滑动翻页" : ""}</div>${dlBtn}`;
   // 绑定图片交互（滚轮/拖拽/双击）
@@ -8823,7 +8883,8 @@ async function fillPhotoImages(p) {
     const legacy = img.getAttribute("data-legacy-url") || ""; // 老公开桶遗留的裸 URL
     const signed = viewMap[k] || "";
     const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
-    img.src = legacy || signed || fallback;
+    // 顺序必须是「新签名 URL → 遗留公开 URL → 裸 URL」，理由见 setCosImgSrc 注释
+    setCosImgSrc(img, signed, legacy, fallback);
     img.onerror = () => onCosImgError(img, img.alt, k);
   });
 }
@@ -9595,7 +9656,8 @@ async function fillProjectContentPhotos(p, rootSelector = ".proj-content-detail"
     const legacy = img.getAttribute("data-legacy-url") || "";
     const signed = viewMap[k] || "";
     const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
-    img.src = legacy || signed || fallback;
+    // 顺序必须是「新签名 URL → 遗留公开 URL → 裸 URL」，理由见 setCosImgSrc 注释
+    setCosImgSrc(img, signed, legacy, fallback);
     img.onerror = () => onCosImgError(img, img.alt, k);
   });
 }
@@ -9683,8 +9745,11 @@ async function fillFormPhotos() {
     const legacy = img.getAttribute("data-legacy-url") || "";
     const signed = viewMap[k] || "";
     const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
-    img.src = legacy || signed || fallback;
-    img.onerror = () => img.classList.add("cos-img--err");
+    // 顺序必须是「新签名 URL → 遗留公开 URL → 裸 URL」，理由见 setCosImgSrc 注释
+    setCosImgSrc(img, signed, legacy, fallback);
+    // 这里不能用「只加个错误类」的裸处理：会覆盖掉标签上的 inline onerror，
+    // 导致表单里已有照片直连失败时既不提示也无法走代理兜底（表现为一片破图）。
+    img.onerror = () => onCosImgError(img, img.alt, k);
   });
 }
 
@@ -27318,7 +27383,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v13a81e10";
+  const APP_VERSION = "v61e2e2c9";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

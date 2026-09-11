@@ -3,9 +3,12 @@
 // - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
 //   用户点「立即更新」或下次打开即生效。
 // 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
-const CACHE = "ad-install-v13a81e10";
-const VERSION = "v13a81e10";
-const COS_CACHE = "ad-install-cos-" + VERSION; // 腾讯云 COS 图片运行时缓存，支持现场离线看图
+const CACHE = "ad-install-v61e2e2c9";
+const VERSION = "v61e2e2c9";
+// 腾讯云 COS 图片运行时缓存，支持现场离线看图。
+// 注意：故意不带版本号 —— 它存的是业务照片（key 唯一且内容不可变），
+// 若跟着版本号走，每次 App 更新都会把离线照片全清掉，导致现场断网时一片「无法预览」。
+const COS_CACHE = "ad-install-cos";
 
 const ASSETS = [
   "./",
@@ -44,7 +47,12 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     Promise.all([
-      caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))),
+      // 清掉旧版本的应用资源缓存与历史版本化的 COS 缓存；保留当前 COS 照片缓存（离线看图不被版本更新清空）
+      caches.keys().then((keys) =>
+        Promise.all(
+          keys.filter((k) => k !== CACHE && k !== COS_CACHE).map((k) => caches.delete(k))
+        )
+      ),
       self.clients.claim()
     ])
   );
@@ -137,6 +145,12 @@ async function handleFetch(req) {
   }
 }
 
+// 从预签名 URL 的 q-sign-time=<起>;<止> 取过期时间（秒）；解析不到返回 0
+function cosSigEnd(url) {
+  const m = /q-sign-time=(\d+)(?:;|%3B)(\d+)/i.exec(String(url || ""));
+  return m ? Number(m[2]) : 0;
+}
+
 // 腾讯云 COS 图片：缓存优先（现场弱网/离线可看图），网络可达时顺带回源更新
 async function handleCosImage(req) {
   let cache = null;
@@ -150,9 +164,15 @@ async function handleCosImage(req) {
       if (hit) return hit;
     } catch (_) { /* 读取异常继续回源 */ }
   }
+  const sigEnd = cosSigEnd(req.url);
+  const sigExpired = sigEnd > 0 && Date.now() / 1000 > sigEnd;
   try {
     const res = await fetch(req); // 仍用带签名的原始 URL 回源
-    if (cache) { try { cache.put(normReq, res.clone()); } catch (_) { /* 写入失败不影响本次 */ } }
+    // 关键：<img> 走 no-cors，SW 拿到的是 opaque 响应，无法判断成败。
+    // 若这次带的是「已过期签名」，opaque 里装的其实是 403 错误页，一旦写入缓存，
+    // 这张图之后每次都会命中坏缓存 → 永远显示失败（只能靠代理救），且跨会话不恢复。
+    // 因此签名已过期时不写缓存。
+    if (cache && !sigExpired) { try { cache.put(normReq, res.clone()); } catch (_) { /* 写入失败不影响本次 */ } }
     return res;
   } catch (_) {
     if (cache) {
@@ -171,5 +191,21 @@ self.addEventListener("message", (e) => {
   }
   if (e.data && e.data.type === "SKIP_WAITING") {
     self.skipWaiting();
+  }
+  // 页面侧发现某张图直连失败时，请求丢弃该对象的 COS 缓存条目（可能缓存了一次失败响应），
+  // 使下一次直连能用新签名真正拿到图片，而不是永远命中坏缓存。
+  if (e.data && e.data.type === "COS_CACHE_DELETE" && e.data.url) {
+    e.waitUntil((async () => {
+      try {
+        const u = new URL(e.data.url);
+        const normReq = new Request(u.origin + u.pathname);
+        const keys = await caches.keys();
+        await Promise.all(
+          keys
+            .filter((k) => k === COS_CACHE)
+            .map((k) => caches.open(k).then((c) => c.delete(normReq)).catch(() => {}))
+        );
+      } catch (_) { /* 忽略 */ }
+    })());
   }
 });
