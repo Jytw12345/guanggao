@@ -7831,38 +7831,31 @@ function invalidateCosCache(key) {
   } catch (_) {}
 }
 
-// 缩略图加载失败时给出明确提示，并尝试经 cos-proxy 代理取 blob 显示（PakePlus/WebView2 常无法直连 COS）。
+// 缩略图加载失败时保持骨架态并尝试经 cos-proxy 代理取 blob 显示（PakePlus/WebView2 常无法直连 COS）。
+// 处理顺序：还能兜底 → 继续显示骨架圈（不闪错误文案）；兜底也失败 → 才落「无法预览」。
 function onCosImgError(img, name, key) {
   if (!img) return;
   img.classList.add("cos-img--err");
-  const parent = img.parentElement;
   const k = key || img.getAttribute("data-cos-key") || "";
-  // 还能走代理兜底时，先显示「加载中…」，不要再闪一下「无法预览」让人误以为图片坏了
   const canRecover = MODE === "cloud" && !!k && img.dataset.proxyTried !== "1";
-  let tip = parent ? parent.querySelector(".cos-thumb__errtxt") : null;
-  if (!tip && parent) {
-    tip = document.createElement("div");
-    tip.className = "cos-thumb__errtxt";
-    parent.appendChild(tip);
+  if (!canRecover) {
+    // 代理已试过仍失败（或非云端模式）：撤骨架、落明确错误文案
+    setCosThumbPending(img, false);
+    cosThumbTip(img, name, isHeicKeyOrName(k, name) ? "HEIC 无法预览" : "无法预览");
+    return;
   }
-  if (tip) {
-    tip.title = name || "图片加载失败";
-    tip.textContent = canRecover ? "加载中…" : (isHeicKeyOrName(k, name) ? "HEIC 无法预览" : "无法预览");
-  }
-  if (!canRecover) return; // 代理已试过仍失败（或非云端模式）：保留错误态，不再重复请求
   console.warn("[cos] 直连失败，转代理兜底：", k, img.currentSrc || img.src);
   invalidateCosCache(k); // 清掉可能被缓存的失败响应，让下次直连能真正命中新图
   img.dataset.proxyTried = "1";
+  setCosThumbPending(img, true); // 兜底期间维持骨架态，图回来后直接替换，无破图中转
   getCosProxyBlob(k).then(async (blob) => {
     if (!blob) throw new Error("代理返回空数据");
     const url = URL.createObjectURL(blob);
     img.src = url;
     img.classList.remove("cos-img--err");
-    if (tip) tip.remove();
-    else if (parent) {
-      const t = parent.querySelector(".cos-thumb__errtxt");
-      if (t) t.remove();
-    }
+    const oldTip = img.parentElement && img.parentElement.querySelector(".cos-thumb__errtxt");
+    if (oldTip) oldTip.remove();
+    setCosThumbPending(img, false);
     // 真实 HEIC blob 在 WebView2 里无法解码，用 heic2any 兜底再转一次；
     // 微信 mmeexport* 无扩展名可能是 JPEG，不能靠文件名瞎猜。
     if (typeof heic2any === "function" && await isHeicBlob(blob)) {
@@ -7876,30 +7869,52 @@ function onCosImgError(img, name, key) {
   }).catch((e) => {
     console.warn("缩略图代理加载失败：", e);
     const msg = String(e && e.message ? e.message : e);
-    if (parent) {
-      const t = parent.querySelector(".cos-thumb__errtxt");
-      if (t) {
-        if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
-          // 调试阶段：显示完整 401 信息（含 Edge Function 返回的 code/body），便于定位 PakePlus 电脑版差异
-          let detail = msg.includes("401") ? msg : `[401] ${msg}`;
-          if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
-          t.textContent = (detail || "登录失效").slice(0, 100);
-          t.title = detail;
-        } else if (msg.includes("代理加载失败")) {
-          const m = msg.match(/\[(\d+)\]/);
-          t.textContent = `代理失败[${m ? m[1] : "?"}]`;
-        } else if (msg.includes("网络") || msg.includes("fetch")) {
-          t.textContent = "网络错误";
-        } else {
-          // 调试阶段：显示完整错误信息（含 status/body），便于定位 PakePlus 电脑版差异
-          let detail = msg;
-          if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
-          t.textContent = (detail || "代理失败").slice(0, 100);
-          t.title = detail;
-        }
-      }
+    setCosThumbPending(img, false);
+    const t = cosThumbTip(img, name);
+    if (!t) return;
+    if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
+      // 调试阶段：显示完整 401 信息（含 Edge Function 返回的 code/body），便于定位 PakePlus 电脑版差异
+      let detail = msg.includes("401") ? msg : `[401] ${msg}`;
+      if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
+      t.textContent = (detail || "登录失效").slice(0, 100);
+      t.title = detail;
+    } else if (msg.includes("代理加载失败")) {
+      const m = msg.match(/\[(\d+)\]/);
+      t.textContent = `代理失败[${m ? m[1] : "?"}]`;
+    } else if (msg.includes("网络") || msg.includes("fetch")) {
+      t.textContent = "网络错误";
+    } else {
+      // 调试阶段：显示完整错误信息（含 status/body），便于定位 PakePlus 电脑版差异
+      let detail = msg;
+      if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
+      t.textContent = (detail || "代理失败").slice(0, 100);
+      t.title = detail;
     }
   });
+}
+
+// 缩略图占位态：img 还没有可用地址 / 正在等图时显示骨架圈，而不是浏览器默认的破图图标 + alt 文件名。
+// 占位态挂在 <img> 和它的 .cos-thumb 容器上（骨架圈由容器的 ::before 画，天然居中）。
+function setCosThumbPending(img, pending) {
+  if (!img) return;
+  img.classList.toggle("is-pending", !!pending);
+  const thumb = img.closest(".cos-thumb");
+  if (thumb) thumb.classList.toggle("is-pending", !!pending);
+}
+
+// 缩略图错误文案节点（同一格子只保留一个）
+function cosThumbTip(img, name, text) {
+  const parent = img && img.parentElement;
+  if (!parent) return null;
+  let tip = parent.querySelector(".cos-thumb__errtxt");
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.className = "cos-thumb__errtxt";
+    parent.appendChild(tip);
+  }
+  tip.title = name || "图片加载失败";
+  if (text) tip.textContent = text;
+  return tip;
 }
 
 // 给照片 <img> 设置直连 URL。顺序固定为「新签名 URL → 遗留公开 URL → 裸 URL 碰 SW 缓存」：
@@ -7912,6 +7927,8 @@ function setCosImgSrc(img, signed, legacy, fallback) {
     onCosImgError(img, img.alt, img.getAttribute("data-cos-key") || "");
     return;
   }
+  // 图真正解码出来才撤掉骨架，避免「骨架 → 破图 → 图」三段跳
+  img.onload = () => setCosThumbPending(img, false);
   img.src = url;
 }
 
@@ -8081,7 +8098,7 @@ function renderProjectPhotosHtml(p) {
           : "";
         const img = it.uploading
           ? `<div class="cos-thumb__ph">⏳ 处理中</div>`
-          : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">`;
+          : `<img class="is-pending" data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">`;
         const err = it.error ? `<div class="cos-thumb__err">失败</div>` : "";
         const dnBtn = canDownload
           ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
@@ -8089,7 +8106,7 @@ function renderProjectPhotosHtml(p) {
         const del = canDelete
           ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeCosPhoto('${esc(p.id)}','${realKind}','${esc(it.key)}')">✕</button>`
           : "";
-        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">${img}${prog}${err}${dnBtn}${del}</div>`;
+        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}${it.uploading ? "" : " is-pending"}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">${img}${prog}${err}${dnBtn}${del}</div>`;
       })
       .join("");
     const addBtn = canUpload
@@ -9612,8 +9629,8 @@ function renderProjectContentPhotos(p, photos, allowDownload = true) {
       const dnBtn = canDownload
         ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
         : "";
-      return `<div class="cos-thumb cos-thumb--readonly" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">
-        <img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">
+      return `<div class="cos-thumb cos-thumb--readonly is-pending" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">
+        <img class="is-pending" data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">
         ${dnBtn}
       </div>`;
     }).join("");
@@ -9676,18 +9693,20 @@ function renderFormPhotos() {
       const sid = cosSafeId(it.key || it.url || it.name || Math.random().toString());
       const realKey = it._kind || kind;
       const isStagedHeic = it._staged && it.file && isUnsupportedImageType(it.file.type);
+      // 仅「有 key、等签名」的那种才需要占位骨架；本地 objectURL 预览立即可见，不加
+      const needsFetch = !isStagedHeic && !it.url;
       const img = isStagedHeic
         ? `<div class="cos-thumb__ph">HEIC<br>将转 JPG 上传</div>`
-        : (it.url
-          ? `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`
-          : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`);
+        : (needsFetch
+          ? `<img class="is-pending" data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`
+          : `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`);
       const del = canDelete
         ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeFormPhoto('${realKey}','${esc(it.key || it.url || it.name)}')">✕</button>`
         : "";
       const dn = perms.canDownload
         ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key || "")}','${esc(it.url || "")}','${esc(it.name || "")}')">⬇</button>`
         : "";
-      return `<div class="cos-thumb" id="cos-item-${sid}">${img}${dn}${del}</div>`;
+      return `<div class="cos-thumb${needsFetch && it.key ? " is-pending" : ""}" id="cos-item-${sid}">${img}${dn}${del}</div>`;
     }).join("");
     const addBtn = canUpload
       ? `<button type="button" class="cos-add" onclick="document.getElementById('cosFormFile_${kind}').click()">＋ 添加${title}</button><input id="cosFormFile_${kind}" type="file" accept="image/*" multiple class="hidden" onchange="formStagePhotos(this,'${kind}')">`
@@ -27383,7 +27402,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v61e2e2c9";
+  const APP_VERSION = "v58899d54";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

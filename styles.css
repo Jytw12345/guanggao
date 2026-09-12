@@ -13915,6 +13915,27 @@ table.data.project-hours-diff thead th {
   justify-content: center;
 }
 .cos-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 照片尚未拿到直连地址（在等 cos-sign 换签名，通常 1~2 秒）时的占位态。
+   关键作用：隐藏浏览器默认的「破图图标 + alt 文件名」，避免被误读成图片坏了。 */
+.cos-thumb.is-pending::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 18px; height: 18px;
+  margin: auto;
+  border: 2px solid #e2e8f0;
+  border-top-color: #94a3b8;
+  border-radius: 50%;
+  animation: cosThumbSpin .8s linear infinite;
+}
+.cos-thumb img.is-pending { visibility: hidden; }
+.cos-thumb img:not(.is-pending) { animation: cosThumbFadeIn .18s ease-out; }
+@keyframes cosThumbSpin { to { transform: rotate(360deg); } }
+@keyframes cosThumbFadeIn { from { opacity: .35; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .cos-thumb.is-pending::before { animation: none; }
+  .cos-thumb img:not(.is-pending) { animation: none; }
+}
 .cos-thumb__ph { color: var(--muted); font-size: 13px; padding: 6px; text-align: center; }
 .cos-thumb.is-error { border-color: #fca5a5; }
 .cos-thumb__err {

@@ -3,8 +3,8 @@
 // - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
 //   用户点「立即更新」或下次打开即生效。
 // 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
-const CACHE = "ad-install-v61e2e2c9";
-const VERSION = "v61e2e2c9";
+const CACHE = "ad-install-v58899d54";
+const VERSION = "v58899d54";
 // 腾讯云 COS 图片运行时缓存，支持现场离线看图。
 // 注意：故意不带版本号 —— 它存的是业务照片（key 唯一且内容不可变），
 // 若跟着版本号走，每次 App 更新都会把离线照片全清掉，导致现场断网时一片「无法预览」。
