@@ -13965,6 +13965,10 @@ table.data.project-hours-diff thead th {
   color: #dc2626; font-size: 12px; font-weight: 500;
   text-align: center; padding: 6px; pointer-events: none;
 }
+.cos-thumb__errtxt.is-recoverable {
+  color: #2563eb;
+  background: rgba(239, 246, 255, .72);
+}
 
 /* 项目卡片预览块里的照片数量徽标 */
 .proj-content-preview__badge {

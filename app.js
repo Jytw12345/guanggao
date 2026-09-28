@@ -7819,24 +7819,48 @@ async function isHeicBlob(blob) {
   }
 }
 
-// 缩略图加载失败时给出明确提示，并尝试经 cos-proxy 代理取 blob 显示（PakePlus/WebView2 常无法直连 COS）。
+// 缩略图加载失败时：先尝试重新换取签名 URL（轻量），失败后再走 cos-proxy 代理取 blob。
+// 缩略图代理超时 5s，避免手机端/PakePlus 网络差时「预览加载中…」挂太久。
 function onCosImgError(img, name, key) {
   if (!img) return;
   img.classList.add("cos-img--err");
   const parent = img.parentElement;
-  if (parent && parent.querySelector(".cos-thumb__errtxt")) return;
   const k = key || img.getAttribute("data-cos-key") || "";
-  const willProxy = MODE === "cloud" && k && img.dataset.proxyTried !== "1";
+  if (parent && parent.querySelector(".cos-thumb__errtxt")) {
+    // 已有提示：若已在代理/签名重试中，避免重复创建；但允许更新文字
+    const existing = parent.querySelector(".cos-thumb__errtxt");
+    if (existing && existing.dataset.cosState === "pending") return;
+  }
+
   const tip = document.createElement("div");
   tip.className = "cos-thumb__errtxt";
   tip.title = name || "图片加载失败";
-  // 若会走代理兜底，先提示「加载中」；直连已失败或无需代理时，直接显示「无法预览」。
-  tip.textContent = willProxy ? "预览加载中…" : (isHeicKeyOrName(k, name) ? "HEIC 无法预览" : "无法预览");
+  tip.dataset.cosState = "pending";
+  tip.textContent = "预览加载中…";
   if (parent) parent.appendChild(tip);
-  // 云端模式：直连失败后，用 Supabase 域名代理拉取字节并转为 blob URL 显示（绕过 WebView2 对 myqcloud 的限制）。
-  if (!willProxy) return;
-  img.dataset.proxyTried = "1";
-  getCosProxyBlob(k).then(async (blob) => {
+
+  // 步骤 1：先重新换取签名 URL（轻量，不下载图片）。很多情况是 legacy/fallback URL 失效，但签名 URL 可用。
+  async function tryRecover() {
+    if (MODE !== "cloud" || !k) throw new Error("非云端模式或缺少 key");
+
+    // 清除缓存，强制重新拿签名（可能之前的已过期/失败）
+    delete _cosViewCache[k];
+    const m = await cosGetViewUrls([k]);
+    const signed = m[k] || "";
+    if (signed) {
+      img.src = signed;
+      img.classList.remove("cos-img--err");
+      if (parent) {
+        const t = parent.querySelector(".cos-thumb__errtxt");
+        if (t) t.remove();
+      }
+      return;
+    }
+
+    // 步骤 2：签名也拿不到，再走代理下载 blob（缩略图限时 5s，大图/灯箱自己调 15s）
+    if (img.dataset.proxyTried === "1") throw new Error("代理已尝试");
+    img.dataset.proxyTried = "1";
+    const blob = await getCosProxyBlob(k, 5000);
     if (!blob) throw new Error("代理返回空数据");
     const url = URL.createObjectURL(blob);
     img.src = url;
@@ -7845,8 +7869,6 @@ function onCosImgError(img, name, key) {
       const t = parent.querySelector(".cos-thumb__errtxt");
       if (t) t.remove();
     }
-    // 真实 HEIC blob 在 WebView2 里无法解码，用 heic2any 兜底再转一次；
-    // 微信 mmeexport* 无扩展名可能是 JPEG，不能靠文件名瞎猜。
     if (typeof heic2any === "function" && await isHeicBlob(blob)) {
       try {
         const jpg = await convertHeicToJpeg(blob);
@@ -7855,37 +7877,38 @@ function onCosImgError(img, name, key) {
         console.warn("缩略图 HEIC 转码失败：", e);
       }
     }
-  }).catch((e) => {
-    console.warn("缩略图代理加载失败：", e);
+  }
+
+  tryRecover().catch((e) => {
+    console.warn("缩略图恢复失败：", e);
     const msg = String(e && e.message ? e.message : e);
-    if (parent) {
-      const t = parent.querySelector(".cos-thumb__errtxt");
-      if (t) {
-        if (msg.includes("超时")) {
-          t.textContent = "加载超时";
-          t.title = msg;
-        } else if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
-          // 调试阶段：显示完整 401 信息（含 Edge Function 返回的 code/body），便于定位 PakePlus 电脑版差异
-          let detail = msg.includes("401") ? msg : `[401] ${msg}`;
-          if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
-          t.textContent = (detail || "登录失效").slice(0, 100);
-          t.title = detail;
-        } else if (msg.includes("403")) {
-          t.textContent = "无权限访问";
-          t.title = msg;
-        } else if (msg.includes("代理加载失败")) {
-          const m = msg.match(/\[(\d+)\]/);
-          t.textContent = `代理失败[${m ? m[1] : "?"}]`;
-        } else if (msg.includes("网络") || msg.includes("fetch") || msg.includes("Failed to send")) {
-          t.textContent = "网络错误";
-        } else {
-          // 调试阶段：显示完整错误信息（含 status/body），便于定位 PakePlus 电脑版差异
-          let detail = msg;
-          if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
-          t.textContent = (detail || "代理失败").slice(0, 100);
-          t.title = detail;
-        }
-      }
+    if (!parent) return;
+    let t = parent.querySelector(".cos-thumb__errtxt");
+    if (!t) {
+      t = document.createElement("div");
+      t.className = "cos-thumb__errtxt is-recoverable";
+      parent.appendChild(t);
+    } else {
+      t.classList.add("is-recoverable");
+    }
+    t.dataset.cosState = "done";
+    t.title = msg || "点击查看大图";
+    // 最终失败时提示「点击查看大图」，因为灯箱大图走独立签名 URL，通常仍能显示
+    if (msg.includes("超时") || msg.includes("timeout")) {
+      t.textContent = "加载超时，点击查看大图";
+    } else if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
+      let detail = msg.includes("401") ? msg : `[401] ${msg}`;
+      if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
+      t.textContent = "登录失效，点击查看大图";
+      t.title = (detail || "登录失效").slice(0, 120);
+    } else if (msg.includes("403")) {
+      t.textContent = "无权限，点击查看大图";
+      t.title = msg;
+    } else if (msg.includes("网络") || msg.includes("fetch") || msg.includes("Failed to send")) {
+      t.textContent = "网络错误，点击查看大图";
+    } else {
+      t.textContent = "点击查看大图";
+      t.title = msg ? msg.slice(0, 120) : "图片预览失败，可点击看大图";
     }
   });
 }
@@ -7924,9 +7947,12 @@ async function cosGetViewUrls(keys) {
   const need = keys.filter((k) => !_cosViewCache[k]);
   if (need.length && MODE === "cloud") {
     try {
-      const { data, error } = await sb.functions.invoke("cos-sign", {
+      // 8s 超时：cos-sign 只是服务端签名，不应超过 1s；PakePlus 网络差时防止卡死，仍返回已缓存结果
+      const p = sb.functions.invoke("cos-sign", {
         body: { action: "get", items: need.map((k) => ({ key: k })) },
       });
+      const to = new Promise((_, rej) => setTimeout(() => rej(new Error("cos-sign timeout")), 8000));
+      const { data, error } = await Promise.race([p, to]);
       if (!error && data && Array.isArray(data.items)) {
         data.items.forEach((it) => {
           if (it.key && it.url) { _cosViewCache[it.key] = it.url; result[it.key] = it.url; }
@@ -7936,7 +7962,7 @@ async function cosGetViewUrls(keys) {
           try { localStorage.setItem("cosViewHost", data.host); } catch (_) {}
         }
       }
-    } catch (_) { /* 断网：依赖已缓存/已下载的 SW 缓存图片 */ }
+    } catch (_) { /* 断网/超时：依赖已缓存/已下载的 SW 缓存图片 */ }
   }
   return result;
 }
@@ -8818,7 +8844,8 @@ function closeCosLightbox() {
 }
 
 // 把画廊里所有 <img> 的 data-cos-key 填入签名下载 URL（私有桶查看用）。
-// 优先用已缓存签名 URL；其次用遗留的公开 URL（老公开桶数据）；再回退裸 URL 触发 SW 缓存命中。
+// 私有桶应以实时签名为优先；legacy 公开 URL 可能已失效或需要认证，不再作为默认 src。
+// 若签名 URL 未拿到，不主动设置坏 URL，而是交给 onCosImgError 走「重签 → 代理」恢复流程。
 async function fillPhotoImages(p) {
   if (!p) return;
   const photos = normalizePhotos(p);
@@ -8830,12 +8857,14 @@ async function fillPhotoImages(p) {
   const imgs = document.querySelectorAll('#cosPhotosWrap img[data-cos-key]');
   imgs.forEach((img) => {
     const k = img.getAttribute("data-cos-key");
-    const legacy = img.getAttribute("data-legacy-url") || ""; // 老公开桶遗留的裸 URL
     const signed = viewMap[k] || "";
-    const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
-    // 私有桶应以实时签名为优先；legacy 公开 URL 可能已失效或需要认证
-    img.src = signed || legacy || fallback;
-    img.onerror = () => onCosImgError(img, img.alt, k);
+    if (signed) {
+      img.src = signed;
+      img.onerror = () => onCosImgError(img, img.alt, k);
+    } else {
+      // 没有拿到签名 URL：交给恢复流程，它会先尝试重签，再限时代理兜底
+      onCosImgError(img, img.alt, k);
+    }
   });
 }
 
@@ -9603,11 +9632,13 @@ async function fillProjectContentPhotos(p, rootSelector = ".proj-content-detail"
   const viewMap = await cosGetViewUrls(keys);
   document.querySelectorAll(`${rootSelector} img[data-cos-key]`).forEach((img) => {
     const k = img.getAttribute("data-cos-key");
-    const legacy = img.getAttribute("data-legacy-url") || "";
     const signed = viewMap[k] || "";
-    const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
-    img.src = legacy || signed || fallback;
-    img.onerror = () => onCosImgError(img, img.alt, k);
+    if (signed) {
+      img.src = signed;
+      img.onerror = () => onCosImgError(img, img.alt, k);
+    } else {
+      onCosImgError(img, img.alt, k);
+    }
   });
 }
 
@@ -27478,7 +27509,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v444baaa6";
+  const APP_VERSION = "vc3fd6379";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
