@@ -7826,16 +7826,18 @@ function onCosImgError(img, name, key) {
   const parent = img.parentElement;
   if (parent && parent.querySelector(".cos-thumb__errtxt")) return;
   const k = key || img.getAttribute("data-cos-key") || "";
+  const willProxy = MODE === "cloud" && k && img.dataset.proxyTried !== "1";
   const tip = document.createElement("div");
   tip.className = "cos-thumb__errtxt";
   tip.title = name || "图片加载失败";
-  tip.textContent = isHeicKeyOrName(k, name) ? "HEIC 无法预览" : "无法预览";
+  // 若会走代理兜底，先提示「加载中」；直连已失败或无需代理时，直接显示「无法预览」。
+  tip.textContent = willProxy ? "预览加载中…" : (isHeicKeyOrName(k, name) ? "HEIC 无法预览" : "无法预览");
   if (parent) parent.appendChild(tip);
   // 云端模式：直连失败后，用 Supabase 域名代理拉取字节并转为 blob URL 显示（绕过 WebView2 对 myqcloud 的限制）。
-  if (MODE !== "cloud" || !k || img.dataset.proxyTried === "1") return;
+  if (!willProxy) return;
   img.dataset.proxyTried = "1";
   getCosProxyBlob(k).then(async (blob) => {
-    if (!blob) return;
+    if (!blob) throw new Error("代理返回空数据");
     const url = URL.createObjectURL(blob);
     img.src = url;
     img.classList.remove("cos-img--err");
@@ -7859,16 +7861,22 @@ function onCosImgError(img, name, key) {
     if (parent) {
       const t = parent.querySelector(".cos-thumb__errtxt");
       if (t) {
-        if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
+        if (msg.includes("超时")) {
+          t.textContent = "加载超时";
+          t.title = msg;
+        } else if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
           // 调试阶段：显示完整 401 信息（含 Edge Function 返回的 code/body），便于定位 PakePlus 电脑版差异
           let detail = msg.includes("401") ? msg : `[401] ${msg}`;
           if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
           t.textContent = (detail || "登录失效").slice(0, 100);
           t.title = detail;
+        } else if (msg.includes("403")) {
+          t.textContent = "无权限访问";
+          t.title = msg;
         } else if (msg.includes("代理加载失败")) {
           const m = msg.match(/\[(\d+)\]/);
           t.textContent = `代理失败[${m ? m[1] : "?"}]`;
-        } else if (msg.includes("网络") || msg.includes("fetch")) {
+        } else if (msg.includes("网络") || msg.includes("fetch") || msg.includes("Failed to send")) {
           t.textContent = "网络错误";
         } else {
           // 调试阶段：显示完整错误信息（含 status/body），便于定位 PakePlus 电脑版差异
@@ -8181,12 +8189,14 @@ function isBlobLike(v) {
 // 注意：PakePlus 等 WebView2 环境中，sb.auth.getSession() 可能拿不到有效 token，
 // 但 sb.functions.invoke / sb.from 能正常从 supabase 内部 storage 取到 token 并自动刷新。
 // 因此优先用 sb.functions.invoke 调用 cos-proxy；失败时尝试 refreshSession 后重试。
-async function getCosProxyBlob(key) {
+async function getCosProxyBlob(key, timeoutMs = 15000) {
   if (MODE !== "cloud") throw new Error("代理不可用（非云端模式）");
   if (!sb) throw new Error("代理不可用（Supabase 未初始化）");
   if (!key) throw new Error("缺少图片 key");
 
   const isAuthError = (msg) => /401|未登录|登录态|令牌|token|jwt|auth/i.test(String(msg || ""));
+
+  const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error(`代理请求超时（${ms}ms）`)), ms));
 
   // 优先用 supabase-js 官方 invoke：自动带 Authorization、自动刷新过期 token，
   // 与 cos-sign / sb.from 走同一条 session 通道，在 PakePlus 中更稳定。
@@ -8280,7 +8290,7 @@ async function getCosProxyBlob(key) {
   }
 
   try {
-    return await tryOnce();
+    return await Promise.race([tryOnce(), timeout(timeoutMs)]);
   } catch (e) {
     const msg = String(e && e.message ? e.message : e);
     if (isAuthError(msg)) {
@@ -8823,7 +8833,8 @@ async function fillPhotoImages(p) {
     const legacy = img.getAttribute("data-legacy-url") || ""; // 老公开桶遗留的裸 URL
     const signed = viewMap[k] || "";
     const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
-    img.src = legacy || signed || fallback;
+    // 私有桶应以实时签名为优先；legacy 公开 URL 可能已失效或需要认证
+    img.src = signed || legacy || fallback;
     img.onerror = () => onCosImgError(img, img.alt, k);
   });
 }
@@ -26202,6 +26213,8 @@ let isLoggingOut = false; // 标记「主动登出中」，避免 onAuthStateCha
 
 async function doLogin() {
   if (authSubmitting) return;
+  const nameRow = document.getElementById("authNameRow");
+  if (nameRow) nameRow.classList.add("hidden");
   const email = document.getElementById("authEmail").value.trim();
   const password = document.getElementById("authPassword").value;
   const remember = document.getElementById("authRemember").checked;
@@ -26231,6 +26244,8 @@ async function doLogin() {
 
 async function doSignup() {
   if (authSubmitting) return;
+  const nameRow = document.getElementById("authNameRow");
+  if (nameRow) nameRow.classList.remove("hidden");
   const email = document.getElementById("authEmail").value.trim();
   const password = document.getElementById("authPassword").value;
   const nameEl = document.getElementById("authName");
@@ -26494,6 +26509,8 @@ async function startCloudSession() {
       const remember = localStorage.getItem("auth_remember");
       const savedEmail = localStorage.getItem("auth_email");
       document.getElementById("authScreen").classList.remove("hidden");
+      const nameRow = document.getElementById("authNameRow");
+      if (nameRow) nameRow.classList.add("hidden");
       if (savedEmail) {
         document.getElementById("authEmail").value = savedEmail;
         document.getElementById("authRemember").checked = remember === "true";
@@ -26646,9 +26663,11 @@ function goToLogin() {
   const authScreen = document.getElementById("authScreen");
   const userMenu = document.getElementById("userMenu");
   const noAccess = document.getElementById("noAccessScreen");
+  const nameRow = document.getElementById("authNameRow");
   if (authScreen) authScreen.classList.remove("hidden");
   if (userMenu) userMenu.classList.add("hidden");
   if (noAccess) noAccess.classList.add("hidden");
+  if (nameRow) nameRow.classList.add("hidden");
   setSyncStatus("", "● 本地模式");
 }
 
@@ -27459,7 +27478,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vcb887263";
+  const APP_VERSION = "v444baaa6";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
