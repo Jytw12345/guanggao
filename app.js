@@ -7819,43 +7819,30 @@ async function isHeicBlob(blob) {
   }
 }
 
-// 通知 SW 丢弃某个对象在 COS 运行时缓存里的条目。
-// 浏览器对 <img> 的跨域请求是 no-cors，SW 拿到的响应是 opaque，无法判断成败，
-// 所以一次 403（多为过期签名）也会被缓存下来；此后带新签名的请求会一直命中这份坏缓存，
-// 表现为该照片「每次预览都先失败、再靠代理救回来」。失败时主动失效即可自愈。
-function invalidateCosCache(key) {
-  try {
-    const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
-    if (!sw || !key || !_cosViewHost) return;
-    sw.postMessage({ type: "COS_CACHE_DELETE", url: `https://${_cosViewHost}/${key}` });
-  } catch (_) {}
-}
-
-// 缩略图加载失败时保持骨架态并尝试经 cos-proxy 代理取 blob 显示（PakePlus/WebView2 常无法直连 COS）。
-// 处理顺序：还能兜底 → 继续显示骨架圈（不闪错误文案）；兜底也失败 → 才落「无法预览」。
+// 缩略图加载失败时给出明确提示，并尝试经 cos-proxy 代理取 blob 显示（PakePlus/WebView2 常无法直连 COS）。
 function onCosImgError(img, name, key) {
   if (!img) return;
   img.classList.add("cos-img--err");
+  const parent = img.parentElement;
+  if (parent && parent.querySelector(".cos-thumb__errtxt")) return;
   const k = key || img.getAttribute("data-cos-key") || "";
-  const canRecover = MODE === "cloud" && !!k && img.dataset.proxyTried !== "1";
-  if (!canRecover) {
-    // 代理已试过仍失败（或非云端模式）：撤骨架、落明确错误文案
-    setCosThumbPending(img, false);
-    cosThumbTip(img, name, isHeicKeyOrName(k, name) ? "HEIC 无法预览" : "无法预览");
-    return;
-  }
-  console.warn("[cos] 直连失败，转代理兜底：", k, img.currentSrc || img.src);
-  invalidateCosCache(k); // 清掉可能被缓存的失败响应，让下次直连能真正命中新图
+  const tip = document.createElement("div");
+  tip.className = "cos-thumb__errtxt";
+  tip.title = name || "图片加载失败";
+  tip.textContent = isHeicKeyOrName(k, name) ? "HEIC 无法预览" : "无法预览";
+  if (parent) parent.appendChild(tip);
+  // 云端模式：直连失败后，用 Supabase 域名代理拉取字节并转为 blob URL 显示（绕过 WebView2 对 myqcloud 的限制）。
+  if (MODE !== "cloud" || !k || img.dataset.proxyTried === "1") return;
   img.dataset.proxyTried = "1";
-  setCosThumbPending(img, true); // 兜底期间维持骨架态，图回来后直接替换，无破图中转
   getCosProxyBlob(k).then(async (blob) => {
-    if (!blob) throw new Error("代理返回空数据");
+    if (!blob) return;
     const url = URL.createObjectURL(blob);
     img.src = url;
     img.classList.remove("cos-img--err");
-    const oldTip = img.parentElement && img.parentElement.querySelector(".cos-thumb__errtxt");
-    if (oldTip) oldTip.remove();
-    setCosThumbPending(img, false);
+    if (parent) {
+      const t = parent.querySelector(".cos-thumb__errtxt");
+      if (t) t.remove();
+    }
     // 真实 HEIC blob 在 WebView2 里无法解码，用 heic2any 兜底再转一次；
     // 微信 mmeexport* 无扩展名可能是 JPEG，不能靠文件名瞎猜。
     if (typeof heic2any === "function" && await isHeicBlob(blob)) {
@@ -7869,67 +7856,30 @@ function onCosImgError(img, name, key) {
   }).catch((e) => {
     console.warn("缩略图代理加载失败：", e);
     const msg = String(e && e.message ? e.message : e);
-    setCosThumbPending(img, false);
-    const t = cosThumbTip(img, name);
-    if (!t) return;
-    if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
-      // 调试阶段：显示完整 401 信息（含 Edge Function 返回的 code/body），便于定位 PakePlus 电脑版差异
-      let detail = msg.includes("401") ? msg : `[401] ${msg}`;
-      if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
-      t.textContent = (detail || "登录失效").slice(0, 100);
-      t.title = detail;
-    } else if (msg.includes("代理加载失败")) {
-      const m = msg.match(/\[(\d+)\]/);
-      t.textContent = `代理失败[${m ? m[1] : "?"}]`;
-    } else if (msg.includes("网络") || msg.includes("fetch")) {
-      t.textContent = "网络错误";
-    } else {
-      // 调试阶段：显示完整错误信息（含 status/body），便于定位 PakePlus 电脑版差异
-      let detail = msg;
-      if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
-      t.textContent = (detail || "代理失败").slice(0, 100);
-      t.title = detail;
+    if (parent) {
+      const t = parent.querySelector(".cos-thumb__errtxt");
+      if (t) {
+        if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
+          // 调试阶段：显示完整 401 信息（含 Edge Function 返回的 code/body），便于定位 PakePlus 电脑版差异
+          let detail = msg.includes("401") ? msg : `[401] ${msg}`;
+          if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
+          t.textContent = (detail || "登录失效").slice(0, 100);
+          t.title = detail;
+        } else if (msg.includes("代理加载失败")) {
+          const m = msg.match(/\[(\d+)\]/);
+          t.textContent = `代理失败[${m ? m[1] : "?"}]`;
+        } else if (msg.includes("网络") || msg.includes("fetch")) {
+          t.textContent = "网络错误";
+        } else {
+          // 调试阶段：显示完整错误信息（含 status/body），便于定位 PakePlus 电脑版差异
+          let detail = msg;
+          if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
+          t.textContent = (detail || "代理失败").slice(0, 100);
+          t.title = detail;
+        }
+      }
     }
   });
-}
-
-// 缩略图占位态：img 还没有可用地址 / 正在等图时显示骨架圈，而不是浏览器默认的破图图标 + alt 文件名。
-// 占位态挂在 <img> 和它的 .cos-thumb 容器上（骨架圈由容器的 ::before 画，天然居中）。
-function setCosThumbPending(img, pending) {
-  if (!img) return;
-  img.classList.toggle("is-pending", !!pending);
-  const thumb = img.closest(".cos-thumb");
-  if (thumb) thumb.classList.toggle("is-pending", !!pending);
-}
-
-// 缩略图错误文案节点（同一格子只保留一个）
-function cosThumbTip(img, name, text) {
-  const parent = img && img.parentElement;
-  if (!parent) return null;
-  let tip = parent.querySelector(".cos-thumb__errtxt");
-  if (!tip) {
-    tip = document.createElement("div");
-    tip.className = "cos-thumb__errtxt";
-    parent.appendChild(tip);
-  }
-  tip.title = name || "图片加载失败";
-  if (text) tip.textContent = text;
-  return tip;
-}
-
-// 给照片 <img> 设置直连 URL。顺序固定为「新签名 URL → 遗留公开 URL → 裸 URL 碰 SW 缓存」：
-// 遗留的 it.url 是早期公开桶地址，桶转私有后必然 403；若把它排在最前（历史 bug），
-// 这批老照片每次预览都会先闪「无法预览」，再等代理几秒后捞回来。
-// 三个都拿不到时不要再赋空串（会去请求当前页面地址再解码失败），直接进失败兜底走代理。
-function setCosImgSrc(img, signed, legacy, fallback) {
-  const url = signed || legacy || fallback;
-  if (!url) {
-    onCosImgError(img, img.alt, img.getAttribute("data-cos-key") || "");
-    return;
-  }
-  // 图真正解码出来才撤掉骨架，避免「骨架 → 破图 → 图」三段跳
-  img.onload = () => setCosThumbPending(img, false);
-  img.src = url;
 }
 
 // 归一化照片数据，确保挂回项目对象，便于渲染与保存
@@ -7945,31 +7895,9 @@ function normalizePhotos(p) {
 }
 
 // 私有桶：按 key 缓存签名下载 URL（避免每张图重复请求），并缓存 host 供离线 fallback
-// 注意：cos-sign 的 GET 签名有效期只有 1h（见 supabase/functions/cos-sign），
-// 缓存必须带过期时间，否则长时间不刷新的会话里会一直拿「过期签名」直连 →
-// 403 → 缩略图先显示「无法预览」，几秒后才被代理兜底救回来。
-let _cosViewCache = {}; // key -> { url, exp }（exp 为毫秒时间戳，0 表示无过期信息）
+let _cosViewCache = {};
 let _cosViewHost = "";
 try { _cosViewHost = localStorage.getItem("cosViewHost") || ""; } catch (_) {}
-
-const COS_URL_SAFETY_MS = 60 * 1000;        // 提前 1 分钟视为过期，避免临界点请求失败
-const COS_URL_FALLBACK_TTL_MS = 50 * 60 * 1000; // 解析不出签名时间时的兜底有效期
-
-// 从预签名 URL 的 q-sign-time=<起>;<止> 里解析真实过期时间（毫秒），失败返回 0
-function cosUrlExpiry(url) {
-  const m = /q-sign-time=(\d+)(?:;|%3B)(\d+)/i.exec(String(url || ""));
-  if (!m) return 0;
-  const end = Number(m[2]);
-  return end > 0 ? end * 1000 : 0;
-}
-
-// 取缓存里的签名 URL；已过期则顺手清掉，返回空串让调用方重新签名
-function cosCachedUrl(key) {
-  const it = _cosViewCache[key];
-  if (!it) return "";
-  if (it.exp && Date.now() >= it.exp) { delete _cosViewCache[key]; return ""; }
-  return it.url || "";
-}
 
 // 批量换取预签名 URL。action=put 用于上传直传，action=get 用于私有桶下载查看
 async function cosGetSignedUrls(items, action = "put") {
@@ -7984,8 +7912,8 @@ async function cosGetSignedUrls(items, action = "put") {
 async function cosGetViewUrls(keys) {
   const result = {};
   if (!keys || !keys.length) return result;
-  keys.forEach((k) => { const u = cosCachedUrl(k); if (u) result[k] = u; });
-  const need = keys.filter((k) => !cosCachedUrl(k));
+  keys.forEach((k) => { if (_cosViewCache[k]) result[k] = _cosViewCache[k]; });
+  const need = keys.filter((k) => !_cosViewCache[k]);
   if (need.length && MODE === "cloud") {
     try {
       const { data, error } = await sb.functions.invoke("cos-sign", {
@@ -7993,11 +7921,7 @@ async function cosGetViewUrls(keys) {
       });
       if (!error && data && Array.isArray(data.items)) {
         data.items.forEach((it) => {
-          if (it.key && it.url) {
-            const exp = (cosUrlExpiry(it.url) || (Date.now() + COS_URL_FALLBACK_TTL_MS)) - COS_URL_SAFETY_MS;
-            _cosViewCache[it.key] = { url: it.url, exp };
-            result[it.key] = it.url;
-          }
+          if (it.key && it.url) { _cosViewCache[it.key] = it.url; result[it.key] = it.url; }
         });
         if (data.host) {
           _cosViewHost = data.host;
@@ -8098,7 +8022,7 @@ function renderProjectPhotosHtml(p) {
           : "";
         const img = it.uploading
           ? `<div class="cos-thumb__ph">⏳ 处理中</div>`
-          : `<img class="is-pending" data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">`;
+          : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">`;
         const err = it.error ? `<div class="cos-thumb__err">失败</div>` : "";
         const dnBtn = canDownload
           ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
@@ -8106,7 +8030,7 @@ function renderProjectPhotosHtml(p) {
         const del = canDelete
           ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeCosPhoto('${esc(p.id)}','${realKind}','${esc(it.key)}')">✕</button>`
           : "";
-        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}${it.uploading ? "" : " is-pending"}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">${img}${prog}${err}${dnBtn}${del}</div>`;
+        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">${img}${prog}${err}${dnBtn}${del}</div>`;
       })
       .join("");
     const addBtn = canUpload
@@ -8150,7 +8074,7 @@ async function handleCosFiles(input, projectId, kind) {
   const prepared = files.map((file) => {
     const nameExt = (file.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     let ext = extFromMime(file.type, nameExt) || "jpg";
-    const key = `projects/${projectId}/${storeKind}/${uid()}.${ext}`;
+    const key = `gg/projects/${projectId}/${storeKind}/${uid()}.${ext}`;
     const item = {
       key,
       url: "",
@@ -8175,7 +8099,7 @@ async function handleCosFiles(input, projectId, kind) {
         const jpg = await convertHeicToJpeg(file);
         // 用 .jpg 重算 key，避免 .heic key 配上 jpg 内容导致预览异常
         const uidPart = item.key.split("/").pop().replace(/\.[^.]+$/, "");
-        item.key = `projects/${projectId}/${storeKind}/${uidPart}.jpg`;
+        item.key = `gg/projects/${projectId}/${storeKind}/${uidPart}.jpg`;
         item.name = jpg.name;
         item._convertedFile = jpg; // const file 不可重赋值，转换结果暂存此处
         refreshPhotosUI(p);
@@ -8734,7 +8658,7 @@ function _cosLbArg(keys, currentKey) {
 
 // 取某 key 的查看 URL（优先缓存，否则现取签名 URL，断网回退裸 URL）
 async function cosLightboxLoadKey(key) {
-  let url = cosCachedUrl(key);
+  let url = _cosViewCache[key] || "";
   if (!url) {
     try {
       const m = await cosGetViewUrls([key]);
@@ -8757,7 +8681,6 @@ async function cosLightboxTryRecover(img, key, name) {
     tip.className = "cos-lightbox__tip";
     tip.textContent = "正在通过代理加载…";
   }
-  invalidateCosCache(key); // 顺手清掉 SW 里可能缓存的失败响应，下次直连即恢复
   try {
     let blob = await getCosProxyBlob(key);
     if (!blob) throw new Error("无法获取原图");
@@ -8844,7 +8767,7 @@ function openCosLightbox(url, key, name) {
   el.className = "cos-lightbox";
   el.onclick = () => closeCosLightbox();
   el.innerHTML = `${prev}${next}${counter}` +
-    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="const tip=this.closest('.cos-lightbox')&&this.closest('.cos-lightbox').querySelector('.cos-lightbox__tip');this.classList.add('cos-lightbox__img--err');if(tip){tip.className='cos-lightbox__tip cos-lightbox__tip--err';tip.textContent='图片加载中…'};cosLightboxTryRecover(this,'${esc(key)}','${esc(name)}')">` +
+    `<img src="${esc(url)}" alt="" onclick="cosLightboxImgClick(event)" onerror="const tip=this.closest('.cos-lightbox')&&this.closest('.cos-lightbox').querySelector('.cos-lightbox__tip');this.classList.add('cos-lightbox__img--err');if(tip){tip.className='cos-lightbox__tip cos-lightbox__tip--err';tip.textContent='无法预览，尝试通过代理加载…'};cosLightboxTryRecover(this,'${esc(key)}','${esc(name)}')">` +
     `${zoomCtl}` +
     `<div class="cos-lightbox__tip">点击空白关闭 · 双击/滚轮缩放 · 拖拽平移${multi ? " · 左右滑动翻页" : ""}</div>${dlBtn}`;
   // 绑定图片交互（滚轮/拖拽/双击）
@@ -8900,8 +8823,7 @@ async function fillPhotoImages(p) {
     const legacy = img.getAttribute("data-legacy-url") || ""; // 老公开桶遗留的裸 URL
     const signed = viewMap[k] || "";
     const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
-    // 顺序必须是「新签名 URL → 遗留公开 URL → 裸 URL」，理由见 setCosImgSrc 注释
-    setCosImgSrc(img, signed, legacy, fallback);
+    img.src = legacy || signed || fallback;
     img.onerror = () => onCosImgError(img, img.alt, k);
   });
 }
@@ -9629,8 +9551,8 @@ function renderProjectContentPhotos(p, photos, allowDownload = true) {
       const dnBtn = canDownload
         ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
         : "";
-      return `<div class="cos-thumb cos-thumb--readonly is-pending" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">
-        <img class="is-pending" data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">
+      return `<div class="cos-thumb cos-thumb--readonly" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">
+        <img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">
         ${dnBtn}
       </div>`;
     }).join("");
@@ -9673,8 +9595,7 @@ async function fillProjectContentPhotos(p, rootSelector = ".proj-content-detail"
     const legacy = img.getAttribute("data-legacy-url") || "";
     const signed = viewMap[k] || "";
     const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
-    // 顺序必须是「新签名 URL → 遗留公开 URL → 裸 URL」，理由见 setCosImgSrc 注释
-    setCosImgSrc(img, signed, legacy, fallback);
+    img.src = legacy || signed || fallback;
     img.onerror = () => onCosImgError(img, img.alt, k);
   });
 }
@@ -9693,20 +9614,18 @@ function renderFormPhotos() {
       const sid = cosSafeId(it.key || it.url || it.name || Math.random().toString());
       const realKey = it._kind || kind;
       const isStagedHeic = it._staged && it.file && isUnsupportedImageType(it.file.type);
-      // 仅「有 key、等签名」的那种才需要占位骨架；本地 objectURL 预览立即可见，不加
-      const needsFetch = !isStagedHeic && !it.url;
       const img = isStagedHeic
         ? `<div class="cos-thumb__ph">HEIC<br>将转 JPG 上传</div>`
-        : (needsFetch
-          ? `<img class="is-pending" data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`
-          : `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`);
+        : (it.url
+          ? `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`
+          : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`);
       const del = canDelete
         ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeFormPhoto('${realKey}','${esc(it.key || it.url || it.name)}')">✕</button>`
         : "";
       const dn = perms.canDownload
         ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key || "")}','${esc(it.url || "")}','${esc(it.name || "")}')">⬇</button>`
         : "";
-      return `<div class="cos-thumb${needsFetch && it.key ? " is-pending" : ""}" id="cos-item-${sid}">${img}${dn}${del}</div>`;
+      return `<div class="cos-thumb" id="cos-item-${sid}">${img}${dn}${del}</div>`;
     }).join("");
     const addBtn = canUpload
       ? `<button type="button" class="cos-add" onclick="document.getElementById('cosFormFile_${kind}').click()">＋ 添加${title}</button><input id="cosFormFile_${kind}" type="file" accept="image/*" multiple class="hidden" onchange="formStagePhotos(this,'${kind}')">`
@@ -9764,11 +9683,8 @@ async function fillFormPhotos() {
     const legacy = img.getAttribute("data-legacy-url") || "";
     const signed = viewMap[k] || "";
     const fallback = _cosViewHost ? `https://${_cosViewHost}/${k}` : "";
-    // 顺序必须是「新签名 URL → 遗留公开 URL → 裸 URL」，理由见 setCosImgSrc 注释
-    setCosImgSrc(img, signed, legacy, fallback);
-    // 这里不能用「只加个错误类」的裸处理：会覆盖掉标签上的 inline onerror，
-    // 导致表单里已有照片直连失败时既不提示也无法走代理兜底（表现为一片破图）。
-    img.onerror = () => onCosImgError(img, img.alt, k);
+    img.src = legacy || signed || fallback;
+    img.onerror = () => img.classList.add("cos-img--err");
   });
 }
 
@@ -9801,7 +9717,7 @@ async function uploadFormPhotos(projectId) {
     const reqItems = staged.map(({ kind, it }) => {
       const nameExt = (it.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       const ext = extFromMime(it.file.type, nameExt) || "jpg";
-      const key = `projects/${projectId}/${kind}/${uid()}.${ext}`;
+      const key = `gg/projects/${projectId}/${kind}/${uid()}.${ext}`;
       it.key = key;
       return { key, contentType: it.file.type || "image/jpeg" };
     });
@@ -16674,7 +16590,7 @@ async function uploadCompletionPhotos(projectId, files) {
     }
     const nameExt = (realName.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     const ext = extFromMime(realFile.type, nameExt) || "jpg";
-    const key = `projects/${projectId}/completion/${uid()}.${ext}`;
+    const key = `gg/projects/${projectId}/completion/${uid()}.${ext}`;
     prepared.push({ file: realFile, key, name: realName });
   }
   const signed = await cosGetSignedUrls(
@@ -21542,6 +21458,7 @@ async function renderAccounts() {
               </td>` : ""}
               <td>
                 ${a.role === "manager" ? "" : `<button class="btn btn-small" onclick="openUserPermModal('${a.id}', '${esc(a.name || a.email || a.id)}', '${a.role || ""}')">权限</button> `}
+                ${MODE === "cloud" ? `<button class="btn btn-small" onclick="resetUserPassword('${a.id}', '${esc(a.email || a.id)}')">重置密码</button> ` : ""}
                 <button class="btn btn-danger btn-small" onclick="deleteAccount('${a.id}', '${esc(a.email || a.id)}')">删除</button>
               </td>
             </tr>`).join("")}
@@ -21675,6 +21592,124 @@ async function toggleForcePw(id, current) {
   if (error) { fail(error); return; }
   toast(next ? "已标记：该用户下次登录须改密（新密码需 8 位+含大小写字母和数字）" : "已取消强制改密");
   renderAccounts();
+}
+
+/* ============================================================
+ * 管理员重置用户密码为初始密码（云端 + 总经理）
+ * 真正改密码必须由服务端完成（前端无 service_role），故走 reset-password
+ * Edge Function；重置后标记 force_password_change=true，用户首次用初始
+ * 密码登录即被强制改密。
+ * ============================================================ */
+function genTempPassword() {
+  const L = "abcdefghijkmnpqrstuvwxyz", U = "ABCDEFGHJKLMNPQRSTUVWXYZ", D = "23456789";
+  const r = (s) => s[Math.floor(Math.random() * s.length)];
+  let p = r(U) + r(L) + r(D);
+  const all = L + U + D;
+  for (let i = p.length; i < 10; i++) p += r(all);
+  return p.split("").sort(() => Math.random() - 0.5).join("");
+}
+
+function resetUserPassword(id, label) {
+  if (MODE !== "cloud") { toast("仅云端模式支持"); return; }
+  if (!perm.manageAccounts()) { toast("仅管理员可重置密码"); return; }
+  const initPw = genTempPassword();
+  const body = `
+    <p style="font-size:12px;color:#666;margin-bottom:10px;line-height:1.6;">
+      将把该用户密码重置为下方<b>初始密码</b>，重置后该用户<b>下次登录须改密</b>。请复制并告知用户。
+    </p>
+    <label class="cp-label">初始密码</label>
+    <input type="text" id="rpNew" class="input" value="${esc(initPw)}" style="font-family:monospace;letter-spacing:1px;" oninput="updateRpStrength()" />
+    <div id="rpStrength" class="pwd-strength-text"></div>
+  `;
+  window._resetDone = false;
+  modal.open(`重置密码 · ${esc(label)}`, body, {
+    confirmText: "重置",
+    cancelText: "取消",
+    onConfirm: () => doResetPw(id, label),
+    onClose: () => {
+      if (window._resetDone) {
+        window._resetDone = false;
+        showInitPasswordModal(label, window._pendingInitPw || "");
+      }
+    },
+  });
+  setTimeout(() => updateRpStrength(), 0);
+}
+
+function updateRpStrength() {
+  const el = document.getElementById("rpNew");
+  if (!el) return;
+  const ev = evaluatePassword(el.value, "", "");
+  const box = document.getElementById("rpStrength");
+  if (!box) return;
+  box.innerHTML = `<div class="pwd-strength-text">强度：${ev.level}${ev.issues.length ? "（" + ev.issues.join("、") + "）" : " ✓"}</div>`;
+}
+
+async function doResetPw(id, label) {
+  const el = document.getElementById("rpNew");
+  const pw = el ? el.value : "";
+  const ev = evaluatePassword(pw, "", "");
+  if (!ev.ok) { toast("密码不达标：" + ev.issues.join("、")); return false; }
+  const token = await _getSupabaseAccessToken();
+  if (!token) { toast("未获取到登录令牌，请重新登录"); return false; }
+  let data = null, error = null;
+  try {
+    const res = await sb.functions.invoke("reset-password", {
+      body: { userId: id, newPassword: pw },
+      headers: { Authorization: "Bearer " + token },
+    });
+    data = res.data; error = res.error;
+  } catch (e) { error = e; }
+  if (error) {
+    let msg = (error && error.message) || String(error);
+    if (error && error.context) { try { const t = await error.context.text(); if (t) msg += "：" + t.slice(0, 160); } catch (_) {} }
+    toast("重置失败：" + msg);
+    return false;
+  }
+  if (data && data.error) { toast("重置失败：" + data.error); return false; }
+  if (data && data.ok) {
+    // 保险：前端再标记一次强制改密（EF 已设，这里同步 profiles 表与本地展示）
+    try { await sb.from("profiles").update({ force_password_change: true }).eq("id", id); } catch (_) {}
+    window._pendingInitPw = pw;
+    window._resetDone = true;
+    toast("密码已重置");
+    renderAccounts();
+    return true; // 关闭输入弹窗，onClose 打开初始密码展示弹窗
+  }
+  toast("重置失败：未知返回");
+  return false;
+}
+
+function showInitPasswordModal(label, pw) {
+  const body = `
+    <p style="font-size:13px;color:#333;margin-bottom:10px;">用户 <b>${esc(label)}</b> 的初始密码已重置为：</p>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <code id="initPw" style="flex:1;background:#f4f5f7;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;font-size:15px;letter-spacing:1px;font-family:monospace;word-break:break-all;">${esc(pw)}</code>
+      <button class="btn btn-small" onclick="copyInitPw()">复制</button>
+    </div>
+    <p style="font-size:12px;color:#d97706;line-height:1.6;">⚠️ 请把此初始密码发给该用户；其首次登录会被要求<b>立即改密</b>。请妥善传达，避免泄露。</p>
+    <button class="btn" style="margin-top:6px;width:100%;" onclick="modal.close()">关闭</button>
+  `;
+  modal.open("初始密码 · " + esc(label), body, { hideFooter: true });
+}
+
+function copyInitPw() {
+  const t = document.getElementById("initPw");
+  if (!t) return;
+  const txt = t.textContent || "";
+  const done = () => toast("已复制初始密码");
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(done).catch(() => fallbackCopy(txt));
+  } else fallbackCopy(txt);
+}
+
+function fallbackCopy(txt) {
+  const ta = document.createElement("textarea");
+  ta.value = txt;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); toast("已复制初始密码"); } catch (e) { toast("复制失败，请手动复制"); }
+  document.body.removeChild(ta);
 }
 
 async function addLocalAccount() {
@@ -26198,14 +26233,19 @@ async function doSignup() {
   if (authSubmitting) return;
   const email = document.getElementById("authEmail").value.trim();
   const password = document.getElementById("authPassword").value;
+  const nameEl = document.getElementById("authName");
+  const name = nameEl ? nameEl.value.trim() : "";
   if (!email || !password) { showAuthError("请输入邮箱和密码"); return; }
-  const ev = evaluatePassword(password, email, "");
-  if (!ev.ok) { showAuthError("密码不达标（至少 8 位、需同时含大小写字母和数字、禁用连续/重复序列、非常见弱密码）：" + ev.issues.join("、")); return; }
+  if (!name) { showAuthError("请填写真实姓名"); return; }
+  const ev = evaluatePassword(password, email, name);
+  if (!ev.ok) { showAuthError("密码不达标（至少 8 位，需同时含大写字母、小写字母和数字）：" + ev.issues.join("、")); return; }
   authSubmitting = true;
   try {
-    const { error } = await sb.auth.signUp({ email, password });
+    const { error } = await sb.auth.signUp({ email, password, options: { data: { name } } });
     if (error) { showAuthError("注册失败：" + error.message); return; }
     showAuthError("");
+    // 暂存姓名：若服务端 trigger 未入库（如未重跑 SQL），登录后由 startCloudSession 兜底写入 profiles.name
+    try { localStorage.setItem("pendingSignupName", name); } catch (e) {}
     toast("注册成功，若开启了邮箱验证请先到邮箱确认，然后登录");
   } catch (e) {
     console.error("注册异常:", e);
@@ -26300,8 +26340,7 @@ const PWD_SEQUENCES = PWD_BL.seq;
 
 /**
  * 评估密码安全性。返回 { score, level, ok, issues, classes }。
- * 达标标准：至少 8 位 + 同时含大小写字母和数字（符号可选）+ 不在常见弱密码清单（500+ 条）
- * + 不含连续/重复字符序列（如 1234、aaaa、qwer）+ 不含邮箱前缀/姓名。
+ * 达标标准：至少 8 位 + 同时含大写字母、小写字母和数字（符号可选）。
  * 注意：系统无法读取 Supabase 已存密码，故「检测」只在用户输入时实时进行（注册 / 改密码 / 强制改密）。
  */
 function evaluatePassword(pwd, email, name) {
@@ -26327,13 +26366,6 @@ function evaluatePassword(pwd, email, name) {
 
   if (pwd.length < 8) issues.push("至少 8 位");
   if (!hasLower || !hasUpper || !hasDigit) issues.push("需同时包含大小写字母和数字");
-  if (weakHit) { score = 0; issues.push("该密码在常见弱密码清单中"); }
-  if (seqBad) { score = 0; issues.push("不能包含连续或重复字符序列（如 1234、aaaa、qwer）"); }
-
-  const local = (email || "").split("@")[0].toLowerCase();
-  if (local && local.length >= 3 && lower.includes(local)) issues.push("不能与邮箱前缀相同");
-  const nm = (name || "").trim().toLowerCase();
-  if (nm && nm.length >= 2 && lower.includes(nm)) issues.push("不能包含姓名");
 
   let level = "弱";
   if (score >= 6) level = "很强";
@@ -26341,11 +26373,7 @@ function evaluatePassword(pwd, email, name) {
   else if (score >= 2) level = "中";
 
   const ok = pwd.length >= 8
-    && hasLower && hasUpper && hasDigit
-    && !weakHit
-    && !seqBad
-    && !(local && local.length >= 3 && lower.includes(local))
-    && !(nm && nm.length >= 2 && lower.includes(nm));
+    && hasLower && hasUpper && hasDigit;
 
   return { score, level, ok, issues, classes };
 }
@@ -26515,6 +26543,11 @@ async function startCloudSession() {
     currentProfile = newProfile;
     applyProfileToUI();
 
+    // 注册时填写的真实姓名兜底入库：profile.name 为空且本地暂存了注册姓名时，
+    // 由本人写入自己的 profiles.name（依赖放宽后的 RLS profiles_self_name；
+    // 若已重跑 trigger SQL，则注册时已由 handle_new_user 入库，此处会跳过）。
+    await ensureSignupName(currentUser.id);
+
     // 未分配角色：显示提示并停止后续加载
     if (!currentProfile.role) {
       showNoAccess(currentUser.email);
@@ -26573,8 +26606,32 @@ async function startCloudSession() {
   }
 }
 
+/* 注册时填写的真实姓名兜底入库：profile.name 为空且本地暂存了注册姓名时写入 */
+async function ensureSignupName(uid) {
+  let pending = null;
+  try { pending = localStorage.getItem("pendingSignupName"); } catch (e) {}
+  if (!pending) return;
+  if (currentProfile && currentProfile.name) {
+    try { localStorage.removeItem("pendingSignupName"); } catch (e) {}
+    return;
+  }
+  try {
+    const { error } = await sb.from("profiles").update({ name: pending }).eq("id", uid);
+    if (!error) {
+      if (currentProfile) currentProfile.name = pending;
+      applyProfileToUI();
+      try { localStorage.removeItem("pendingSignupName"); } catch (e) {}
+    } else {
+      console.warn("写入注册姓名失败（可能尚未重跑 RLS / trigger SQL）：", error.message);
+    }
+  } catch (e) {
+    console.warn("写入注册姓名异常：", e);
+  }
+}
+
 /* 账号未授权时的提示遮罩 */
 function showNoAccess(email) {
+  hideBootLoader(); // 必须在显示「待授权」前收起加载遮罩，否则 bootLoader（DOM 在 noAccessScreen 之后）会盖在上方，表现为「一直加载」
   setSyncStatus("offline", "● 待授权");
   const screen = document.getElementById("noAccessScreen");
   document.getElementById("noAccessEmail").textContent = email || "";
@@ -27402,7 +27459,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v58899d54";
+  const APP_VERSION = "vcb887263";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
