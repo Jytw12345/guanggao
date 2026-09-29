@@ -184,6 +184,7 @@ let elapsedMarkerTimer = null;   // 已施工时长轻量刷新（30s，仅更�
 let delayedPromotionTimer = null; // 延期项目自动转正定时检查
 let overdueNotifyTimer = null;    // 超期未完工定时扫描（5 分钟，给本门店店长发站内通知）
 let lastSyncTime = null;   // 上次成功同步时间戳
+let lastCloudLoadFailed = false; // 最近一次 loadAll 是否失败（用于空白页区分「未同步」与「真没数据」）
 let syncJustTimer = null;   // 刚同步提示的延时定时器
 let syncSyncingTimer = null; // 同步中态的兜底定时器
 let realtimeRetryTimer = null; // Realtime 断线重连定时器
@@ -3176,21 +3177,26 @@ const repo = {
         console.error("云端数据读取失败:", errorMsg);
         // 本次全量失败，内存未被覆盖，把作废掉的队列还回去，等下次重试
         staleTables.forEach((t) => pendingChanges.add(t));
+        lastCloudLoadFailed = true;
         // 重试过后仍然失败，此时才区分原因：
         // 网络抖动（回前台/切网常见）只做轻提示并自动重试，不能用「请检查建表脚本」吓唬用户；
         // 只有带明确 code 的结构性错误才是真的要人去查建表脚本。
-        if (allErrors.every((e) => isTransientCloudError(e.res.error))) {
+        const allTransient = allErrors.every((e) => isTransientCloudError(e.res.error));
+        if (allTransient) {
           setSyncStatus("offline", "● 网络不稳定，重试中");
           scheduleResyncRetry();
+          // 持久横幅：明确告知同步失败并提供重试，无论是否有本地缓存（之前仅在完全无缓存时才弹，
+          // 导致有缓存但项目未拉到的客户端一片空白却无任何提示）。
+          showCloudLoadError(`云端同步失败（网络或超时，已自动重试），可点「重试」立即重连`);
         } else {
+          const firstMsg = (allErrors[0].res.error && allErrors[0].res.error.message) || "";
           toast(`云端数据读取失败，${allErrors.length} 个表出错，请检查建表脚本是否已执行`);
-        }
-        // 首启且本地无任何缓存：显示持久错误横幅，区分「无数据」与「加载失败」
-        if (!((cache.projects || []).length || (cache.workers || []).length || (cache.stores || []).length)) {
-          showCloudLoadError(`数据加载失败（${allErrors.length} 个表出错），请检查网络或建表脚本后重试`);
+          setSyncStatus("offline", "● 数据加载失败");
+          showCloudLoadError(`数据加载失败（${allErrors.length} 个表出错，如「${allErrors[0].name}」：${firstMsg}）。请检查网络或建表脚本后点「重试」`);
         }
         return false;
       }
+      lastCloudLoadFailed = false; // 走到这里说明所有表都拉取成功
       // 角色权限：以默认模板为底，用云端配置覆盖（rpRes 出错则退回默认）
       rolePerms = JSON.parse(JSON.stringify(DEFAULT_ROLE_PERMS));
       if (!rpRes.error) {
@@ -9071,8 +9077,43 @@ function renderProjects() {
   if (status) items = items.filter((p) => p.status === status);
 
   if (items.length === 0) {
-    let emptyText = "暂无项目";
-    if (status === STATUS.PAUSED) {
+    // 汇总当前生效的筛选条件，便于用户知道为什么空白
+    const hasFilter = !!(status || storeFilter || kw || projectTimeFilterDays > 0);
+    const filters = [];
+    if (status) filters.push(`状态：${status}`);
+    if (storeFilter) {
+      const s = getStore(storeFilter);
+      filters.push(`门店：${s ? s.name : storeFilter}`);
+    }
+    if (kw) filters.push(`搜索：${kw}`);
+    if (projectTimeFilterDays > 0) filters.push(`时间：近${projectTimeFilterDays}天`);
+
+    const isSyncing = !!syncSyncingTimer || document.getElementById("mobileSyncTime")?.classList.contains("is-syncing");
+    const totalProjects = cache.projects.length;
+
+    // 云端模式且从未成功同步 / 上次同步失败：列表为空很可能不是「真没数据」，而是
+    // 「服务器数据没加载进来」。明确提示并给一个「立即同步」按钮（强制从服务器全量拉取）。
+    if (MODE === "cloud" && totalProjects === 0 && !isSyncing && (lastCloudLoadFailed || !lastSyncTime)) {
+      const why = lastCloudLoadFailed ? "上次同步失败" : "尚未与服务器同步";
+      list.innerHTML = `<div class="empty sync-failed-empty">
+        <div class="sync-failed-empty__icon">☁️</div>
+        <div class="sync-failed-empty__title">数据未同步</div>
+        <div class="sync-failed-empty__desc">${why}，项目列表为空可能是还没从服务器加载到数据。</div>
+        <button type="button" class="btn btn-primary" style="margin-top:14px;" onclick="forceFullRefresh()">立即同步</button>
+      </div>`;
+      return;
+    }
+
+    let emptyText = "";
+    let extra = "";
+
+    if (hasFilter) {
+      // 有筛选条件导致空：提示条件 + 给清除按钮
+      emptyText = filters.join("，") || "当前筛选条件下无项目";
+      extra = `<button type="button" class="btn" style="margin-top:12px;" onclick="clearProjectFilters()">清除筛选</button>`;
+    } else if (totalProjects === 0 && isSyncing) {
+      emptyText = "数据同步中，请稍候…";
+    } else if (status === STATUS.PAUSED) {
       emptyText = "暂无已暂停项目。施工中项目可点击「暂停施工」进入此状态。";
     } else if (status === STATUS.DELAYED) {
       emptyText = "暂无已延期项目。预约中或施工中项目可点击「延期」进入此状态。";
@@ -9089,7 +9130,8 @@ function renderProjects() {
     } else {
       emptyText = "暂无项目。";
     }
-    list.innerHTML = `<div class="empty">${emptyText}</div>`;
+
+    list.innerHTML = `<div class="empty">${emptyText}${extra ? `<div>${extra}</div>` : ""}</div>`;
     return;
   }
 
@@ -9347,6 +9389,35 @@ function filterProjectsByStatus(status) {
   sel.value = newValue;
   // 手动触发 change，让自定义下拉组件同步显示文本，同时触发已有的 change 监听器
   sel.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+// 一键清除项目列表的所有筛选条件（状态、门店、时间、搜索）
+function clearProjectFilters() {
+  const statusSel = document.getElementById("projectStatusFilter");
+  if (statusSel) {
+    statusSel.value = "";
+    statusSel.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  const storeSel = document.getElementById("projectStoreFilter");
+  if (storeSel) {
+    // 非管理员且不能看全部时，保留本门店；否则清空
+    const keepMyStore = !isManager() && !perm.viewProjectAll() && myStore();
+    if (!keepMyStore) {
+      storeSel.value = "";
+    }
+  }
+  const timeSel = document.getElementById("projectTimeFilter");
+  let needsRender = true;
+  if (timeSel) {
+    timeSel.value = "0";
+    setProjectTimeFilter(0); // 内部会 renderProjects
+    needsRender = false;
+  } else {
+    projectTimeFilterDays = 0;
+  }
+  const search = document.getElementById("projectSearch");
+  if (search) search.value = "";
+  if (needsRender) renderProjects();
 }
 
 function updateProjectStatusIndicator(items) {
@@ -27509,7 +27580,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc3fd6379";
+  const APP_VERSION = "v608a0651";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
