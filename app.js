@@ -20,6 +20,8 @@ window.addEventListener("beforeinstallprompt", (e) => {
 window.addEventListener("appinstalled", () => {
   window.__pwaDeferredPrompt = null;
 });
+// 包活分成「汇总比例条」分隔点拖动（事件委托，全局只注册一次）
+document.addEventListener("pointerdown", onCommHandleDown);
 
 const STORE_KEY = "ad_install_system_v1";
 const CUSTOMER_HISTORY_KEY = "ad_install_customer_history";
@@ -33,7 +35,7 @@ const HOURS_MAX = 24;
 const DAILY_BLOCK_CAP = 18;
 // 当日累计软上限：单日累计超过此值(12h)弹确认框（仍可加），提醒疑似重复。
 const DAILY_WARN_CAP = 12;
-// 点完工时「开工→完工」时长小于此分钟数，疑似未实际施工仅登记工时，给出警告（非拦截）。
+// 点完工时「开工→完工」时长小于此分钟数，系统估算工时不准确，给出警告提示手动填写真实工时（非拦截；包活制下仅影响内部考勤统计）。
 const SHORT_WORK_WARN_MINUTES = 30;
 // 反向失真守卫（与「虚假施工」对称）：实际在场窗口很短（< SHORT_WORK_WARN_MINUTES 分钟）却填报大量工时（> 此值小时），弹确认拦截。
 const LOGGED_VS_ONSITE_WARN_HOURS = 2;
@@ -167,7 +169,7 @@ function getAllowedStatuses(currentStatus) {
 const TIGHT_GAP_MINUTES = 30;
 
 /* 内存缓存：所有渲染函数都读它；shape 与本地模式一致 */
-const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [], vehicleTrips: [], vehicles: [], internalTasks: [], notifications: [] };
+const cache = { workers: [], projects: [], stores: [], leaveRecords: [], leaveQuota: [], holidays: [], operationLogs: [], outsourcedWorkers: [], workerSchedules: [], accounts: [], vehicleTrips: [], vehicles: [], internalTasks: [], notifications: [], measurements: [] };
 
 /* 角色 */
 const ROLE = { MANAGER: "manager", STORE: "store_manager", WORKER: "worker" };
@@ -242,8 +244,6 @@ const CAP = {
   CONSTRUCTION_PAUSE: "construction_pause",
   CONSTRUCTION_RESUME: "construction_resume",
   CONSTRUCTION_COMPLETE: "construction_complete",
-  CONSTRUCTION_LOG_WORK: "construction_log_work",
-  CONSTRUCTION_LOG_OUTSOURCED: "construction_log_outsourced",
   WORKLOG_DELETE: "worklog_delete",
   WORKER_ASSIGN: "worker_assign",
   WORKER_UNASSIGN: "worker_unassign",
@@ -268,13 +268,10 @@ const CAP = {
   REPAIR_CREATE: "repair_create",
   REPAIR_COMPLETE: "repair_complete",
   REWORK_PROJECT: "rework_project",
-  MANAGE_WAGE_CONFIG: "manage_wage_config",
   PROJECT_EDIT_APPOINTMENT_OWN: "project_edit_appointment_own",
   PROJECT_EDIT_APPOINTMENT_ALL: "project_edit_appointment_all",
-  PROJECT_EDIT_HOURS_OWN: "project_edit_hours_own",
-  PROJECT_EDIT_HOURS_ALL: "project_edit_hours_all",
-  PROJECT_EDIT_WORKLOG_OWN: "project_edit_worklog_own",
-  PROJECT_EDIT_WORKLOG_ALL: "project_edit_worklog_all",
+  PROJECT_EDIT_CONTRACT: "project_edit_contract",
+  PROJECT_EDIT_COMMISSION: "project_edit_commission",
   EXPORT_PROJECTS: "export_projects",
   EXPORT_WORKLOGS: "export_worklogs",
   EXPORT_LEAVES: "export_leaves",
@@ -290,13 +287,6 @@ const CAP = {
   SCHEDULE_EDIT_ALL: "schedule_edit_all",
   SCHEDULE_DELETE_OWN: "schedule_delete_own",
   SCHEDULE_DELETE_ALL: "schedule_delete_all",
-  TASK_VIEW: "task_view",
-  TASK_ADD: "task_add",
-  TASK_START: "task_start",
-  TASK_COMPLETE: "task_complete",
-  TASK_DELETE: "task_delete",
-  TASK_VERIFY: "task_verify",
-  INTERNAL_WORK_LOG: "internal_work_log",
   VEHICLE_VIEW: "vehicle_view",
   VEHICLE_TRIP_ADD: "vehicle_trip_add",
   VEHICLE_TRIP_DELETE: "vehicle_trip_delete",
@@ -308,6 +298,9 @@ const CAP = {
   PHOTO_UPLOAD_COMPLETION: "photo_upload_completion",
   PHOTO_DELETE_COMPLETION: "photo_delete_completion",
   PHOTO_DOWNLOAD: "photo_download",
+  // 注：「内部任务」与「上门量尺」功能已于 2026-10-18 下线，其权限点（TASK_* / INTERNAL_WORK_LOG /
+  // MEASUREMENT_*）一并移除。若要恢复功能，需同时恢复 CAP、CAP_LABEL、CAP_GROUPS、DEFAULT_ROLE_PERMS
+  // 与 perm 中的对应函数，以及 index.html 的 tab / 面板入口。
 };
 
 /* 权限项的中文说明（角色权限配置页逐行展示，顺序即展示顺序） */
@@ -324,9 +317,7 @@ const CAP_LABEL = {
   construction_pause: "暂停施工",
   construction_resume: "恢复施工",
   construction_complete: "完成施工",
-  construction_log_work: "填写施工工时",
-  construction_log_outsourced: "填写外协工时",
-  worklog_delete: "删除工时记录",
+  worklog_delete: "删除考勤工时记录（纠错）",
   worker_assign: "分配安装人员",
   worker_unassign: "移除安装人员",
   worker_add: "添加施工人员",
@@ -343,16 +334,14 @@ const CAP_LABEL = {
   review_project: "审核项目",
   unreview_project: "反审核项目",
   accept_project: "验收项目",
-  view_stats_global: "查看全局工时统计",
+  view_stats_global: "查看全局提成统计",
   view_stats_store: "查看本门店统计",
   manage_stores: "管理门店",
   manage_outsourced: "管理外协人员",
   project_edit_appointment_own: "修改自己项目预约时间",
   project_edit_appointment_all: "修改所有项目预约时间",
-  project_edit_hours_own: "修改自己项目预约工时",
-  project_edit_hours_all: "修改所有项目预约工时",
-  project_edit_worklog_own: "修改自己项目的完工工时",
-  project_edit_worklog_all: "修改所有项目的完工工时",
+  project_edit_contract: "修改包活金额",
+  project_edit_commission: "修改工人分成",
   export_projects: "导出项目数据",
   export_worklogs: "导出工时记录",
   export_leaves: "导出休假记录",
@@ -368,19 +357,11 @@ const CAP_LABEL = {
   schedule_edit_all: "编辑所有日程",
   schedule_delete_own: "删除自己的日程",
   schedule_delete_all: "删除所有日程",
-  task_view: "查看内部任务",
-  task_add: "下达内部任务",
-  task_start: "开始内部任务",
-  task_complete: "完成内部任务",
-  task_delete: "删除内部任务",
-  task_verify: "审核内部任务",
-  internal_work_log: "填写内部工作日志",
   vehicle_view: "查看车辆里程",
   vehicle_trip_add: "用车/还车登记",
   vehicle_trip_delete: "删除里程记录",
   vehicle_manage: "管理车辆",
   repair_create: "发起维修单",
-  manage_wage_config: "管理工时单价",
   repair_complete: "完成维修",
   rework_project: "返工项目",
   photo_upload_site: "上传现场图",
@@ -394,16 +375,16 @@ const CAP_LABEL = {
 
 /* 权限项分组（角色权限配置页与个性权限弹窗按组展示，方便勾选） */
 const CAP_GROUPS = [
-  { label: "项目预约", caps: ["project_create","project_edit_own","project_edit_all","project_edit_appointment_own","project_edit_appointment_all","project_edit_hours_own","project_edit_hours_all","project_delete_own","project_delete_all","project_view_all","project_delay","project_cancel"] },
-  { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","construction_log_work","construction_log_outsourced","worklog_delete","project_edit_worklog_own","project_edit_worklog_all","worker_assign","worker_unassign"] },
+  { label: "项目预约", caps: ["project_create","project_edit_own","project_edit_all","project_edit_appointment_own","project_edit_appointment_all","project_delete_own","project_delete_all","project_view_all","project_delay","project_cancel"] },
+  { label: "包活结算", caps: ["project_edit_contract","project_edit_commission"] },
+  { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","worklog_delete","worker_assign","worker_unassign"] },
   { label: "人员管理", caps: ["worker_add","worker_edit","worker_delete","worker_view","manage_outsourced"] },
   { label: "休假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","leave_delete","leave_withdraw","leave_batch_rotational"] },
   { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_complete","rework_project"] },
   { label: "数据统计", caps: ["view_stats_global","view_stats_store"] },
   { label: "数据工具", caps: ["export_projects","export_worklogs","export_leaves","export_workers","export_stores","export_all","import_data","view_operation_logs"] },
-  { label: "系统管理", caps: ["manage_stores","manage_wage_config"] },
+  { label: "系统管理", caps: ["manage_stores"] },
   { label: "个人日程", caps: ["schedule_view","schedule_view_all","schedule_add","schedule_edit_own","schedule_edit_all","schedule_delete_own","schedule_delete_all"] },
-  { label: "内部任务", caps: ["task_view","task_add","task_start","task_complete","task_delete","task_verify","internal_work_log"] },
   { label: "车辆里程", caps: ["vehicle_view","vehicle_trip_add","vehicle_trip_delete","vehicle_manage"] },
   { label: "照片管理", caps: ["photo_upload_site","photo_delete_site","photo_upload_pm","photo_delete_pm","photo_upload_completion","photo_delete_completion","photo_download"] },
 ];
@@ -415,7 +396,7 @@ const DEFAULT_ROLE_PERMS = {
     project_delete_own: true, project_delete_all: true, project_view_all: true,
     project_delay: true, project_cancel: true,
     construction_start: false, construction_pause: false, construction_resume: false,
-    construction_complete: false, construction_log_work: false, construction_log_outsourced: false,
+    construction_complete: false,
     worklog_delete: false,
     worker_assign: false, worker_unassign: false, worker_add: false,
     worker_edit: false, worker_delete: false, worker_view: true,
@@ -423,17 +404,15 @@ const DEFAULT_ROLE_PERMS = {
     leave_delete: true, leave_withdraw: true, leave_batch_rotational: true,
     review_project: true, unreview_project: true, accept_project: false,
     view_stats_global: false, view_stats_store: true,
-    manage_stores: false, manage_wage_config: false,
+    manage_stores: false,
     manage_outsourced: true,
-    project_edit_appointment_own: true, project_edit_appointment_all: true, project_edit_hours_own: true, project_edit_hours_all: true,
-    project_edit_worklog_own: true, project_edit_worklog_all: true,
+    project_edit_appointment_own: true, project_edit_appointment_all: true,
+    project_edit_contract: true, project_edit_commission: true,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
     import_data: false, view_operation_logs: false,
     repair_create: true, repair_complete: false, rework_project: true,
     photo_upload_site: true, photo_delete_site: true, photo_upload_pm: true, photo_delete_pm: true, photo_upload_completion: true, photo_delete_completion: true, photo_download: true,
     schedule_view: true, schedule_view_all: true, schedule_add: true, schedule_edit_own: true, schedule_edit_all: true, schedule_delete_own: true, schedule_delete_all: true,
-    task_view: true, task_add: true, task_start: true, task_complete: true, task_delete: true, task_verify: true,
-    internal_work_log: false,
     vehicle_view: true, vehicle_trip_add: true, vehicle_trip_delete: false,
     vehicle_manage: true,
   },
@@ -442,7 +421,7 @@ const DEFAULT_ROLE_PERMS = {
     project_delete_own: false, project_delete_all: false, project_view_all: false,
     project_delay: true, project_cancel: true,
     construction_start: true, construction_pause: true, construction_resume: true,
-    construction_complete: true, construction_log_work: true, construction_log_outsourced: true,
+    construction_complete: true,
     worklog_delete: true,
     worker_assign: true, worker_unassign: true, worker_add: false,
     worker_edit: false, worker_delete: false, worker_view: true,
@@ -450,17 +429,15 @@ const DEFAULT_ROLE_PERMS = {
     leave_delete: false, leave_withdraw: false, leave_batch_rotational: false,
     review_project: false, unreview_project: false, accept_project: false,
     view_stats_global: false, view_stats_store: false,
-    manage_stores: false, manage_wage_config: false,
+    manage_stores: false,
     repair_create: false, repair_complete: true, rework_project: false,
     photo_upload_site: true, photo_delete_site: true, photo_upload_pm: true, photo_delete_pm: true, photo_upload_completion: true, photo_delete_completion: true, photo_download: true,
     manage_outsourced: false,
-    project_edit_appointment_own: false, project_edit_appointment_all: false, project_edit_hours_own: false, project_edit_hours_all: false,
-    project_edit_worklog_own: false, project_edit_worklog_all: false,
+    project_edit_appointment_own: false, project_edit_appointment_all: false,
+    project_edit_contract: false, project_edit_commission: false,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
     import_data: false, view_operation_logs: false,
     schedule_view: true, schedule_view_all: false, schedule_add: true, schedule_edit_own: true, schedule_edit_all: false, schedule_delete_own: true, schedule_delete_all: false,
-    task_view: true, task_add: false, task_start: true, task_complete: true, task_delete: false, task_verify: false,
-    internal_work_log: false,
     vehicle_view: true, vehicle_trip_add: true, vehicle_trip_delete: false,
     vehicle_manage: false,
   },
@@ -506,9 +483,11 @@ const perm = {
   pauseConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_PAUSE),
   resumeConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_RESUME),
   completeConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_COMPLETE),
-  logWorkHours: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_LOG_WORK),
-  logOutsourcedHours: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_LOG_OUTSOURCED),
-  deleteWorkLog: (p) => (!isReviewed(p) && can(CAP.WORKLOG_DELETE)) || perm.editWorkLog(p),
+  // 「填写施工/外协工时」权限点已随手动工时功能取消而移除（2026-10-18），恒 false：
+  // 工时由系统在完工时按在场时段自动生成，任何角色都无需勾选。
+  logWorkHours: () => false,
+  logOutsourcedHours: () => false,
+  deleteWorkLog: (p) => !isReviewed(p) && can(CAP.WORKLOG_DELETE),
   delayProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELAY),
   // 取消仅允许「开工前/施工中/暂停/延期」阶段；已完工/已验收/已审核/已取消均不可取消
   // （与 STATUS_TRANSITIONS 状态机、详情页取消按钮可见性保持一致，避免防御性缺口）
@@ -538,7 +517,8 @@ const perm = {
   createRepair: () => can(CAP.REPAIR_CREATE),
   completeRepair: () => can(CAP.REPAIR_COMPLETE),
   rework: (p) => can(CAP.REWORK_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
-  manageWageConfig: () => isManager() || can(CAP.MANAGE_WAGE_CONFIG),
+  // 「管理工时单价」权限点与工资单价配置 UI 已整体移除（2026-10-18 包活制改造），恒 false
+  manageWageConfig: () => false,
   // 注意：项目一旦开工或进入终态，预约时间即锁定，任何权限都不能再改（须走「延期」流程）
   editAppointment: (p) => !isReviewed(p) && !isAppointmentLocked(p) && (
     // "所有"权限：跨门店，覆盖全部门店的项目
@@ -550,30 +530,20 @@ const perm = {
       (can(CAP.PROJECT_EDIT_OWN) && p && p.createdBy === currentProfile.id)
     ))
   ),
-  // 注意：项目一旦开工或进入终态，预约工时即锁定为考核基准，任何权限都不能再改
-  editHours: (p) => !isReviewed(p) && !isAppointmentLocked(p) && (
-    // "所有"权限：跨门店，覆盖全部门店的项目
-    can(CAP.PROJECT_EDIT_HOURS_ALL) ||
-    can(CAP.PROJECT_EDIT_ALL) ||
-    // 本门店内：仅本人创建的项目
-    ((isManager() || !myStore() || (p && p.storeId === myStore())) && (
-      (can(CAP.PROJECT_EDIT_HOURS_OWN) && p && p.createdBy === currentProfile.id) ||
-      (can(CAP.PROJECT_EDIT_OWN) && p && p.createdBy === currentProfile.id)
-    ))
-  ),
-  // 修改已完工工时（施工工时登记有误时更正）：面向「已完工/已验收/已审核」等终态项目，
-  // 不锁预约工时，仅由权限控制；修改会记入操作日志，便于审计。默认门店经理/总经理拥有。
-  // 修改完工工时：已审核(REVIEWED)后锁定，仅 PROJECT_EDIT_ALL 经理级可强制修改（纠错安全闸）；
-  // 已完工(DONE)/已验收(ACCEPTED) 仍按权限可改。
-  editWorkLog: (p) => {
-    if (!p) return false;
-    if (isReviewed(p)) return can(CAP.PROJECT_EDIT_ALL);
-    return can(CAP.PROJECT_EDIT_WORKLOG_ALL) || can(CAP.PROJECT_EDIT_ALL) ||
-      ((isManager() || !myStore() || (p.storeId === myStore())) && (
-        (can(CAP.PROJECT_EDIT_WORKLOG_OWN) && p.createdBy === currentProfile.id) ||
-        (can(CAP.PROJECT_EDIT_OWN) && p.createdBy === currentProfile.id)
-      ));
-  },
+  // 「修改预约工时」权限点已于 2026-10-18 移除：预约表单已无工时输入，预计总工时按施工时段
+  // × 已分配人数自动派生，改预约时间即自动重算，无需单独授权（改预约只认 perm.editAppointment）。
+  editHours: (p) => perm.editAppointment(p),
+  // 包活制（2026-10-18）：改工程金额/材料费 与 改工人分成 从「经理+店长硬编码」改为权限点，
+  // 默认模板给 manager / store_manager = true、worker = false（与改造前行为一致）。
+  // 门店兜底：与 editProject / rework / reviewProject 同口径 —— 「编辑所有项目」权限 或 总经理 或
+  // 未绑定门店（跨店账号）放行；否则仅限本门店项目。防止单独勾了本权限的账号改到别店项目的工钱。
+  editContract: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_CONTRACT)
+    && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
+  editCommission: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COMMISSION)
+    && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
+  // 注：「修改完工工时」权限点（project_edit_worklog_own/all）已随手动工时功能取消而移除。
+  // 工时由系统在完工时自动生成（仅考勤参考、不计工资），唯一的工时纠错入口是「删除考勤工时记录」
+  // （worklog_delete），故 deleteWorkLog 只认该权限，不再叠加「修改工时」判定。
   exportProjects: () => can(CAP.EXPORT_PROJECTS),
   exportWorkLogs: () => can(CAP.EXPORT_WORKLOGS),
   exportLeaves: () => can(CAP.EXPORT_LEAVES),
@@ -598,7 +568,7 @@ const perm = {
   addVehicleTrip: () => can(CAP.VEHICLE_TRIP_ADD),
   deleteVehicleTrip: () => can(CAP.VEHICLE_TRIP_DELETE),
   vehicleManage: () => can(CAP.VEHICLE_MANAGE),
-  doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE) || can(CAP.CONSTRUCTION_LOG_WORK) || can(CAP.CONSTRUCTION_LOG_OUTSOURCED)),
+  doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE)),
   manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT),
   manageMakeup: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_BATCH_ROTATIONAL),
   viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
@@ -610,6 +580,22 @@ const perm = {
   photoUploadCompletion: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_COMPLETION),
   photoDeleteCompletion: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_COMPLETION),
   photoDownload: () => can(CAP.PHOTO_DOWNLOAD),
+  // 「内部任务」与「上门量尺」已于 2026-10-18 下线，权限项已从 CAP/CAP_GROUPS/DEFAULT_ROLE_PERMS 移除。
+  // 这里保留函数名但恒返回 false，避免历史调用点（首页提醒 / 日程聚合 / 卡片渲染等 40+ 处）抛
+  // "perm.xxx is not a function" 导致白屏。恢复功能时把这些改回 can(CAP.*) 即可。
+  viewTask: () => false,
+  addTask: () => false,
+  startTask: () => false,
+  completeTask: () => false,
+  deleteTask: () => false,
+  verifyTask: () => false,
+  internalWorkLog: () => false,
+  measurementView: () => false,
+  measurementCreate: () => false,
+  measurementEdit: () => false,
+  measurementAssign: () => false,
+  measurementDelete: () => false,
+  measurementConvert: () => false,
 };
 
 function isReviewed(p) {
@@ -1093,7 +1079,7 @@ function buildProjectMenu(p) {
   const items = [];
   items.push({ label: "查看详情 / 施工管理", icon: "🔧", onClick: () => openProjectFromCard(p.id) });
   if (perm.editProject(p)) items.push({ label: "编辑项目", icon: "✏️", onClick: () => editProject(p.id) });
-  if ((perm.editAppointment(p) || perm.editHours(p)) && !isAppointmentLocked(p))
+  if (perm.editAppointment(p) && !isAppointmentLocked(p))
     items.push({ label: "快速改期", icon: "📅", onClick: () => quickEditProjectTime(p.id) });
   if (p.phone) items.push({ label: "打电话", icon: "📞", onClick: () => callPhone(makePhoneEvent(p.phone)) });
   if (p.address) items.push({ label: "复制地址", icon: "📋", onClick: () => copyText(p.address, "已复制地址") });
@@ -1727,21 +1713,17 @@ function readAllSegments() {
   return segs;
 }
 
-/* 重写 updateSpanHint：按所有分段求和显示总施工时长与建议人数（支持跨天多段） */
+/* 重写 updateSpanHint：按所有分段求和显示总施工时长（支持跨天多段）。
+   预约只填施工时间段：不再有「预计总工时 / 施工人数」输入，总工时由保存时按 时段时长 × 已分配人数 自动派生。 */
 function updateSpanHint() {
   const durationCard = document.getElementById("pDurationCard");
   const durationValue = document.getElementById("pDurationValue");
-  const suggestWorkers = document.getElementById("pSuggestWorkers");
-  const estEl = document.getElementById("pEst");
-  const calcBtn = document.getElementById("pCalcBtn");
-  const estHint = document.getElementById("pEstHint");
-  if (!durationCard || !durationValue || !suggestWorkers) return;
+  if (!durationCard || !durationValue) return;
 
   const segs = (typeof readAllSegments === "function") ? readAllSegments() : [];
   if (!segs.length) {
     durationCard.style.opacity = "0.5";
     durationValue.textContent = "--";
-    suggestWorkers.textContent = "--";
     return;
   }
 
@@ -1772,7 +1754,6 @@ function updateSpanHint() {
   if (bad) {
     durationCard.style.opacity = "1";
     durationValue.innerHTML = `<span style="color:var(--danger);font-size:14px;">每段结束时间需晚于开始时间</span>`;
-    suggestWorkers.textContent = "--";
     return;
   }
 
@@ -1790,33 +1771,6 @@ function updateSpanHint() {
     durText = `${m}分钟`;
   }
   durationValue.innerHTML = `<span style="color:#1e293b;">${durText}</span>`;
-
-  const workersEl = document.getElementById("pWorkers");
-  const workerCount = Number(workersEl ? workersEl.value : 1) || 1;
-  const autoEstHours = Math.round((totalMins / 60) * workerCount * 10) / 10;
-
-  // 跨天施工：计算按钮按单日连续时段推算，会覆盖多段设置，故隐藏并更换提示
-  if (calcBtn) calcBtn.style.display = isCrossDay ? "none" : "";
-  if (estHint) {
-    if (isCrossDay) {
-      estHint.innerHTML = `<span style="color:#0891b2;">跨天施工：总工时 = 各段时长之和 × 施工人数，修改分段时间即可自动重算</span>`;
-    } else {
-      estHint.innerHTML = `<span style="color:#16a34a;">先填写总工时，方便计算结束时间</span>`;
-    }
-  }
-  // 跨天且用户未手动改动过工时时，自动回填推荐总工时
-  if (isCrossDay && estEl && !window._estDirty) {
-    estEl.value = autoEstHours;
-  }
-
-  const estHours = Number(estEl ? estEl.value : 0) || 0;
-  if (estHours > 0 && totalMins > 0) {
-    const hoursPerPerson = totalMins / 60;
-    const suggested = Math.max(1, Math.ceil(estHours / hoursPerPerson));
-    suggestWorkers.innerHTML = `<span style="color:#2563eb;">${suggested}人</span>`;
-  } else {
-    suggestWorkers.textContent = "--";
-  }
 }
 
 function sumHours(project) {
@@ -1875,6 +1829,15 @@ function diffColor(diff) {
   if (diff > 0) return "var(--danger)";
   if (diff < 0) return "var(--success)";
   return "var(--muted)";
+}
+
+/* 项目卡片进度（包活制：不再按工时，改为按状态给一个大致进度） */
+function cardStatusProgress(p) {
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED].includes(p.status)) return 100;
+  if (p.status === STATUS.WORKING) return 50;
+  if (p.status === STATUS.PAUSED) return 40;
+  if (p.status === STATUS.DELAYED) return 30;
+  return 0; // 预约中等未开工
 }
 
 /* Excel 导出专用：差异列前景色 + 背景色（diffColor 返回 CSS 变量，不能直接写 argb） */
@@ -2149,7 +2112,7 @@ function getCurrentSessionDurationText(p) {
    - 终态（已完工/已验收/已审核）：第一行显示「开工 → 完工」，第二行显示「施工时长」；
    - 进行中（施工中/已暂停/已延期）或预约中已开工：有恢复史显示「本次施工 X 起」，否则「开工 X 起」；
    - 未开工（无 startedAt/finishedAt）：返回空，容器整体不渲染。 */
-function buildCardActualTimeline(p, ctx) {
+function buildCardActualTimeline(p) {
   if (p.finishedAt) {
     const originalStart = p.originalStartedAt || p.startedAt;
     const started = originalStart ? fmtDateTime(originalStart) : null;
@@ -2382,7 +2345,7 @@ function diffLabel(project, clickable = false) {
 }
 
 /* 「未登记实际工时」快捷登记入口：若疑似忘点完工则走 openProjectFromCard 的确认流程，
-   否则跳到施工管理页 + 滚动到工时表单 + 聚焦到工时输入框。 */
+   否则跳到施工管理页并滚动到该项目的考勤记录区块。 */
 function gotoConstructionWorklog(id) {
   const p = getProject(id);
   if (!p) return;
@@ -2396,6 +2359,288 @@ function gotoConstructionWorklog(id) {
 /* 计算项目各施工人员实际工时（人·小时）及汇总。
    只统计「当前」在场/外包的工人；已移除人员的历史工时保留在 workLogs 中，
    但不计入本项目摘要，避免"已移除的人还占着总工时"。 */
+/* ============================================================
+ * 包活制辅助函数（2026-10-18）
+ *   工费 = 包工: 工程金额；包工包料: 工程金额 − 材料费
+ *   工人分成池 = 工费 / 2
+ *   每个已派工人的应得 = 分成池 × 该工人比例（平均=等分；自定义=各自 ratio）
+ * ============================================================ */
+function getLaborFee(p) {
+  if (!p) return 0;
+  // 优先用已存储的 labor_fee；历史数据未填时按 contract_type 派生
+  if (Number(p.laborFee) > 0) return Number(p.laborFee);
+  const amt = Number(p.projectAmount) || 0;
+  if (p.contractType === "包工包料") return Math.max(0, amt - (Number(p.materialFee) || 0));
+  return amt;
+}
+
+function getCommissionPool(p) {
+  return getLaborFee(p) / 2;
+}
+
+// n 人等分比例（合计 100，尾差补最后一人）
+/* 生成均分且合计=100% 的整数比例数组（1% 精度），用于 avg / custom 默认起点。
+   例如 3 人 → [33, 33, 34]；拖动时按 1% 整数刻度吸附，避免 99.9% 合计不等 100。 */
+function equalCommissionRatios(count) {
+  if (count <= 0) return [];
+  const base = Math.floor(100 / count);
+  const arr = Array(count).fill(base);
+  arr[arr.length - 1] = 100 - base * (count - 1);
+  return arr;
+}
+
+/* 把任意比例数组换算成「合计恒为 100 的整数百分比」用于显示（最大余额法）。
+   拖动写入的比例已是整数，但历史数据可能是 33.3 这类小数——直接对每项 Math.round
+   会显示成 33/33/33（合计 99）引发误解，故统一先取整再按小数余额从大到小补齐。 */
+function commDisplayRatios(ratios) {
+  const arr = (ratios || []).map((v) => Number(v) || 0);
+  const n = arr.length;
+  if (!n) return [];
+  const total = arr.reduce((s, v) => s + v, 0);
+  if (total <= 0) return equalCommissionRatios(n);
+  const scaled = arr.map((v) => (v / total) * 100);
+  const out = scaled.map((v) => Math.floor(v));
+  let rest = 100 - out.reduce((s, v) => s + v, 0);
+  const order = scaled
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac);
+  for (let j = 0; rest > 0 && j < order.length; j++, rest--) out[order[j].i] += 1;
+  return out;
+}
+
+// 解析某项目的工人分成明细，返回 { mode, pool, items:[{workerId, workerName, ratio, amount, fixed, isOutsourced}], total, outsourcedTotal }
+// 规则（2026-10-18 起）：
+// - 外协人员**不进比例条、不参与比例分配**，按「固定金额」先从分成池扣除；
+// - 扣除后的剩余池由内部安装工人按 avg 均分 / custom 比例分配。
+// - 外协固定金额存于 commission_custom 的 "outsourced:姓名" 项（avg 模式也只存外协项，内部不存）。
+// - 外协固定合计超过池时按池等比缩小（保存时已拦截）。
+// - custom 无保存记录（或无内部比例项）时，内部工人均分剩余池作为默认起点。
+// - 旧数据（纯内部比例、合计 100 或≠100）完全兼容：无外协项时 remaining=pool，行为与旧版一致。
+function resolveCommissionAlloc(p) {
+  const internal = (p.assignedWorkerIds || [])
+    .map((wid) => getWorker(wid))
+    .filter(Boolean);
+  const outsourced = (p.outsourcedWorkers || "").split(/[,，]/).map((n) => n.trim()).filter(Boolean)
+    .map((nm) => ({ id: "outsourced:" + nm, name: nm }));
+  const pool = getCommissionPool(p);
+  const mode = p.commissionMode || "avg";
+  if (pool <= 0 || (!internal.length && !outsourced.length)) {
+    return { mode, pool, items: [], total: 0, outsourcedTotal: 0 };
+  }
+  const custom = Array.isArray(p.commissionCustom) ? p.commissionCustom : [];
+  const customMap = {};
+  custom.forEach((c) => { if (c && c.workerId) customMap[c.workerId] = c; });
+  // —— 外协固定金额：先从分成池扣除 ——
+  const outFixedRaw = outsourced.map((o) => {
+    const c = customMap[o.id];
+    return c && c.fixed != null ? Math.max(0, Number(c.fixed) || 0) : 0;
+  });
+  const outFixedTotalRaw = outFixedRaw.reduce((s, v) => s + v, 0);
+  const outScale = outFixedTotalRaw > pool && pool > 0 ? pool / outFixedTotalRaw : 1;
+  const outItems = outsourced.map((o, i) => {
+    const fx = Math.round(outFixedRaw[i] * outScale * 100) / 100;
+    return { workerId: o.id, workerName: o.name, ratio: 0, amount: fx, fixed: fx, isOutsourced: true };
+  });
+  const remaining = Math.max(0, Math.round((pool - outFixedTotalRaw * outScale) * 100) / 100);
+  const items = [...outItems];
+  const internalStart = items.length;
+  if (internal.length) {
+    if (mode === "custom_amount" && custom.length) {
+      // 自定义金额：直接用保存的金额；合计≠remaining 时按金额占比缩放（保存时会校验合计=remaining）
+      const amountOf = (w) => { const c = customMap[w.id]; return Number(c && c.amount) || 0; };
+      const amountSum = internal.reduce((s, w) => s + amountOf(w), 0);
+      internal.forEach((w) => {
+        const rawAmt = amountOf(w);
+        const amt = amountSum > 0 ? Math.round(remaining * (rawAmt / amountSum) * 100) / 100 : Math.round((remaining / internal.length) * 100) / 100;
+        items.push({
+          workerId: w.id,
+          workerName: w.name,
+          ratio: amountSum > 0 ? Math.round((rawAmt / amountSum) * 1000) / 10 : Math.round((1000 / internal.length)) / 10,
+          amount: amt,
+          fixed: null,
+        });
+      });
+    } else if (mode === "custom" && custom.length) {
+      // 内部工人按自定义比例分剩余池（权重归一化；保存的合计=100 时即真实占比）
+      const ratioOf = (w) => { const c = customMap[w.id]; return Number(c && c.ratio) || 0; };
+      const ratioSum = internal.reduce((s, w) => s + ratioOf(w), 0);
+      const amountOf = (w) => {
+        if (ratioSum > 0) return Math.round(remaining * (ratioOf(w) / ratioSum) * 100) / 100;
+        // 比例合计为 0 时，剩余池在内部工人间均分兜底
+        return Math.round((remaining / internal.length) * 100) / 100;
+      };
+      internal.forEach((w) => {
+        items.push({
+          workerId: w.id,
+          workerName: w.name,
+          ratio: ratioSum > 0 ? Math.round((ratioOf(w) / ratioSum) * 1000) / 10 : Math.round((1000 / internal.length)) / 10,
+          amount: amountOf(w),
+          fixed: null,
+        });
+      });
+    } else {
+      // avg（或 custom 无保存记录）：内部工人均分剩余池
+      const each = Math.round((remaining / internal.length) * 100) / 100;
+      const ratios = equalCommissionRatios(internal.length);
+      internal.forEach((w, idx) => {
+        items.push({
+          workerId: w.id,
+          workerName: w.name,
+          ratio: ratios[idx] != null ? ratios[idx] : Math.round((100 / internal.length) * 10) / 10,
+          amount: each,
+          fixed: null,
+        });
+      });
+    }
+    // 尾差补最后一个内部项，保证内部合计 = remaining（从而全部合计 = pool）
+    const last = items[items.length - 1];
+    if (last) {
+      const others = items.reduce((s, it, i) => (i === items.length - 1 ? s : s + it.amount), 0);
+      last.amount = Math.round((pool - others) * 100) / 100;
+    }
+  }
+  return {
+    mode, pool, items,
+    total: Math.round(items.reduce((s, i) => s + i.amount, 0) * 100) / 100,
+    outsourcedTotal: Math.round(outItems.reduce((s, i) => s + i.amount, 0) * 100) / 100,
+  };
+}
+
+/* 提成统计口径：项目「完工后才计入」提成。
+   仅 DONE / REVIEWED / ACCEPTED 计入；已取消与施工中/暂停/延期/预约均不提前计入。
+   注意不可复用 isCompleted()（它含 CANCELLED，取消的项目不应计提成）。 */
+function isCommissionCounted(p) {
+  if (!p) return false;
+  return [STATUS.DONE, STATUS.REVIEWED, STATUS.ACCEPTED].includes(p.status);
+}
+
+// 汇总某工人在给定项目集合中的包活分成总额（仅统计已完工项目）
+function sumWorkerCommission(workerId, projects) {
+  const list = projects || cache.projects || [];
+  let total = 0;
+  list.forEach((p) => {
+    if (!isCommissionCounted(p)) return;
+    if (!(p.assignedWorkerIds || []).includes(workerId)) return;
+    const alloc = resolveCommissionAlloc(p);
+    const it = alloc.items.find((i) => i.workerId === workerId);
+    if (it) total += it.amount;
+  });
+  return Math.round(total * 100) / 100;
+}
+
+/* 项目内每人提成按天拆分（跨天）：每人项目提成总额 = 分成池×比例（与工时脱钩，由比例/平均决定），
+   再按该工人「每日在场工时占比」把提成摊到各天（施工时长只作分摊参考，不改变提成总额）；
+   无考勤数据时平均摊到项目各施工分段日；仍无则计入项目主日期。
+   返回 { [date]: { [workerId]: amount } }。 */
+function commissionDaily(p) {
+  const out = {};
+  if (!p) return out;
+  const alloc = resolveCommissionAlloc(p);
+  if (!alloc.items.length) return out;
+  const add = (date, wid, amt) => {
+    if (!date || !(amt > 0)) return;
+    out[date] = out[date] || {};
+    out[date][wid] = (out[date][wid] || 0) + amt;
+  };
+  // 无考勤兜底：项目各施工分段涉及的自然日
+  let segDates = [];
+  try {
+    const segs = getBookedSegments(p) || [];
+    const set = {};
+    segs.forEach((s) => {
+      const d = s.date || (s.start != null ? dateKey(new Date(s.start)) : null);
+      if (d) set[d] = 1;
+    });
+    segDates = Object.keys(set).sort();
+  } catch (e) { segDates = []; }
+  const fallbackDate = p.finishedAt ? dateKey(new Date(p.finishedAt))
+    : (p.appointmentTime ? dateKey(new Date(p.appointmentTime)) : dateKey(new Date()));
+  alloc.items.forEach((it) => {
+    const daily = {};
+    (p.workLogs || []).forEach((l) => {
+      if (l.workerId === it.workerId && l.date) daily[l.date] = (daily[l.date] || 0) + (Number(l.hours) || 0);
+    });
+    const dates = Object.keys(daily);
+    const total = dates.reduce((s, d) => s + daily[d], 0);
+    if (dates.length && total > 0) {
+      dates.forEach((d) => add(d, it.workerId, it.amount * (daily[d] / total)));
+    } else if (segDates.length) {
+      segDates.forEach((d) => add(d, it.workerId, it.amount / segDates.length));
+    } else {
+      add(fallbackDate, it.workerId, it.amount);
+    }
+  });
+  return out;
+}
+
+/* 聚合一组项目的包活提成：按 workerId 汇总总额 + 按天 + 工程金额/工费/分成池合计。
+   供提成统计页 / 店面统计 / 施工人员卡片复用。 */
+function aggregateCommission(projects) {
+  const byWorker = {};      // workerId -> amount
+  const byWorkerDate = {};  // workerId -> { date -> amount }
+  const workerNames = {};   // workerId -> name
+  let totalAmount = 0, totalLaborFee = 0, totalProjectAmount = 0, totalPool = 0;
+  const wset = new Set();
+  (projects || []).forEach((p) => {
+    // 项目提成：完工后才计入（施工中/预约/暂停/延期/已取消一律不计）
+    if (isCommissionCounted(p)) {
+      totalProjectAmount += Number(p.projectAmount) || 0;
+      totalLaborFee += getLaborFee(p);
+      totalPool += getCommissionPool(p);
+      const alloc = resolveCommissionAlloc(p);
+      alloc.items.forEach((it) => {
+        byWorker[it.workerId] = (byWorker[it.workerId] || 0) + it.amount;
+        workerNames[it.workerId] = it.workerName;
+        totalAmount += it.amount;
+        wset.add(it.workerId);
+      });
+      const daily = commissionDaily(p);
+      Object.keys(daily).forEach((d) => {
+        Object.keys(daily[d]).forEach((wid) => {
+          byWorkerDate[wid] = byWorkerDate[wid] || {};
+          byWorkerDate[wid][d] = (byWorkerDate[wid][d] || 0) + daily[d][wid];
+        });
+      });
+    }
+    // 付费维修单：工程金额/工费/分成池计入合计，commissionAlloc 均分金额计入参与人提成
+    (p.repairOrders || []).forEach((ro) => {
+      if (!ro || ro.payType !== "paid") return;
+      const amt = Number(ro.projectAmount) || 0;
+      if (amt <= 0) return;
+      const labor = Number(ro.laborFee) || 0;
+      const pool = Number(ro.commissionPool) || 0;
+      totalProjectAmount += amt;
+      totalLaborFee += labor;
+      totalPool += pool;
+      const d = ro.completedAt ? dateKey(new Date(ro.completedAt)) : (ro.appointmentTime ? dateKey(new Date(ro.appointmentTime)) : null);
+      (ro.commissionAlloc || []).forEach((a) => {
+        const wid = a.workerId;
+        const amount = Number(a.amount) || 0;
+        if (!amount) return;
+        byWorker[wid] = (byWorker[wid] || 0) + amount;
+        workerNames[wid] = a.name || workerNames[wid];
+        totalAmount += amount;
+        wset.add(wid);
+        if (d) {
+          byWorkerDate[wid] = byWorkerDate[wid] || {};
+          byWorkerDate[wid][d] = (byWorkerDate[wid][d] || 0) + amount;
+        }
+      });
+    });
+  });
+  return {
+    byWorker, byWorkerDate, workerNames,
+    totalAmount: Math.round(totalAmount * 100) / 100,
+    totalLaborFee: Math.round(totalLaborFee * 100) / 100,
+    totalProjectAmount: Math.round(totalProjectAmount * 100) / 100,
+    totalPool: Math.round(totalPool * 100) / 100,
+    // 参与分成总人数（含外协）；workerCount 仅内部施工人数（外协另有独立卡片统计）
+    participantCount: wset.size,
+    outsourcedCount: Array.from(wset).filter((wid) => String(wid).startsWith("outsourced:")).length,
+    workerCount: Array.from(wset).filter((wid) => !String(wid).startsWith("outsourced:")).length,
+  };
+}
+
 function calcProjectWorkerStats(p) {
   const currentAssigned = p.assignedWorkerIds || [];
   const currentOutsourced = (p.outsourcedWorkers || "").split(",").map((n) => n.trim()).filter((n) => n).map((name) => "outsourced:" + name);
@@ -2737,6 +2982,13 @@ const mapProject = (r) => ({
   reworkOf: r.rework_of || r.reworkOf || null,
   reworkContent: r.rework_content || r.reworkContent || "",
   reworkPayable: r.rework_payable === false ? false : true, // 返工工时是否计入工资，默认计入
+  // 包活制字段
+  contractType: r.contract_type || "包工",
+  projectAmount: Number(r.project_amount) || 0,
+  materialFee: Number(r.material_fee) || 0,
+  laborFee: Number(r.labor_fee) || 0,
+  commissionMode: r.commission_mode || "avg",
+  commissionCustom: (r.commission_custom && typeof r.commission_custom === "string" ? safeJsonParse(r.commission_custom, []) : r.commission_custom) || [],
   projectPhotos: (r.project_photos || r.projectPhotos)
     ? (typeof (r.project_photos || r.projectPhotos) === "string"
         ? safeJsonParse(r.project_photos || r.projectPhotos, null)
@@ -2784,6 +3036,13 @@ const projectToRow = (p) => ({
   delay_reason: p.delayReason || null,
   delay_count: p.delayCount || 0,
   schedule_history: p.scheduleHistory && p.scheduleHistory.length > 0 ? JSON.stringify(p.scheduleHistory) : null,
+  // 包活制字段
+  contract_type: p.contractType || "包工",
+  project_amount: p.projectAmount || 0,
+  material_fee: p.materialFee || 0,
+  labor_fee: p.laborFee || 0,
+  commission_mode: p.commissionMode || "avg",
+  commission_custom: (p.commissionCustom && Array.isArray(p.commissionCustom) && p.commissionCustom.length) ? JSON.stringify(p.commissionCustom) : null,
   cancelled_at: p.cancelledAt || null,
   cancel_reason: p.cancelReason || null,
   rework_count: p.reworkCount || 0,
@@ -3142,7 +3401,7 @@ const repo = {
         if (hasCache) q.in("project_id", activeIds.length ? activeIds : ["__none__"]);
         return q;
       });
-      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes, itRes, vRes, nRes, aRes] = await Promise.all([
+      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes, itRes, vRes, nRes, aRes, mRes] = await Promise.all([
         cloudQuery(() => sb.from("workers").select("*")),
         cloudQuery(() => sb.from("stores").select("*")),
         cloudQuery(() => sb.from("role_permissions").select("*")),
@@ -3154,8 +3413,10 @@ const repo = {
         cloudQuery(() => sb.from("worker_schedules").select("*")),
         cloudQuery(() => sb.from("vehicle_trips").select("*")),
         cloudQuery(() => sb.from("user_permissions").select("*")),
-        cloudQuery(() => sb.from("internal_tasks").select("*")),
+        // 内部任务 / 上门量尺已于 2026-10-18 下线：保留位置占位，不再发请求（数据表不删，便于回滚）
+        cloudQuery(() => Promise.resolve({ data: [], error: null })),
         cloudQuery(() => sb.from("vehicles").select("*")),
+        cloudQuery(() => Promise.resolve({ data: [], error: null })),
         cloudQuery(() => sb.from("notifications").select("*").eq("recipient_user_id", (currentUser && currentUser.id) || "__none__").order("created_at", { ascending: false })),
         cloudQuery(() => sb.from("user_directory").select("*").order("email")),
       ]);
@@ -3170,6 +3431,7 @@ const repo = {
         { name: "holidays", res: hRes },
         { name: "user_permissions", res: uRes },
         { name: "vehicles", res: vRes },
+        { name: "measurements", res: mRes },
       ].filter(e => e.res.error);
       
       if (allErrors.length > 0) {
@@ -3218,6 +3480,7 @@ const repo = {
       } else {
         console.warn("profiles 表读取失败，发通知人员列表可能为空:", aRes.error.message);
       }
+      cache.measurements = []; // 上门量尺功能已下线（2026-10-18）
       cache.workers = (wRes.data || []).map((r) => ({
         id: r.id, name: r.name, phone: r.phone, role: r.role,
       }));
@@ -3242,6 +3505,8 @@ const repo = {
         ? cachedProjects.filter((p) => cloudIds.has(p.id) && !activeIds.includes(p.id))
         : cachedProjects.filter((p) => !activeIds.includes(p.id));
       cache.projects = [...activeMapped, ...historical];
+      // 覆盖式重拉可能抹掉「本地已生效、云端尚未追上」的人员分配（见 ASSIGN_GUARD 注释）
+      if (reconcileAssignGuard()) console.warn("[assign-guard] 云端快照落后于本地分配，已按本地恢复");
       cache.leaveRecords = (lrRes.data || []).map((r) => ({
         id: r.id, workerId: r.worker_id, workerName: r.worker_name,
         leaveType: r.leave_type || "personal",
@@ -3322,31 +3587,8 @@ const repo = {
         console.warn("vehicles 表读取失败（可能尚未创建）:", vRes.error.message);
         cache.vehicles = [];
       }
-      // 内部任务：云端真源；首次（表为空）将本机 localStorage 历史一次性迁移上云
-      if (!itRes.error) {
-        cache.internalTasks = (itRes.data || []).map((r) => mapInternalTask(r));
-        if ((itRes.data || []).length === 0 && !localStorage.getItem("internalTasksCloudMigrated")) {
-          const localRaw = localStorage.getItem("internalTasks");
-          if (localRaw) {
-            try {
-              const localTasks = JSON.parse(localRaw).map(normalizeInternalTask);
-              if (localTasks.length) {
-                for (const t of localTasks) {
-                  const { error } = await sb.from("internal_tasks").upsert(internalTaskToRow(t));
-                  if (error) { console.warn("内部任务上云迁移失败:", error.message); break; }
-                }
-                cache.internalTasks = localTasks;
-              }
-            } catch (e) { console.warn("内部任务本地数据解析失败:", e); }
-            localStorage.setItem("internalTasksCloudMigrated", "true");
-          } else {
-            localStorage.setItem("internalTasksCloudMigrated", "true");
-          }
-        }
-      } else {
-        console.warn("internal_tasks 表读取失败（可能尚未创建）:", itRes.error.message);
-        cache.internalTasks = [];
-      }
+      // 内部任务功能已下线（2026-10-18）：不再读取云端 / 迁移本地数据，恒为空
+      cache.internalTasks = [];
       // 通知：收件人为当前用户的站内消息。notifications 表可能尚未创建（老库需先跑 migration），
       // 单独容错——失败时清空并告警，但不进入致命 allErrors 检查，不影响其他数据加载。
       if (!nRes.error) {
@@ -3610,7 +3852,29 @@ const repo = {
   /* ---- 项目 ---- */
   async saveProject(project, id) {
     if (MODE === "cloud") {
-      const base = id ? { ...getProject(id), ...project } : { id: uid(), actualHours: 0, ...project };
+      // 乐观更新：在首个 await（云端写入）之前先把新值同步写进本地缓存，
+      // 调用方即可立即关弹窗 + renderAll 实时显示，无需等云端往返（往返慢时按钮会卡
+      // 「保存中…」数秒、保存后列表/详情也不实时）。云端写入失败时由调用方
+      // loadAll 回拉云端真值覆盖本地乐观数据，自动回滚。
+      // 注意 id 放在最前：缓存缺失时 getProject(id) 为 undefined，展开后 base 仍须带 id
+      // （否则补回缓存的对象 / 云端 row 都会丢 id）
+      const base = id ? { id, ...getProject(id), ...project } : { id: uid(), actualHours: 0, ...project };
+      if (id) {
+        const existing = getProject(id);
+        if (existing) Object.assign(existing, project);
+        else cache.projects.push(base); // 缓存缺失（极端情况）时补回，避免乐观更新丢对象
+      } else {
+        cache.projects.push({
+          id: base.id,
+          ...project,
+          actualHours: 0,
+          assignedWorkerIds: project.assignedWorkerIds || [],
+          workLogs: [],
+          repairOrders: project.repairOrders || [],
+          acceptance: null,
+          createdAt: new Date().toISOString(),
+        });
+      }
       const row = projectToRow(base);
       if (!id && currentUser) row.created_by = currentUser.id;
       
@@ -3720,12 +3984,14 @@ const repo = {
         .update({ assigned_workers: ids, updated_at: new Date().toISOString() })
         .eq("id", pid);
       if (error) return fail(error);
+      return true;   // 明确成功返回值：调用方据此判断是否回滚乐观数据（fail() 会 resolve undefined）
     } else {
       const project = getProject(pid);
       if (project) {
         project.assignedWorkerIds = ids;
         saveLocal();
       }
+      return true;
     }
   },
 
@@ -3981,19 +4247,8 @@ function loadLocal() {
       cache.accounts = data.accounts || [];
       cache.vehicleTrips = data.vehicleTrips || [];
       cache.vehicles = data.vehicles || [];
-      cache.internalTasks = (data.internalTasks || []).map(normalizeInternalTask);
-      // 本地模式历史兼容：旧版内部任务存在独立的 "internalTasks" key，
-      // 若 STORE_KEY 中尚未收录，则从旧 key 迁移进来（仅首次，避免重复）。
-      if (!cache.internalTasks.length) {
-        const legacy = localStorage.getItem("internalTasks");
-        if (legacy) {
-          try {
-            cache.internalTasks = JSON.parse(legacy).map(normalizeInternalTask);
-            saveLocal();
-            localStorage.removeItem("internalTasks");
-          } catch (e) { console.warn("旧内部任务数据迁移失败:", e); }
-        }
-      }
+      // 内部任务功能已下线（2026-10-18）：不再从本地/旧 key 读取，恒为空
+      cache.internalTasks = [];
     }
   } catch (e) {
     console.error("读取本地数据失败", e);
@@ -4066,6 +4321,79 @@ const CLOUD_CACHE_SCHEMA = 1; // 结构变更不兼容时 +1，旧缓存会被�
 // 这里必须用 STATUS 的值（中文）拼接，不能用 JS 标识符 BOOKED/WORKING…，否则 status.in 永远匹配不到。
 const CLOUD_ACTIVE_STATUSES = [STATUS.BOOKED, STATUS.WORKING, STATUS.PAUSED, STATUS.DELAYED].join(",");
 const CLOUD_HISTORY_LOOKBACK_DAYS = 120;
+
+/* ---- 人员分配「本地保护窗」----
+   分配/移除人员采用乐观更新：先写本地缓存 + 立即重绘（秒级反馈），云端写入放后台。
+   但后台 loadAll 与 Realtime 整表重拉是「覆盖式」的——会用云端快照整体替换 cache.projects。
+   若云端写入尚未落地、或更早发出的重拉请求先返回（网络乱序），刚分配的人就会凭空消失，
+   用户感知为「添加的人又被移除了」。
+   对策：本地写入前登记一条短时效记录（默认 45s）。全量重拉后若云端值尚未与本地一致，
+   以本地为准保留，并后台把该字段补推一次（自愈）；窗口超时自动失效，不干扰正常多端协作。*/
+const ASSIGN_GUARD_MS = 45000;
+const ASSIGN_GUARD_RETRY_MS = 2500;
+let _assignGuard = new Map();          // pid -> { ids:[], at:number, confirmed:boolean }
+let _assignRepairTimers = new Map();   // pid -> timeoutId
+
+function guardLocalAssign(pid, ids) {
+  if (!pid) return;
+  _assignGuard.set(pid, { ids: (ids || []).slice(), at: Date.now(), confirmed: false });
+}
+
+/* 云端名单写入成功后调用：此后云端值为权威，不再用本地覆盖（除非云端确实没这项变更） */
+function confirmLocalAssign(pid) {
+  const g = _assignGuard.get(pid);
+  if (g) g.confirmed = true;
+}
+
+function clearAssignGuard(pid) {
+  _assignGuard.delete(pid);
+  const t = _assignRepairTimers.get(pid);
+  if (t) { clearTimeout(t); _assignRepairTimers.delete(pid); }
+}
+
+/* 全量重拉完成后调用：把「本地已生效但云端尚未追上」的人员名单重新对齐到本地，并补推云端。 */
+function reconcileAssignGuard() {
+  if (!_assignGuard.size) return false;
+  const now = Date.now();
+  let changed = false;
+  // 先清掉过期项（同时解绑补推定时器）
+  _assignGuard.forEach((g, pid) => {
+    if (now - g.at <= ASSIGN_GUARD_MS) return;
+    _assignGuard.delete(pid);
+    const t = _assignRepairTimers.get(pid);
+    if (t) { clearTimeout(t); _assignRepairTimers.delete(pid); }
+  });
+  _assignGuard.forEach((g, pid) => {
+    const p = getProject(pid);
+    if (!p) return;
+    const cur = p.assignedWorkerIds || [];
+    const same = cur.length === g.ids.length && cur.every((x) => g.ids.includes(x));
+    if (same) { clearAssignGuard(pid); return; }   // 云端已一致，收工
+    if (g.confirmed) {
+      // 云端名单写入已确认成功却不一致 → 多端并发改动，不做本地覆盖（尊重云端/其他端）
+      clearAssignGuard(pid);
+      return;
+    }
+    p.assignedWorkerIds = g.ids.slice();          // 云端还没追上 → 以本地为准
+    changed = true;
+    scheduleAssignRepair(pid);
+  });
+  return changed;
+}
+
+function scheduleAssignRepair(pid) {
+  if (_assignRepairTimers.has(pid)) return;
+  const t = setTimeout(async () => {
+    _assignRepairTimers.delete(pid);
+    const g = _assignGuard.get(pid);
+    if (!g || Date.now() - g.at > ASSIGN_GUARD_MS) return;
+    if (MODE !== "cloud") return;
+    const ok = await repo.setAssignedWorkers(pid, g.ids);
+    if (ok === false || ok === undefined) return;  // 仍失败：保留保护窗，下轮重拉再试
+    confirmLocalAssign(pid);
+  }, ASSIGN_GUARD_RETRY_MS);
+  _assignRepairTimers.set(pid, t);
+}
 
 function openCloudCacheDB() {
   return new Promise((resolve, reject) => {
@@ -4272,8 +4600,8 @@ async function applyIncrementalUpdate(tableName) {
       break;
     }
     case "internalTasks": {
-      const itRes = await sb.from("internal_tasks").select("*");
-      if (!itRes.error) cache.internalTasks = (itRes.data || []).map((r) => mapInternalTask(r));
+      // 内部任务功能已下线（2026-10-18）：表仍保留但不再拉取
+      cache.internalTasks = [];
       break;
     }
     case "accounts": {
@@ -4329,6 +4657,8 @@ async function applyIncrementalUpdate(tableName) {
           }, 0);
           return p;
         });
+        // 同样防止 Realtime 整表重拉抹掉刚分配的人员（见 ASSIGN_GUARD 注释）
+        reconcileAssignGuard();
       }
       break;
     }
@@ -4362,6 +4692,11 @@ async function applyIncrementalUpdate(tableName) {
       } else {
         console.warn("notifications 实时同步读取失败:", nRes.error.message);
       }
+      break;
+    }
+    case "measurements": {
+      const mRes = await sb.from("measurements").select("*");
+      if (!mRes.error) cache.measurements = (mRes.data || []).map((r) => mapMeasurement(r));
       break;
     }
   }
@@ -4449,6 +4784,7 @@ const REALTIME_TABLES = {
   operation_logs: "operationLogs",
   leave_quota: "leaveQuota",
   notifications: "notifications",
+  measurements: "measurements",
 };
 
 /* 查找已建立的实时频道。
@@ -4862,11 +5198,11 @@ function recordSyncTime() {
  * 施工人员模块
  * ============================================================ */
 
-/* 施工人员/我的安排顶部：统一汇总「待处理提醒」，覆盖四类：
+/* 施工人员/我的安排顶部：统一汇总「待处理提醒」，覆盖三类：
    ① 安装项目：超时未开工（历史任何日期）+ 施工中跨夜/超时（疑似忘点完工）
-   ② 内部任务：逾期未开始（date<今天） + 已开始却超时才未完工
    ③ 请假：待审批且已到/已过开始日（怕当天漏批又排了活）
-   ④ 个人日程：与当天项目/内部任务时间冲突（撞车）
+   ④ 个人日程：与当天项目时间冲突（撞车）
+   （② 内部任务功能已于 2026-10-18 下线）
    workerId 为 null 时汇总全部工人（管理页），否则只汇总指定工人。 */
 function renderWorkerOverdueSection(workerId = null) {
   const today = todayStr();
@@ -4924,33 +5260,8 @@ function renderWorkerOverdueSection(workerId = null) {
     });
   });
 
-  // ② 内部任务
-  cache.internalTasks.forEach(t => {
-    if (t.status === TASK_STATUS.COMPLETED || t.status === TASK_STATUS.VERIFIED) return;
-    if (workerId && !taskHasWorker(t, workerId)) return;
-    if (!workerId && !getTaskWorkerIds(t).length) return;
-    const d = t.date || "";
-    if (t.status === TASK_STATUS.PENDING) {
-      if (d && d < today) {
-        items.push({
-          level: 2, badgeCls: "overdue", badge: "⏰ 内部任务逾期未开始",
-          title: t.name, sub: `应 ${d} 开始`,
-          goto: "switchTab('internalTasks')",
-          wNames: workerId ? [] : getTaskWorkerNames(t)
-        });
-      }
-    } else if (t.status === TASK_STATUS.IN_PROGRESS) {
-      if (t.startTimestamp && (Date.now() - t.startTimestamp) > WORKING_TIMEOUT_HOURS * 3600 * 1000) {
-        const hrs = ((Date.now() - t.startTimestamp) / 3600000).toFixed(1);
-        items.push({
-          level: 1, badgeCls: "forgotten", badge: "⚠️ 内部任务未完工",
-          title: t.name, sub: `已进行 ${hrs} 小时`,
-          goto: "switchTab('internalTasks')",
-          wNames: workerId ? [] : getTaskWorkerNames(t)
-        });
-      }
-    }
-  });
+  // ② 内部任务：功能已下线（2026-10-18），不再产生提醒
+
 
   // ③ 请假：待审批且已到/已过开始日
   cache.leaveRecords.forEach(lr => {
@@ -5050,7 +5361,7 @@ function renderWorkerOverdueSection(workerId = null) {
     <div style="font-weight:600;color:#b91c1c;font-size:13px;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
       <span>⚠️</span>
       <span>待处理提醒</span>
-      <span style="font-size:11px;color:#7f1d1d;font-weight:400;">（含项目超期/忘完工、内部任务、请假、日程冲突）</span>
+      <span style="font-size:11px;color:#7f1d1d;font-weight:400;">（含项目超期/忘完工、请假、日程冲突）</span>
     </div>
     <div style="display:flex;flex-direction:column;gap:8px;">
       ${rows}
@@ -5176,16 +5487,14 @@ function renderWorkers(dateStr) {
       <h3 style="margin:0; font-size:16px;">👷 施工人员列表</h3>
       ${perm.addWorker() ? `<button class="btn primary" onclick="newWorker()">+ 添加施工人员</button>` : ""}
     </div>
-    <div class="card-grid" style="margin-top:0;">
+    <div class="stats-hint" style="margin-bottom:10px;">💡 提成<b>仅统计已完工 / 已验收 / 已审核的项目</b>，施工中与预约中的项目完工后才计入。</div>
+        <div class="card-grid" style="margin-top:0;">
     ${cache.workers.map((w) => {
-      const totalHours = cache.projects.reduce((s, p) =>
-        s + (p.workLogs || []).filter((l) => l.workerId === w.id)
-          .reduce((a, l) => a + (Number(l.hours) || 0), 0), 0);
+      const totalComm = sumWorkerCommission(w.id, cache.projects);
       const now = new Date();
       const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-      const monthHours = cache.projects.reduce((s, p) =>
-        s + (p.workLogs || []).filter((l) => l.workerId === w.id && (l.date || '').startsWith(ym))
-          .reduce((a, l) => a + (Number(l.hours) || 0), 0), 0);
+      const monthProjects = cache.projects.filter(p => monthKey(p.appointmentTime) === ym);
+      const monthComm = sumWorkerCommission(w.id, monthProjects);
       return `
         <div class="card">
           <div class="worker-card-head">
@@ -5197,9 +5506,9 @@ function renderWorkers(dateStr) {
           </div>
           <div class="card-row"><span>👤 联系电话</span><b>${esc(w.phone || "—")}</b></div>
           <div class="worker-hours-row">
-            <span class="worker-hours-item"><span class="worker-hours-label">累计工时</span><b>${fmtHours(totalHours)} 小时</b></span>
+            <span class="worker-hours-item"><span class="worker-hours-label">累计提成</span><b>¥${totalComm.toFixed(2)}</b></span>
             <span class="worker-hours-sep"></span>
-            <span class="worker-hours-item"><span class="worker-hours-label">本月工时</span><b class="${monthHours > 260 ? 'text-overload' : ''}">${fmtHours(monthHours)} 小时</b></span>
+            <span class="worker-hours-item"><span class="worker-hours-label">本月提成</span><b>¥${monthComm.toFixed(2)}</b></span>
           </div>
           <div class="card-actions">
             ${perm.editWorker() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button>` : ""}${perm.deleteWorker() ? `<button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
@@ -6180,27 +6489,6 @@ function workerScheduleForm(s = {}) {
       <label style="font-size:12px;font-weight:600;color:#333;">备注</label>
       <textarea class="input" id="wsDescription" placeholder="备注信息" rows="2" style="padding:4px 6px;font-size:13px;">${esc(s.description || "")}</textarea>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-      <input type="checkbox" id="wsCreateTask" onchange="toggleScheduleTaskFields()" style="width:16px;height:16px;" />
-      <label for="wsCreateTask" style="font-size:13px;color:#333;cursor:pointer;">同时生成内部任务（计入工时统计）</label>
-    </div>
-    <div id="wsTaskFields" style="display:none;">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
-        <div style="display:flex;flex-direction:column;gap:4px;">
-          <label style="font-size:12px;font-weight:600;color:#333;">工时等级</label>
-          <select class="input" id="wsTaskLevel" style="padding:4px 6px;font-size:13px;">
-            <option value="初级">初级</option>
-            <option value="中级" selected>中级</option>
-            <option value="高级">高级</option>
-            <option value="特级">特级</option>
-          </select>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:4px;">
-          <label style="font-size:12px;font-weight:600;color:#333;">预计工时(小时)</label>
-          <input class="input" type="number" min="0" step="0.1" id="wsTaskEstHours" placeholder="自动计算" style="padding:4px 6px;font-size:13px;" />
-        </div>
-      </div>
-    </div>
     <div class="form-actions" style="display:flex;gap:10px;justify-content:flex-end;">
       <button class="btn" onclick="modal.close()" style="padding:6px 16px;font-size:13px;">取消</button>
       <button class="btn primary" onclick="saveWorkerSchedule('${s.id || ""}')" style="padding:6px 16px;font-size:13px;">保存</button>
@@ -6230,35 +6518,7 @@ function onScheduleTimeChange() {
   }
 }
 
-function toggleScheduleTaskFields() {
-  const createTask = document.getElementById("wsCreateTask");
-  const taskFields = document.getElementById("wsTaskFields");
-  if (createTask && taskFields) {
-    taskFields.style.display = createTask.checked ? "block" : "none";
-    if (createTask.checked) {
-      calculateScheduleEstHours();
-    }
-  }
-}
-
-function calculateScheduleEstHours() {
-  const startTime = document.getElementById("wsStartTime");
-  const endTime = document.getElementById("wsEndTime");
-  const estHours = document.getElementById("wsTaskEstHours");
-  if (!startTime || !endTime || !estHours) return;
-  
-  const startVal = startTime.value;
-  const endVal = endTime.value;
-  if (!startVal || !endVal) return;
-  
-  const [startH, startM] = startVal.split(":").map(Number);
-  const [endH, endM] = endVal.split(":").map(Number);
-  
-  let diffMinutes = (endH * 60 + endM) - (startH * 60 + startM);
-  if (diffMinutes < 0) diffMinutes += 24 * 60;
-  
-  estHours.value = (diffMinutes / 60).toFixed(1);
-}
+/* toggleScheduleTaskFields / calculateScheduleEstHours：随「内部任务」功能下线一并移除 */
 
 function toggleAllDaySchedule() {
   const allDay = document.getElementById("wsAllDay");
@@ -6342,51 +6602,7 @@ async function saveWorkerSchedule(id) {
   await repo.saveWorkerSchedule(payload, id);
   repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] saveWorkerSchedule 后台同步失败：", e));
   
-  const createTask = document.getElementById("wsCreateTask");
-  if (createTask && createTask.checked && perm.addTask()) {
-    const scheduleTypeMap = {
-      warehouse: "仓库工作",
-      delivery: "送货",
-      outsideInstall: "外出安装",
-      internalOther: "其他",
-      company: "仓库工作",
-      meeting: "其他",
-      equipment: "设备维护",
-      standby: "待命",
-      training: "培训学习"
-    };
-    
-    const workType = scheduleTypeMap[payload.type] || "其他";
-    const level = document.getElementById("wsTaskLevel").value;
-    let estHours = Number(document.getElementById("wsTaskEstHours").value);
-    
-    if (!estHours || estHours <= 0) {
-      const startTime = payload.startTime || "08:00";
-      const endTime = payload.endTime || "18:00";
-      const [startH, startM] = startTime.split(":").map(Number);
-      const [endH, endM] = endTime.split(":").map(Number);
-      let diffMinutes = (endH * 60 + endM) - (startH * 60 + startM);
-      if (diffMinutes < 0) diffMinutes += 24 * 60;
-      estHours = Math.max(HOURS_MIN, diffMinutes / 60);
-    }
-    
-    addInternalTask({
-      name: payload.title,
-      workType: workType,
-      level: level,
-      workerId: payload.workerId,
-      workerName: payload.workerName,
-      date: payload.startDate,
-      scheduledStartTime: payload.startTime || "08:00",
-      scheduledEndTime: payload.endTime || "18:00",
-      estHours: estHours,
-      note: payload.description || ""
-    });
-    
-    toast("日程已保存，同时已生成内部任务");
-  } else {
-    toast("已保存");
-  }
+  toast("已保存");
   
   modal.close();
   renderAll();
@@ -6882,7 +7098,7 @@ function updateLeaveDuration() {
   if (remainingHours > 0) durationText += `${remainingHours} 小时`;
   if (!durationText) durationText = `${totalHours} 小时`;
   
-  textEl.textContent = `${durationText.trim()}（约 ${totalHours.toFixed(1)} 工时，仅计算工作时间08:00-18:00）`;
+  textEl.textContent = `${durationText.trim()}（${startTime}–${endTime}，仅作考勤参考，不影响包活分成）`;
   textEl.style.color = "#10b981";
   hintEl.style.borderColor = "#10b981";
   hintEl.style.background = "#f0fdf4";
@@ -7537,86 +7753,6 @@ function toggleCrossDay() {
     }
     updateSpanHint();
   }
-}
-
-function autoCalcEndTime() {
-  const dateEl = document.getElementById("pDate");
-  const timeEl = document.getElementById("pTime");
-  const estEl = document.getElementById("pEst");
-  const workersEl = document.getElementById("pWorkers");
-  const endSel = document.getElementById("pEnd");
-
-  if (!dateEl || !timeEl || !estEl || !workersEl || !endSel) {
-    toast("表单元素未找到");
-    return;
-  }
-
-  // 跨天施工：结束时间由多段分段决定，不能按单日连续时段推算
-  if (typeof readAllSegments === "function") {
-    const segs = readAllSegments();
-    const days = new Set(segs.filter(s => s.date).map(s => s.date));
-    if (days.size > 1) {
-      toast("跨天施工请直接修改各分段时间，系统会自动计算总工时");
-      return;
-    }
-  }
-
-  const date = dateEl.value;
-  const time = timeEl.value;
-  const estHours = Number(estEl.value) || 0;
-  const workerCount = Number(workersEl.value) || 1;
-
-  if (!date || !time) {
-    toast("请先选择日期和开始时间");
-    return;
-  }
-
-  if (estHours <= 0) {
-    toast("请先填写预计工时");
-    return;
-  }
-  
-  const hoursNeeded = Math.ceil(estHours / workerCount * 10) / 10;
-  const startTime = new Date(`${date}T${time}`);
-  const endTime = new Date(startTime.getTime() + hoursNeeded * 60 * 60 * 1000);
-  
-  const endDateEl = document.getElementById("pEndDate");
-  const crossDayEl = document.getElementById("pCrossDay");
-  const isCrossDay = endTime.toDateString() !== startTime.toDateString();
-  
-  if (crossDayEl) crossDayEl.checked = isCrossDay;
-  if (endDateEl) {
-    endDateEl.value = endTime.toISOString().slice(0, 10);
-    endDateEl.style.display = isCrossDay ? "inline-block" : "none";
-  }
-  
-  if (!isCrossDay && endDateEl) {
-    endDateEl.value = date;
-  }
-  
-  const endH = String(endTime.getHours()).padStart(2, "0");
-  const endM = String(endTime.getMinutes()).padStart(2, "0");
-  const endStr = `${endH}:${endM}`;
-
-  const options = Array.from(endSel.options).map(o => o.value);
-  if (options.includes(endStr)) {
-    endSel.value = endStr;
-  } else {
-    let closest = options[0];
-    let minDiff = Infinity;
-    options.forEach(o => {
-      const [oh, om] = o.split(":").map(Number);
-      const diff = Math.abs((oh * 60 + om) - (endTime.getHours() * 60 + endTime.getMinutes()));
-      if (diff < minDiff) {
-        minDiff = diff;
-        closest = o;
-      }
-    });
-    endSel.value = closest;
-  }
-  // 同步自定义下拉组件显示，并触发 updateSpanHint 刷新施工时长
-  endSel.dispatchEvent(new Event("change", { bubbles: true }));
-  updateSpanHint();
 }
 
 /* ============================================================
@@ -9136,12 +9272,11 @@ function renderProjects() {
   }
 
   list.innerHTML = items.map((p) => {
-    const done = sumHours(p);
-    const { est, act, hasActual } = hoursDiff(p);
     // 全量「编辑」按钮（打开完整项目表单）仅当拥有"编辑项目"权限时显示；
     // 仅拥有"修改预约时间/工时"权限者，只显示施工时间旁的「✏️ 修改」快捷按钮，不显示整单「编辑」。
     const canEdit = perm.editProject(p);
-    const canQuickEdit = perm.editAppointment(p) || perm.editHours(p);
+    const canQuickEdit = perm.editAppointment(p);
+    const canEditContract = perm.editContract(p);   // 卡片上「包活金额」摘要块可点（详见下方 info-grid）
     const canDelete = perm.deleteProject(p);
     const canReview = perm.reviewProject(p);
     const reviewed = isReviewed(p);
@@ -9220,6 +9355,16 @@ function renderProjects() {
           ${p.address ? `<span class="card-sub__addr">${esc(p.address)}</span>` : ""}
         </div>
 
+        <!-- 包活制：工程金额 / 分成池（视觉重点：淡绿金额条，主数字放大加粗）
+             有包活编辑权限时整块可点，直接弹「修改包活金额」快捷弹窗 -->
+        ${((Number(p.projectAmount) > 0 || canEditContract) ? `
+        <div class="card-contract${canEditContract ? " is-editable" : ""}"${canEditContract ? ` onclick="openQuickContractEdit('${p.id}')" title="点击修改包活金额"` : ""}>
+          <span class="card-contract__tag">💰 ${esc(p.contractType || "包工")}</span>
+          <span class="card-contract__amt"><i>工程</i><b>¥${(Number(p.projectAmount) || 0).toFixed(0)}</b></span>
+          <span class="card-contract__pool"><i>分成池</i><b>¥${getCommissionPool(p).toFixed(0)}</b></span>
+          ${canEditContract ? `<span class="card-contract__edit">✏️ 改金额</span>` : ""}
+        </div>` : "")}
+
         <!-- 预约时段（高亮 + 时长标签） -->
         ${(() => {
           const s = projectStart(p), e = projectEnd(p);
@@ -9281,24 +9426,11 @@ function renderProjects() {
           </div>
         ` : ""}
 
-        <!-- 工时摘要：预计 / 实际 -->
-        <div class="card-hours">
-          <div class="card-hours__item ${hasActual ? "" : "card-hours__item--muted"}">
-            <span class="card-hours__label">预计</span>
-            <span class="card-hours__val">${fmtHours(est)}工时 · ${(p.assignedWorkerIds && p.assignedWorkerIds.length) || p.workerCount || 1}人</span>
-          </div>
-          <div class="card-hours__sep"></div>
-          <div class="card-hours__item ${hasActual ? "" : "card-hours__item--muted"}">
-            <span class="card-hours__label">实际</span>
-            <span class="card-hours__val">${hasActual ? fmtHours(act) + "工时 · " + new Set((p.workLogs || []).map(l => l.workerId).filter(Boolean)).size + "人" : "—"} ${diffLabel(p, true)}</span>
-          </div>
-        </div>
-
-        <!-- 进度条 -->
+        <!-- 进度条（包活制：按状态，不按工时） -->
         <div class="card-progress">
           <div class="card-progress__bar-wrap">
-            <div class="card-progress__bar${p.status === STATUS.WORKING ? ' is-active' : ''}" style="width:${Math.min(100, getProjectProgress(p, est, act, hasActual, done))}%;background:${(() => {
-              const pg = getProjectProgress(p, est, act, hasActual, done);
+            <div class="card-progress__bar${p.status === STATUS.WORKING ? ' is-active' : ''}" style="width:${Math.min(100, cardStatusProgress(p))}%;background:${(() => {
+              const pg = cardStatusProgress(p);
               if (isFakeWorking(p)) return 'linear-gradient(90deg, #dc2626, #fb923c)';
               if (pg >= 100 || [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) return '#10b981';
               if (p.status === STATUS.WORKING || p.status === STATUS.PAUSED) return '#f59e0b';
@@ -9306,13 +9438,13 @@ function renderProjects() {
               return '#3b82f6';
             })()};"></div>
           </div>
-          <span class="card-progress__pct">${Math.round(getProjectProgress(p, est, act, hasActual, done))}%</span>
+          <span class="card-progress__pct">${Math.round(cardStatusProgress(p))}%</span>
         </div>
 
         <!-- 时间节点：仅在有值时显示。卡片底部只保留关键时间点单行摘要（开工/本次施工/完工），逐段与历史明细见「施工记录」弹窗 -->
         ${(p.startedAt || p.finishedAt) ? `
         <div class="card-timeline">
-          ${buildCardActualTimeline(p, { est, act, hasActual })}
+          ${buildCardActualTimeline(p)}
         </div>` : ""}
 
         ${isAutoReviewed(p) ? `<div class="card-auto-stamp" title="系统自动审核（验收满设定时长后自动审核）">自动审核</div>` : ""}
@@ -9458,11 +9590,13 @@ function projectForm(p = {}) {
   // 新建项目(p.id 为空)：预约时间/工时由「新建预约」权限控制入口，不再叠加「修改预约时间/工时」权限，
   // 否则仅有新建权限的角色（如施工人员）将无法填写日期与工时。
   const apptDisabled = !!p.id && (locked || !perm.editAppointment(p));
-  const hoursDisabled = !!p.id && (locked || !perm.editHours(p));
   // 基本信息字段（名称/客户/地址/施工内容/人数等）仅在「编辑项目」权限下可改；
   // 仅拥有「修改预约时间/工时」等子权限的用户打开表单时，这些字段只读，避免越权。
   // 注意：这里用「终态锁」而非「预约锁」——开工后基本信息仍可编辑，只锁预约时间与工时。
   const basicDisabled = !!p.id && (isProjectLocked(p) || !perm.editProject(p));
+  // 包活字段（包活方式/工程金额/材料费）由独立权限「修改包活金额」控制（2026-10-18 从 editProject 拆出），
+  // 便于把「能改基本信息但不能动钱」或「只让店长改钱」这类授权分开配置。
+  const contractDisabled = !!p.id && (isProjectLocked(p) || !perm.editContract(p));
   // 初始化表单照片工作集（现场图 / 施工图及物料 两类，预约时即可添加）；新建项目默认可添加
   const isNewForm = !p.id;
   window._formPhotos = JSON.parse(JSON.stringify(normalizePhotos(p)));
@@ -9507,6 +9641,34 @@ function projectForm(p = {}) {
     <div class="form-row">
       <label><span style="color:#0891b2">📍</span> 安装地址</label>
       <input class="input" id="pAddress" value="${esc(p.address || "")}" placeholder="施工现场地址" />
+    </div>
+    <!-- 包活制（2026-10-18）：预约施工时填写包活方式与工程金额 -->
+    <div class="form-row" style="grid-column:1/-1;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;margin-bottom:4px;">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:8px;">
+        <label style="font-weight:500;margin:0;display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">💰</span> 包活方式</label>
+        <label class="radio-inline"><input type="radio" name="contractType" value="包工" ${p.contractType !== "包工包料" ? "checked" : ""} onchange="onContractTypeChange()" ${contractDisabled ? "disabled" : ""}> 包工</label>
+        <label class="radio-inline"><input type="radio" name="contractType" value="包工包料" ${p.contractType === "包工包料" ? "checked" : ""} onchange="onContractTypeChange()" ${contractDisabled ? "disabled" : ""}> 包工包料</label>
+      </div>
+      <div class="form-grid contract-grid">
+        <div class="form-row" style="margin:0;">
+          <label><span style="color:#16a34a;">💵</span> 工程金额 *</label>
+          <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+            <span style="color:#64748b;flex-shrink:0;">¥</span>
+            <input class="input" type="number" min="0" step="0.01" id="pProjectAmount" value="${esc(p.projectAmount != null ? p.projectAmount : "")}" placeholder="客户应付总额" oninput="updateContractCalc()" ${contractDisabled ? "disabled" : ""} />
+          </div>
+        </div>
+        <div class="form-row" id="pMaterialFeeRow" style="margin:0;${p.contractType === "包工包料" ? "" : "display:none;"}">
+          <label><span style="color:#16a34a;">📦</span> 材料费</label>
+          <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+            <span style="color:#64748b;flex-shrink:0;">¥</span>
+            <input class="input" type="number" min="0" step="0.01" id="pMaterialFee" value="${esc(p.materialFee != null ? p.materialFee : "")}" placeholder="材料成本" oninput="updateContractCalc()" ${contractDisabled ? "disabled" : ""} />
+          </div>
+        </div>
+      </div>
+      <div id="pContractCalc" style="margin-top:8px;font-size:13px;color:#166534;line-height:1.7;">
+        <span>工费：<b id="pLaborFeeTxt">—</b></span> · <span>工人分成池（工费÷2）：<b id="pPoolTxt">—</b></span>
+        <span id="pContractNote" style="color:#64748b;font-size:12px;margin-left:6px;"></span>
+      </div>
     </div>
     <div class="form-row">
       <label><span style="color:var(--warn)">${svgCal(14)}</span> 预约时间 *</label>
@@ -9555,31 +9717,7 @@ function projectForm(p = {}) {
           <div id="pDurationValue" style="font-size:20px;font-weight:700;color:#1e293b;">--</div>
         </div>
       </div>
-      <div style="text-align:right;">
-        <div style="font-size:12px;color:#64748b;">建议人数</div>
-        <div id="pSuggestWorkers" style="font-size:16px;font-weight:600;color:#2563eb;">--</div>
-      </div>
-    </div>
-    <div class="form-grid">
-      <div class="form-row">
-        <label><span style="color:var(--success)">⚙️</span> 预计总工时</label>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <input class="input" type="number" min="0" step="0.5" id="pEst" value="${esc(p.estimatedHours ?? "")}" placeholder="0" style="width:auto;max-width:100px;" oninput="window._estDirty=true;updateSpanHint()" ${hoursDisabled ? "disabled" : ""} />
-          <span style="font-size:12px;color:var(--muted)">人·小时</span>
-        </div>
-        ${hoursDisabled
-          ? (locked ? '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">🔒 ' + esc(lockMsg) + '</small>' : '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">⛔ 您没有「修改预约工时」权限，无法修改预约工时</small>')
-          : '<small id="pEstHint" class="hint" style="font-size:11px;margin:2px 0 0;color:#16a34a;">先填写总工时，方便计算结束时间</small>'}
-      </div>
-      <div class="form-row">
-        <label><span style="color:var(--success)">👷</span> 施工人数</label>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <select class="input" id="pWorkers" onchange="autoCalcEndTime();updateSpanHint();" style="width:auto;max-width:100px;" ${basicDisabled ? "disabled" : ""}>
-            ${workerCountOptions(p)}
-          </select>
-          <button id="pCalcBtn" class="btn small" onclick="autoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">计算</button>
-        </div>
-      </div>
+      <div style="font-size:12px;color:#64748b;text-align:right;">总工时与人数<br/>保存时自动计算</div>
     </div>
     <div class="form-row">
       <label><span style="color:#0ea5e9;">🛠️</span> 施工内容</label>
@@ -9602,6 +9740,254 @@ function projectForm(p = {}) {
       <button class="btn" onclick="modal.close()">取消</button>
       <button class="btn primary" onclick="saveProject('${p.id || ""}')">保存</button>
     </div>`;
+}
+
+/* 包活方式切换：包工包料时显示材料费输入框 */
+function onContractTypeChange() {
+  const type = document.querySelector('input[name="contractType"]:checked');
+  const row = document.getElementById("pMaterialFeeRow");
+  if (row) row.style.display = (type && type.value === "包工包料") ? "" : "none";
+  updateContractCalc();
+}
+
+/* 实时计算工费与工人分成池（工费÷2），写入表单提示 */
+function updateContractCalc() {
+  const amtEl = document.getElementById("pProjectAmount");
+  const matEl = document.getElementById("pMaterialFee");
+  const laborTxt = document.getElementById("pLaborFeeTxt");
+  const poolTxt = document.getElementById("pPoolTxt");
+  const noteEl = document.getElementById("pContractNote");
+  if (!amtEl || !laborTxt || !poolTxt) return;
+  const type = document.querySelector('input[name="contractType"]:checked');
+  const isMaterial = type && type.value === "包工包料";
+  const amt = Number(amtEl.value) || 0;
+  const mat = isMaterial ? (Number(matEl && matEl.value) || 0) : 0;
+  const labor = isMaterial ? Math.max(0, amt - mat) : amt;
+  const pool = labor / 2;
+  laborTxt.textContent = "¥" + labor.toFixed(2);
+  poolTxt.textContent = "¥" + pool.toFixed(2);
+  if (noteEl) {
+    noteEl.textContent = amt > 0
+      ? (isMaterial ? `（工程金额 ¥${amt.toFixed(2)} − 材料费 ¥${mat.toFixed(2)}）` : "（包工：工费=工程金额）")
+      : "（请填写工程金额）";
+  }
+}
+
+/* ============================================================
+   包活金额快捷修改（2026-10-18）
+   项目详情里的「💰 包活 / 工程金额 / 工费 / 分成池」摘要块做成可点击：
+   点一下即弹出小表单改「包活方式 + 工程金额（+ 材料费）」，实时联动工费与分成池，
+   无需回预约表单里翻找。权限沿用 perm.editContract（修改包活金额）。
+   ============================================================ */
+/* 计算包活金额改动后的「每人分成前后对比」，供快捷弹窗实时预览。
+   返回 { pool, oldMap, newMap, rows, outShrink }：
+   - rows：[{ workerId, workerName, isOutsourced, from, to, delta }]
+   - outShrink：外协固定合计超出新池被等比缩小的 { name, from, to } 列表（空数组=未触发） */
+function previewCommissionChange(p, newType, amt, mat) {
+  const oldAlloc = resolveCommissionAlloc(p);
+  const newLabor = newType === "包工包料" ? Math.max(0, amt - mat) : amt;
+  const newP = { ...p, contractType: newType, projectAmount: amt, materialFee: mat, laborFee: newLabor };
+  const newAlloc = resolveCommissionAlloc(newP);
+  const oldMap = {}; const newMap = {};
+  oldAlloc.items.forEach((i) => { oldMap[i.workerId] = i.amount; });
+  newAlloc.items.forEach((i) => { newMap[i.workerId] = i.amount; });
+  const ids = Array.from(new Set([...Object.keys(oldMap), ...Object.keys(newMap)]));
+  const rows = ids.map((wid) => {
+    const isOut = String(wid).startsWith("outsourced:");
+    const name = (newAlloc.items.find((i) => i.workerId === wid) || oldAlloc.items.find((i) => i.workerId === wid) || {}).workerName || wid;
+    const from = Math.round((oldMap[wid] || 0) * 100) / 100;
+    const to = Math.round((newMap[wid] || 0) * 100) / 100;
+    return { workerId: wid, workerName: name, isOutsourced: isOut, from, to, delta: Math.round((to - from) * 100) / 100 };
+  });
+  // 外协固定额是否超出新池（超出则需等比缩小，避免外协白吃、工人被砍）
+  const outShrink = rows.filter((r) => r.isOutsourced && r.from > 0 && r.to < r.from - 0.005);
+  return { pool: Math.round(newAlloc.pool * 100) / 100, oldMap, newMap, rows, outShrink };
+}
+
+/* 按新池等比缩小超池的外协固定额，返回新的 commissionCustom（avg/custom/custom_amount 通用：
+   外协项统一是 { workerId:"outsourced:姓名", ratio:0, fixed:n }）。未超池则原样返回。 */
+function scaleOutsourcedFixed(p, newPool) {
+  const custom = Array.isArray(p.commissionCustom) ? p.commissionCustom.map((c) => ({ ...c })) : [];
+  const outIdx = [];
+  custom.forEach((c, i) => { if (c && String(c.workerId).startsWith("outsourced:") && c.fixed != null) outIdx.push(i); });
+  if (!outIdx.length) return { custom, changed: false };
+  const sum = outIdx.reduce((s, i) => s + (Number(custom[i].fixed) || 0), 0);
+  if (sum <= 0 || sum <= newPool + 0.005) return { custom, changed: false };
+  const scale = newPool / sum;
+  outIdx.forEach((i) => { custom[i].fixed = Math.round((Number(custom[i].fixed) || 0) * scale * 100) / 100; });
+  return { custom, changed: true };
+}
+
+function openQuickContractEdit(id) {
+  const p = getProject(id);
+  if (!p) return;
+  if (!perm.editContract(p)) { toast("权限不足，无法修改包活金额"); return; }
+  const isMaterial = (p.contractType || "包工") === "包工包料";
+  const body = `<div class="quick-contract">
+    <input type="hidden" id="qcProjectId" value="${esc(id)}" />
+    <div class="form-row">
+      <label>包活方式</label>
+      <div class="commission-mode" style="border:none;padding:0;margin:0;">
+        <label class="radio-inline"><input type="radio" name="qcType" value="包工" ${isMaterial ? "" : "checked"} onchange="onQuickContractChange()"> 包工</label>
+        <label class="radio-inline"><input type="radio" name="qcType" value="包工包料" ${isMaterial ? "checked" : ""} onchange="onQuickContractChange()"> 包工包料</label>
+      </div>
+    </div>
+    <!-- 金额区：包工时「工程金额」独占整行；包工包料时两栏并排（flex，子项 flex:1，
+         只剩一个子元素时自然占满整行，无需额外判断列数） -->
+    <div class="quick-contract__amounts">
+      <div class="form-row" style="margin-bottom:0;">
+        <label>工程金额 *</label>
+        <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+          <span style="color:#64748b;flex-shrink:0;">¥</span>
+          <input class="input" type="number" min="0" step="0.01" id="qcAmount" value="${Number(p.projectAmount) || 0}" placeholder="客户应付总额" style="flex:1;min-width:0;" oninput="onQuickContractChange()" />
+        </div>
+      </div>
+      <div class="form-row" id="qcMaterialRow" style="${isMaterial ? "" : "display:none;"}">
+        <label>材料费</label>
+        <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+          <span style="color:#64748b;flex-shrink:0;">¥</span>
+          <input class="input" type="number" min="0" step="0.01" id="qcMaterial" value="${Number(p.materialFee) || 0}" placeholder="材料成本" style="flex:1;min-width:0;" oninput="onQuickContractChange()" />
+        </div>
+      </div>
+    </div>
+    <div class="quick-contract__calc" id="qcCalc"></div>
+    <div class="qc-alloc-preview" id="qcAllocPreview"></div>
+    <p class="hint" style="margin:0;">改金额后工人分成会按新分成池重算（比例不变）；<b>已完工项目改动会直接改变已计入统计的提成</b>，请确认后再保存。</p>
+  </div>`;
+  modal.open("修改包活金额", body, {
+    titleHtml: "💰 修改包活金额",
+    confirmText: "保存",
+    cancelText: "取消",
+    onConfirm: async () => {
+      const amt = Number(document.getElementById("qcAmount").value) || 0;
+      if (!(amt > 0)) { toast("请填写工程金额（需大于 0）"); return false; }
+      const newType = (document.querySelector('input[name="qcType"]:checked') || {}).value || "包工";
+      const mat = newType === "包工包料" ? Math.max(0, Number(document.getElementById("qcMaterial").value) || 0) : 0;
+      const labor = newType === "包工包料" ? Math.max(0, amt - mat) : amt;
+
+      /* 留痕：金额直接决定工费与工人分成，属于对工钱有影响的改动，必须可追溯。
+         先取保存前快照（saveProject 会就地改写缓存对象，用活引用对比会全变成「无变更」）。 */
+      const _ex = getProject(id);
+      const oldType = (_ex && _ex.contractType) || "包工";
+      const oldAmt = Number(_ex && _ex.projectAmount) || 0;
+      const oldMat = Number(_ex && _ex.materialFee) || 0;
+      const changes = [];
+      if (oldType !== newType) changes.push(`包活方式: ${oldType} → ${newType}`);
+      if (Math.abs(oldAmt - amt) > 0.005) changes.push(`工程金额: ¥${oldAmt.toFixed(2)} → ¥${amt.toFixed(2)}`);
+      if (newType === "包工包料" && Math.abs(oldMat - mat) > 0.005) changes.push(`材料费: ¥${oldMat.toFixed(2)} → ¥${mat.toFixed(2)}`);
+
+      const payload = {
+        contractType: newType,
+        projectAmount: amt,
+        materialFee: mat,
+        laborFee: labor,
+      };
+      if (!changes.length) { toast("金额无变化"); return false; }
+
+      /* ② 外协固定额联动：新池变小后外协合计超池会被等比缩小，
+         否则外协金额不变、工人被砍光（例：池 5000→3000、外协固定 2000 仍拿 2000）。*/
+      const pv = previewCommissionChange(_ex, newType, amt, mat);
+      const scaled = scaleOutsourcedFixed(_ex, pv.pool);
+      if (scaled.changed) {
+        payload.commissionCustom = scaled.custom;
+        const detail = scaled.custom
+          .filter((c) => String(c.workerId).startsWith("outsourced:"))
+          .map((c) => `${String(c.workerId).replace("outsourced:", "")} ¥${(Number(c.fixed) || 0).toFixed(2)}`)
+          .join("、");
+        changes.push(`外协固定工钱按新池等比缩小（${detail}）`);
+      }
+
+      /* ① 已完工项目改动会直接改变已计入统计的提成 → 二次确认，把每个人的变化摊开给操作者看 */
+      if (isCommissionCounted(_ex)) {
+        const diffLines = pv.rows
+          .filter((r) => Math.abs(r.delta) > 0.005)
+          .map((r) => `${r.workerName}（${r.isOutsourced ? "外协" : "内部"}）：¥${r.from.toFixed(2)} → ¥${r.to.toFixed(2)}`)
+          .join("<br>");
+        const okDone = await confirmDialog(
+          `本项目<b>已完工</b>，提成已计入统计。改金额后以下提成将立即重算：<br><br>${diffLines || "（无变化）"}<br><br>确认要改吗？`,
+          "已完工项目改金额"
+        );
+        if (!okDone) {
+          // confirmDialog 复用了同一个 modal 元素，取消后原表单已被清空 → 重建并保留已填值
+          const _keep = { type: newType, amt, mat };
+          openQuickContractEdit(id);
+          const _t = document.querySelector(`input[name="qcType"][value="${_keep.type}"]`);
+          if (_t) _t.checked = true;
+          const _a = document.getElementById("qcAmount");
+          if (_a) _a.value = _keep.amt;
+          if (_keep.type === "包工包料") {
+            const _m = document.getElementById("qcMaterial");
+            if (_m) _m.value = _keep.mat;
+          }
+          onQuickContractChange();
+          return false;
+        }
+      }
+
+      const actionLogs = [...((_ex && _ex.actionLogs) || [])];
+      actionLogs.push({
+        time: new Date().toISOString(),
+        action: "contract_edit",
+        description: `修改包活金额：${changes.join("；")}（工费 ¥${labor.toFixed(2)}，分成池 ¥${(labor / 2).toFixed(2)}）`,
+        operator: currentProfile.name || currentUser?.email || "系统",
+        operatorRole: currentProfile.role,
+      });
+      payload.actionLogs = actionLogs;
+
+      const saved = await repo.saveProject(payload, id);
+      if (!saved) { toast("保存失败，已恢复为云端数据"); await repo.loadAll(false); renderConstruction(); return false; }
+      logOperation("PROJECT_EDIT", (_ex && _ex.name) || "项目", `ID: ${id}, 变更: ${changes.join("; ")}`);
+      toast(`已更新包活金额${scaled.changed ? "（外协固定工钱已按新池缩小）" : ""}`);
+      renderConstruction();
+      return true;
+    },
+  });
+  onQuickContractChange();
+}
+function onQuickContractChange() {
+  const amtEl = document.getElementById("qcAmount");
+  const calcEl = document.getElementById("qcCalc");
+  const matRow = document.getElementById("qcMaterialRow");
+  if (!amtEl || !calcEl) return;
+  const newType = (document.querySelector('input[name="qcType"]:checked') || {}).value || "包工";
+  const isMaterial = newType === "包工包料";
+  if (matRow) matRow.style.display = isMaterial ? "" : "none";
+  const amt = Number(amtEl.value) || 0;
+  const mat = isMaterial ? (Number(document.getElementById("qcMaterial").value) || 0) : 0;
+  const labor = isMaterial ? Math.max(0, amt - mat) : amt;
+  const pool = labor / 2;
+  calcEl.innerHTML = `工费 <b>¥${labor.toFixed(2)}</b> · 工人分成池 <b class="is-pool">¥${pool.toFixed(2)}</b>`;
+  // 当前弹窗对应的项目 id：由 openQuickContractEdit 挂到弹窗容器上。
+  // 不能从函数参数取——本函数被 inline oninput/onchange 无参调用，取不到闭包变量。
+  const pid = document.getElementById("qcProjectId");
+  renderQuickAllocPreview(pid ? pid.value : "", newType, amt, mat);
+}
+
+/* 快捷金额弹窗内：实时显示「每人分成 旧 → 新」，金额变了的标红/标绿；
+   外协固定额超出新池时额外提示会被等比缩小，避免外协白吃、工人被砍。 */
+function renderQuickAllocPreview(id, newType, amt, mat) {
+  const box = document.getElementById("qcAllocPreview");
+  const p = getProject(id);
+  if (!box || !p) return;
+  if (!(amt > 0)) { box.innerHTML = ""; return; }
+  const pv = previewCommissionChange(p, newType, amt, mat);
+  const changed = pv.rows.filter((r) => Math.abs(r.delta) > 0.005);
+  if (!changed.length) {
+    box.innerHTML = `<div class="qc-alloc-preview__none">分成无变化（当前无已分配人员或分成池为 0）</div>`;
+    return;
+  }
+  const rowsHtml = changed.map((r) => {
+    const cls = r.delta < 0 ? "is-down" : "is-up";
+    const arrow = r.from > 0 ? `¥${r.from.toFixed(2)} → ` : "";
+    return `<span class="qc-alloc-chip ${cls}">${esc(r.workerName)}${r.isOutsourced ? '<i class="qc-out-tag">外协</i>' : ""} ${arrow}<b>¥${r.to.toFixed(2)}</b></span>`;
+  }).join("");
+  const warnHtml = pv.outShrink.length
+    ? `<div class="qc-alloc-preview__warn">⚠️ 外协固定工钱合计超出新的分成池，保存时会按同比例缩小：${pv.outShrink.map((r) => `${esc(r.workerName)} ¥${r.from.toFixed(2)} → ¥${r.to.toFixed(2)}`).join("、")}</div>`
+    : "";
+  const doneHint = isCommissionCounted(p)
+    ? `<div class="qc-alloc-preview__warn" style="background:#fff7ed;border-color:#fdba74;color:#9a3412;">本项目已完工（提成已计入统计），保存后以下提成会立即按新金额重算。</div>`
+    : "";
+  box.innerHTML = `<div class="qc-alloc-preview__title">分成变化预览（完工后才计入统计）</div><div class="qc-alloc-preview__list">${rowsHtml}</div>${warnHtml}${doneHint}`;
 }
 
 function toggleWorkChip(el) {
@@ -9802,9 +10188,12 @@ async function fillFormPhotos() {
 }
 
 // 保存项目后调用：把工作集里暂存的照片上传到 COS 并写回 project_photos
-async function uploadFormPhotos(projectId) {
-  const fp = window._formPhotos;
-  window._formPhotos = null;
+async function uploadFormPhotos(projectId, fpOverride) {
+  // fpOverride：调用方在关弹窗前截获的暂存照片快照。后台上传场景必须传快照——
+  // 否则随后打开其他项目表单会把 window._formPhotos 覆盖成别项目的图，导致照片传错项目。
+  const fp = fpOverride || window._formPhotos;
+  if (!fpOverride) window._formPhotos = null;
+  else if (window._formPhotos === fp) window._formPhotos = null;
   if (!fp) return;
   if (MODE !== "cloud") { toast("离线模式暂不支持上传照片，请联网后重试"); return; }
   const staged = [];
@@ -9879,18 +10268,16 @@ function switchAssignType(btn) {
   }
 }
 
-function newProject() { 
-  window._estDirty = false;
-  modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED })); 
-  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); }, 100); 
+function newProject() {
+  modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED }));
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); updateContractCalc(); }, 100);
 }
-function editProject(id) { 
-  window._estDirty = false;
-  modal.open("编辑项目", projectForm(getProject(id))); 
-  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); }, 100); 
+function editProject(id) {
+  modal.open("编辑项目", projectForm(getProject(id)));
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); updateContractCalc(); }, 100);
 }
 
-/* 快速修改项目预约时间/工时/人数 */
+/* 快速修改项目预约时间（总工时/人数保存时自动派生） */
 function workerCountOptions(p) {
   const assigned = (p.assignedWorkerIds && p.assignedWorkerIds.length) || 0;
   const cur = (p.workerCount && p.workerCount > 0) ? p.workerCount : assigned;
@@ -9907,7 +10294,6 @@ function quickEditProjectTimeForm(p = {}) {
   const locked = isAppointmentLocked(p);
   const lockMsg = locked ? appointmentLockReason(p) : "";
   const apptDisabled = locked || !perm.editAppointment(p);
-  const hoursDisabled = locked || !perm.editHours(p);
   const apptDate = p.appointmentTime ? new Date(p.appointmentTime) : null;
   const now = new Date();
   // 过期项目进入快速修改时，日期默认调到今天，避免日期框显示昨天但又受 min=today 限制保存不了
@@ -9978,31 +10364,7 @@ function quickEditProjectTimeForm(p = {}) {
           <div id="pDurationValue" style="font-size:20px;font-weight:700;color:#1e293b;">--</div>
         </div>
       </div>
-      <div style="text-align:right;">
-        <div style="font-size:12px;color:#64748b;">建议人数</div>
-        <div id="pSuggestWorkers" style="font-size:16px;font-weight:600;color:#2563eb;">--</div>
-      </div>
-    </div>
-    <div class="form-grid">
-      <div class="form-row">
-        <label><span style="color:var(--success)">⚙️</span> 预计总工时</label>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <input class="input" type="number" min="0" step="0.5" id="pEst" value="${esc(p.estimatedHours ?? "")}" placeholder="0" style="width:auto;max-width:110px;" oninput="window._estDirty=true;updateSpanHint()" ${hoursDisabled ? "disabled" : ""} />
-          <span style="font-size:12px;color:var(--muted);">人·小时</span>
-        </div>
-        ${hoursDisabled
-          ? (locked ? '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">🔒 ' + esc(lockMsg) + '</small>' : '<small class="hint" style="font-size:11px;margin:2px 0 0;color:#dc2626;">⛔ 您没有「修改预约工时」权限，无法修改预约工时</small>')
-          : '<small id="pEstHint" class="hint" style="font-size:11px;margin:2px 0 0;color:#16a34a;">先填写总工时，方便计算结束时间</small>'}
-      </div>
-      <div class="form-row">
-        <label><span style="color:var(--success)">👷</span> 施工人数</label>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <select class="input" id="pWorkers" onchange="autoCalcEndTime();updateSpanHint();" style="width:auto;max-width:110px;">
-            ${workerCountOptions(p)}
-          </select>
-          <button id="pCalcBtn" class="btn small" onclick="autoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">计算</button>
-        </div>
-      </div>
+      <div style="font-size:12px;color:#64748b;text-align:right;">总工时与人数<br/>保存时自动计算</div>
     </div>
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
@@ -10017,11 +10379,10 @@ function quickEditProjectTime(id) {
     toast(appointmentLockReason(p));
     return;
   }
-  if (!perm.editAppointment(p) && !perm.editHours(p)) {
+  if (!perm.editAppointment(p)) {
     toast("您没有修改预约时间或预约工时的权限");
     return;
   }
-  window._estDirty = false;
   modal.open("快速修改施工安排", quickEditProjectTimeForm(p));
   setTimeout(() => { updateSpanHint(); refreshProjectQuickTimeMin(); }, 100);
 }
@@ -10088,14 +10449,10 @@ async function saveQuickEditProjectTime(id) {
     return;
   }
 
-  const workerCountInput = document.getElementById("pWorkers").value;
-  if (!validateWorkerCount(workerCountInput)) { toast("施工人数必须在 1-8 之间"); return; }
-  const workerCount = Number(workerCountInput);
-  const inputEstHours = Number(document.getElementById("pEst").value) || 0;
-  const autoEstHours = Math.round(totalBookedHours * workerCount * 10) / 10;
-  // 未填写总工时，或用户未手动改动过工时字段时，自动按 施工时长 × 人数 计算；
-  // 无「修改预约工时」权限时后续会强制保持原值
-  const estimatedHours = (inputEstHours <= 0 || !window._estDirty) ? autoEstHours : inputEstHours;
+  // 预约只填施工时间段：施工人数取已分配工人数（未分配则维持原值/默认1），
+  // 预计总工时自动按「各段时长之和 × 人数」派生（人·小时口径）；无「修改预约工时」权限时后续强制保持原值
+  const workerCount = Math.max(1, (p.assignedWorkerIds || []).length || p.workerCount || 1);
+  const estimatedHours = Math.round(totalBookedHours * workerCount * 10) / 10;
 
   const payload = {
     appointmentTime: fullTime,
@@ -10111,9 +10468,6 @@ async function saveQuickEditProjectTime(id) {
     payload.appointmentTime = p.appointmentTime;
     payload.endTime = p.endTime;
     if (segPayload) payload.workSegments = p.workSegments; // 分段决定预约时间，无权限时回退原值
-  }
-  if (!perm.editHours(p)) {
-    payload.estimatedHours = p.estimatedHours;
   }
 
   // 工时可行性校验：人均剩余工时显著超过可用施工窗口时给出提示
@@ -10142,32 +10496,60 @@ async function saveQuickEditProjectTime(id) {
     ];
   }
 
+  // 变更日志对比快照：乐观更新会就地改写 p（见 repo.saveProject cloud 分支），先取快照
+  const beforeQuick = {
+    appointmentTime: p.appointmentTime,
+    endTime: p.endTime,
+    estimatedHours: p.estimatedHours,
+    workerCount: p.workerCount,
+  };
+
+  // 乐观更新：repo.saveProject 先同步把新值写入本地缓存再发起云端写入，这里不 await
+  // 云端往返——立即关弹窗 + 重绘 + 提示，后台同步随后执行，避免弹窗卡住数秒。
+  let savePromise;
   try {
-    const saved = await repo.saveProject(payload, id);
-    const savedId = (saved && saved.id) || id;
-    // 乐观反馈：写入成功后立即关弹窗 + 提示，loadAll 后台静默同步，避免「保存中…」卡 2-4 秒
-    modal.close();
-    renderAll();
-    toast("已更新施工安排");
-
-    const changes = [];
-    if (p.appointmentTime !== payload.appointmentTime) changes.push(`预约时间: ${fmtDateTime(p.appointmentTime) || "无"} -> ${fmtDateTime(payload.appointmentTime)}`);
-    if (p.endTime !== payload.endTime) changes.push(`结束时间: ${fmtDateTime(p.endTime) || "无"} -> ${fmtDateTime(payload.endTime)}`);
-    if (p.estimatedHours !== payload.estimatedHours) changes.push(`预计工时: ${p.estimatedHours || 0} -> ${payload.estimatedHours}`);
-    if (p.workerCount !== payload.workerCount) changes.push(`施工人数: ${p.workerCount || 1} -> ${payload.workerCount}`);
-    if (changes.length > 0) {
-      logOperation("PROJECT_EDIT", p.name, `ID: ${id}, 变更: ${changes.join("; ")}`);
-    }
-
-    // 通知依赖最新缓存，后台同步完成后再发
-    repo.loadAll().then(() => {
-      const updated = getProject(savedId);
-      if (updated) sendNotificationForProjectChange("update", updated);
-    }).catch((e) => console.warn("[sync] 修改预约后台同步失败：", e));
+    savePromise = repo.saveProject(payload, id);
   } catch (e) {
     console.error(e);
     toast("保存失败: " + (e.message || "未知错误"));
+    return;
   }
+
+  modal.close();
+  renderAll();
+  toast("已更新施工安排");
+
+  const changes = [];
+  if (beforeQuick.appointmentTime !== payload.appointmentTime) changes.push(`预约时间: ${fmtDateTime(beforeQuick.appointmentTime) || "无"} -> ${fmtDateTime(payload.appointmentTime)}`);
+  if (beforeQuick.endTime !== payload.endTime) changes.push(`结束时间: ${fmtDateTime(beforeQuick.endTime) || "无"} -> ${fmtDateTime(payload.endTime)}`);
+  if (beforeQuick.estimatedHours !== payload.estimatedHours) changes.push(`预计工时: ${beforeQuick.estimatedHours || 0} -> ${payload.estimatedHours}`);
+  if (beforeQuick.workerCount !== payload.workerCount) changes.push(`施工人数: ${beforeQuick.workerCount || 1} -> ${payload.workerCount}`);
+  if (changes.length > 0) {
+    logOperation("PROJECT_EDIT", p.name, `ID: ${id}, 变更: ${changes.join("; ")}`);
+  }
+
+  // 后台：云端写入完成后静默全量同步，再发通知。
+  // repo.saveProject 云端失败时 fail() 不 throw 而是 resolve undefined（已 toast 并触发补偿
+  // loadAll），故判空：失败时补明确提示并回拉真值重绘（乐观数据自动回滚）。
+  savePromise.then(async (saved) => {
+    if (!saved) {
+      toast("保存失败，已恢复为云端数据");
+      try { await repo.loadAll(); } catch (e) { /* 补偿同步失败不阻断 */ }
+      renderAll();
+      return;
+    }
+    try {
+      await repo.loadAll();
+      const updated = getProject(id);
+      if (updated) sendNotificationForProjectChange("update", updated);
+    } catch (e) {
+      console.warn("[sync] 修改预约后台同步失败：", e);
+    }
+  }).catch((e) => {
+    console.error(e);
+    toast("保存失败: " + (e.message || "未知错误"));
+    repo.loadAll().then(() => renderAll()).catch(() => {});
+  });
 }
 
 async function saveProject(id) {
@@ -10213,33 +10595,32 @@ async function saveProject(id) {
   let storeId = storeEl ? storeEl.value : "";
   if (isStoreManager() && myStore() != null && myStore() !== "") storeId = myStore();
   if (isWorker() && myStore() != null && myStore() !== "") storeId = myStore();
-  const workerCountInput = document.getElementById("pWorkers").value;
-  if (!validateWorkerCount(workerCountInput)) { toast("施工人数必须在 1-8 之间"); return; }
-  const workerCount = Number(workerCountInput);
-  
+  // 预约只填施工时间段：施工人数取已分配工人数（新建未分配时默认1），
+  // 预计总工时自动按「各段时长之和 × 人数」派生（人·小时口径，修改时间段即自动跟随重算）；
+  // 无「修改预约工时」权限时，下方权限检查会强制保持原值，不会覆盖
+  const existingProject = id ? getProject(id) : null;
+  const workerCount = Math.max(1, ((existingProject && existingProject.assignedWorkerIds) || []).length || 1);
+
   const phone = document.getElementById("pPhone").value.trim();
   if (!validatePhone(phone)) { toast("请输入有效的手机号码"); return; }
-  
-  const inputEstHours = Number(document.getElementById("pEst").value) || 0;
+
   const startTime = new Date(fullTime);
   const endTime = new Date(fullEnd);
   const durationHours = totalBookedHours; // 总预约时长（各段之和）
-  const autoEstHours = Math.round(totalBookedHours * workerCount * 10) / 10;
-  
-  let estimatedHours = inputEstHours;
-  let autoCalculated = false;
-  // 未填写总工时，或用户未手动改动过工时字段时，自动按 施工时长 × 人数 计算
-  // （新建与编辑均适用；这样修改施工时间段后总工时会自动跟随重算）。
-  // 若用户无「修改预约工时」权限，后续权限检查会强制保持原值，不会覆盖。
-  if (inputEstHours <= 0 || !window._estDirty) {
-    estimatedHours = autoEstHours;
-    autoCalculated = true;
-  }
+  const estimatedHours = Math.round(totalBookedHours * workerCount * 10) / 10;
   
   const wcChecks = Array.from(document.querySelectorAll("#pWorkContent input:checked")).map((c) => c.value);
   const wcCustom = (document.getElementById("pWorkContentCustom").value || "")
     .split(/[、,，\s]+/).map((s) => s.trim()).filter(Boolean);
   const workContent = [...new Set([...wcChecks, ...wcCustom])];
+
+  // 包活制字段
+  const contractType = (document.querySelector('input[name="contractType"]:checked') || {}).value || "包工";
+  const projectAmount = Number(document.getElementById("pProjectAmount").value) || 0;
+  const materialFee = contractType === "包工包料" ? (Number(document.getElementById("pMaterialFee").value) || 0) : 0;
+  const laborFee = contractType === "包工包料" ? Math.max(0, projectAmount - materialFee) : projectAmount;
+  // 新建项目必须填写工程金额（包活制下工资来自工程金额分成）
+  if (!id && projectAmount <= 0) { toast("请填写工程金额（包活制下工资按工程金额分成）"); return; }
 
   const payload = {
     name,
@@ -10255,6 +10636,10 @@ async function saveProject(id) {
     note: document.getElementById("pNote").value.trim(),
     workContent,
     storeId,
+    contractType,
+    projectAmount,
+    materialFee,
+    laborFee,
   };
 
   // 改期留痕：编辑已有项目时，把"改之前的预约时间"记为最初预约时间（已有则保留最初的）
@@ -10282,7 +10667,7 @@ async function saveProject(id) {
       payload.endTime = _ex.endTime;
       payload.workSegments = _ex.workSegments;
     }
-    if (_ex && !perm.editHours(_ex)) {
+    if (_ex && !perm.editAppointment(_ex)) {
       payload.estimatedHours = _ex.estimatedHours;
     }
   }
@@ -10301,6 +10686,13 @@ async function saveProject(id) {
       payload.workContent = _ex.workContent;
       payload.storeId = _ex.storeId;
       payload.workerCount = _ex.workerCount;
+      // 包活字段由独立权限「修改包活金额」保护（2026-10-18 拆分），无权者保持原值
+      if (!perm.editContract(_ex)) {
+        payload.contractType = _ex.contractType;
+        payload.projectAmount = _ex.projectAmount;
+        payload.materialFee = _ex.materialFee;
+        payload.laborFee = _ex.laborFee;
+      }
     }
   }
 
@@ -10311,7 +10703,9 @@ async function saveProject(id) {
     }
   }
 
-  const preExisting = id ? getProject(id) : null;  // 保存前快照，供变更日志对比（loadAll 前即正确）
+  // 保存前快照（浅拷贝取值）：乐观更新会就地改写缓存对象（见 repo.saveProject），
+  // 变更日志 / 改期留痕 / 工时校验都必须用这份快照对比才正确
+  const preExisting = id ? { ...getProject(id) } : null;
 
   // 工时可行性校验：人均剩余工时显著超过可用施工窗口时给出提示
   const consumedSave = preExisting ? hoursDiff(preExisting).act : 0;
@@ -10339,70 +10733,32 @@ async function saveProject(id) {
     ];
   }
 
-  // 防重复提交：保存期间加锁，禁用按钮并显示“保存中...”，避免用户误以为卡住而重复点击导致重复保存
+  // 防重复提交：保存期间加锁，仅禁用按钮（不把文字卡成「保存中…」数秒——云端往返很慢，
+  // 文字卡住会让用户以为卡死而重复点击；真正防重复靠禁用 + 锁，弹窗即时关闭后按钮即销毁）
   if (window._savingProject) return;
   window._savingProject = true;
   const _saveBtn = document.querySelector('#modalBody .form-actions .btn.primary');
   const _saveBtnText = _saveBtn ? _saveBtn.textContent : '保存';
   if (_saveBtn) {
     _saveBtn.disabled = true;
-    _saveBtn.textContent = '保存中...';
     _saveBtn.style.opacity = '0.65';
     _saveBtn.style.pointerEvents = 'none';
   }
 
+  // 表单暂存照片快照：后台上传用。若随后打开其他项目表单，window._formPhotos 会被覆盖，
+  // 故这里先截获引用，避免把别项目的图传到本项目下。
+  const stagedFormPhotos = window._formPhotos || null;
+
+  // 乐观更新：repo.saveProject 在 cloud 模式下会先同步把新值写入本地缓存再发起云端写入，
+  // 因此这里不 await 云端往返——立即关弹窗 + 重绘 + 提示，云端同步与图片上传放后台执行，
+  // 避免「保存中…」卡数秒、保存后列表/详情不实时（工程金额等字段改完立刻可见）。
+  let savePromise;
   try {
-    const saved = await repo.saveProject(payload, id);
-    const savedId = (saved && saved.id) || id;
-    // 表单内暂存的现场图 / 施工图及物料：保存项目拿到 id 后立即上传 COS 并写回 project_photos
-    await uploadFormPhotos(savedId);
-    // 乐观反馈：写入成功后立即关弹窗 + 提示，loadAll 改为后台静默同步，
-    // 避免云端全量刷新（12+ 表）导致按钮「保存中…」卡 2-4 秒。
-    modal.close();
-    renderAll();
-    toast(autoCalculated ? `已保存，预计总工时已根据施工时间和人数自动计算为 ${estimatedHours} 小时` : "已保存");
-    // 保存成功，释放锁（弹窗已关闭，按钮随之销毁）
-    window._savingProject = false;
-
-    if (payload.customer) {
-      upsertCustomer(payload.customer, payload.phone, payload.address);
-    }
-
-    // 变更日志：用保存前快照对比（loadAll 前即正确）
-    if (id && preExisting) {
-      const existing = preExisting;
-      const changes = [];
-      if (existing.name !== name) changes.push(`项目名称: ${existing.name} -> ${name}`);
-      if (existing.customer !== payload.customer) changes.push(`客户: ${existing.customer || "无"} -> ${payload.customer || "无"}`);
-      if (existing.phone !== payload.phone) changes.push(`电话: ${existing.phone || "无"} -> ${payload.phone || "无"}`);
-      if (existing.address !== payload.address) changes.push(`地址: ${existing.address || "无"} -> ${payload.address || "无"}`);
-      if (existing.appointmentTime !== payload.appointmentTime) changes.push(`预约时间: ${fmtDateTime(existing.appointmentTime) || "无"} -> ${fmtDateTime(payload.appointmentTime)}`);
-      if (existing.endTime !== payload.endTime) changes.push(`结束时间: ${fmtDateTime(existing.endTime) || "无"} -> ${fmtDateTime(payload.endTime)}`);
-      if (existing.estimatedHours !== payload.estimatedHours) changes.push(`预计工时: ${existing.estimatedHours || 0} -> ${payload.estimatedHours}`);
-      if (existing.workerCount !== payload.workerCount) changes.push(`施工人数: ${existing.workerCount || 1} -> ${payload.workerCount}`);
-      if (existing.status !== payload.status) changes.push(`状态: ${existing.status || "无"} -> ${payload.status}`);
-      if (existing.note !== payload.note) changes.push(`备注: ${existing.note || "无"} -> ${payload.note || "无"}`);
-      const oldWc = (existing.workContent || []).join("、");
-      const newWc = (payload.workContent || []).join("、");
-      if (oldWc !== newWc) changes.push(`施工内容: ${oldWc || "无"} -> ${newWc || "无"}`);
-      if (existing.storeId !== payload.storeId) changes.push(`门店: ${storeName(existing.storeId) || "无"} -> ${storeName(payload.storeId) || "无"}`);
-      const changeDetail = changes.length > 0 ? changes.join("; ") : "无字段变更";
-      logOperation("PROJECT_EDIT", name, `ID: ${id}, 变更: ${changeDetail}`);
-    } else if (!id) {
-      logOperation("PROJECT_CREATE", name, `客户: ${payload.customer || "无"}, 电话: ${payload.phone || "无"}, 地址: ${payload.address || "无"}, 预约时间: ${fmtDateTime(payload.appointmentTime)}, 预计工时: ${payload.estimatedHours}小时, 施工人数: ${payload.workerCount}, 门店: ${storeName(payload.storeId) || "无"}`);
-    }
-
-    // 通知依赖最新缓存（新建项目需 loadAll 后才进缓存），后台同步完成后再发
-    repo.loadAll().then(() => {
-      const p = getProject(savedId);
-      if (p) {
-        sendNotificationForProjectChange(id ? "update" : "new", p);
-      }
-    }).catch((e) => console.warn("[sync] 保存项目后台同步失败：", e));
+    savePromise = repo.saveProject(payload, id);
   } catch (error) {
+    // 同步阶段就失败（极少见）：恢复按钮允许重试
     console.error("保存项目失败:", error);
     toast("保存失败：" + (error.message || "未知错误"));
-    // 保存失败，释放锁并恢复按钮，允许用户修正后重试
     window._savingProject = false;
     if (_saveBtn) {
       _saveBtn.disabled = false;
@@ -10410,7 +10766,77 @@ async function saveProject(id) {
       _saveBtn.style.opacity = '';
       _saveBtn.style.pointerEvents = '';
     }
+    return;
   }
+
+  // 关闭弹窗并立即用本地缓存重绘：新值（含工程金额 / 工费 / 分成池）当下即显示
+  modal.close();
+  renderAll();
+  toast(`已保存，预计总工时已按施工时段自动计算为 ${estimatedHours} 小时`);
+  // 弹窗已关闭（按钮随之销毁），释放锁
+  window._savingProject = false;
+
+  if (payload.customer) {
+    upsertCustomer(payload.customer, payload.phone, payload.address);
+  }
+
+  // 变更日志：用保存前快照对比（快照为浅拷贝，不受乐观更新就地改写影响）
+  if (id && preExisting) {
+    const existing = preExisting;
+    const changes = [];
+    if (existing.name !== name) changes.push(`项目名称: ${existing.name} -> ${name}`);
+    if (existing.customer !== payload.customer) changes.push(`客户: ${existing.customer || "无"} -> ${payload.customer || "无"}`);
+    if (existing.phone !== payload.phone) changes.push(`电话: ${existing.phone || "无"} -> ${payload.phone || "无"}`);
+    if (existing.address !== payload.address) changes.push(`地址: ${existing.address || "无"} -> ${payload.address || "无"}`);
+    if (existing.appointmentTime !== payload.appointmentTime) changes.push(`预约时间: ${fmtDateTime(existing.appointmentTime) || "无"} -> ${fmtDateTime(payload.appointmentTime)}`);
+    if (existing.endTime !== payload.endTime) changes.push(`结束时间: ${fmtDateTime(existing.endTime) || "无"} -> ${fmtDateTime(payload.endTime)}`);
+    if (existing.estimatedHours !== payload.estimatedHours) changes.push(`预计工时: ${existing.estimatedHours || 0} -> ${payload.estimatedHours}`);
+    if (existing.workerCount !== payload.workerCount) changes.push(`施工人数: ${existing.workerCount || 1} -> ${payload.workerCount}`);
+    if (existing.status !== payload.status) changes.push(`状态: ${existing.status || "无"} -> ${payload.status}`);
+    if (existing.note !== payload.note) changes.push(`备注: ${existing.note || "无"} -> ${payload.note || "无"}`);
+    const oldWc = (existing.workContent || []).join("、");
+    const newWc = (payload.workContent || []).join("、");
+    if (oldWc !== newWc) changes.push(`施工内容: ${oldWc || "无"} -> ${newWc || "无"}`);
+    if (existing.storeId !== payload.storeId) changes.push(`门店: ${storeName(existing.storeId) || "无"} -> ${storeName(payload.storeId) || "无"}`);
+    const changeDetail = changes.length > 0 ? changes.join("; ") : "无字段变更";
+    logOperation("PROJECT_EDIT", name, `ID: ${id}, 变更: ${changeDetail}`);
+  } else if (!id) {
+    logOperation("PROJECT_CREATE", name, `客户: ${payload.customer || "无"}, 电话: ${payload.phone || "无"}, 地址: ${payload.address || "无"}, 预约时间: ${fmtDateTime(payload.appointmentTime)}, 预计工时: ${payload.estimatedHours}小时, 施工人数: ${payload.workerCount}, 门店: ${storeName(payload.storeId) || "无"}`);
+  }
+
+  // 后台：等云端写入完成 → 上传表单暂存图片 → 静默全量同步 → 发通知。
+  // 注意 repo.saveProject 云端失败时 fail() 不 throw 而是 resolve undefined（已 toast 具体错误
+  // 并触发补偿 loadAll），故这里必须判空：失败时补一条明确提示并回拉云端真值重绘（自动回滚），
+  // 且不能继续拿 undefined 的 id 去传照片。
+  savePromise.then(async (saved) => {
+    if (!saved) {
+      toast("保存失败，已恢复为云端数据");
+      try { await repo.loadAll(); } catch (e) { /* 补偿同步失败不阻断 */ }
+      renderAll();
+      return;
+    }
+    const savedId = saved.id || id;
+    try {
+      await uploadFormPhotos(savedId, stagedFormPhotos);
+    } catch (e) {
+      console.warn("[photos] 表单图片上传失败：", e);
+      toast("项目已保存，但照片上传失败：" + (e.message || e));
+    }
+    try {
+      await repo.loadAll();
+      const p = getProject(savedId);
+      if (p) {
+        sendNotificationForProjectChange(id ? "update" : "new", p);
+      }
+    } catch (e) {
+      console.warn("[sync] 保存项目后台同步失败：", e);
+    }
+  }).catch((error) => {
+    console.error("保存项目失败:", error);
+    toast("保存失败：" + (error.message || "未知错误"));
+    // 云端写入失败：回拉云端真值覆盖本地乐观数据
+    repo.loadAll().then(() => renderAll()).catch(() => {});
+  });
 }
 
 function openRepairOrderForm(projectId) {
@@ -10474,14 +10900,8 @@ function openRepairOrderForm(projectId) {
             <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="repairUrgency" value="加急" /> 加急</label>
           </div>
         </div>
-        <div style="flex:1;">
-          <label>预计工时</label>
-          <div style="display:flex;align-items:center;gap:4px;">
-            <input class="input" type="number" id="repairEstimatedHours" min="0" step="0.5" placeholder="0" style="flex:1;" />
-            <span style="color:#6b7280;font-size:12px;white-space:nowrap;">小时</span>
-          </div>
-        </div>
       </div>
+      ${repairPayBlockHtml("rp", { title: "维修收费", freeLabel: "免费维修", paidLabel: "付费维修", freeHint: "免费维修：不计客户费用，工时仅作考勤记录，工人无包活分成" })}
       <div class="form-row">
         <label>维修人员</label>
         ${workerRows}
@@ -10508,7 +10928,9 @@ async function submitRepairOrder(projectId) {
   const time = document.getElementById("repairTime").value;
   const urgencyEl = document.querySelector('input[name="repairUrgency"]:checked');
   const urgency = urgencyEl ? urgencyEl.value : "普通";
-  const estimatedHours = Number(document.getElementById("repairEstimatedHours").value) || 0;
+  // 包活制（2026-10-18）：维修单不再录工时，改「免费 / 付费」+ 包活方式（付费必填工程金额）
+  const pay = readRepairPayBlock("rp");
+  if (pay.payType === "paid" && pay.projectAmount <= 0) { toast("付费维修请填写工程金额"); return; }
   const notes = document.getElementById("repairNotes").value.trim();
   
   if (!items) {
@@ -10530,7 +10952,7 @@ async function submitRepairOrder(projectId) {
   // —— 维修人员冲突检测：选定工人当天该时段是否已有请假/日程/其它项目 ——
   if (assignedWorkerIds.length) {
     const repEnd = new Date(`${date}T${time}`);
-    repEnd.setMinutes(repEnd.getMinutes() + (estimatedHours > 0 ? estimatedHours * 60 : 120));
+    repEnd.setMinutes(repEnd.getMinutes() + 120); // 维修无结束时间，按 2 小时预估冲突窗口
     const repEndHM = `${String(repEnd.getHours()).padStart(2, "0")}:${String(repEnd.getMinutes()).padStart(2, "0")}`;
     const busy = assignedWorkerIds.map(wid => {
       const c = checkWorkerAvailability(wid, date, time, repEndHM);
@@ -10552,7 +10974,13 @@ async function submitRepairOrder(projectId) {
     address,
     appointmentTime: new Date(fullTime).toISOString(),
     urgency,
-    estimatedHours,
+    payType: pay.payType,
+    contractType: pay.contractType,
+    projectAmount: pay.projectAmount,
+    materialFee: pay.materialFee,
+    laborFee: pay.laborFee,
+    commissionPool: pay.pool,
+    payable: pay.payType === "paid", // 兼容旧字段（工资核算/详情展示）
     assignedWorkerIds,
     notes,
     status: "待维修",
@@ -10581,45 +11009,75 @@ async function completeRepair(projectId, repairId) {
   openCompleteRepairForm(projectId, ro.id);
 }
 
-/* 完成维修：弹表单录入参与人员真实工时与计薪开关（免费保修/付费维修） */
+/* 完成维修：包活制下不逐人录工时——勾选参与人员 + 填整单实际用时（考勤参考）；
+   付费维修按「工费÷2 均分勾选人员」自动分成并写入提成统计。 */
 function openCompleteRepairForm(projectId, repairId) {
   const p = getProject(projectId);
   if (!p) return;
   const ro = (p.repairOrders || []).find(r => r.id === repairId) || {};
   const workerSourceIds = (ro.assignedWorkerIds && ro.assignedWorkerIds.length) ? ro.assignedWorkerIds : (p.assignedWorkerIds || []);
   const workers = workerSourceIds.map(wid => getWorker(wid)).filter(Boolean);
+  const isPaid = ro.payType === "paid" || (ro.payType == null && ro.payable === true);
+  const pool = Number(ro.commissionPool) || 0;
   const workerRows = workers.length ? workers.map(w => `
     <div class="form-row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-      <input type="checkbox" id="repairW_${w.id}" checked style="width:18px;height:18px;flex:0 0 auto;">
+      <input type="checkbox" id="repairW_${w.id}" checked onchange="updateRepairCompletePreview()" style="width:18px;height:18px;flex:0 0 auto;">
       <span style="flex:1;min-width:0;">${esc(w.name)}</span>
-      <input class="input" type="number" min="0" step="0.5" id="repairWh_${w.id}" placeholder="工时" style="width:90px;flex:0 0 auto;">
-      <span style="color:#6b7280;font-size:12px;flex:0 0 auto;">小时</span>
+      <span class="repair-each-amt" data-wid="${w.id}" style="font-size:13px;color:#16a34a;font-weight:600;">${isPaid && pool > 0 ? "¥" + (pool / workers.length).toFixed(2) : ""}</span>
     </div>`).join("") : `<div class="hint">原项目未分配人员，请先在项目里分配参与维修的人员。</div>`;
   const form = `
     <div class="repair-complete-form">
       <div class="form-row"><label>维修单 #${ro.seq || ""}</label><div style="font-weight:600;color:#f59e0b;">${esc(ro.items || "—")}</div></div>
       <div class="form-row"><label>维修原因</label><div>${esc(ro.reason || "—")}</div></div>
       <div class="form-row"><label>预约维修时间</label><div>${ro.appointmentTime ? fmtDateTime(ro.appointmentTime) : "—"}</div></div>
+      <div class="info-grid" style="margin-bottom:8px;">
+        ${repairPaySummaryHtml(ro)}
+      </div>
       <div class="form-row">
-        <label>参与维修人员与工时（维修必记工时，请填真实工时）</label>
+        <label>参与维修人员</label>
         ${workerRows}
       </div>
-      ${perm.viewGlobalStats() ? `
-      <div class="form-row" style="background:#f0f9ff;padding:10px;border-radius:8px;margin-bottom:8px;">
-        <label style="font-weight:500;display:block;margin-bottom:6px;">维修性质（决定工时是否计入工资）</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:4px;">
-          <input type="radio" name="repairNature" value="warranty" checked> 免费保修（仅成本核算，不计入工资）
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-          <input type="radio" name="repairNature" value="paid"> 付费维修（计入工人工资）
-        </label>
-      </div>` : ""}
+      <div class="form-row">
+        <label>实际用时（考勤参考，不参与计薪）</label>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input class="input" type="number" min="0" step="0.5" id="repairActualHours" value="2" placeholder="0" style="width:auto;max-width:100px;" />
+          <span style="font-size:12px;color:#6b7280;">小时</span>
+          <span style="font-size:11px;color:#6b7280;">勾选人员各记此时长</span>
+        </div>
+      </div>
+      ${isPaid && pool > 0 ? `
+      <input type="hidden" id="repairPoolVal" data-pool="${pool}" />
+      <div class="form-row" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 10px;font-size:12px;color:#166534;">
+        💵 工钱分成：分成池 ¥${pool.toFixed(2)} 均分给勾选人员<span id="repairAllocPreview"></span>
+      </div>` : `
+      <div class="form-row" style="font-size:12px;color:#6b7280;">🆓 免费维修：工人无包活分成，工时仅作考勤记录。</div>`}
       <div class="form-actions">
         <button class="btn" onclick="modal.close()">取消</button>
         <button class="btn primary" onclick="submitCompleteRepair('${projectId}','${repairId}')">完成维修</button>
       </div>
     </div>`;
   modal.open("✅ 完成维修", form);
+  updateRepairCompletePreview();
+}
+
+/* 完成维修弹窗：付费维修的均分预览（随勾选人员实时刷新） */
+function updateRepairCompletePreview() {
+  const form = document.querySelector(".repair-complete-form");
+  if (!form) return;
+  const poolEl = document.getElementById("repairPoolVal");
+  const pool = poolEl ? Number(poolEl.dataset.pool) || 0 : 0;
+  const amounts = Array.from(form.querySelectorAll(".repair-each-amt"));
+  const preview = document.getElementById("repairAllocPreview");
+  const checked = Array.from(form.querySelectorAll("input[id^='repairW_']")).filter((cb) => cb.checked);
+  const n = checked.length;
+  amounts.forEach((el) => { el.textContent = ""; });
+  if (!(pool > 0) || !n) { if (preview) preview.textContent = n ? "" : "（请至少勾选 1 人）"; return; }
+  const per = Math.floor(pool * 100 / n) / 100;
+  amounts.forEach((el) => { el.textContent = "¥" + per.toFixed(2); });
+  if (preview) {
+    const tail = Math.round((pool - per * n) * 100) / 100;
+    preview.textContent = `：勾选 ${n} 人，每人约 ¥${per.toFixed(2)}${tail > 0 ? `（尾差 ¥${tail.toFixed(2)} 补最后一人）` : ""}`;
+  }
 }
 
 async function submitCompleteRepair(projectId, repairId) {
@@ -10627,19 +11085,21 @@ async function submitCompleteRepair(projectId, repairId) {
   if (!p || !p.repairOrders) { toast("维修单不存在"); return; }
   const idx = p.repairOrders.findIndex(r => r.id === repairId);
   if (idx < 0) { toast("维修单不存在"); return; }
-  const workers = (p.assignedWorkerIds || []).map(wid => getWorker(wid)).filter(Boolean);
-  const workLogs = [];
-  for (const w of workers) {
-    const cb = document.getElementById("repairW_" + w.id);
-    const hEl = document.getElementById("repairWh_" + w.id);
-    if (cb && cb.checked && hEl && Number(hEl.value) > 0) {
-      workLogs.push({ workerId: w.id, name: w.name, hours: Number(hEl.value), level: "中级", date: todayStr() });
-    }
-  }
-  if (workLogs.length === 0) { toast("请至少勾选一位维修人员并填写真实工时"); return; }
-  let payable = false;
-  const paidEl = document.querySelector('input[name="repairNature"][value="paid"]');
-  if (perm.viewGlobalStats() && paidEl && paidEl.checked) payable = true; // 非财务默认仅成本核算
+  const ro = p.repairOrders[idx];
+  const workerSourceIds = (ro.assignedWorkerIds && ro.assignedWorkerIds.length) ? ro.assignedWorkerIds : (p.assignedWorkerIds || []);
+  const workers = workerSourceIds.map(wid => getWorker(wid)).filter(Boolean);
+  const actualHours = Math.round((Number(document.getElementById("repairActualHours").value) || 0) * 10) / 10;
+  if (actualHours <= 0) { toast("请填写实际用时（考勤参考）"); return; }
+  const checked = workers.filter(w => { const cb = document.getElementById("repairW_" + w.id); return cb && cb.checked; });
+  if (checked.length === 0) { toast("请至少勾选一位参与维修人员"); return; }
+  // 考勤工时：勾选人员各记整单实际用时（auto 标记=系统按整单用时记，非逐人填报）
+  const workLogs = checked.map(w => ({ workerId: w.id, name: w.name, hours: actualHours, level: "中级", date: todayStr(), auto: true }));
+  // 付费维修：分成池（工费÷2）均分给勾选人员（尾差补最后一人）
+  const isPaid = ro.payType === "paid" || (ro.payType == null && ro.payable === true);
+  const pool = Number(ro.commissionPool) || 0;
+  const commissionAlloc = (isPaid && pool > 0)
+    ? splitCommissionEvenly(pool, checked.map(w => w.id), (id) => (getWorker(id) || {}).name || id)
+    : [];
   const lockKey = `completeRepair:${projectId}:${repairId}`;
   if (!lockAction(lockKey)) { toast("操作处理中，请勿重复点击"); return; }
   try {
@@ -10650,14 +11110,16 @@ async function submitCompleteRepair(projectId, repairId) {
       status: "已完成",
       completedAt: new Date().toISOString(),
       workLogs,
-      payable
+      actualHours,
+      commissionAlloc,
+      payable: isPaid,
     };
     await repo.patchProject(projectId, { repairOrders });
     const p2 = getProject(projectId);
     if (p2) p2.repairOrders = repairOrders;
     modal.close();
     gotoConstruction(projectId);
-    toast("维修已完成");
+    toast(isPaid && commissionAlloc.length ? `维修已完成，工钱已均分给 ${commissionAlloc.length} 人` : "维修已完成");
     repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("完成维修后台同步失败：", e));
   } finally {
     unlockAction(lockKey);
@@ -11015,13 +11477,9 @@ function gotoConstruction(id, opts = {}) {
     }
     if (opts.scrollToWorklog) {
       setTimeout(() => {
-        const form = document.querySelector('.worklog-form');
-        if (form) {
-          form.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          const hoursInput = document.getElementById('logHours');
-          if (hoursInput) hoursInput.focus();
-        }
-      }, 200);
+        const block = document.getElementById('detailWorklogBlock');
+        if (block) block.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 250);
     }
   }, 100);
 }
@@ -11052,6 +11510,1110 @@ function todaySchedule() {
   renderConstruction();
 }
 
+/* 包活分成分配面板（项目详情内，经理/店长可编辑，工人只读） */
+function renderCommissionPanel(p) {
+  if (!p) return "";
+  const canEditCommission = perm.editCommission(p);
+  const alloc = resolveCommissionAlloc(p);
+  const pool = alloc.pool;
+  const mode = p.commissionMode || "avg";
+  const workers = commissionParticipants(p, mode);
+  const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).map((n) => n.trim()).filter(Boolean);
+  const infoGrid = `
+    <div class="money-chain">
+      <span class="money-chain__tag">${esc(p.contractType || "包工")}</span>
+      <span class="money-chain__step"><i>工程金额</i><b>¥${(Number(p.projectAmount) || 0).toFixed(2)}</b></span>
+      <span class="money-chain__arrow">→</span>
+      <span class="money-chain__step"><i>工费</i><b>¥${getLaborFee(p).toFixed(2)}</b></span>
+      <span class="money-chain__arrow">→</span>
+      <span class="money-chain__step is-pool"><i>工人分成池</i><b>¥${pool.toFixed(2)}</b></span>
+    </div>`;
+  if (!workers.length && !outsourcedNames.length) {
+    return `<div class="detail-block commission-panel">
+      <h3>💰 包活分成</h3>
+      ${infoGrid}
+      <p class="hint" style="margin:6px 0 0">尚未分配安装人员，分配人员后可设置分成。</p>
+    </div>`;
+  }
+  const COMM_COLORS = ['#16a34a', '#2563eb', '#d97706', '#db2777', '#7c3aed', '#0891b2', '#dc2626', '#65a30d', '#ca8a04', '#0d9488'];
+  const surname = (nm) => (nm && nm.trim() ? nm.trim().charAt(0) : '?');
+  // 自定义比例：整数比例；自定义金额：每人金额（元）。无保存时按剩余池均分作为默认起点。
+  const isAmountMode = mode === "custom_amount";
+  const customEditable = (mode === "custom" || isAmountMode) && canEditCommission;
+  // 外协固定金额（先从分成池扣除，剩余才进比例条）
+  const outFixedSaved = outsourcedNames.map((nm) => {
+    const c = (Array.isArray(p.commissionCustom) ? p.commissionCustom : []).find((x) => x && x.workerId === "outsourced:" + nm);
+    return c && c.fixed != null ? Math.max(0, Number(c.fixed) || 0) : null;
+  });
+  const outFixed = outsourcedNames.map((nm, i) => (outFixedSaved[i] == null ? 0 : outFixedSaved[i]));
+  const outUnfilled = outsourcedNames.filter((nm, i) => outFixedSaved[i] == null);
+  const outFixedTotal = Math.round(outFixed.reduce((s, v) => s + v, 0) * 100) / 100;
+  const remaining = Math.max(0, Math.round((pool - outFixedTotal) * 100) / 100);
+  // 不能改用 alloc.items.fixed——resolveCommissionAlloc 会把未填归一成 0，无法区分「忘填」与「明确 0」。
+  const savedRatios = workers.map((w) => {
+    const it = alloc.items.find((i) => i.workerId === w.id);
+    return it ? it.ratio : 0;
+  });
+  const initialRatios = (mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length);
+  const savedAmounts = workers.map((w) => {
+    const c = (Array.isArray(p.commissionCustom) ? p.commissionCustom : []).find((x) => x && x.workerId === w.id);
+    return c && c.amount != null ? Math.max(0, Number(c.amount) || 0) : 0;
+  });
+  const defaultAmount = workers.length ? Math.round((remaining / workers.length) * 100) / 100 : 0;
+  const initialAmounts = (isAmountMode && savedAmounts.some((a) => a > 0)) ? savedAmounts : Array(workers.length).fill(defaultAmount);
+  // 分段宽度与初始显示
+  const barCalc = isAmountMode
+    ? commBarCalcFromAmounts(workers.map((w) => w.id), initialAmounts, remaining)
+    : commBarCalc(workers.map((w) => w.id), initialRatios, remaining);
+  const widths = barCalc.widths;
+  // 金额模式一律以「归一后」的金额为准（尾差补最后一人）：
+  // 保证 dataset / 段上显示 / 图例输入框 / 保存校验四处同源，
+  // 否则 3 人均分 33.33×3=99.99 会因合计≠剩余池被保存校验拦下。
+  const barAmounts = isAmountMode ? barCalc.amounts : initialAmounts;
+  let acc = 0;
+  const segs = workers.map((w, i) => {
+    const pct = widths[i];
+    const left = (i === 0 ? 0 : acc);
+    acc += pct;
+    return `<div class="comm-seg" data-i="${i}" style="left:${left}%;width:${pct}%;background:${COMM_COLORS[i % COMM_COLORS.length]};">
+      <span class="comm-seg-name">${esc(surname(w.name))}</span>
+      <span class="comm-seg-pct" id="commPct_${w.id}">${isAmountMode ? "¥" + barAmounts[i].toFixed(2) : commDisplayRatios(initialRatios)[i] + "%"}</span>
+    </div>`;
+  }).join("");
+  let acc2 = 0;
+  const handles = [];
+  if (customEditable) {
+    for (let i = 0; i < workers.length - 1; i++) {
+      acc2 += widths[i] || 0;
+      handles.push(`<div class="comm-handle" data-k="${i}" style="left:${acc2}%;" title="${isAmountMode ? "拖动调整相邻两人金额" : "拖动调整相邻两人占比"}"><span></span></div>`);
+    }
+  }
+  const barDataAttr = isAmountMode
+    ? `data-mode="amount" data-amounts="${barAmounts.join(',')}" data-locked=""`
+    : `data-mode="ratio" data-ratios="${initialRatios.join(',')}"`;
+  const bar = workers.length
+    ? `<div class="comm-bar" id="commBar" data-pid="${p.id}" data-ids="${workers.map((w) => w.id).join(',')}" ${barDataAttr} data-pool="${pool.toFixed(2)}" data-outfixed="${outFixedTotal.toFixed(2)}" data-noteid="commRemainNote">${segs}${handles}</div>`
+    : "";
+  // 图例：每人一个同色圆点 + 姓名 + 金额；自定义金额模式下显示金额输入框
+  const legend = workers.map((w, i) => {
+    const it = alloc.items.find((x) => x.workerId === w.id);
+    const amt = it ? it.amount : 0;
+    const amountInput = (isAmountMode && canEditCommission)
+      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBar', this)" style="width:80px;margin-left:auto;text-align:right;" />`
+      : "";
+    return `<div class="comm-legend-item">
+      <span class="comm-dot" style="background:${COMM_COLORS[i % COMM_COLORS.length]}"></span>
+      <span class="comm-legend-name">${esc(w.name)}</span>
+      ${amountInput}
+      <span class="comm-legend-amt" id="commLegAmt_${w.id}">¥${amt.toFixed(2)}</span>
+    </div>`;
+  }).join("");
+  // 外协固定工钱区：先从分成池扣除，剩余再分给安装人员
+  const outsourcedBlock = outsourcedNames.length ? `
+    <div class="comm-outsourced${outUnfilled.length ? " has-unfilled" : ""}">
+      <div class="comm-outsourced-title">🤝 外协固定工钱（先扣除）<span class="comm-out-badge${outUnfilled.length ? " is-warn" : ""}">${outUnfilled.length ? outUnfilled.length + " 人未填" : outsourcedNames.length + " 名外协"}</span></div>
+      ${outsourcedNames.map((nm, i) => {
+        const fx = outFixed[i];
+        const savedFx = outFixedSaved[i];
+        return `<div class="comm-legend-item is-outsourced">
+          <span class="comm-dot" style="background:#cbd5e1"></span>
+          <span class="comm-legend-name">${esc(nm)}</span>
+          ${canEditCommission
+            ? `<input class="comm-out-input${savedFx == null ? " is-empty" : ""}" type="number" min="0" step="0.01" value="${savedFx != null ? savedFx : ""}" placeholder="${savedFx != null ? "固定金额" : "点此填工钱"}" data-idx="${i}" data-name="${esc(nm)}" oninput="onCommOutsourcedFixedInput('commissionPanelWrap','${p.id}',this)">`
+            : `<span class="comm-item-tag">固定</span>`}
+          <span class="comm-out-amt">¥${fx.toFixed(2)}</span>
+        </div>`;
+      }).join("")}
+      ${outsourcedUnfilledWarningHtml(outUnfilled)}
+      <div class="comm-out-note" id="commRemainNote">${remainingNoteText(pool, outFixedTotal, workers.length, outUnfilled.length)}</div>
+    </div>` : "";
+  const modeBtns = canEditCommission ? `
+    <div class="commission-mode">
+      <label class="radio-inline"><input type="radio" name="commMode" value="avg" ${mode === "avg" ? "checked" : ""} onchange="onCommissionModeChange('${p.id}','avg')"> 平均分配</label>
+      <label class="radio-inline"><input type="radio" name="commMode" value="custom" ${mode === "custom" ? "checked" : ""} onchange="onCommissionModeChange('${p.id}','custom')"> 自定义比例</label>
+      <label class="radio-inline"><input type="radio" name="commMode" value="custom_amount" ${mode === "custom_amount" ? "checked" : ""} onchange="onCommissionModeChange('${p.id}','custom_amount')"> 按金额分配</label>
+    </div>` : "";
+  const barHint = customEditable
+    ? (isAmountMode
+      ? `<p class="hint" style="margin:6px 0 0;color:#64748b;">手填 / 拖动过的金额为<strong>固定值</strong>（蓝框），其余人自动均分剩余；填超了会自动只保留你手填的那位固定，其余人重新均分。</p>`
+      : `<p class="hint" style="margin:6px 0 0;color:#64748b;">拖动分隔点调整相邻两人占比（1% 刻度），松手自动补到 100%。</p>`)
+    : `<p class="hint" style="margin:6px 0 0;color:#64748b;">工人分成 = 工费 ÷ 2，按上方方式分摊给已派工人${canEditCommission ? "" : "（仅经理/店长可调整）"}。</p>`;
+  return `<div class="detail-block commission-panel" id="commissionPanelWrap">
+    <div class="commission-head"><h3>💰 包活分成</h3>${canEditCommission ? `<button class="btn small primary comm-save-btn" id="commSaveBtn" onclick="saveCommissionAlloc('${p.id}')">💾 保存分成</button>` : ""}</div>
+    ${infoGrid}
+    ${modeBtns}
+    <div class="commission-list">${bar}${legend}${outsourcedBlock}</div>
+    ${barHint}
+  </div>`;
+}
+
+/* 外协扣除提示文案（比例条下方）。
+   unfilledCount：忘填外协人数（>0 时明确标注暂按 ¥0 扣除，避免与警告行口径不一致）。 */
+function remainingNoteText(pool, outFixedTotal, workerCount, unfilledCount = 0) {
+  const remaining = Math.max(0, Math.round((pool - outFixedTotal) * 100) / 100);
+  // 有未填时：红行已列明"谁没填"，这里只补充"先按 0 算"的处理口径，避免同一句话说两遍
+  if (unfilledCount > 0) return `未填的先按 ¥0 算 · 剩余 ¥${remaining.toFixed(2)} 分给 ${workerCount} 人`;
+  if (outFixedTotal > 0) return `已扣外协 ¥${outFixedTotal.toFixed(2)} · 剩余 ¥${remaining.toFixed(2)} 分给 ${workerCount} 人`;
+  return `全部分给 ${workerCount} 名工人`;
+}
+
+/* ============ 维修 / 返工共用的「免费 / 计费」包活区块（2026-10-18） ============
+   包活制下：维修单与返工预约不再统计工时计薪，改为「免费 / 计费」二选一——
+   免费：¥0，工时仅作考勤记录，工人无包活分成；
+   计费：选包活方式（仅出人工费 / 包工包料）+ 填工程金额，工费÷2 为分成池，
+         参与人员均分（与项目包活分成同模型），计入提成统计。
+   前缀：维修单用 rp，返工预约用 rw，避免 DOM id 冲突。 */
+function repairPayBlockHtml(prefix, state) {
+  const st = state || {};
+  const paid = st.payType === "paid";
+  const ct = st.contractType === "包工包料" ? "包工包料" : "包工";
+  const amt = st.projectAmount != null && st.projectAmount !== "" ? String(st.projectAmount) : "";
+  const mat = st.materialFee != null && st.materialFee !== "" ? String(st.materialFee) : "";
+  const title = st.title || "收费方式";
+  const freeLabel = st.freeLabel || "免费";
+  const paidLabel = st.paidLabel || "计费";
+  const freeHint = st.freeHint || "不计客户费用，工时仅作考勤记录，工人无包活分成";
+  return `
+    <div class="form-row" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;margin-bottom:4px;">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;${paid ? "margin-bottom:8px;" : ""}">
+        <label style="font-weight:500;margin:0;display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">💰</span> ${esc(title)}</label>
+        <label class="radio-inline"><input type="radio" name="${prefix}PayType" value="free" ${!paid ? "checked" : ""} onchange="onRepairPayTypeChange('${prefix}')" /> 🆓 ${esc(freeLabel)}</label>
+        <label class="radio-inline"><input type="radio" name="${prefix}PayType" value="paid" ${paid ? "checked" : ""} onchange="onRepairPayTypeChange('${prefix}')" /> 💵 ${esc(paidLabel)}</label>
+      </div>
+      <div id="${prefix}PayDetail" style="${paid ? "" : "display:none;"}">
+        <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:8px;">
+          <label style="font-weight:500;margin:0;display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">📋</span> 包活方式</label>
+          <label class="radio-inline"><input type="radio" name="${prefix}ContractType" value="包工" ${ct === "包工" ? "checked" : ""} onchange="onRepairContractTypeChange('${prefix}')" /> 仅出人工费</label>
+          <label class="radio-inline"><input type="radio" name="${prefix}ContractType" value="包工包料" ${ct === "包工包料" ? "checked" : ""} onchange="onRepairContractTypeChange('${prefix}')" /> 包工包料</label>
+        </div>
+        <div class="form-grid">
+          <div class="form-row" style="margin:0;">
+            <label><span style="color:#16a34a;">💵</span> 工程金额 *</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="color:#64748b;">¥</span>
+              <input class="input" type="number" min="0" step="0.01" id="${prefix}ProjectAmount" value="${esc(amt)}" placeholder="客户应付总额" style="width:auto;max-width:160px;" oninput="updateRepairContractCalc('${prefix}')" />
+            </div>
+          </div>
+          <div class="form-row" id="${prefix}MaterialFeeRow" style="margin:0;${ct === "包工包料" ? "" : "display:none;"}">
+            <label><span style="color:#16a34a;">📦</span> 材料费</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="color:#64748b;">¥</span>
+              <input class="input" type="number" min="0" step="0.01" id="${prefix}MaterialFee" value="${esc(mat)}" placeholder="材料成本" style="width:auto;max-width:160px;" oninput="updateRepairContractCalc('${prefix}')" />
+            </div>
+          </div>
+        </div>
+        <div id="${prefix}PayCalc" style="margin-top:8px;font-size:13px;color:#166534;line-height:1.7;">
+          <span>工费：<b id="${prefix}LaborFeeTxt">—</b></span> · <span>工人分成池（工费÷2）：<b id="${prefix}PoolTxt">—</b></span>
+          <span id="${prefix}PayNote" style="color:#64748b;font-size:12px;margin-left:6px;"></span>
+        </div>
+      </div>
+      <div id="${prefix}FreeHint" style="${paid ? "display:none;" : ""}font-size:12px;color:#64748b;">${esc(freeHint)}</div>
+    </div>`;
+}
+
+function onRepairPayTypeChange(prefix) {
+  const paidEl = document.querySelector(`input[name="${prefix}PayType"]:checked`);
+  const paid = !!(paidEl && paidEl.value === "paid");
+  const detail = document.getElementById(prefix + "PayDetail");
+  const freeHint = document.getElementById(prefix + "FreeHint");
+  if (detail) detail.style.display = paid ? "" : "none";
+  if (freeHint) freeHint.style.display = paid ? "none" : "";
+  updateRepairContractCalc(prefix);
+}
+
+function onRepairContractTypeChange(prefix) {
+  const ctEl = document.querySelector(`input[name="${prefix}ContractType"]:checked`);
+  const row = document.getElementById(prefix + "MaterialFeeRow");
+  if (row) row.style.display = (ctEl && ctEl.value === "包工包料") ? "" : "none";
+  updateRepairContractCalc(prefix);
+}
+
+/* 实时计算工费与分成池（与 updateContractCalc 同口径，id 带前缀） */
+function updateRepairContractCalc(prefix) {
+  const amtEl = document.getElementById(prefix + "ProjectAmount");
+  const matEl = document.getElementById(prefix + "MaterialFee");
+  const laborTxt = document.getElementById(prefix + "LaborFeeTxt");
+  const poolTxt = document.getElementById(prefix + "PoolTxt");
+  const noteEl = document.getElementById(prefix + "PayNote");
+  if (!amtEl || !laborTxt || !poolTxt) return;
+  const ctEl = document.querySelector(`input[name="${prefix}ContractType"]:checked`);
+  const isMaterial = ctEl && ctEl.value === "包工包料";
+  const amt = Number(amtEl.value) || 0;
+  const mat = isMaterial ? (Number(matEl && matEl.value) || 0) : 0;
+  const labor = isMaterial ? Math.max(0, amt - mat) : amt;
+  laborTxt.textContent = "¥" + labor.toFixed(2);
+  poolTxt.textContent = "¥" + (labor / 2).toFixed(2);
+  if (noteEl) {
+    noteEl.textContent = amt > 0
+      ? (isMaterial ? `（工程金额 ¥${amt.toFixed(2)} − 材料费 ¥${mat.toFixed(2)}）` : "（仅出人工费：工费=工程金额）")
+      : "（请填写工程金额）";
+  }
+}
+
+/* 读取「免费/计费」区块。免费时全部金额归 0（合法，不强制填钱）。 */
+function readRepairPayBlock(prefix) {
+  const paidEl = document.querySelector(`input[name="${prefix}PayType"]:checked`);
+  const payType = paidEl && paidEl.value === "paid" ? "paid" : "free";
+  if (payType === "free") {
+    return { payType: "free", contractType: "包工", projectAmount: 0, materialFee: 0, laborFee: 0, pool: 0 };
+  }
+  const ctEl = document.querySelector(`input[name="${prefix}ContractType"]:checked`);
+  const contractType = ctEl && ctEl.value === "包工包料" ? "包工包料" : "包工";
+  const projectAmount = Math.round((Number(document.getElementById(prefix + "ProjectAmount").value) || 0) * 100) / 100;
+  const materialFee = contractType === "包工包料"
+    ? Math.round((Number(document.getElementById(prefix + "MaterialFee").value) || 0) * 100) / 100
+    : 0;
+  const laborFee = contractType === "包工包料" ? Math.max(0, projectAmount - materialFee) : projectAmount;
+  return {
+    payType: "paid",
+    contractType,
+    projectAmount,
+    materialFee,
+    laborFee: Math.round(laborFee * 100) / 100,
+    pool: Math.round(laborFee / 2 * 100) / 100,
+  };
+}
+
+/* 分成池均分给若干人（尾差补最后一人，保证 Σ=pool）。 */
+function splitCommissionEvenly(pool, ids, nameOf) {
+  const n = (ids || []).length;
+  if (!n) return [];
+  const cents = Math.round((Number(pool) || 0) * 100);
+  const base = Math.floor(cents / n);
+  const tail = cents - base * n;
+  return ids.map((id, i) => ({
+    workerId: id,
+    name: (nameOf ? nameOf(id) : "") || id,
+    amount: Math.round((base + (i === n - 1 ? tail : 0)) / 100 * 100) / 100,
+  }));
+}
+
+/* 维修单详情页「收费方式」摘要（兼容旧数据：无 payType 时按 payable 推断） */
+function repairPaySummaryHtml(ro) {
+  if (!ro) return "";
+  const legacyPaid = ro.payType == null && ro.payable === true;
+  if (ro.payType !== "paid" && !legacyPaid) {
+    return `<div class="info-item"><div class="k">收费方式</div><div class="v">🆓 免费维修 · 不计客户费用（工时仅考勤）</div></div>`;
+  }
+  if (legacyPaid) {
+    return `<div class="info-item"><div class="k">收费方式</div><div class="v" style="color:#16a34a;font-weight:600;">💵 付费维修（历史单·无金额记录）</div></div>`;
+  }
+  const amt = Number(ro.projectAmount) || 0;
+  const labor = Number(ro.laborFee) || 0;
+  const pool = Number(ro.commissionPool) || 0;
+  const alloc = Array.isArray(ro.commissionAlloc) ? ro.commissionAlloc : [];
+  return `<div class="info-item"><div class="k">收费方式</div><div class="v" style="color:#16a34a;font-weight:600;">💵 付费维修 · ${esc(ro.contractType || "包工")}</div></div>
+    <div class="info-item"><div class="k">工程金额</div><div class="v">¥${amt.toFixed(2)}</div></div>
+    <div class="info-item"><div class="k">工费</div><div class="v">¥${labor.toFixed(2)}</div></div>
+    <div class="info-item"><div class="k">工人分成池</div><div class="v">¥${pool.toFixed(2)}${alloc.length ? `（${alloc.length} 人均分）` : ""}</div></div>`;
+}
+
+
+/* 外协未填固定工钱警告行（有未填时返回警告 HTML，否则空串）。
+   unfilled：未填外协姓名数组。文案与保存/完工时的确认弹窗保持一致口径。 */
+function outsourcedUnfilledWarningHtml(unfilled) {
+  if (!unfilled || !unfilled.length) return "";
+  return `<div class="comm-out-warn">⚠️ ${unfilled.map(esc).join("、")} 未填固定工钱——未填将按 ¥0 结算，不计入分成</div>`;
+}
+
+/* 从外协固定项（readOutsourcedFixedInputs / getCompleteCommissionAlloc 的 custom 项）
+   中挑出「未填」的外协姓名：fixed === null 表示输入框为空（忘填）；fixed === 0 表示明确填 0（不提醒）。 */
+function outsourcedUnfilledNames(items) {
+  return (items || [])
+    .filter((it) => it && typeof it.workerId === "string" && it.workerId.startsWith("outsourced:") && it.fixed == null)
+    .map((it) => it.workerId.replace(/^outsourced:/, ""));
+}
+
+/* ---------------------------------------------------------
+   分成面板「未保存草稿」保留（2026-10-18）
+   背景：施工中项目每 60s 会 renderProjects()+renderConstruction() 整页重绘，
+        实时同步/权限变更也会触发重渲染 —— 重绘会把用户正在输入但尚未点
+        「保存分成」的外协固定工钱 / 金额分配值全部冲掉，表现为"填了保存不了"。
+   方案：输入时把当前面板的编辑态（模式 / 各人金额 / 锁定集 / 外协固定额）存到
+        window._commDraft；重绘后由 restoreCommissionDraft() 回填。
+        点「保存分成」成功后 clearCommissionDraft() 清空，行为与用户预期一致。 */
+function commDraftKey(pid, wrapId) {
+  // 详情页与完工弹窗各自独立保存草稿（同一项目可能同时存在两个面板）
+  return (wrapId === "completeCommissionWrap" ? "c_" : "p_") + pid;
+}
+function captureCommissionDraft(wrapId, pid) {
+  const wrap = document.getElementById(wrapId);
+  if (!wrap || !pid) return;
+  const bar = wrap.querySelector(".comm-bar");
+  const checked = wrap.querySelector('input[name^="commMode"]:checked');
+  const outFixed = {};
+  wrap.querySelectorAll(".comm-out-input").forEach((inp) => {
+    if (inp.dataset.name) outFixed[inp.dataset.name] = String(inp.value == null ? "" : inp.value);
+  });
+  const draft = {
+    mode: checked ? checked.value : null,
+    amounts: bar && bar.dataset.mode === "amount" ? (bar.dataset.amounts || "") : null,
+    locked: bar && bar.dataset.mode === "amount" ? (bar.dataset.locked || "") : null,
+    outFixed,
+  };
+  const empty = !draft.mode && !draft.amounts && !Object.keys(outFixed).length;
+  if (empty) { delete (window._commDraft || {})[commDraftKey(pid, wrapId)]; return; }
+  if (!window._commDraft) window._commDraft = {};
+  window._commDraft[commDraftKey(pid, wrapId)] = draft;
+}
+function clearCommissionDraft(pid) {
+  if (!window._commDraft) return;
+  if (pid) { delete window._commDraft[commDraftKey(pid, "commissionPanelWrap")]; delete window._commDraft[commDraftKey(pid, "completeCommissionWrap")]; }
+  else window._commDraft = {};
+}
+/* 重绘后回填草稿（DOM 已重建）：先恢复外协输入值（会联动刷新扣除额），再恢复金额分配 */
+function restoreCommissionDraft(wrapId, pid) {
+  const draft = (window._commDraft || {})[commDraftKey(pid, wrapId)];
+  const wrap = document.getElementById(wrapId);
+  if (!draft || !wrap) return;
+  const radioName = wrap.querySelector('input[name^="commMode"]') ? wrap.querySelector('input[name^="commMode"]').name : null;
+  if (draft.mode && radioName) {
+    const r = wrap.querySelector('input[name="' + radioName + '"][value="' + draft.mode + '"]');
+    if (r && !r.checked) r.checked = true;
+  }
+  // 外协固定工钱：逐个回填并触发 input 事件，保持「扣除额/剩余池/未填警告」一致
+  wrap.querySelectorAll(".comm-out-input").forEach((inp) => {
+    const nm = inp.dataset.name;
+    if (nm && Object.prototype.hasOwnProperty.call(draft.outFixed || {}, nm)) {
+      const v = draft.outFixed[nm];
+      if (String(inp.value == null ? "" : inp.value) !== v) {
+        inp.value = v;
+        inp.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }
+  });
+  // 金额分配：恢复 dataset 后统一重算（段宽/图例/合计同源）
+  const bar = wrap.querySelector(".comm-bar");
+  if (bar && draft.amounts != null) {
+    bar.dataset.amounts = draft.amounts;
+    bar.dataset.locked = draft.locked || "";
+    // 草稿可能是「锁定总额超池」的僵局状态（全锁死导致合计≠池），恢复时顺手按手填者收敛，
+    // 否则一恢复页面就停在合计对不上的状态（pruneOverlocked 见其注释）
+    const locked = (draft.locked || "").split(",").filter((s) => s !== "").map(Number);
+    if (locked.length > 1) pruneOverlocked(bar, locked[locked.length - 1]);
+    recalcCommBar(bar);
+  }
+}
+
+/* 外协区输入即时反馈（详情页 / 完工弹窗通用，按 wrap 容器查找）：
+   切换空输入红框样式 + 刷新标题徽标（N 名外协 ↔ N 名未填）+ 增删未填警告行 +
+   同步「扣除后剩余」提示（有未填时标注暂按 ¥0）。注意：须在 recalcCommBar 之后调用，
+   否则 recalcCommBar 会用不含未填口径的文案覆盖提示。 */
+function refreshOutsourcedWarn(wrap) {
+  if (!wrap) return;
+  const block = wrap.querySelector(".comm-outsourced");
+  if (!block) return;
+  const inputs = Array.from(block.querySelectorAll(".comm-out-input"));
+  const unfilled = [];
+  inputs.forEach((inp) => {
+    const raw = String(inp.value == null ? "" : inp.value).trim();
+    const v = Math.max(0, Number(inp.value) || 0);
+    inp.classList.toggle("is-empty", raw === "");
+    if (raw === "" && inp.dataset.name) unfilled.push(inp.dataset.name);
+  });
+  const badge = block.querySelector(".comm-out-badge");
+  if (badge) {
+    badge.textContent = unfilled.length ? unfilled.length + " 人未填" : inputs.length + " 名外协";
+    badge.classList.toggle("is-warn", unfilled.length > 0);
+  }
+  block.classList.toggle("has-unfilled", unfilled.length > 0);
+  let warn = block.querySelector(".comm-out-warn");
+  if (unfilled.length) {
+    const html = `⚠️ ${unfilled.map(esc).join("、")} 还没填工钱`;
+    if (warn) warn.innerHTML = html;
+    else {
+      warn = document.createElement("div");
+      warn.className = "comm-out-warn";
+      warn.innerHTML = html;
+      const note = block.querySelector(".comm-out-note");
+      if (note) block.insertBefore(warn, note);
+      else block.appendChild(warn);
+    }
+  } else if (warn) {
+    warn.remove();
+  }
+  // 同步「扣除后剩余」提示（未填时明确标注暂按 ¥0，与警告行口径一致）
+  const note = block.querySelector(".comm-out-note");
+  if (note) {
+    const bar = block.closest(".commission-list") ? block.closest(".commission-list").querySelector(".comm-bar") : null;
+    const pool = bar ? Number(bar.dataset.pool) || 0 : 0;
+    const workerCount = bar && bar.dataset.ids ? bar.dataset.ids.split(",").length : 0;
+    const outFixedTotal = Math.round(inputs.reduce((s, el) => s + Math.max(0, Number(el.value) || 0), 0) * 100) / 100;
+    note.textContent = remainingNoteText(pool, outFixedTotal, workerCount, unfilled.length);
+  }
+}
+
+function onCommissionModeChange(id, mode) {
+  const p = getProject(id);
+  if (!p) return;
+  p.commissionMode = mode; // 仅改内存工作副本，点「保存分成」才持久化
+  renderConstruction();
+}
+
+/* 完工弹窗内的包活分成面板（仅拖动分钱，无独立「保存分成」按钮，确认完工时一并持久化）。
+   与 renderCommissionPanel 共用 .comm-bar / .comm-handle 结构，bar id 用 commBarComplete 避免与详情页冲突。
+   外协人员不进比例条：按固定金额先从分成池扣除，剩余由内部安装工人 avg/custom 分配。
+   图例已合并考勤工时（每人金额后跟 h），完工弹窗不再单列考勤区块。 */
+function renderCompleteCommission(p) {
+  if (!p) return "";
+  const canEditCommission = perm.editCommission(p);
+  const alloc = resolveCommissionAlloc(p);
+  const pool = alloc.pool;
+  const mode = p.commissionMode || "avg";
+  const workers = commissionParticipants(p, mode);
+  const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).map((n) => n.trim()).filter(Boolean);
+  const infoGrid = `
+    <div class="info-grid">
+      <div class="info-item"><div class="k">包活方式</div><div class="v">${esc(p.contractType || "包工")}</div></div>
+      <div class="info-item"><div class="k">工程金额</div><div class="v">¥${(Number(p.projectAmount) || 0).toFixed(2)}</div></div>
+      <div class="info-item"><div class="k">工费</div><div class="v">¥${getLaborFee(p).toFixed(2)}</div></div>
+      <div class="info-item"><div class="k">工人分成池</div><div class="v" style="color:#16a34a;font-weight:600">¥${pool.toFixed(2)}</div></div>
+    </div>`;
+  if (!workers.length && !outsourcedNames.length) {
+    return `<div class="detail-block commission-panel">
+      <h3>💰 包活分成</h3>
+      ${infoGrid}
+      <p class="hint" style="margin:6px 0 0">尚未分配安装人员，分配人员后可设置分成。</p>
+    </div>`;
+  }
+  const COMM_COLORS = ['#16a34a', '#2563eb', '#d97706', '#db2777', '#7c3aed', '#0891b2', '#dc2626', '#65a30d', '#ca8a04', '#0d9488'];
+  const surname = (nm) => (nm && nm.trim() ? nm.trim().charAt(0) : '?');
+  const isAmountMode = mode === "custom_amount";
+  const customEditable = (mode === "custom" || isAmountMode) && canEditCommission;
+  // 外协固定金额（先从分成池扣除，剩余才进比例条）
+  const outFixedSaved = outsourcedNames.map((nm) => {
+    const c = (Array.isArray(p.commissionCustom) ? p.commissionCustom : []).find((x) => x && x.workerId === "outsourced:" + nm);
+    return c && c.fixed != null ? Math.max(0, Number(c.fixed) || 0) : null;
+  });
+  const outFixed = outsourcedNames.map((nm, i) => (outFixedSaved[i] == null ? 0 : outFixedSaved[i]));
+  const outUnfilled = outsourcedNames.filter((nm, i) => outFixedSaved[i] == null);
+  const outFixedTotal = Math.round(outFixed.reduce((s, v) => s + v, 0) * 100) / 100;
+  const remaining = Math.max(0, Math.round((pool - outFixedTotal) * 100) / 100);
+  const savedRatios = workers.map((w) => {
+    const it = alloc.items.find((i) => i.workerId === w.id);
+    return it ? it.ratio : 0;
+  });
+  const initialRatios = (mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length);
+  const savedAmounts = workers.map((w) => {
+    const c = (Array.isArray(p.commissionCustom) ? p.commissionCustom : []).find((x) => x && x.workerId === w.id);
+    return c && c.amount != null ? Math.max(0, Number(c.amount) || 0) : 0;
+  });
+  const defaultAmount = workers.length ? Math.round((remaining / workers.length) * 100) / 100 : 0;
+  const initialAmounts = (isAmountMode && savedAmounts.some((a) => a > 0)) ? savedAmounts : Array(workers.length).fill(defaultAmount);
+  const barCalc = isAmountMode
+    ? commBarCalcFromAmounts(workers.map((w) => w.id), initialAmounts, remaining)
+    : commBarCalc(workers.map((w) => w.id), initialRatios, remaining);
+  const widths = barCalc.widths;
+  // 金额模式一律以「归一后」的金额为准（尾差补最后一人）：
+  // 保证 dataset / 段上显示 / 图例输入框 / 保存校验四处同源，
+  // 否则 3 人均分 33.33×3=99.99 会因合计≠剩余池被保存校验拦下。
+  const barAmounts = isAmountMode ? barCalc.amounts : initialAmounts;
+  let acc = 0;
+  const segs = workers.map((w, i) => {
+    const pct = widths[i];
+    const left = (i === 0 ? 0 : acc);
+    acc += pct;
+    return `<div class="comm-seg" data-i="${i}" style="left:${left}%;width:${pct}%;background:${COMM_COLORS[i % COMM_COLORS.length]};">
+      <span class="comm-seg-name">${esc(surname(w.name))}</span>
+      <span class="comm-seg-pct" id="commPctC_${w.id}">${isAmountMode ? "¥" + barAmounts[i].toFixed(2) : commDisplayRatios(initialRatios)[i] + "%"}</span>
+    </div>`;
+  }).join("");
+  let acc2 = 0;
+  const handles = [];
+  if (customEditable) {
+    for (let i = 0; i < workers.length - 1; i++) {
+      acc2 += widths[i] || 0;
+      handles.push(`<div class="comm-handle" data-k="${i}" style="left:${acc2}%;" title="${isAmountMode ? "拖动调整相邻两人金额" : "拖动调整相邻两人占比"}"><span></span></div>`);
+    }
+  }
+  const barDataAttr = isAmountMode
+    ? `data-mode="amount" data-amounts="${barAmounts.join(',')}" data-locked=""`
+    : `data-mode="ratio" data-ratios="${initialRatios.join(',')}"`;
+  const bar = workers.length
+    ? `<div class="comm-bar" id="commBarComplete" data-ids="${workers.map((w) => w.id).join(',')}" ${barDataAttr} data-pool="${pool.toFixed(2)}" data-outfixed="${outFixedTotal.toFixed(2)}" data-noteid="commRemainNoteC">${segs}${handles}</div>`
+    : "";
+  // 图例合并考勤工时（系统自动统计 · 仅参考不计入工资）
+  const attMap = {};
+  attendancePreview(p).forEach((a) => { if (a.wid) attMap[a.wid] = a.hours; });
+  const legend = workers.map((w, i) => {
+    const it = alloc.items.find((x) => x.workerId === w.id);
+    const amt = it ? it.amount : 0;
+    const hrs = attMap[w.id];
+    const amountInput = (isAmountMode && canEditCommission)
+      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBarComplete', this)" style="width:80px;margin-left:auto;text-align:right;" />`
+      : "";
+    return `<div class="comm-legend-item">
+      <span class="comm-dot" style="background:${COMM_COLORS[i % COMM_COLORS.length]}"></span>
+      <span class="comm-legend-name">${esc(w.name)}</span>
+      ${amountInput}
+      <span class="comm-legend-amt" id="commLegAmtC_${w.id}">¥${amt.toFixed(2)}</span>
+      <span class="comm-legend-hrs">${hrs != null ? hrs.toFixed(1) + "h" : "--"}</span>
+    </div>`;
+  }).join("");
+  // 外协行：固定金额（可编辑时输入）+ 考勤工时，不进比例条
+  const outsourcedRows = outsourcedNames.map((nm, i) => {
+    const hrs = attMap["outsourced:" + nm];
+    const fx = outFixed[i];
+    const savedFx = outFixedSaved[i];
+    return `<div class="comm-legend-item is-outsourced">
+      <span class="comm-dot" style="background:#cbd5e1"></span>
+      <span class="comm-legend-name">${esc(nm)}</span>
+      ${canEditCommission
+        ? `<input class="comm-out-input${savedFx == null ? " is-empty" : ""}" type="number" min="0" step="0.01" value="${savedFx != null ? savedFx : ""}" placeholder="${savedFx != null ? "固定金额" : "点此填工钱"}" data-idx="${i}" data-name="${esc(nm)}" oninput="onCommOutsourcedFixedInput('completeCommissionWrap','${p.id}',this)">`
+        : `<span class="comm-item-tag">固定</span>`}
+      <span class="comm-out-amt">¥${fx.toFixed(2)}</span>
+      <span class="comm-legend-hrs">${hrs != null ? hrs.toFixed(1) + "h" : "--"}</span>
+    </div>`;
+  }).join("");
+  const outsourcedBlock = outsourcedNames.length ? `
+    <div class="comm-outsourced${outUnfilled.length ? " has-unfilled" : ""}">
+      <div class="comm-outsourced-title">🤝 外协固定工钱（先扣除）<span class="comm-out-badge${outUnfilled.length ? " is-warn" : ""}">${outUnfilled.length ? outUnfilled.length + " 人未填" : outsourcedNames.length + " 名外协"}</span></div>
+      ${outsourcedRows}
+      ${outsourcedUnfilledWarningHtml(outUnfilled)}
+      <div class="comm-out-note" id="commRemainNoteC">${remainingNoteText(pool, outFixedTotal, workers.length, outUnfilled.length)}</div>
+    </div>` : "";
+  const attTotal = Object.keys(attMap).reduce((s, k) => s + (Number(attMap[k]) || 0), 0);
+  const footHtml = `<div class="commission-foot">
+    <span>合计 <b class="comm-total-amt">¥${(alloc.total > 0 ? alloc.total : pool).toFixed(2)}</b>${attTotal > 0 ? ` · ${attTotal.toFixed(1)}h` : ""}</span>
+    <span class="commission-foot-note">工时自动考勤 · 不计工资</span>
+  </div>`;
+  const modeBtns = canEditCommission ? `
+    <div class="commission-mode">
+      <label class="radio-inline"><input type="radio" name="commModeC" value="avg" ${mode === "avg" ? "checked" : ""} onchange="onCompleteCommMode('${p.id}','avg')"> 平均分配</label>
+      <label class="radio-inline"><input type="radio" name="commModeC" value="custom" ${mode === "custom" ? "checked" : ""} onchange="onCompleteCommMode('${p.id}','custom')"> 自定义比例</label>
+      <label class="radio-inline"><input type="radio" name="commModeC" value="custom_amount" ${mode === "custom_amount" ? "checked" : ""} onchange="onCompleteCommMode('${p.id}','custom_amount')"> 按金额分配</label>
+    </div>` : "";
+  const barHint = customEditable
+    ? (isAmountMode
+      ? `<p class="hint" style="margin:6px 0 0;color:#64748b;">手填 / 拖动过的金额为<strong>固定值</strong>（蓝框），其余人自动均分剩余；填超了会自动只保留你手填的那位固定，其余人重新均分。</p>`
+      : `<p class="hint" style="margin:6px 0 0;color:#64748b;">拖动分隔点调整相邻两人占比（1% 刻度），松手自动补到 100%。</p>`)
+    : `<p class="hint" style="margin:6px 0 0;color:#64748b;">工人分成 = 工费 ÷ 2，按上方方式分摊${canEditCommission ? "（可切到自定义比例调整）" : "（仅经理/店长可调整）"}。</p>`;
+  return `<div class="detail-block commission-panel">
+    <h3>💰 包活分成</h3>
+    ${infoGrid}
+    ${modeBtns}
+    <div class="commission-list">${bar}${legend}${outsourcedBlock}</div>
+    ${footHtml}
+    ${barHint}
+  </div>`;
+}
+
+function onCompleteCommMode(id, mode) {
+  const p = getProject(id);
+  if (!p) return;
+  p.commissionMode = mode; // 仅改内存工作副本，确认完工时一并持久化
+  const wrap = document.getElementById("completeCommissionWrap");
+  if (wrap) {
+    wrap.innerHTML = renderCompleteCommission(p);
+    captureCommissionDraft("completeCommissionWrap", id);
+    restoreCommissionDraft("completeCommissionWrap", id);
+  }
+}
+
+/* 读取完工弹窗当前的分成方式（mode + 内部每人 ratio + 外协固定金额），用于确认完工时持久化。
+   外协项以 { workerId:"outsourced:姓名", ratio:0, fixed:n } 存入 commission_custom（avg 模式同样只存外协项）。 */
+function getCompleteCommissionAlloc(p) {
+  const mode = (document.querySelector('input[name="commModeC"]:checked') || {}).value || p.commissionMode || "avg";
+  const bar = document.getElementById("commBarComplete");
+  const custom = [];
+  if (mode === "custom" && bar) {
+    const ids = bar.dataset.ids ? bar.dataset.ids.split(",") : (p.assignedWorkerIds || []);
+    const ratios = bar.dataset.ratios ? bar.dataset.ratios.split(",").map(Number) : [];
+    ids.forEach((wid, i) => {
+      custom.push({
+        workerId: wid,
+        ratio: Math.round((ratios[i] != null ? ratios[i] : 0) * 10) / 10,
+        fixed: null,
+      });
+    });
+  } else if (mode === "custom_amount" && bar) {
+    const ids = bar.dataset.ids ? bar.dataset.ids.split(",") : (p.assignedWorkerIds || []);
+    const amounts = bar.dataset.amounts ? bar.dataset.amounts.split(",").map(Number) : [];
+    ids.forEach((wid, i) => {
+      custom.push({ workerId: wid, amount: Math.round((amounts[i] != null ? amounts[i] : 0) * 100) / 100 });
+    });
+  }
+  readOutsourcedFixedInputs("completeCommissionWrap", p).forEach((it) => custom.push(it));
+  return { mode, custom };
+}
+
+/* 从外协固定工钱区读取各外协的固定金额（返回 [{workerId:"outsourced:姓名", ratio:0, fixed:n|null}]）。
+   wrapId：commissionPanelWrap（详情页）/ completeCommissionWrap（完工弹窗）。 */
+function readOutsourcedFixedInputs(wrapId, p) {
+  const wrap = document.getElementById(wrapId);
+  if (!wrap) return [];
+  const inputs = wrap.querySelectorAll(".comm-out-input");
+  const items = [];
+  inputs.forEach((inp) => {
+    const idx = Number(inp.dataset.idx);
+    const names = (p.outsourcedWorkers || "").split(/[,，]/).map((n) => n.trim()).filter(Boolean);
+    const nm = names[idx];
+    if (!nm) return;
+    // 空串=未填（fixed:null → 保存/完工时漏填提醒）；明确填 0=已填（fixed:0，属合法值不提醒）
+    const raw = String(inp.value == null ? "" : inp.value).trim();
+    const fx = raw === "" ? null : Math.round(Math.max(0, Number(raw) || 0) * 100) / 100;
+    items.push({
+      workerId: "outsourced:" + nm,
+      ratio: 0,
+      fixed: fx,
+    });
+  });
+  return items;
+}
+
+/* 锁定超池兜底：手填/拖动会把该人加入 dataset.locked（固定值），其余人自动均分剩余额度。
+   但若所有人均被锁定、且锁定总额已超过剩余池，就出现「没有自由人可均分差额」的僵局——
+   结果是合计对不上池（例：池 ¥633，朱 400 + 郝 327 = 727 全部锁死，谁也不动），保存被拦。
+   规则：当锁定总额 > 剩余池时，只保留「本次手填的这一人」为固定，其余全部解锁回自动均分。
+        因为「我填谁，谁就是定的」是用户最直观的预期；且只在超额时触发——
+        双人各自锁定且合计 ≤ 池（如 400 + 233 = 633）不受影响，仍可同时固定。
+   keepIdx 为本次操作的索引；传 -1 表示拖动场景（保留全部锁定，仅在全员超池时退化为清空）。 */
+function pruneOverlocked(bar, keepIdx) {
+  const pool = Number(bar.dataset.pool) || 0;
+  const outFixed = Number(bar.dataset.outfixed) || 0;
+  const remaining = Math.max(0, Math.round((pool - outFixed) * 100) / 100);
+  const n = (bar.dataset.ids ? bar.dataset.ids.split(",").length : 0);
+  const amts = (bar.dataset.amounts || "").split(",").map(Number);
+  const locked = (bar.dataset.locked || "").split(",").filter((s) => s !== "").map(Number);
+  if (locked.length < 2) return false;                    // 0/1 个固定：解锁别人也无人可均分，无意义
+  const lockSum = locked.reduce((s, i) => s + (Number(amts[i]) || 0), 0);
+  if (lockSum <= remaining + 0.005) return false;        // 未超池：不动
+  // 超池 → 只留 keepIdx（合法索引时），其余解锁。
+  // keepIdx=-1 → 清空全部固定：随后 commBarCalcFromAmounts 走「最后一人补差」，
+  //   合计仍精确等于剩余池（不会抖动），适用于拖动后叠加历史锁定的超额场景。
+  const keep = (Number.isInteger(keepIdx) && keepIdx >= 0 && keepIdx < n) ? [keepIdx] : [];
+  bar.dataset.locked = keep.join(",");
+  console.warn(`[commission] 锁定金额合计 ¥${lockSum.toFixed(2)} 超出剩余池 ¥${remaining.toFixed(2)}，已只保留手填者固定，其余重新均分`);
+  return true;
+}
+
+/* 自定义金额模式：图例输入框变化时同步比例条 dataset.amounts 并重算显示。
+   规则：手填/拖动过的金额视为**固定值**（记入 dataset.locked），其余人员自动均分剩余额度。
+   例：池 ¥176，两人时给张三填 25 → 李四自动 = 176−25 = 151；三人时填 100 → 另两人各 38。
+   锁定总额超池时由 pruneOverlocked 兜底（见其注释）。 */
+function onCommissionAmountInput(barId, inp) {
+  const bar = document.getElementById(barId);
+  if (!bar || bar.dataset.mode !== "amount") return;
+  const list = bar.closest(".commission-list");
+  if (!list) return;
+  const inputs = Array.from(list.querySelectorAll(".comm-amount-input"));
+  const amounts = inputs.map((el) => Math.max(0, Math.round((Number(el.value) || 0) * 100) / 100));
+  bar.dataset.amounts = amounts.join(",");
+  // 本框被手动填写 → 锁定为固定值（其余框在 recalcCommBar 里重新均分）
+  const idx = Number(inp.dataset.idx);
+  if (Number.isInteger(idx)) {
+    const locked = bar.dataset.locked ? bar.dataset.locked.split(",").filter((s) => s !== "").map(Number) : [];
+    if (!locked.includes(idx)) locked.push(idx);
+    bar.dataset.locked = locked.join(",");
+    pruneOverlocked(bar, idx);
+  }
+  recalcCommBar(bar);
+  captureCommissionDraft(barId, bar.dataset.pid);
+}
+
+/* 外协固定金额输入（详情页 / 完工弹窗通用）：该金额先从分成池扣除，
+   输入后同步比例条 dataset.outfixed，刷新内部工人金额/段宽与扣除提示 */
+function onCommOutsourcedFixedInput(wrapId, pid, inp) {
+  const wrap = document.getElementById(wrapId);
+  if (!wrap) return;
+  // 刷新本行金额显示
+  const row = inp.closest(".comm-legend-item");
+  const amtEl = row ? row.querySelector(".comm-out-amt") : null;
+  if (amtEl) amtEl.textContent = "¥" + (Math.max(0, Number(inp.value) || 0)).toFixed(2);
+  const bar = wrap.querySelector(".comm-bar");
+  if (bar) {
+    const inputs = wrap.querySelectorAll(".comm-out-input");
+    let total = 0;
+    inputs.forEach((el) => { total += Math.max(0, Number(el.value) || 0); });
+    bar.dataset.outfixed = String(Math.round(total * 100) / 100);
+    recalcCommBar(bar);
+  }
+  // 最后刷新未填警告/徽标/提示（放在 recalcCommBar 之后，保证提示文案以未填感知版本为准；
+  // 无内部工人（bar 不存在）时也要提醒）
+  refreshOutsourcedWarn(wrap);
+  // 存草稿：防止定时重绘/实时同步把未保存的输入冲掉（详见 captureCommissionDraft 注释）
+  captureCommissionDraft(wrapId, pid);
+}
+
+/* 包活制：完工时不再手填工时，由系统按实际在场时段自动统计（仅考勤参考）。
+   返回可直接写入 workLogs 的记录数组；若某工人当日已存在工时记录则保留不重复生成。 */
+function autoAttendanceLogs(p) {
+  if (!p) return [];
+  const dateStr = dateKey(new Date());
+  const ids = new Set([...(p.assignedWorkerIds || [])]);
+  (p.workerChangeHistory || []).forEach((ch) => { if (ch.workerId) ids.add(ch.workerId); });
+  (p.workLogs || []).forEach((l) => { if (l.workerId && !l.workerId.startsWith("outsourced:")) ids.add(l.workerId); });
+  (p.outsourcedWorkers || "").split(/[,，]/).map((n) => n.trim()).filter(Boolean).forEach((n) => ids.add("outsourced:" + n));
+  const existingToday = new Set((p.workLogs || []).filter((l) => l.date === dateStr).map((l) => l.workerId));
+  const logs = [];
+  ids.forEach((wid) => {
+    if (existingToday.has(wid)) return; // 已有当日工时，保留不重复生成
+    /* 注意：不要把开放时段提前置 pr.end——calcWorkerRealtimeHours 只统计未关闭时段
+       （防重复闸之一），提前关闭会让整段被跳过、工时算成 0。结束时间由该函数内部
+       按 getProjectEffectiveEndTime 截断，暂停段也会自动扣除。 */
+    const periods = buildWorkerPeriods(p, wid);
+    const hours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
+    if (hours > 0) {
+      const w = getWorker(wid);
+      const isOut = wid.startsWith("outsourced:");
+      logs.push({
+        workerId: wid,
+        workerName: w ? w.name : (isOut ? wid.slice(11) : "未知"),
+        hours,
+        level: "中级",
+        workType: "地面作业",
+        date: dateStr,
+        note: "自动·考勤",
+        auto: true,
+        isOutsourced: isOut,
+      });
+    }
+  });
+  return logs;
+}
+
+/* 完工弹窗里的考勤预览（只读展示，不写入）：列出每个安装/外协人员的预计在场工时 */
+function attendancePreview(p) {
+  if (!p) return [];
+  const dateStr = dateKey(new Date());
+  const ids = [
+    ...(p.assignedWorkerIds || []),
+    ...(p.outsourcedWorkers || "").split(/[,，]/).map((n) => n.trim()).filter(Boolean).map((n) => "outsourced:" + n),
+  ];
+  const list = [];
+  ids.forEach((wid) => {
+    const existingDay = (p.workLogs || []).filter((l) => l.workerId === wid && l.date === dateStr).reduce((s, l) => s + (Number(l.hours) || 0), 0);
+    let hours = existingDay;
+    if (hours <= 0) {
+      /* 同 autoAttendanceLogs：不可提前置 pr.end，否则 calcWorkerRealtimeHours
+         只统计未关闭时段会把整段跳过、预览恒为 0。 */
+      const periods = buildWorkerPeriods(p, wid);
+      hours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
+    }
+    const w = getWorker(wid);
+    const isOut = wid.startsWith("outsourced:");
+    list.push({ wid, name: w ? w.name : (isOut ? wid.slice(11) : "?"), hours, isOutsourced: isOut });
+  });
+  return list;
+}
+
+/* ===== 包活分成条共用工具（详情页 commBar 与完工弹窗 commBarComplete 两个实例通用） ===== */
+
+/* 分成比例条参与人：仅内部安装工人（外协按固定金额先从池扣除，不进比例条，见 resolveCommissionAlloc）。
+   mode 参数保留以兼容旧调用点，两种模式下返回一致。 */
+function commissionParticipants(p, mode) {
+  return (p.assignedWorkerIds || []).map((wid) => getWorker(wid)).filter(Boolean);
+}
+
+/* 按 ids/ratios/pool 计算每人金额与分段宽度。
+   注意：pool 传「扣除外协固定金额后的剩余池」——比例条只展示内部工人对剩余池的分配，段宽合计恒为 100%。 */
+function commBarCalc(ids, ratios, pool) {
+  const ratioSum = ids.reduce((s, _, i) => s + (ratios[i] || 0), 0);
+  const amountOf = (i) => {
+    if (ratioSum > 0) return Math.round(pool * ((ratios[i] || 0) / ratioSum) * 100) / 100;
+    return ids.length ? Math.round((pool / ids.length) * 100) / 100 : 0;
+  };
+  const amounts = ids.map((_, i) => amountOf(i));
+  const widths = ids.map((_, i) => {
+    if (pool <= 0) return 0;
+    if (ratioSum > 0) return ((ratios[i] || 0) / ratioSum) * 100;
+    return 100 / Math.max(1, ids.length);
+  });
+  // 尾差补最后一项，保证金额合计 = 剩余池
+  if (ids.length) {
+    const li = ids.length - 1;
+    const others = amounts.reduce((s, a, i) => (i === li ? s : s + a), 0);
+    amounts[li] = Math.round((pool - others) * 100) / 100;
+  }
+  return { amounts, widths };
+}
+
+/* 按 ids/amounts/remaining 计算分段宽度（金额模式）。
+   locked：被「手动填写 / 拖动过」的索引数组，这些金额视为**固定值**；
+   其余未锁定的人自动均分剩余额度（尾差补最后一个未锁定的人）；
+   locked 为空（初始渲染）时按当前金额，仅把尾差补到最后一人，保证合计 = remaining。
+   段宽一律用归一后的金额算——顺序不可颠倒，否则段宽与段上显示的金额对不上。 */
+function commBarCalcFromAmounts(ids, amounts, remaining, locked) {
+  const src = (amounts || []).map((a) => Number(a) || 0);
+  const n = (ids || []).length;
+  if (!n) return { amounts: [], widths: [], locked: [] };
+  const lockSet = new Set((locked || []).map(Number).filter((i) => i >= 0 && i < n));
+  const outAmounts = src.slice();
+  if (lockSet.size) {
+    let lockSum = 0;
+    lockSet.forEach((i) => { lockSum += outAmounts[i] || 0; });
+    const free = [];
+    for (let i = 0; i < n; i++) if (!lockSet.has(i)) free.push(i);
+    const room = Math.max(0, Math.round((remaining - lockSum) * 100) / 100);
+    if (free.length) {
+      const base = Math.round((room / free.length) * 100) / 100;
+      free.forEach((i, k) => {
+        outAmounts[i] = (k === free.length - 1)
+          ? Math.round((room - base * (free.length - 1)) * 100) / 100
+          : base;
+      });
+    }
+  } else {
+    const li = n - 1;
+    const others = outAmounts.reduce((s, a, i) => (i === li ? s : s + a), 0);
+    outAmounts[li] = Math.max(0, Math.round((remaining - others) * 100) / 100);
+  }
+  const widths = ids.map((_, i) => remaining > 0 ? (outAmounts[i] / remaining) * 100 : 0);
+  return { amounts: outAmounts, widths, locked: Array.from(lockSet) };
+}
+
+/* 按 bar 当前 dataset 重算并刷新比例条/图例显示（局部 DOM 更新，不重渲染面板，避免输入框失焦）。
+   dataset.mode = "ratio" | "amount"（默认 ratio）；
+   dataset.pool = 分成池总额；dataset.outfixed = 外协固定金额合计（先从池扣除）；
+   dataset.noteid = 「扣除后剩余」提示元素 id（可选）。
+   比例模式：ratio 为整数百分比，显示无小数；金额模式：段上显示金额，图例显示金额。 */
+function recalcCommBar(bar) {
+  if (!bar) return;
+  const mode = bar.dataset.mode || "ratio";
+  const pool = Number(bar.dataset.pool) || 0;
+  const outFixed = Number(bar.dataset.outfixed) || 0;
+  const remaining = Math.max(0, Math.round((pool - outFixed) * 100) / 100);
+  const ids = bar.dataset.ids ? bar.dataset.ids.split(",") : [];
+  let amounts = [], widths = [], displayRatios = [], lockedIdx = [];
+  if (mode === "amount") {
+    const amts = bar.dataset.amounts ? bar.dataset.amounts.split(",").map(Number) : [];
+    lockedIdx = bar.dataset.locked ? bar.dataset.locked.split(",").filter((s) => s !== "").map(Number) : [];
+    const calc = commBarCalcFromAmounts(ids, amts, remaining, lockedIdx);
+    amounts = calc.amounts; widths = calc.widths; lockedIdx = calc.locked;
+  } else {
+    const ratios = bar.dataset.ratios ? bar.dataset.ratios.split(",").map(Number) : [];
+    const calc = commBarCalc(ids, ratios, remaining);
+    amounts = calc.amounts; widths = calc.widths;
+    displayRatios = commDisplayRatios(ratios);
+  }
+  let acc = 0;
+  ids.forEach((wid, i) => {
+    const seg = bar.querySelector('.comm-seg[data-i="' + i + '"]');
+    if (seg) {
+      seg.style.left = acc + "%";
+      seg.style.width = Math.max(0, widths[i]) + "%";
+      const pctEl = seg.querySelector(".comm-seg-pct");
+      if (pctEl) {
+        if (mode === "amount") {
+          pctEl.textContent = "¥" + (amounts[i] != null ? amounts[i].toFixed(2) : "0.00");
+        } else {
+          pctEl.textContent = (displayRatios[i] != null ? displayRatios[i] : 0) + "%";
+        }
+      }
+    }
+    acc += widths[i];
+  });
+  bar.querySelectorAll(".comm-handle").forEach((hd) => {
+    const ki = Number(hd.dataset.k);
+    let a = 0;
+    for (let j = 0; j <= ki; j++) a += widths[j] || 0;
+    hd.style.left = a + "%";
+  });
+  const legendList = bar.closest(".commission-list");
+  const amtEls = legendList ? legendList.querySelectorAll(".comm-legend-amt") : [];
+  ids.forEach((wid, i) => {
+    const amtEl = amtEls[i];
+    if (amtEl) amtEl.textContent = "¥" + amounts[i].toFixed(2);
+  });
+  // 刷新「扣除外协后剩余」提示
+  if (mode === "amount") {
+    // 归一/均分后的金额回写到图例输入框与 dataset（正在输入的那一框不覆盖，避免打断输入）。
+    // 不回写会出现「绿字金额已更新、输入框还是旧值」的不一致（用户实测踩到）。
+    const inputs = legendList ? Array.from(legendList.querySelectorAll(".comm-amount-input")) : [];
+    inputs.forEach((el, i) => {
+      if (i >= ids.length) return;
+      const v = amounts[i].toFixed(2);
+      if (el !== document.activeElement && el.value !== v) el.value = v;
+      // 蓝框 = 该金额已被手动固定（手填 / 拖过），其余灰框是自动均分出来的
+      el.classList.toggle("is-locked", lockedIdx.includes(i));
+    });
+    bar.dataset.amounts = amounts.join(",");
+    bar.dataset.locked = lockedIdx.join(",");
+  }
+  const noteId = bar.dataset.noteid;
+  const note = noteId ? document.getElementById(noteId) : null;
+  if (note) {
+    note.textContent = outFixed > 0
+      ? `已扣除外协固定工钱 ¥${outFixed.toFixed(2)}，剩余 ¥${remaining.toFixed(2)} 分给 ${ids.length} 名安装人员`
+      : `分成池 ¥${pool.toFixed(2)} 全部分给 ${ids.length} 名安装人员`;
+  }
+}
+
+/* 汇总比例条：分隔点拖动。
+   - 比例模式（mode=ratio）：按 1% 整数刻度吸附，相邻两人转移占比，总比例恒为 100%；
+   - 金额模式（mode=amount）：按 1 元整数刻度吸附，相邻两人转移金额，总金额恒为 remaining。 */
+let _commDrag = null;
+function onCommHandleDown(e) {
+  const h = e.target.closest ? e.target.closest(".comm-handle") : null;
+  if (!h) return;
+  const bar = h.closest(".comm-bar");
+  if (!bar) return;
+  e.preventDefault();
+  const mode = bar.dataset.mode || "ratio";
+  _commDrag = {
+    k: Number(h.dataset.k),
+    bar,
+    mode,
+    rect: bar.getBoundingClientRect(),
+    ids: bar.dataset.ids ? bar.dataset.ids.split(",") : [],
+    pool: Number(bar.dataset.pool) || 0,
+    outFixed: Number(bar.dataset.outfixed) || 0,
+  };
+  if (mode === "amount") {
+    _commDrag.amounts = bar.dataset.amounts ? bar.dataset.amounts.split(",").map(Number) : [];
+    _commDrag.locked = bar.dataset.locked ? bar.dataset.locked.split(",").filter((s) => s !== "").map(Number) : [];
+  } else {
+    _commDrag.ratios = bar.dataset.ratios ? bar.dataset.ratios.split(",").map(Number) : [];
+  }
+  window.addEventListener("pointermove", onCommHandleMove);
+  window.addEventListener("pointerup", onCommHandleUp);
+}
+function onCommHandleMove(e) {
+  if (!_commDrag) return;
+  const { k, bar, mode, rect, ids } = _commDrag;
+  const remaining = Math.max(0, Math.round(((_commDrag.pool || 0) - (_commDrag.outFixed || 0)) * 100) / 100);
+  if (mode === "amount") {
+    const amounts = _commDrag.amounts;
+    if (k < 0 || k >= amounts.length - 1) return;
+    let pct = ((e.clientX - rect.left) / rect.width) * 100;
+    let cum = 0;
+    for (let i = 0; i < k; i++) cum += amounts[i] || 0;
+    const S = (amounts[k] || 0) + (amounts[k + 1] || 0);
+    // 金额边界（1 元精度）
+    let boundary = remaining > 0 ? Math.round((pct / 100) * remaining) : cum;
+    boundary = Math.max(0, Math.min(remaining, boundary));
+    boundary = Math.max(cum, Math.min(cum + S, boundary));
+    amounts[k] = Math.round((boundary - cum) * 100) / 100;
+    amounts[k + 1] = Math.round((cum + S - boundary) * 100) / 100;
+    bar.dataset.amounts = amounts.map((v) => Math.round((v || 0) * 100) / 100).join(",");
+    // 拖过的相邻两人锁定为固定值，其余人员自动均分剩余额度
+    const locked = _commDrag.locked || (_commDrag.locked = []);
+    [k, k + 1].forEach((x) => { if (!locked.includes(x)) locked.push(x); });
+    bar.dataset.locked = locked.join(",");
+  } else {
+    const ratios = _commDrag.ratios;
+    if (k < 0 || k >= ratios.length - 1) return;
+    let pct = ((e.clientX - rect.left) / rect.width) * 100;
+    let cum = 0;
+    for (let i = 0; i < k; i++) cum += ratios[i];
+    const S = ratios[k] + ratios[k + 1];
+    // 1% 整数刻度吸附
+    let boundary = Math.round(pct);
+    boundary = Math.max(cum, Math.min(cum + S, boundary));
+    ratios[k] = Math.max(0, boundary - cum);
+    ratios[k + 1] = Math.max(0, cum + S - boundary);
+    bar.dataset.ratios = ratios.join(",");
+  }
+  recalcCommBar(bar);
+}
+function onCommHandleUp() {
+  if (_commDrag) {
+    const { bar, mode } = _commDrag;
+    if (bar && mode === "amount") {
+      // 金额模式拖动结束：把「锁定项固定 + 其余均分」的结果写回输入框与 dataset
+      const ids = bar.dataset.ids ? bar.dataset.ids.split(",") : [];
+      const amts = bar.dataset.amounts ? bar.dataset.amounts.split(",").map(Number) : [];
+      const pool = Number(bar.dataset.pool) || 0;
+      const outFixed = Number(bar.dataset.outfixed) || 0;
+      const remaining = Math.max(0, Math.round((pool - outFixed) * 100) / 100);
+      const locked = (_commDrag && _commDrag.locked) || (bar.dataset.locked ? bar.dataset.locked.split(",").filter((s) => s !== "").map(Number) : []);
+      const calc = commBarCalcFromAmounts(ids, amts, remaining, locked);
+      // 拖动把相邻两人都锁成固定值；若锁定总额已超剩余池（全锁死无自由人可均分差额），
+      // 交给 pruneOverlocked 收敛，避免停在「合计对不上池」的僵局（keepIdx=-1 → 清空全部固定）
+      bar.dataset.amounts = calc.amounts.join(",");
+      bar.dataset.locked = calc.locked.join(",");
+      if (calc.locked.length > 1) pruneOverlocked(bar, -1);
+      const list = bar.closest(".commission-list");
+      const inputs = list ? list.querySelectorAll(".comm-amount-input") : [];
+      inputs.forEach((inp, i) => { if (calc.amounts[i] != null) inp.value = calc.amounts[i].toFixed(2); });
+      recalcCommBar(bar);
+    } else if (bar) {
+      // 比例模式拖动结束再做一次归一化：把最后一段补到 100%，防止浮点漂移
+      const ratios = bar.dataset.ratios ? bar.dataset.ratios.split(",").map(Number) : [];
+      if (ratios.length) {
+        const sum = ratios.reduce((s, v) => s + v, 0);
+        if (Math.abs(sum - 100) > 0.001 && sum !== 0) {
+          ratios[ratios.length - 1] = Math.max(0, Math.round((100 - (sum - ratios[ratios.length - 1])) * 10) / 10);
+        }
+        bar.dataset.ratios = ratios.join(",");
+        recalcCommBar(bar);
+      }
+    }
+  }
+  _commDrag = null;
+  window.removeEventListener("pointermove", onCommHandleMove);
+  window.removeEventListener("pointerup", onCommHandleUp);
+}
+
+async function saveCommissionAlloc(id) {
+  const p = getProject(id);
+  if (!p) return;
+  const mode = (document.querySelector('input[name="commMode"]:checked') || {}).value || p.commissionMode || "avg";
+  const pool = getCommissionPool(p);
+  const custom = [];
+  // 内部工人比例项（仅 custom 模式保存；avg 模式内部均分，不存比例）
+  if (mode === "custom") {
+    const bar = document.getElementById("commBar");
+    const ids = bar && bar.dataset.ids ? bar.dataset.ids.split(",") : (p.assignedWorkerIds || []);
+    const ratios = bar && bar.dataset.ratios ? bar.dataset.ratios.split(",").map(Number) : [];
+    ids.forEach((wid, i) => {
+      custom.push({
+        workerId: wid,
+        ratio: Math.round((ratios[i] != null ? ratios[i] : 0) * 10) / 10,
+        fixed: null,
+      });
+    });
+    const total = custom.reduce((s, c) => s + c.ratio, 0);
+    if (Math.abs(total - 100) > 0.01) { toast("自定义比例合计需等于 100%，当前 " + total.toFixed(1) + "%"); return; }
+  } else if (mode === "custom_amount") {
+    const bar = document.getElementById("commBar");
+    const ids = bar && bar.dataset.ids ? bar.dataset.ids.split(",") : (p.assignedWorkerIds || []);
+    const amounts = bar && bar.dataset.amounts ? bar.dataset.amounts.split(",").map(Number) : [];
+    const outFixedTotal = Number(bar && bar.dataset.outfixed) || 0;
+    const remaining = Math.max(0, Math.round((pool - outFixedTotal) * 100) / 100);
+    const total = amounts.reduce((s, v) => s + (Number(v) || 0), 0);
+    if (Math.abs(total - remaining) > 0.01) { toast(`按金额分配合计需等于 ¥${remaining.toFixed(2)}（扣除外协后的剩余池），当前 ¥${total.toFixed(2)}`); return; }
+    ids.forEach((wid, i) => {
+      custom.push({ workerId: wid, amount: Math.round((amounts[i] != null ? amounts[i] : 0) * 100) / 100 });
+    });
+  }
+  // 外协固定金额项（avg/custom 都保存：该金额先从分成池扣除）
+  const outItems = readOutsourcedFixedInputs("commissionPanelWrap", p);
+  // 漏填提醒：空输入=忘填，将按 ¥0 结算（外协本次不参与分成，剩余池全给内部工人）。
+  // 用确认弹窗拦截而非硬拦——存在合法 ¥0（已现金结清/别处结算）；明确填 0 不触发本提醒。
+  const unfilledOuts = outsourcedUnfilledNames(outItems);
+  if (unfilledOuts.length) {
+    const proceed = await confirmDialog(
+      `⚠️ ${unfilledOuts.map(esc).join("、")} 还没填固定工钱<br><br>没填的这次按 ¥0 算。确定要保存吗？`,
+      "外协工钱未填"
+    );
+    if (!proceed) {
+      // 取消则聚焦第一个未填输入框，方便直接补填
+      const wrap = document.getElementById("commissionPanelWrap");
+      const firstEmpty = wrap
+        ? Array.from(wrap.querySelectorAll(".comm-out-input")).find((inp) => String(inp.value == null ? "" : inp.value).trim() === "")
+        : null;
+      if (firstEmpty) firstEmpty.focus();
+      return;
+    }
+  }
+  outItems.forEach((it) => custom.push(it));
+  const outTotal = custom.reduce((s, c) => s + (c.fixed || 0), 0);
+  if (outTotal > pool + 0.01) {
+    toast(`外协固定金额合计 ¥${outTotal.toFixed(2)} 超过分成池 ¥${pool.toFixed(2)}，请调低`);
+    return;
+  }
+  try {
+    await repo.saveProject({ commissionMode: mode, commissionCustom: custom }, id);
+    clearCommissionDraft(id);
+    toast("已保存分成方式");
+    renderConstruction();
+  } catch (e) {
+    console.error("保存分成失败:", e);
+    toast("保存失败：" + (e.message || "未知错误"));
+  }
+}
+
 function renderConstruction() {
   const scheduleBox = document.getElementById("workerScheduleDescription");
   const dateStr = viewScheduleDate || dateKey(new Date());
@@ -11079,9 +12641,12 @@ function renderConstruction() {
   const reviewed = isReviewed(p);
   const canEdit = perm.doConstruction(p);
   // 手动登记工时（添加/编辑/删除）只允许「施工中」或「已暂停」；预约中没开工、已完工/已验收后不应再改工时。
-  const canLogWork = canEdit && [STATUS.WORKING, STATUS.PAUSED].includes(p.status);
   const canAssign = perm.assignWorker(p);
   const canReview = perm.reviewProject(p);
+  // 包活金额摘要块可点编辑（perm.editContract = 修改包活金额权限 + 未审核）
+  const canEditContract = perm.editContract(p);
+  // 包活金额最近一次修改留痕（action==="contract_edit"），在金额块下方显示一行，便于直接追溯
+  const lastContractEdit = (p.actionLogs || []).filter((l) => l && l.action === "contract_edit").pop() || null;
   const logsRows = (p.workLogs || []).length
     ? p.workLogs.map((l) => {
         const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
@@ -11090,34 +12655,11 @@ function renderConstruction() {
           <td>${esc(l.workerName)}${isOutsourced ? ` <span style="color:#8b5cf6;font-size:12px">(外协)</span>` : ""}</td>
           <td>${fmtDate(l.date)}</td>
           <td>${fmtHours(l.hours)} 小时</td>
-          <td>${esc(normWorkType(l.workType))}</td>
-          <td>${esc(l.level || "中级")}</td>
           <td>${esc(l.note || "—")}</td>
-          <td>${canLogWork || perm.editWorkLog(p) ? `<button class="btn small" onclick="editWorkLog('${p.id}','${l.id}')">修改</button><button class="btn small danger" onclick="deleteWorkLog('${p.id}','${l.id}')">删除</button>` : ""}</td>
+          <td>${perm.deleteWorkLog(p) ? `<button class="btn small danger" onclick="deleteWorkLog('${p.id}','${l.id}')">删除</button>` : ""}</td>
         </tr>`;
       }).join("")
-    : `<tr><td colspan="7" style="color:var(--muted)">暂无施工工时记录</td></tr>`;
-
-  /* 「添加工时」人员下拉：按"项目分配"分组优先显示，避免一长串无关人员
-     导致默认选中错误的人（HTML <select> 默认显示第一个 option）。默认优先级：
-     1) 当前登录用户（如果他是项目分配人员）
-     2) 第一个项目分配人员
-     3) 空（让用户手动选） */
-  const assignedSet = new Set(p.assignedWorkerIds || []);
-  const assignedWorkers = (p.assignedWorkerIds || []).map(wid => getWorker(wid)).filter(Boolean);
-  const otherWorkers = (cache.workers || []).filter(w => !assignedSet.has(w.id));
-  const defaultWorkerId =
-    (currentProfile.id && assignedSet.has(currentProfile.id)) ? currentProfile.id :
-    (assignedWorkers[0] ? assignedWorkers[0].id : "");
-  const assignedOpts = assignedWorkers.map(w =>
-    `<option value="${esc(w.id)}" ${w.id === defaultWorkerId ? 'selected' : ''}>${esc(w.name)}</option>`
-  ).join("");
-  const otherOpts = otherWorkers.map(w =>
-    `<option value="${esc(w.id)}" ${w.id === defaultWorkerId ? 'selected' : ''}>${esc(w.name)}</option>`
-  ).join("");
-  const workerOptions =
-    (assignedOpts ? `<optgroup label="项目分配（${assignedWorkers.length}人）">${assignedOpts}</optgroup>` : "") +
-    (otherOpts ? `<optgroup label="其他人员">${otherOpts}</optgroup>` : "");
+    : `<tr><td colspan="5" style="color:var(--muted)">暂无施工工时记录</td></tr>`;
 
   const ac = p.acceptance;
   // 验收区块仅对终态项目显示（已完工/已验收/已审核）；已取消仅在有验收记录时显示。
@@ -11261,11 +12803,27 @@ function renderConstruction() {
         </div>` : ""}
       </div>
       <div class="info-grid">
-        <div class="info-item"><div class="k">预计工时</div><div class="v">${fmtHours(p.estimatedHours || 0)} 工时</div></div>
-        <div class="info-item"><div class="k">外协工时</div><div class="v" style="color:#8b5cf6">${fmtHours(p.outsourcedHoursFromLogs || 0)} 工时</div></div>
-        <div class="info-item"><div class="k">实际工时</div><div class="v">${fmtHours((p.workLogs || []).filter(l => isReworkLogPayable(p, l)).reduce((sum, l) => sum + (Number(l.hours) || 0), 0))} 工时</div></div>
+        <!-- 包活制（2026-10-18）：工时不参与结算、不做考核，故删除「预计工时 / 外协工时 /
+             差异（实际−预计）」三项——它们只对时长考核有意义，现已无业务价值且误导。
+             仅保留「实际工时」（考勤唯一凭证）与「返工工时」（有返工单时）。 -->
+        <div class="info-item"><div class="k">实际工时（考勤）</div><div class="v">${fmtHours((p.workLogs || []).filter(l => isReworkLogPayable(p, l)).reduce((sum, l) => sum + (Number(l.hours) || 0), 0))} 工时</div></div>
         ${(getReworkOrders(p.id).length > 0) ? `<div class="info-item"><div class="k">🔄 返工工时</div><div class="v" style="color:#8b5cf6">${fmtHours(getReworkHours(p.id))} 工时</div></div>` : ""}
-        <div class="info-item"><div class="k">差异</div><div class="v">${diffLabel(p, true)}</div></div>
+        ${(Number(p.projectAmount) > 0 || lastContractEdit ? `
+        <!-- 包活金额摘要：有「修改包活金额」权限时整块可点，弹快捷编辑窗直接改，不必回预约表单 -->
+        <div class="info-item${canEditContract ? " is-editable" : ""}" style="grid-column:1/-1;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 10px;margin-top:4px;"
+          ${canEditContract ? `onclick="openQuickContractEdit('${p.id}')" title="点击修改包活金额"` : ""}>
+          <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:#166534;align-items:center;">
+            <span>💰 包活：<b>${esc(p.contractType || "包工")}</b></span>
+            <span>工程金额：<b${Number(p.projectAmount) > 0 ? "" : ' style="color:#dc2626"'}>¥${(Number(p.projectAmount) || 0).toFixed(2)}${Number(p.projectAmount) > 0 ? "" : " 未填"}</b></span>
+            <span>工费：<b>¥${getLaborFee(p).toFixed(2)}</b></span>
+            <span>工人分成池：<b>¥${getCommissionPool(p).toFixed(2)}</b></span>
+            ${canEditContract ? `<span class="info-item__edit">✏️ 改金额</span>` : ""}
+          </div>
+          ${lastContractEdit ? `
+          <div class="contract-edit-trace">
+            最近修改：${new Date(lastContractEdit.time).getMonth() + 1}/${new Date(lastContractEdit.time).getDate()} ${esc(lastContractEdit.operator || "")} · ${esc(lastContractEdit.description.replace(/^修改包活金额：/, ""))}
+          </div>` : ""}
+        </div>` : "")}
         ${(p.reworkOf && getProject(p.reworkOf)) ? `<div class="info-item"><div class="k">🔄 返工源自</div><div class="v"><a href="javascript:void(0)" onclick="gotoConstruction('${esc(p.reworkOf)}')">${esc(getProject(p.reworkOf).name || "原项目")}</a></div></div>` : ""}
         ${(p.reworkContent) ? `<div class="info-item" style="grid-column:1/-1;"><div class="k">🔧 返工内容</div><div class="v" style="white-space:pre-wrap;">${esc(p.reworkContent)}</div></div>` : ""}
         ${p.startedAt ? `<div class="info-item"><div class="k">⏰ 开工</div><div class="v">${esc(fmtDateTime(p.startedAt))}</div></div>` : ""}
@@ -11320,15 +12878,8 @@ function renderConstruction() {
           }).join("")}
         </div>`;
       })()}
-      ${(p.reworkOf && perm.viewGlobalStats()) ? `
-      <div class="rework-pay-control">
-        <label class="rework-pay-toggle">
-          <input type="checkbox" ${(p.reworkPayable !== false) ? "checked" : ""} onchange="setReworkPayable('${p.id}', this.checked)" />
-          <span>🔧 返工工时计入工资</span>
-        </label>
-        <span class="rework-pay-hint">取消勾选：仅作成本核算，不计入工人工资</span>
-      </div>` : ""}
-      ${(canEdit || canReview || (perm.editWorkLog(p) && (p.workLogs || []).length > 0) || (reviewed && perm.unreviewProject(p)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p))) ? `
+      ${(p.reworkOf && perm.viewGlobalStats()) ? reworkPaySummaryHtml(p) : ""}
+      ${(canEdit || canReview || (perm.deleteWorkLog(p) && (p.workLogs || []).length > 0) || (reviewed && perm.unreviewProject(p)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p))) ? `
       <div class="action-groups">
         <!-- 状态流转操作 -->
         <div class="action-group">
@@ -11362,14 +12913,13 @@ function renderConstruction() {
         </div>
 
         <!-- 已完工/已验收/已审核后的操作：合并到同一 action-group，移动端横向排列 -->
-        ${(canReview && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p)) || (reviewed && perm.unreviewProject(p)) || (perm.editWorkLog(p) && (p.workLogs || []).length > 0) ? `
+        ${(canReview && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p)) || (reviewed && perm.unreviewProject(p)) || (perm.deleteWorkLog(p) && (p.workLogs || []).length > 0) ? `
         <div class="action-group action-group--post-completion">
           ${canReview && !reviewed && p.status === STATUS.DONE ? `<button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>${!ac && perm.acceptProject(p) ? `<button class="btn small outline" onclick="openAcceptance('${p.id}')">📋 验收登记</button>` : ""}` : ""}
           ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `<button class="btn small success" onclick="reviewProject('${p.id}')">🔍 审核项目</button>` : ""}
           ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `<button class="btn small outline" onclick="openRepairOrderForm('${p.id}')">🔧 发起维修</button>` : ""}
           ${[STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `<button class="btn small" onclick="reworkProject('${p.id}')">🔄 发起返工</button>` : ""}
           ${reviewed && perm.unreviewProject(p) ? `<button class="btn small warning" onclick="unreviewProject('${p.id}')">↩ 反审核</button>` : ""}
-          ${perm.editWorkLog(p) && (p.workLogs || []).length > 0 ? `<button class="btn small ${isReviewed(p) ? 'warning' : ''}" onclick="openEditWorkHoursForm('${p.id}')">✏️ 修改工时</button>` : ""}
         </div>` : ""}
       </div>` : ""}
     </div>
@@ -11388,7 +12938,7 @@ function renderConstruction() {
             <div class="info-item"><div class="k">预约维修时间</div><div class="v">${ro.appointmentTime ? fmtDateTime(ro.appointmentTime) : "—"}</div></div>
             <div class="info-item"><div class="k">维修状态</div><div class="v">${ro.status || "待维修"}</div></div>
             <div class="info-item"><div class="k">紧急程度</div><div class="v" style="${ro.urgency === '加急' ? 'color:#dc2626;font-weight:600;' : ''}">${esc(ro.urgency || "普通")}</div></div>
-            <div class="info-item"><div class="k">预计工时</div><div class="v">${ro.estimatedHours ? fmtHours(ro.estimatedHours) + ' 小时' : "—"}</div></div>
+            ${repairPaySummaryHtml(ro)}
             <div class="info-item"><div class="k">维修人员</div><div class="v">${esc(repairWorkerNames)}</div></div>
             ${ro.originalRepairTime ? `<div class="info-item"><div class="k">原预约维修</div><div class="v">${fmtDateTime(ro.originalRepairTime)}</div></div>` : ""}
             ${ro.notes ? `<div class="info-item" style="grid-column:1/-1;"><div class="k">备注 / 注意事项</div><div class="v" style="white-space:pre-wrap;">${esc(ro.notes)}</div></div>` : ""}
@@ -11396,8 +12946,8 @@ function renderConstruction() {
           })()}
           ${ro.workLogs && ro.workLogs.length ? `
           <div class="info-grid" style="margin-top:10px">
-            <div class="info-item"><div class="k">维修工时</div><div class="v">${ro.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0).toFixed(1)} 小时</div></div>
-            <div class="info-item"><div class="k">计薪</div><div class="v">${ro.payable ? "✅ 付费维修·计入工资" : "🆓 免费保修·仅成本核算"}</div></div>
+            <div class="info-item"><div class="k">维修工时（考勤参考）</div><div class="v">${(ro.actualHours || ro.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0)).toFixed(1)} 小时</div></div>
+            ${Array.isArray(ro.commissionAlloc) && ro.commissionAlloc.length ? `<div class="info-item" style="grid-column:1/-1;"><div class="k">工钱分成</div><div class="v">${ro.commissionAlloc.map((a) => `${esc(a.name || a.workerId)} ¥${(Number(a.amount) || 0).toFixed(2)}`).join(" · ")}</div></div>` : ""}
           </div>` : ""}
           ${(ro.status === "待维修") ? `
           <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
@@ -11412,9 +12962,12 @@ function renderConstruction() {
 
     ${assignBlock}
 
+    ${renderCommissionPanel(p)}
+
     ${(p.appointmentTime || p.startedAt || p.finishedAt || p.workSessions.length > 0 || p.pauseCount > 0 || p.reviewedAt || p.pauseHistory.length > 0 || p.delayHistory.length > 0 || (p.acceptance && p.acceptance.acceptedAt) || p.workerChangeHistory.length > 0 || p.actionLogs.length > 0 || p.cancelledAt) ? `
     <div class="detail-block">
       <h3>📝 施工记录</h3>
+      <div class="rec-hint">开工 / 暂停 / 延期 / 完工 / 分配人员 / <b>修改包活金额</b>等改动都记在下方「📋 操作日志」里</div>
       <div class="rec-timeline">
         ${buildStatusTimeCards(p)}
         ${projectWorkerStats.totalHours > 0 ? `<div class="rec-node rec-node--violet">
@@ -11627,14 +13180,14 @@ function renderConstruction() {
       })()}
       
       ${p.actionLogs.length > 0 ? `
-      <details class="rec-details rec-details--gray">
+      <details class="rec-details rec-details--gray" id="projActionLogs">
         <summary>📋 操作日志（${p.actionLogs.length}条）</summary>
         <div class="rec-details__body">
           <div class="rec-list" style="gap:4px;">
             ${p.actionLogs.slice().reverse().map((log) => {
               const logTime = new Date(log.time);
               const timeStr = `${logTime.getMonth() + 1}/${logTime.getDate()} ${String(logTime.getHours()).padStart(2, "0")}:${String(logTime.getMinutes()).padStart(2, "0")}`;
-              const iconMap = { start: "🚀", pause: "⏸️", resume: "▶️", delay: "⚠️", assign: "👥", unassign: "➖", finish: "✅", review: "🔍" };
+              const iconMap = { start: "🚀", pause: "⏸️", resume: "▶️", delay: "⚠️", assign: "👥", unassign: "➖", finish: "✅", review: "🔍", contract_edit: "💰" };
               const icon = iconMap[log.action] || "📋";
               return `<div class="rec-list__item" style="font-size:12px;gap:6px;">
                 <span>${icon}</span>
@@ -11647,77 +13200,18 @@ function renderConstruction() {
       </details>` : ""}
     </div>` : ""}
 
-    <div class="detail-block">
-      <h3>👷 施工人员工时（分人填写）</h3>
+    <div class="detail-block" id="detailWorklogBlock">
+      <h3>👷 施工人员工时（考勤记录）</h3>
       <table class="data">
         <thead>
-          <tr><th>施工人员</th><th>施工日期</th><th>施工工时</th><th>作业类型</th><th>等级</th><th>说明</th><th></th></tr>
+          <tr><th>施工人员</th><th>施工日期</th><th>施工工时</th><th>说明</th><th></th></tr>
         </thead>
         <tbody>${logsRows}</tbody>
         <tfoot>
-          <tr><td colspan="3">合计施工工时</td><td colspan="3">${fmtHours(totalHours)} 小时</td></tr>
+          <tr><td colspan="3">合计施工工时</td><td>${fmtHours(totalHours)} 小时</td><td></td></tr>
         </tfoot>
       </table>
-
-      ${canLogWork ? `
-      <div class="worklog-form">
-        <div class="field">
-          <label>人员类型</label>
-          <select class="input" id="logType" onchange="toggleLogWorkerType()">
-            <option value="internal">内部施工人员</option>
-            <option value="outsourced">外协人员</option>
-          </select>
-        </div>
-        <div class="field" id="logInternalWorkerField">
-          <label>选择施工人员</label>
-          <select class="input" id="logWorker">
-            ${workerOptions || `<option value="">请先添加人员</option>`}
-          </select>
-        </div>
-        <div class="field outsourced-field" id="logOutsourcedField" style="display:none">
-          <label>外协人员</label>
-          <small class="hint" style="font-size:11px;color:#8b5cf6;margin-bottom:4px;display:block;">可从常用列表选择，或手动输入新的外协人员</small>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <select class="input" id="logOutsourcedSelect" onchange="updateLogOutsourcedInput()">
-              <option value="">从常用列表选择</option>
-              ${cache.outsourcedWorkers.map((w) => `<option value="${esc(w.name)}">${esc(w.name)}${w.phone ? ` (${esc(w.phone)})` : ''}</option>`).join("")}
-            </select>
-            <input class="input" id="logOutsourcedName" placeholder="或手动输入" />
-          </div>
-        </div>
-        <div class="field">
-          <label>施工日期</label>
-          <input class="input" type="date" id="logDate" value="${todayStr()}" />
-        </div>
-        <div class="field">
-          <label>施工工时(小时)</label>
-          <input class="input" type="number" min="0" step="0.5" id="logHours" placeholder="0" style="width:120px" />
-        </div>
-        <div class="field">
-          <label>作业类型</label>
-          <select class="input" id="logWorkType" style="width:120px" onchange="onLogWorkTypeChange()">
-            <option value="高空作业">高空作业</option>
-            <option value="高级作业">高级作业</option>
-            <option value="地面施工" selected>地面施工</option>
-            <option value="路程备料">路程备料</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>工时等级</label>
-          <select class="input" id="logLevel" style="width:100px">
-            <option value="初级">初级</option>
-            <option value="中级" selected>中级</option>
-            <option value="高级">高级</option>
-            <option value="特级">特级</option>
-          </select>
-        </div>
-        <div class="field" style="flex:1;min-width:150px">
-          <label>说明</label>
-          <input class="input" id="logNote" placeholder="选填" />
-        </div>
-        <button class="btn primary" onclick="addWorkLog('${p.id}')">添加工时</button>
-        <button class="btn" onclick="openAllocSlider()" title="按作业类型占比分摊总工时">📊 按占比分配</button>
-      </div>` : ""}
+      <p class="hint" style="margin:6px 0 0;color:#64748b;">包活制下工时不计入工资，此处仅作考勤记录参考；如需纠错可删除对应记录。</p>
     </div>
 
     ${showAcceptance ? `
@@ -11760,6 +13254,9 @@ function renderConstruction() {
   }
 
   initCustomSelects(document.getElementById("construction"));
+  // 重绘完成后回填分成面板未保存草稿（外协固定工钱 / 金额分配），
+  // 避免定时刷新与实时同步把用户正在输入的值冲掉
+  restoreCommissionDraft("commissionPanelWrap", p.id);
 }
 
 /* 找出某安装人员已被分配、且与本项目时间段重叠的其它项目 */
@@ -12185,27 +13682,41 @@ async function assignWorker(pid) {
 
     try {
       const newIds = cur.concat(wid);
-      await repo.setAssignedWorkers(pid, newIds);
-      const patchOk = await repo.patchProject(pid, { workerChangeHistory, actionLogs });
-      if (patchOk === false) {
-        // patchProject 内部已处理版本冲突并刷新
-        toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
-        return;
-      }
-      // 乐观更新内存，秒级反馈；云端全量 loadAll 改为后台静默
+      /* 乐观更新：先本地生效并立即重绘（不 await 云端往返，避免"慢半拍"），
+         同时登记保护窗，防止后台 loadAll / Realtime 整表重拉用旧快照把刚分配的人抹掉。
+         云端写入失败时回滚为云端数据并明确提示。 */
       const p2 = getProject(pid);
       if (p2) {
         p2.assignedWorkerIds = newIds;
         p2.workerChangeHistory = workerChangeHistory;
         p2.actionLogs = actionLogs;
       }
+      guardLocalAssign(pid, newIds);
       renderAll();
       toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
       logOperation("PROJECT_ASSIGN", p.name || "项目", `ID: ${pid}, 人员: ${worker ? worker.name : "未知"}${worker?.phone ? `(${worker.phone})` : ""}`);
+
+      const ok = await repo.setAssignedWorkers(pid, newIds);
+      if (!ok) {
+        clearAssignGuard(pid);
+        toast("分配失败，已恢复为云端数据");
+        await repo.loadAll(false);
+        renderAll();
+        return;
+      }
+      confirmLocalAssign(pid);
+      const patchOk = await repo.patchProject(pid, { workerChangeHistory, actionLogs });
+      if (patchOk === false) {
+        // patchProject 内部已处理版本冲突并刷新
+        clearAssignGuard(pid);
+        return;
+      }
       repo.loadAll().then(() => renderAll()).catch((e) => console.warn("分配人员后台同步失败：", e));
     } catch (error) {
       console.error("分配人员失败:", error);
+      clearAssignGuard(pid);
       toast("分配失败，请重试");
+      repo.loadAll().then(() => renderAll()).catch(() => {});
     }
   } finally {
     unlockAction(lockKey);
@@ -12461,23 +13972,31 @@ async function unassignWorker(pid, wid) {
       });
     }
     
-    await repo.setAssignedWorkers(pid, next);
-    const patchOk = await repo.patchProject(pid, { workerChangeHistory, actionLogs });
-    if (patchOk === false) {
-      // patchProject 内部已处理版本冲突并刷新
-      toast(autoHours > 0 ? `已移除，自动记录 ${autoHours} 工时` : "已移除");
-      return;
+    const p2u = getProject(pid);
+    if (p2u) {
+      p2u.assignedWorkerIds = next;
+      p2u.workerChangeHistory = workerChangeHistory;
+      p2u.actionLogs = actionLogs;
     }
-    // 乐观更新内存，秒级反馈；云端全量 loadAll 改为后台静默
-    const p2 = getProject(pid);
-    if (p2) {
-      p2.assignedWorkerIds = next;
-      p2.workerChangeHistory = workerChangeHistory;
-      p2.actionLogs = actionLogs;
-    }
+    guardLocalAssign(pid, next);
     renderAll();
     toast(autoHours > 0 ? `已移除，自动记录 ${autoHours} 工时` : "已移除");
     logOperation("PROJECT_UNASSIGN", p.name || "项目", `ID: ${pid}, 人员: ${worker ? worker.name : "未知"}${worker?.phone ? `(${worker.phone})` : ""}, 自动记录工时: ${autoHours}`);
+    const okU = await repo.setAssignedWorkers(pid, next);
+    if (!okU) {
+      clearAssignGuard(pid);
+      toast("移除失败，已恢复为云端数据");
+      await repo.loadAll(false);
+      renderAll();
+      return;
+    }
+    confirmLocalAssign(pid);
+    const patchOk = await repo.patchProject(pid, { workerChangeHistory, actionLogs });
+    if (patchOk === false) {
+      // patchProject 内部已处理版本冲突并刷新
+      clearAssignGuard(pid);
+      return;
+    }
     repo.loadAll().then(() => renderAll()).catch((e) => console.warn("移除人员后台同步失败：", e));
   } finally {
     unlockAction(lockKey);
@@ -13607,24 +15126,7 @@ function reworkProjectForm(id) {
         <span style="font-size:24px;">⏳</span>
         <div><div style="font-size:12px;color:#64748b;">施工时长</div><div id="rwDurationValue" style="font-size:20px;font-weight:700;color:#1e293b;">--</div></div>
       </div>
-      <div style="text-align:right;"><div style="font-size:12px;color:#64748b;">建议人数</div><div id="rwSuggestWorkers" style="font-size:16px;font-weight:600;color:#2563eb;">--</div></div>
-    </div>
-    <div class="form-grid">
-      <div class="form-row">
-        <label><span style="color:var(--success)">⚙️</span> 预计总工时</label>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <input class="input" type="number" min="0" step="0.5" id="rwEst" value="${esc(p.estimatedHours ?? "")}" placeholder="0" style="width:auto;max-width:100px;" oninput="rwUpdateHint()" />
-          <span style="font-size:12px;color:var(--muted)">人·小时</span>
-        </div>
-        <small class="hint" style="font-size:11px;margin:2px 0 0;color:#16a34a;">预填原项目工时，可按实际返工范围调整</small>
-      </div>
-      <div class="form-row">
-        <label><span style="color:var(--success)">👷</span> 施工人数</label>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <select class="input" id="rwWorkers" onchange="rwAutoCalcEndTime()" style="width:auto;max-width:100px;">${workerCountOptions({ workerCount: p.workerCount })}</select>
-          <button class="btn small" onclick="rwAutoCalcEndTime()" style="flex-shrink:0;background:#2563eb;color:#fff;border-color:#2563eb;">计算</button>
-        </div>
-      </div>
+      <div style="font-size:12px;color:#64748b;text-align:right;">总工时与人数<br/>保存时自动计算</div>
     </div>
     <div class="form-row">
       <label><span style="color:#0ea5e9;">🔧</span> 返工内容 *</label>
@@ -13634,22 +15136,19 @@ function reworkProjectForm(id) {
       <label><span style="color:#6b7280;">💬</span> 注意事项</label>
       <textarea class="input" id="rwNote" placeholder="施工注意事项、特殊要求等" style="min-height:50px;">${esc(p.note || "")}</textarea>
     </div>
+    ${repairPayBlockHtml("rw", { payType: "free", title: "返工收费", freeLabel: "免费返工", paidLabel: "计费返工", freeHint: "免费返工：¥0，工时仅作考勤记录，工人无包活分成（默认，多数返工为免费整改）" })}
     ${assignedNames.length ? `<div style="font-size:12px;color:#64748b;margin:2px 0 8px;">👷 派工人员沿用原项目：${esc(assignedNames.join("、"))}（可在详情页调整）</div>` : ""}
-    <label id="rwPayableWrap" style="display:flex;align-items:center;gap:8px;font-size:13px;margin:2px 0 8px;cursor:pointer;">
-      <input type="checkbox" id="rwPayable" /> <span>返工工时计入工资（勾选后计入工人工资；取消勾选仅作成本核算）</span>
-    </label>
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
       <button class="btn primary" onclick="confirmRework('${id}')">生成返工预约</button>
     </div>`;
 }
 
-/* 以下 rw* 辅助函数对应新建项目表单的 setPTimeRange / onDateChange / updateSpanHint / autoCalcEndTime，
-   但操作 rw 前缀的 DOM，互不干扰。 */
+/* 以下 rw* 辅助函数对应新建项目表单的 setPTimeRange / onDateChange / updateSpanHint，
+   但操作 rw 前缀的 DOM，互不干扰。（返工单包活制口径：无工时/人数输入，保存时自动派生） */
 function rwOnModeChange() {
   const mode = document.querySelector('input[name="rwMode"]:checked')?.value || "new";
   const hint = document.getElementById("rwModeHint");
-  const payableWrap = document.getElementById("rwPayableWrap");
   const nameInput = document.getElementById("rwName");
   if (!hint) return;
   if (mode === "reopen") {
@@ -13657,13 +15156,11 @@ function rwOnModeChange() {
     hint.style.borderColor = "#bfdbfe";
     hint.style.color = "#1e40af";
     hint.innerHTML = `♻️ 将把「${esc(nameInput ? nameInput.value : '')}」本身转回「预约中」并填入新的返工预约时间，原项目历史工时保留。不会生成新单。`;
-    if (payableWrap) payableWrap.style.display = "none"; // 转回老单时整个单子正常计薪，无需单独开关
   } else {
     hint.style.background = "#fff7ed";
     hint.style.borderColor = "#fed7aa";
     hint.style.color = "#9a3412";
     hint.innerHTML = `🔄 基于「${esc(getProjectFormName())}」生成一条<strong>独立的新返工预约</strong>。原项目保持「${esc(getProjectFormName())}」不变。`;
-    if (payableWrap) payableWrap.style.display = "";
   }
 }
 function getProjectFormName() {
@@ -13727,23 +15224,19 @@ function rwOnDateChange() {
 function rwUpdateHint() {
   const durationCard = document.getElementById("rwDurationCard");
   const durationValue = document.getElementById("rwDurationValue");
-  const suggestWorkers = document.getElementById("rwSuggestWorkers");
   const dateEl = document.getElementById("rwDate");
   const timeEl = document.getElementById("rwTime");
   const endEl = document.getElementById("rwEnd");
-  const estEl = document.getElementById("rwEst");
-  if (!dateEl || !timeEl || !endEl || !durationCard || !durationValue || !suggestWorkers) return;
+  if (!dateEl || !timeEl || !endEl || !durationCard || !durationValue) return;
   const date = dateEl.value, start = timeEl.value, end = endEl.value;
-  const estHours = Number(estEl?.value) || 0;
   if (!date || !start || !end) {
-    durationCard.style.opacity = "0.5"; durationValue.textContent = "--"; suggestWorkers.textContent = "--"; return;
+    durationCard.style.opacity = "0.5"; durationValue.textContent = "--"; return;
   }
   const s = new Date(`${date}T${start}`), e = new Date(`${date}T${end}`);
-  if (isNaN(s) || isNaN(e)) { durationCard.style.opacity = "0.5"; durationValue.textContent = "--"; suggestWorkers.textContent = "--"; return; }
+  if (isNaN(s) || isNaN(e)) { durationCard.style.opacity = "0.5"; durationValue.textContent = "--"; return; }
   if (e <= s) {
     durationCard.style.opacity = "1";
     durationValue.innerHTML = `<span style="color:var(--danger);font-size:14px;">结束时间需晚于开始时间</span>`;
-    suggestWorkers.textContent = "--";
     return;
   }
   durationCard.style.opacity = "1";
@@ -13751,33 +15244,6 @@ function rwUpdateHint() {
   const h = Math.floor(mins / 60), m = mins % 60;
   const durationText = (h > 0 && m > 0) ? `${h}小时${m}分钟` : (h > 0 ? `${h}小时` : `${m}分钟`);
   durationValue.innerHTML = `<span style="color:#1e293b;">${durationText}</span>`;
-  if (estHours > 0) {
-    const hoursPerPerson = mins / 60;
-    const suggested = Math.max(1, Math.ceil(estHours / hoursPerPerson));
-    suggestWorkers.innerHTML = `<span style="color:#2563eb;">${suggested}人</span>`;
-  } else {
-    suggestWorkers.innerHTML = `<span style="font-size:11px;color:#64748b;">填写总工时后估算</span>`;
-  }
-}
-
-function rwAutoCalcEndTime() {
-  const dateEl = document.getElementById("rwDate");
-  const timeEl = document.getElementById("rwTime");
-  const estEl = document.getElementById("rwEst");
-  const workersEl = document.getElementById("rwWorkers");
-  const endSel = document.getElementById("rwEnd");
-  if (!dateEl || !timeEl || !estEl || !workersEl || !endSel) { toast("表单元素未找到"); return; }
-  const date = dateEl.value, time = timeEl.value;
-  const estHours = Number(estEl.value) || 0, workerCount = Number(workersEl.value) || 1;
-  if (!date || !time) { toast("请先选择日期和开始时间"); return; }
-  if (estHours <= 0) { toast("请先填写预计工时"); return; }
-  const hoursNeeded = Math.ceil(estHours / workerCount * 10) / 10;
-  const [sh, sm] = time.split(":").map(Number);
-  const totalMin = sh * 60 + sm + Math.round(hoursNeeded * 60);
-  const eh = String(Math.floor(totalMin / 60) % 24).padStart(2, '0');
-  const em = String(totalMin % 60).padStart(2, '0');
-  endSel.value = `${eh}:${em}`;
-  rwUpdateHint();
 }
 
 async function confirmRework(id) {
@@ -13799,17 +15265,16 @@ async function confirmRework(id) {
   const fullTime = buildLocalDateTime(date, time);
   const fullEnd = buildLocalDateTime(date, end);
   if (new Date(fullEnd) <= new Date(fullTime)) { toast("结束时间需晚于开始时间"); return; }
-  const workerCountInput = document.getElementById("rwWorkers").value;
-  if (!validateWorkerCount(workerCountInput)) { toast("施工人数必须在 1-8 之间"); return; }
-  const workerCount = Number(workerCountInput);
-  const inputEstHours = Number(document.getElementById("rwEst").value) || 0;
+  // 包活制口径（2026-10-18）：返工单不录工时/人数——人数取已派工人数（兜底原值），
+  // 总工时 = 预约时长 × 人数 保存时自动派生；收费走「免费/计费」区块（默认免费）。
+  const workerCount = Math.max(1, ((p.assignedWorkerIds || []).length) || Number(p.workerCount) || 1);
   const durationHours = (new Date(fullEnd) - new Date(fullTime)) / (1000 * 60 * 60);
-  const autoEstHours = Math.round(durationHours * workerCount * 10) / 10;
-  const estimatedHours = inputEstHours > 0 ? inputEstHours : autoEstHours; // 未填则按 时长×人数 自动算
+  const estimatedHours = Math.round(durationHours * workerCount * 10) / 10;
+  const pay = readRepairPayBlock("rw");
+  if (pay.payType === "paid" && pay.projectAmount <= 0) { toast("计费返工请填写工程金额"); return; }
   const reworkCount = (p.reworkCount || 0) + 1;
   const operator = currentProfile.name || currentUser?.email || "系统";
   const mode = document.querySelector('input[name="rwMode"]:checked')?.value || "new";
-  const payable = document.getElementById("rwPayable") ? document.getElementById("rwPayable").checked : true;
   // —— 返工预约冲突检测：沿用原项目派工，检查新预约时段是否与工人其它安排冲突 ——
   const rwIds = (p.assignedWorkerIds || []);
   if (rwIds.length) {
@@ -13832,6 +15297,10 @@ async function confirmRework(id) {
         note: document.getElementById("rwNote").value.trim(),
         reworkContent: content,
         reworkCount,
+        contractType: pay.contractType,
+        projectAmount: pay.projectAmount,
+        materialFee: pay.materialFee,
+        laborFee: pay.laborFee,
         startedAt: null,
         finishedAt: null,
         reviewedAt: null,
@@ -13847,6 +15316,10 @@ async function confirmRework(id) {
         note: document.getElementById("rwNote").value.trim(),
         reworkContent: content,
         reworkCount,
+        contractType: pay.contractType,
+        projectAmount: pay.projectAmount,
+        materialFee: pay.materialFee,
+        laborFee: pay.laborFee,
         startedAt: null,
         finishedAt: null,
         reviewedAt: null,
@@ -13879,7 +15352,10 @@ async function confirmRework(id) {
       outsourcedWorkers: p.outsourcedWorkers || "",
       reworkCount,
       reworkOf: p.id,
-      reworkPayable: payable,
+      contractType: pay.contractType,
+      projectAmount: pay.projectAmount,
+      materialFee: pay.materialFee,
+      laborFee: pay.laborFee,
       repairOrders: [],
       actionLogs: [{ time: new Date().toISOString(), action: "rework_create", description: `基于「${p.name}」生成返工预约（第 ${reworkCount} 次返工）`, operator, operatorRole: currentProfile.role }],
     };
@@ -13909,49 +15385,15 @@ async function saveActualHours(id) {
   repo.loadAll().then(() => renderConstruction()).catch((e) => console.warn("保存实际工时后台同步失败：", e));
 }
 
-/* 切换某条返工单的工时是否计入工资。计入=正常发薪；不计入=仅作成本核算（如保修返工）。 */
-async function setReworkPayable(id, payable) {
-  const p = getProject(id);
-  if (!p) { toast("项目不存在"); return; }
-  if (!perm.viewGlobalStats()) { toast("无权限"); return; }
-  clearTimeout(reloadTimer);
-  await repo.patchProject(id, { rework_payable: !!payable });
-  const p2 = getProject(id);
-  if (p2) p2.reworkPayable = !!payable;
-  renderProjectDetail(id);
-  renderStats();
-  toast(payable ? "返工工时已计入工资" : "返工工时已移出工资（仅成本核算）");
-  repo.loadAll().then(() => { renderProjectDetail(id); renderStats(); }).catch((e) => console.warn("返工计薪后台同步失败：", e));
-}
-
-function toggleLogWorkerType() {
-  const type = document.getElementById("logType").value;
-  document.getElementById("logInternalWorkerField").style.display = type === "internal" ? "block" : "none";
-  document.getElementById("logOutsourcedField").style.display = type === "outsourced" ? "block" : "none";
-}
-
-function updateLogOutsourcedInput() {
-  const sel = document.getElementById("logOutsourcedSelect");
-  const input = document.getElementById("logOutsourcedName");
-  if (sel && input && sel.value) {
-    input.value = sel.value;
+/* 返工单详情「收费方式」摘要（免费返工/计费返工）。 */
+function reworkPaySummaryHtml(p) {
+  const amt = Number(p.projectAmount) || 0;
+  if (amt <= 0) {
+    return `<div class="rework-pay-control"><span class="rework-pay-hint">🆓 免费返工 · 不计客户费用，工人无包活分成</span></div>`;
   }
-}
-
-function onLogWorkTypeChange() {
-  const t = document.getElementById("logWorkType");
-  const l = document.getElementById("logLevel");
-  if (t && l) l.value = WORK_TYPE_LEVEL[t.value] || "中级";
-}
-
-async function commitWorkLog(pid, log) {
-  const p = getProject(pid);
-  if (!p) {
-    toast("项目不存在，无法记录工时");
-    return;
-  }
-  await repo.addWorkLog(pid, log);
-  logOperation("WORK_LOG_ADD", `${p.name} - ${log.workerName}`, `工时：${log.hours}小时，日期：${log.date}，作业类型：${log.workType}，等级：${log.level}，备注：${log.note || "无"}，类型：${log.isOutsourced ? "外协" : "内部"}`);
+  const labor = Number(p.laborFee) || 0;
+  const pool = getCommissionPool(p);
+  return `<div class="rework-pay-control"><span class="rework-pay-hint">💵 计费返工 · ${esc(p.contractType || "包工")} · 工程金额 ¥${amt.toFixed(2)} · 工费 ¥${labor.toFixed(2)} · 分成池 ¥${pool.toFixed(2)}</span></div>`;
 }
 
 async function recomputeActualHours(pid) {
@@ -13964,203 +15406,10 @@ async function recomputeActualHours(pid) {
   return total;
 }
 
-/* 预约中(BOOKED)直接登记工时触发的「自动开工」：与 updateProjectStatus(WORKING) 行为保持一致，
-   把登记工时的工人一并补进在场名单 + 人员变动历史 + 操作日志，避免：
-   1) 该工人不被计入本项目工人工时统计（既不在 assignedWorkerIds/outsourcedWorkers，会被过滤掉）；
-   2) 旧兜底逻辑给无 assign 记录的工人凭空生成 startedAt→现在的时段，与已登记 workLog 叠加重复计工时。
-   内部工人入 assignedWorkerIds，外协入 outsourcedWorkers 串；若该工人最近一条人员变动已是 assign 则不重复追加。 */
-async function autoStartWithWorker(id, p, workerId, workerName, isOutsourced) {
-  const now = new Date().toISOString();
 
-  // 1) 在场名单：内部入 assignedWorkerIds，外协入 outsourcedWorkers 串
-  let assignedWorkerIds = [...(p.assignedWorkerIds || [])];
-  let outsourcedWorkers = (p.outsourcedWorkers || "").trim();
-  if (isOutsourced) {
-    const names = outsourcedWorkers ? outsourcedWorkers.split(/[,，]/).map(n => n.trim()).filter(n => n) : [];
-    if (!names.includes(workerName)) names.push(workerName);
-    outsourcedWorkers = names.join(",");
-  } else {
-    if (!assignedWorkerIds.includes(workerId)) assignedWorkerIds.push(workerId);
-  }
 
-  // 2) 人员变动历史：补一条 assign（若该工人最近一条不是 assign，避免重复）
-  const workerChangeHistory = [...(p.workerChangeHistory || [])];
-  const prev = workerChangeHistory.filter(ch => ch.workerId === workerId).pop();
-  if (!prev || prev.action !== "assign") {
-    const w = isOutsourced ? null : getWorker(workerId);
-    workerChangeHistory.push({
-      time: now,
-      action: "assign",
-      workerId,
-      workerName,
-      workerPhone: w ? w.phone : "",
-      isOutsourced: !!isOutsourced
-    });
-  }
 
-  // 3) 操作日志：开始施工
-  const actionLogs = [...(p.actionLogs || [])];
-  actionLogs.push({
-    time: now,
-    action: "start",
-    description: "开始施工（登记工时自动开工）",
-    operator: currentProfile.name || currentUser?.email || "系统",
-    operatorRole: currentProfile.role
-  });
 
-  const patch = {
-    status: STATUS.WORKING,
-    startedAt: now,
-    originalStartedAt: p.originalStartedAt || now,
-    assignedWorkerIds,
-    outsourcedWorkers,
-    workerChangeHistory,
-    actionLogs
-  };
-
-  await repo.patchProject(id, patch);
-  // 乐观更新内存，秒级反馈；后续 loadAll 会静默 reconcile
-  const p2 = getProject(id);
-  if (p2) {
-    p2.status = STATUS.WORKING;
-    p2.startedAt = now;
-    p2.originalStartedAt = patch.originalStartedAt;
-    p2.assignedWorkerIds = assignedWorkerIds;
-    p2.outsourcedWorkers = outsourcedWorkers;
-    p2.workerChangeHistory = workerChangeHistory;
-    p2.actionLogs = actionLogs;
-  }
-}
-
-/* 同日跨项目工时冲突检测 ------------------------------------------------
- * 工时记录只有「单日(date) + 工时(hours)」，无起止时间，故冲突只能退化到"同一天"粒度。
- * 扫描全量项目，返回某工人在某天、跨项目的工时明细。 */
-function getWorkerDailyLogs(workerId, date) {
-  if (!workerId || !date) return [];
-  const entries = [];
-  (cache.projects || []).forEach((p) => {
-    (p.workLogs || []).forEach((l) => {
-      if (l.workerId === workerId && l.date === date) {
-        entries.push({ projectId: p.id, projectName: p.name, hours: Number(l.hours) || 0 });
-      }
-    });
-  });
-  return entries;
-}
-
-/* 某工人在某项目的「实际在场窗口」分钟数：startedAt → 结束点（finishedAt / pausedAt / 当前）。
-   返回 null 表示项目尚未开工（无 startedAt），无法判定；用于反向失真守卫 B。
-   注意：BOOKED 自动开工时 startedAt=now、窗口≈0，但 B 在校验时 p.startedAt 仍为 null，故不误拦首笔工时。 */
-function getWorkerOnsiteWindowMinutes(p, workerId) {
-  if (!p || !p.startedAt) return null;
-  const start = new Date(p.startedAt);
-  let end;
-  if (p.finishedAt) end = new Date(p.finishedAt);
-  else if (p.status === STATUS.PAUSED && p.pausedAt) end = new Date(p.pausedAt);
-  else end = new Date();
-  const mins = (end - start) / 60000;
-  return mins > 0 ? mins : 0;
-}
-
-async function addWorkLog(id) {
-  const p = getProject(id);
-  const type = document.getElementById("logType").value;
-  if (type === "internal" && !perm.logWorkHours(p)) { toast("无权限填写施工工时"); return; }
-  if (type === "outsourced" && !perm.logOutsourcedHours(p)) { toast("无权限填写外协工时"); return; }
-  const hoursInput = document.getElementById("logHours").value;
-  const date = document.getElementById("logDate").value;
-  const noteRaw = document.getElementById("logNote").value.trim();
-  // 手动登记工时默认标记，与自动化施工计时（备注以「自动·」开头）区分
-  const note = noteRaw ? `${noteRaw} [手动]` : "[手动]";
-  const level = document.getElementById("logLevel").value;
-  const workType = document.getElementById("logWorkType").value;
-  
-  if (!validateHours(hoursInput)) { toast(`工时必须在 ${HOURS_MIN}-${HOURS_MAX} 小时之间`); return; }
-  const hours = Number(hoursInput);
-  if (!date) { toast("请选择施工日期"); return; }
-  
-  let workerId, workerName;
-  if (type === "internal") {
-    workerId = document.getElementById("logWorker").value;
-    if (!workerId) { toast("请选择施工人员"); return; }
-    const worker = getWorker(workerId);
-    if (!worker) {
-      toast("施工人员不存在，请刷新后重试");
-      return;
-    }
-    workerName = worker.name;
-  } else {
-    workerName = document.getElementById("logOutsourcedName").value.trim();
-    if (!workerName) { toast("请输入外协人员姓名"); return; }
-    workerId = "outsourced:" + workerName;
-  }
-
-  // —— 当日工时冲突检测 ——
-  // 工时记录只有「单日 + 工时」无起止时间，无法判时段重叠；故只防两类：
-  //   1) 物理不可能：当天累计 > 18h 直接拦截；
-  //   2) 累计超软上限：当天累计 > 12h 弹确认框（含跨项目同日明细，但仍可加）。
-  // 注意：同人同日多项目（如上午 A 下午 B 分段施工）不视为冲突，不拦截、不标红。
-  const dayLogs = getWorkerDailyLogs(workerId, date);
-  const dayExisting = dayLogs.reduce((s, e) => s + e.hours, 0);
-  const dayNewTotal = dayExisting + hours;
-  if (dayNewTotal > DAILY_BLOCK_CAP) {
-    toast(`「${workerName}」${fmtDate(date)} 当天累计工时将达 ${dayNewTotal.toFixed(1)} 小时，超过 ${DAILY_BLOCK_CAP} 小时上限（不可能），已阻止添加`);
-    return;
-  }
-  if (dayNewTotal > DAILY_WARN_CAP) {
-    const lines = dayLogs.map((e) => `· ${e.projectId === id ? "本项目" : esc(e.projectName)}：${e.hours.toFixed(1)}h`).join("<br>");
-    const html = `⚠️ 工时提醒<br>${esc(workerName)} 在 ${fmtDate(date)} 当天累计将超过 ${DAILY_WARN_CAP} 小时：<br>${lines || "（暂无其他记录）"}<br>本次将再加 ${hours.toFixed(1)}h，累计 ${dayNewTotal.toFixed(1)}h。<br>确认仍要添加？`;
-    if (!(await confirmDialog(html, "工时提醒"))) return;
-  }
-
-  // —— 反向失真守卫（B）：单项目在场窗口极短却填报大量工时 ——
-  const onsiteMinsB = getWorkerOnsiteWindowMinutes(p, workerId);
-  if (onsiteMinsB !== null && onsiteMinsB < SHORT_WORK_WARN_MINUTES) {
-    const loggedSoFarB = (p.workLogs || [])
-      .filter(l => l.workerId === workerId)
-      .reduce((s, l) => s + (Number(l.hours) || 0), 0);
-    const loggedTotalB = loggedSoFarB + hours;
-    if (loggedTotalB > LOGGED_VS_ONSITE_WARN_HOURS) {
-      const htmlB = `⚠️ 工时异常提醒<br>${esc(workerName)} 在「${esc(p.name)}」的实际在场约 ${Math.round(onsiteMinsB)} 分钟，却已登记 ${loggedTotalB.toFixed(1)} 小时工时。<br><br>是否确认仍要添加本次 ${hours.toFixed(1)} 小时？`;
-      if (!(await confirmDialog(htmlB, "工时异常确认"))) return;
-    }
-  }
-
-  try {
-    await commitWorkLog(id, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
-    if (p.status === STATUS.BOOKED) {
-      await autoStartWithWorker(id, p, workerId, workerName, type === "outsourced");
-    }
-    clearTimeout(reloadTimer);
-    renderAll();
-    toast("已添加施工工时");
-    repo.loadAll().then(async () => { await recomputeActualHours(id); renderAll(); }).catch((e) => console.warn("登记工时后台同步失败：", e));
-  } catch (error) {
-    console.error("添加工时失败:", error);
-    toast("添加工时失败：" + (error.message || "请重试"));
-  }
-}
-
-/* 滑块占比分配：将一个总工时按 4 种作业类型占比分摊到对应等级 */
-function readAllocWorker() {
-  const type = document.getElementById("allocType").value;
-  if (type === "internal") {
-    const workerId = document.getElementById("allocWorker").value;
-    if (!workerId) { toast("请选择施工人员"); return null; }
-    const worker = getWorker(workerId);
-    return { workerId, workerName: worker.name, isOutsourced: false };
-  } else {
-    const workerName = document.getElementById("allocOutsourcedName").value.trim();
-    if (!workerName) { toast("请输入外协人员姓名"); return null; }
-    return { workerId: "outsourced:" + workerName, workerName, isOutsourced: true };
-  }
-}
-
-function toggleAllocType() {
-  const type = document.getElementById("allocType").value;
-  document.getElementById("allocInternalField").style.display = type === "internal" ? "" : "none";
-  document.getElementById("allocOutsourcedField").style.display = type === "outsourced" ? "" : "none";
-}
 
 /* 项目进度跟踪卡片：点击头部展开/收起详情 */
 function toggleProgressDetail(headerEl) {
@@ -14219,317 +15468,9 @@ if (!window.__statDetailOutsideHandler) {
   });
 }
 
-function renderSliderAlloc() {
-  const total = Number(document.getElementById("allocTotal").value) || 0;
-  const sliders = WORK_TYPES.map((_, i) => document.getElementById("allocSlider" + i));
-  const vals = sliders.map((s) => Number(s.value));
-  const sum = vals.reduce((a, b) => a + b, 0);
-  WORK_TYPES.forEach((_, i) => {
-    const pctEl = document.getElementById("allocPct" + i);
-    const hrsEl = document.getElementById("allocHours" + i);
-    if (pctEl) pctEl.textContent = vals[i] + "%";
-    if (hrsEl) {
-      const h = sum > 0 ? Math.round((total * vals[i] / sum) * 10) / 10 : 0;
-      hrsEl.textContent = h + "h";
-    }
-  });
-  const sumEl = document.getElementById("allocSumPct");
-  if (sumEl) sumEl.textContent = sum + "%";
-  const totEl = document.getElementById("allocTotalHours");
-  if (totEl) totEl.textContent = total.toFixed(1) + "h";
-}
 
-function onSliderInput(idx) {
-  const sliders = WORK_TYPES.map((_, i) => document.getElementById("allocSlider" + i));
-  const vals = sliders.map((s) => Number(s.value));
-  const newVal = Math.max(0, Math.min(100, vals[idx]));
-  vals[idx] = newVal;
-  const others = WORK_TYPES.map((_, i) => i).filter((i) => i !== idx);
-  const otherSum = others.reduce((s, i) => s + vals[i], 0);
-  const remaining = 100 - newVal;
-  if (otherSum <= 0) {
-    const base = Math.floor(remaining / others.length);
-    others.forEach((i) => { vals[i] = base; });
-    let rem = remaining - base * others.length;
-    for (let k = 0; k < rem; k++) vals[others[k]] += 1;
-  } else {
-    let allocated = 0;
-    others.forEach((i, k) => {
-      if (k === others.length - 1) {
-        vals[i] = remaining - allocated;
-      } else {
-        const v = Math.round((vals[i] / otherSum) * remaining);
-        vals[i] = v;
-        allocated += v;
-      }
-    });
-  }
-  sliders.forEach((s, i) => { s.value = vals[i]; });
-  renderSliderAlloc();
-}
 
-function applyAllocPreset(arr) {
-  const sliders = WORK_TYPES.map((_, i) => document.getElementById("allocSlider" + i));
-  sliders.forEach((s, i) => { s.max = 100; s.step = 1; s.value = arr[i] || 0; });
-  renderSliderAlloc();
-}
 
-function openAllocSlider() {
-  const pid = currentProjectId;
-  if (!pid) return;
-  const p = getProject(pid);
-  const workerOptions = (cache.workers || []).map((w) => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
-  const init = [0, 0, 80, 20];
-
-  /* 计算本次默认总工时 */
-  /* 规则：
-   *   - 已完工/已取消：用项目的实际累计工时 actualHours（即已有工时记录之和）
-   *   - 施工中 且 今天开工的：算从 startedAt 到现在的时长（上限 12 小时）
-   *   - 其他情况：默认 8 小时（标准工作日）
-   *   - 最终结果不超过 HOURS_MAX（24）
-   */
-  const now = new Date();
-  const todayKey = now.toISOString().slice(0, 10);
-  let defaultTotal = 8; // 默认标准工作日
-
-  if (p.status === STATUS.COMPLETED || p.status === STATUS.CANCELLED) {
-    // 已完工/取消：使用实际累计工时（最准确）
-    defaultTotal = p.actualHours > 0 ? Math.round(p.actualHours * 10) / 10 : 8;
-  } else if (p.startedAt) {
-    const sessionStart = new Date(p.startedAt);
-    const startedDateStr = sessionStart.toISOString().slice(0, 10);
-    // 只有今天开工的项目才用实时计时；跨天的项目不应把历史时长当作"本次"
-    if (startedDateStr === todayKey) {
-      let endTime = now;
-      if (p.status === STATUS.PAUSED && p.pausedAt) {
-        endTime = new Date(p.pausedAt);
-      }
-      const hoursElapsed = (endTime - sessionStart) / (1000 * 60 * 60);
-      // 单次填报上限 12 小时（防止异常数据）
-      if (hoursElapsed > 0 && hoursElapsed <= 12) {
-        defaultTotal = Math.round(hoursElapsed * 10) / 10;
-      } else if (hoursElapsed > 12) {
-        defaultTotal = 12;
-      }
-    }
-    // startedDateStr !== today 时保持默认 8
-  }
-
-  defaultTotal = Math.min(defaultTotal, HOURS_MAX);
-  const sliderRows = WORK_TYPES.map((t, i) => `
-    <div class="alloc-row">
-      <div class="alloc-label">${t} <span class="alloc-pct" id="allocPct${i}">${init[i]}%</span></div>
-      <input type="range" min="0" max="100" value="${init[i]}" id="allocSlider${i}" oninput="onSliderInput(${i})" class="alloc-slider" />
-      <div class="alloc-hours" id="allocHours${i}">0h</div>
-    </div>`).join("");
-  const body = `
-    <div class="alloc-form">
-      <div class="field">
-        <label>人员类型</label>
-        <select class="input" id="allocType" onchange="toggleAllocType()">
-          <option value="internal">内部施工人员</option>
-          <option value="outsourced">外协人员</option>
-        </select>
-      </div>
-      <div class="field" id="allocInternalField">
-        <label>选择施工人员</label>
-        <select class="input" id="allocWorker">${workerOptions || `<option value="">请先添加人员</option>`}</select>
-      </div>
-      <div class="field outsourced-field" id="allocOutsourcedField" style="display:none">
-        <label>外协人员</label>
-        <input class="input" id="allocOutsourcedName" placeholder="输入外协人员姓名" />
-      </div>
-      <div class="field">
-        <label>施工日期</label>
-        <input class="input" type="date" id="allocDate" value="${todayStr()}" />
-      </div>
-      <div class="alloc-presets" id="allocPresets">
-        <button type="button" class="chip" onclick="applyAllocPreset([0,0,80,20])">地面为主</button>
-        <button type="button" class="chip" onclick="applyAllocPreset([80,0,0,20])">高空为主</button>
-        <button type="button" class="chip" onclick="applyAllocPreset([0,80,0,20])">高级为主</button>
-        <button type="button" class="chip" onclick="applyAllocPreset([27,27,26,20])">均衡</button>
-      </div>
-      <div class="field" id="allocTotalField">
-        <label>本次总工时(小时)</label>
-        <input class="input" type="number" min="0.1" step="0.5" id="allocTotal" value="${defaultTotal}" oninput="renderSliderAlloc()" />
-      </div>
-      <div class="alloc-sliders">${sliderRows}</div>
-      <div class="alloc-summary">
-        合计：<span id="allocTotalHours">${defaultTotal.toFixed(1)}h</span> · 占比之和 <span id="allocSumPct">100%</span>
-      </div>
-      <small class="hint">拖动滑块调整各类作业占比（之和恒为 100%），系统按占比把总工时自动分摊到对应等级（高空作业→特级 / 高级作业→高级 / 地面施工→中级 / 路程备料→初级）。</small>
-    </div>`;
-  modal.open("按占比分配工时", body, {
-    confirmText: "生成工时",
-    onConfirm: async () => {
-      try {
-      const w = readAllocWorker();
-      if (!w) return false;
-      const date = document.getElementById("allocDate").value;
-      if (!date) { toast("请选择施工日期"); return false; }
-      const vals = WORK_TYPES.map((_, i) => Number(document.getElementById("allocSlider" + i).value));
-      const totalInput = document.getElementById("allocTotal").value;
-      if (!validateHours(totalInput)) { toast(`总工时必须在 ${HOURS_MIN}-${HOURS_MAX} 小时之间`); return false; }
-      const total = Number(totalInput);
-      const sum = vals.reduce((a, b) => a + b, 0);
-      if (sum <= 0) { toast("请至少设置一个作业类型的占比"); return false; }
-      const raw = WORK_TYPES.map((t, i) => ({ t, hours: Math.round((total * vals[i] / sum) * 10) / 10 }));
-      const allocated = raw.reduce((s, r) => s + r.hours, 0);
-      const diff = Math.round((total - allocated) * 10) / 10;
-      if (diff !== 0) {
-        let maxIdx = 0;
-        raw.forEach((r, i) => { if (r.hours > raw[maxIdx].hours) maxIdx = i; });
-        raw[maxIdx].hours = Math.round((raw[maxIdx].hours + diff) * 10) / 10;
-      }
-      const logs = raw.filter((r) => r.hours > 0).map((r) => ({
-        workerId: w.workerId, workerName: w.workerName, hours: r.hours, date,
-        note: `占比(${r.t} ${Math.round((r.hours / total) * 100)}%)`,
-        level: WORK_TYPE_LEVEL[r.t] || "中级", workType: r.t, isOutsourced: w.isOutsourced,
-      }));
-      if (logs.length === 0) { toast("请至少设置一个作业类型的工时"); return false; }
-      for (const log of logs) await commitWorkLog(pid, log);
-      if (p.status === STATUS.BOOKED) {
-        await autoStartWithWorker(pid, p, w.workerId, w.workerName, w.isOutsourced);
-      }
-      clearTimeout(reloadTimer);
-      await repo.loadAll();
-      await recomputeActualHours(pid);
-      renderAll();
-      modal.close();
-      toast(`已生成 ${logs.length} 条工时`);
-      } catch (error) {
-        console.error("生成工时失败:", error);
-        toast("生成工时失败：" + (error.message || "请重试"));
-        return false;
-      }
-    },
-  });
-  renderSliderAlloc();
-}
-
-/* 修改已保存工时（审核前可改） */
-function toggleEditType() {
-  const type = document.getElementById("editType").value;
-  document.getElementById("editInternalField").style.display = type === "internal" ? "" : "none";
-  document.getElementById("editOutsourcedField").style.display = type === "outsourced" ? "" : "none";
-}
-
-function editWorkLog(pid, lid) {
-  const p = getProject(pid);
-  if (p && !perm.editWorkLog(p)) { toast("权限不足：无法修改完工工时"); return; }
-  const log = (p.workLogs || []).find((l) => l.id === lid);
-  if (!log) return;
-  const isOut = log.isOutsourced || (log.workerId && log.workerId.startsWith("outsourced:"));
-  const workerOptions = (cache.workers || []).map((w) => {
-    const wid = w.id === log.workerId ? " selected" : "";
-    return `<option value="${w.id}"${wid}>${esc(w.name)}</option>`;
-  }).join("");
-  const curType = normWorkType(log.workType);
-  const typeOptions = WORK_TYPES.map((t) => `<option value="${t}"${t === curType ? " selected" : ""}>${t}</option>`).join("");
-  const levelOptions = LEVELS.map((l) => `<option value="${l}"${(l === (log.level || "中级")) ? " selected" : ""}>${l}</option>`).join("");
-  const body = `
-    <div class="alloc-form">
-      <div class="field">
-        <label>人员类型</label>
-        <select class="input" id="editType" onchange="toggleEditType()">
-          <option value="internal"${!isOut ? " selected" : ""}>内部施工人员</option>
-          <option value="outsourced"${isOut ? " selected" : ""}>外协人员</option>
-        </select>
-      </div>
-      <div class="field" id="editInternalField"${isOut ? ' style="display:none"' : ""}>
-        <label>施工人员</label>
-        <select class="input" id="editWorker">${workerOptions || `<option value="">请先添加人员</option>`}</select>
-      </div>
-      <div class="field outsourced-field" id="editOutsourcedField"${!isOut ? ' style="display:none"' : ""}>
-        <label>外协人员</label>
-        <input class="input" id="editOutsourcedName" value="${esc(isOut ? log.workerName : "")}" placeholder="输入外协人员姓名" />
-      </div>
-      <div class="field">
-        <label>施工日期</label>
-        <input class="input" type="date" id="editDate" value="${esc(log.date || "")}" />
-      </div>
-      <div class="field">
-        <label>施工工时(小时)</label>
-        <input class="input" type="number" min="0.1" step="0.5" id="editHours" value="${log.hours}" style="width:120px" />
-      </div>
-      <div class="field">
-        <label>作业类型</label>
-        <select class="input" id="editWorkType" style="width:120px" onchange="document.getElementById('editLevel').value = (WORK_TYPE_LEVEL[this.value]||'中级')">${typeOptions}</select>
-      </div>
-      <div class="field">
-        <label>工时等级</label>
-        <select class="input" id="editLevel" style="width:100px">${levelOptions}</select>
-      </div>
-      <div class="field" style="flex:1;min-width:150px">
-        <label>说明</label>
-        <input class="input" id="editNote" value="${esc(log.note || "")}" placeholder="选填" />
-      </div>
-    </div>`;
-  modal.open("修改施工工时", body, {
-    confirmText: "保存修改",
-    onConfirm: async () => {
-      try {
-      const type = document.getElementById("editType").value;
-      let workerId, workerName;
-      if (type === "internal") {
-        workerId = document.getElementById("editWorker").value;
-        if (!workerId) { toast("请选择施工人员"); return false; }
-        const _w = getWorker(workerId);
-        if (!_w) { toast("该施工人员不存在或已被删除"); return false; }
-        workerName = _w.name;
-      } else {
-        workerName = document.getElementById("editOutsourcedName").value.trim();
-        if (!workerName) { toast("请输入外协人员姓名"); return false; }
-        workerId = "outsourced:" + workerName;
-      }
-      const hoursInput = document.getElementById("editHours").value;
-      if (!validateHours(hoursInput)) { toast(`工时必须在 ${HOURS_MIN}-${HOURS_MAX} 小时之间`); return false; }
-      const hours = Number(hoursInput);
-      const date = document.getElementById("editDate").value;
-      if (!date) { toast("请选择施工日期"); return false; }
-      const workType = document.getElementById("editWorkType").value;
-      const level = document.getElementById("editLevel").value;
-      const inputNote = document.getElementById("editNote").value.trim();
-      const originalNote = log.note || "";
-      const wasAutoNote = isAutoLog(log);
-      const originalType = log.isOutsourced ? "outsourced" : "internal";
-      const hasChanged =
-        workerId !== log.workerId ||
-        workerName !== log.workerName ||
-        hours !== Number(log.hours) ||
-        date !== log.date ||
-        workType !== (log.workType || "") ||
-        level !== (log.level || "中级") ||
-        type !== originalType;
-      // 系统自动计算的工时被修改、且用户没有手动改写说明时，自动标注为手动修正，并保留原始计算依据
-      let note = inputNote;
-      if (wasAutoNote && hasChanged && inputNote === originalNote) {
-        note = `手动修正（原${originalNote}）`;
-      }
-      // 标注修改人（审计痕迹：保留最近一次修改人，避免每次编辑叠加多个 [修改人:...]）
-      const editor = currentProfile && currentProfile.name ? currentProfile.name : "未知";
-      const noteBase = note.replace(/\s*\[修改人:[^\]]*\]\s*$/, "");
-      note = noteBase ? `${noteBase} [修改人:${editor}]` : `[修改人:${editor}]`;
-      await repo.updateWorkLog(pid, lid, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
-      clearTimeout(reloadTimer);
-      const p2 = getProject(pid);
-      if (p2 && p2.workLogs) {
-        const wl = p2.workLogs.find((l) => l.id === lid);
-        if (wl) Object.assign(wl, { workerId, workerName, hours, date, note, level, workType, isOutsourced: type === "outsourced" });
-      }
-      logOperation("WORK_LOG_UPDATE", `${p.name} - ${workerName}`, `工时：${hours}小时，日期：${date}，作业类型：${workType}，等级：${level}，备注：${note || "无"}，类型：${type === "outsourced" ? "外协" : "内部"}`);
-      renderAll();
-      modal.close();
-      toast("已保存修改");
-      repo.loadAll().then(async () => { await recomputeActualHours(pid); renderAll(); }).catch((e) => console.warn("修改工时后台同步失败：", e));
-      } catch (error) {
-        console.error("保存工时修改失败:", error);
-        toast("保存失败：" + (error.message || "请重试"));
-        return false;
-      }
-    },
-  });
-}
 
 async function deleteWorkLog(pid, lid) {
   if (!(await confirmDialog("确定删除该工时记录？此操作不可撤销。", "删除工时"))) return;
@@ -14551,216 +15492,9 @@ async function deleteWorkLog(pid, lid) {
     });
 }
 
-/* 修改完工工时用的分段行（携带 data-wid / data-date / data-id 等元数据，便于保存时还原归属与日期） */
-function workerSegRowHtmlEdit(seg) {
-  const type = seg.type || "地面施工";
-  const level = seg.level || WORK_TYPE_LEVEL[type] || "中级";
-  const wid = seg.workerId || "";
-  const date = seg.date || "";
-  const id = seg.id || "";
-  const rework = seg.isRework ? "1" : "0";
-  const reworkCycle = (seg.reworkCycle != null && seg.reworkCycle !== "") ? seg.reworkCycle : "";
-  return `<div class="worker-seg" data-wid="${esc(wid)}" data-date="${esc(date)}" data-id="${esc(id)}" data-rework="${rework}" data-reworkcycle="${esc(String(reworkCycle))}">
-    <select class="seg-type input" style="width:96px;padding:3px 4px;font-size:12px;" onchange="onSegType(this)">
-      ${WORK_TYPES.map(t => `<option value="${t}"${t === type ? " selected" : ""}>${t}</option>`).join("")}
-    </select>
-    <select class="seg-level input" style="width:80px;padding:3px 4px;font-size:12px;">
-      ${LEVELS.map(l => `<option value="${l}"${l === level ? " selected" : ""}>${l}</option>`).join("")}
-    </select>
-    <input class="seg-hours input" type="number" step="0.1" min="0" max="24" value="${seg.hours ?? ""}" placeholder="0" style="width:64px;padding:3px 4px;font-size:12px;">
-    <input class="seg-note input" type="text" placeholder="备注" value="${esc(seg.note || "")}" style="flex:1;min-width:90px;padding:3px 4px;font-size:12px;">
-    <button type="button" class="seg-del" onclick="delWorkerSeg(this)" title="删除分段" style="border:none;background:#fee2e2;color:#dc2626;border-radius:4px;width:22px;height:22px;cursor:pointer;font-size:14px;line-height:1;">×</button>
-  </div>`;
-}
 
-/* 在批量修改弹窗内为某人追加一段新工时（沿用所在容器携带的 wid / date） */
-function addEditSeg(idx, kind) {
-  const container = document.getElementById((kind === "w" ? "ewsegs_" : "eosegs_") + idx);
-  if (!container) return;
-  const wid = container.dataset.wid || "";
-  const date = container.dataset.date || dateKey(new Date());
-  container.insertAdjacentHTML("beforeend", workerSegRowHtmlEdit({ workerId: wid, id: "", type: "地面施工", level: "中级", hours: "", note: "", date: date, isRework: false }));
-}
 
-/* 打开「修改完工工时」弹窗：列出该项目所有施工人员（内部 + 外协）的已登记工时，逐段可改 */
-function openEditWorkHoursForm(id) {
-  const p = getProject(id);
-  if (!p || !perm.editWorkLog(p)) { toast("权限不足：无法修改完工工时"); return; }
-  const assignedWorkerIds = p.assignedWorkerIds || [];
-  const allWorkerIds = new Set([...assignedWorkerIds]);
-  (p.workerChangeHistory || []).forEach(ch => { if (ch.workerId) allWorkerIds.add(ch.workerId); });
-  (p.workLogs || []).forEach(l => { if (l.workerId && !l.workerId.startsWith("outsourced:")) allWorkerIds.add(l.workerId); });
-  const workers = Array.from(allWorkerIds).map(wid => getWorker(wid) || { id: wid, name: "未知" });
 
-  const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).map(n => n.trim()).filter(n => n);
-  (p.workLogs || []).forEach(l => {
-    if (l.workerId && l.workerId.startsWith("outsourced:")) {
-      const n = l.workerName;
-      if (n && !outsourcedNames.includes(n)) outsourcedNames.push(n);
-    }
-  });
-
-  const editDate = p.finishedAt ? dateKey(new Date(p.finishedAt)) : dateKey(new Date());
-
-  const groups = [];
-  let form = `<div class="form-grid">`;
-  form += `<div class="form-row" style="grid-column:1/-1;background:#fffbeb;padding:10px;border-radius:6px;border-left:4px solid #f59e0b;margin-bottom:8px;font-size:12px;color:#92400e;">⚠️ 此项目已完工，仅可更正工时登记中的错误。修改将记入操作日志，请勿随意改动已核算工资。</div>`;
-
-  if (workers.length === 0 && outsourcedNames.length === 0) {
-    form += `<div class="form-row" style="grid-column:1/-1;color:var(--muted);">暂无可修改的工时记录。</div>`;
-  }
-
-  if (workers.length > 0) {
-    form += workers.map((w, idx) => {
-      const logs = (p.workLogs || []).filter(l => l.workerId === w.id);
-      const segs = logs.length
-        ? logs.map(l => ({ workerId: w.id, id: l.id, type: normWorkType(l.workType), level: l.level || "中级", hours: l.hours, note: l.note || "", date: l.date, isRework: l.isRework, reworkCycle: l.reworkCycle }))
-        : [{ workerId: w.id, id: "", type: "地面施工", level: "中级", hours: "", note: "", date: editDate, isRework: false }];
-      groups.push({ containerId: "ewsegs_" + idx, wid: w.id, name: w.name, isOut: false });
-      return `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
-        <div style="width:100%;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-            <span style="min-width:80px;font-weight:500;flex-shrink:0;">👷 ${esc(w.name)}${(!assignedWorkerIds.includes(w.id)) ? ` <span style="font-size:11px;color:#9ca3af;">(已移除)</span>` : ""}</span>
-            <button type="button" class="btn small" onclick="addEditSeg(${idx},'w')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
-          </div>
-          <div class="worker-segs" id="ewsegs_${idx}" data-wid="${esc(w.id)}" data-date="${editDate}">
-            ${segs.map(s => workerSegRowHtmlEdit(s)).join("")}
-          </div>
-        </div>
-      </div>`;
-    }).join("");
-  }
-
-  if (outsourcedNames.length > 0) {
-    form += outsourcedNames.map((name, idx) => {
-      const logs = (p.workLogs || []).filter(l => l.workerId === "outsourced:" + name);
-      const segs = logs.length
-        ? logs.map(l => ({ workerId: "outsourced:" + name, id: l.id, type: normWorkType(l.workType), level: l.level || "中级", hours: l.hours, note: l.note || "", date: l.date, isRework: l.isRework, reworkCycle: l.reworkCycle }))
-        : [{ workerId: "outsourced:" + name, id: "", type: "地面施工", level: "中级", hours: "", note: "", date: editDate, isRework: false }];
-      groups.push({ containerId: "eosegs_" + idx, wid: "outsourced:" + name, name: name, isOut: true });
-      return `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
-        <div style="width:100%;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-            <span style="min-width:80px;font-weight:500;flex-shrink:0;color:#8b5cf6;">👤 ${esc(name)}（外协）</span>
-            <button type="button" class="btn small" onclick="addEditSeg(${idx},'o')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
-          </div>
-          <div class="worker-segs" id="eosegs_${idx}" data-wid="outsourced:${esc(name)}" data-date="${editDate}">
-            ${segs.map(s => workerSegRowHtmlEdit(s)).join("")}
-          </div>
-        </div>
-      </div>`;
-    }).join("");
-  }
-
-  form += `</div>`;
-
-  window._editWorkHoursGroups = groups;
-  window._editWorkHoursDate = editDate;
-
-  modal.open("修改完工工时", form, {
-    confirmText: "保存修改",
-    onConfirm: async () => {
-      try {
-        return await submitEditWorkHours(id);
-      } catch (e) {
-        console.error("保存完工工时修改失败:", e);
-        toast("保存失败：" + (e.message || "请重试"));
-        return false;
-      }
-    },
-  });
-}
-
-/* 保存批量修改：替换该项目的全部施工工时记录，并同步云端 work_logs 表与本地缓存 */
-async function submitEditWorkHours(id) {
-  const p = getProject(id);
-  if (!p || !perm.editWorkLog(p)) { toast("权限不足：无法修改完工工时"); return false; }
-  const groups = window._editWorkHoursGroups || [];
-  const editDate = window._editWorkHoursDate || dateKey(new Date());
-  const before = (p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0);
-
-  const newLogs = [];
-  for (const g of groups) {
-    const container = document.getElementById(g.containerId);
-    if (!container) continue;
-    container.querySelectorAll(".worker-seg").forEach(seg => {
-      const hours = Number(seg.querySelector(".seg-hours").value) || 0;
-      if (hours <= 0) return;
-      if (!validateHours(String(hours))) { throw new Error(`工时必须在 ${HOURS_MIN}-${HOURS_MAX} 小时之间`); }
-      const type = seg.querySelector(".seg-type").value;
-      const level = seg.querySelector(".seg-level").value;
-      const note = (seg.querySelector(".seg-note").value || "").trim();
-      const idAttr = seg.dataset.id || uid();
-      const date = seg.dataset.date || editDate;
-      const isRework = seg.dataset.rework === "1";
-      const reworkCycle = (seg.dataset.reworkcycle && seg.dataset.reworkcycle !== "") ? Number(seg.dataset.reworkcycle) : null;
-      newLogs.push({
-        id: idAttr,
-        workerId: g.wid,
-        workerName: g.name,
-        hours,
-        level,
-        workType: type,
-        date,
-        note: note || null,
-        isOutsourced: g.isOut,
-        isRework,
-        reworkCycle,
-      });
-    });
-  }
-
-  if (newLogs.length === 0) { toast("请至少保留一条有效工时"); return false; }
-  const total = Math.round(newLogs.reduce((s, l) => s + l.hours, 0) * 10) / 10;
-
-  const nowStr = new Date().toISOString();
-  const actionLogs = [...(p.actionLogs || []), {
-    time: nowStr,
-    action: "edit_work_hours",
-    description: `修改完工工时：原总工时 ${before.toFixed(1)} → 新总工时 ${total.toFixed(1)} 工时`,
-    operator: currentProfile?.name || currentUser?.email || "系统",
-    operatorRole: currentProfile?.role,
-  }];
-
-  try {
-    if (MODE === "cloud" && cloudConfigured()) {
-      // work_logs 表是云端工时真源（同步时按该表回填 p.workLogs），必须同步更新，否则下次同步会被覆盖
-      const { error: delErr } = await sb.from("work_logs").delete().eq("project_id", id);
-      if (delErr) return fail(delErr);
-      const insertRows = newLogs.map(l => ({
-        id: l.id, project_id: id, worker_id: l.workerId, worker_name: l.workerName,
-        hours: l.hours, date: l.date, note: l.note, level: l.level || "中级",
-        work_type: l.workType, is_outsourced: !!l.isOutsourced,
-        is_rework: !!l.isRework, rework_cycle: l.reworkCycle || null,
-      }));
-      const { error: insErr } = await sb.from("work_logs").insert(insertRows);
-      if (insErr) return fail(insErr);
-      const { error: updErr } = await sb.from("projects")
-        .update({ actual_hours: total, action_logs: actionLogs, updated_at: nowStr })
-        .eq("id", id);
-      if (updErr) return fail(updErr);
-    } else {
-      const proj = getProject(id);
-      proj.workLogs = newLogs;
-      proj.actualHours = total;
-      proj.actionLogs = actionLogs;
-      proj.version = (proj.version || 0) + 1;
-      saveLocal();
-    }
-
-    clearTimeout(reloadTimer);
-    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] submitEditWorkHours 后台同步失败：", e));
-    logOperation("WORK_LOG_UPDATE", p.name, `批量修改完工工时：原 ${before.toFixed(1)} → ${total.toFixed(1)} 工时`);
-    renderAll();
-    modal.close();
-    toast("已保存工时修改");
-    return true;
-  } catch (e) {
-    console.error("保存完工工时修改失败:", e);
-    toast("保存失败：" + (e.message || "请重试"));
-    return false;
-  }
-}
 
 function generateWorkerScheduleDescription(dateStr = null) {
   const targetDate = dateStr ? new Date(dateStr) : new Date();
@@ -15668,282 +16402,6 @@ function generateWorkerScheduleDescription(dateStr = null) {
 }
 
 /* 完成项目表单：单个工时分段行（作业类型 + 等级 + 工时 + 备注） */
-function workerSegRowHtml(seg) {
-  const type = seg.type || "地面施工";
-  const level = seg.level || WORK_TYPE_LEVEL[type] || "中级";
-  return `<div class="worker-seg">
-    <select class="seg-type input" style="width:96px;padding:3px 4px;font-size:12px;" onchange="onSegType(this)">
-      ${WORK_TYPES.map(t => `<option value="${t}"${t === type ? " selected" : ""}>${t}</option>`).join("")}
-    </select>
-    <select class="seg-level input" style="width:80px;padding:3px 4px;font-size:12px;">
-      ${LEVELS.map(l => `<option value="${l}"${l === level ? " selected" : ""}>${l}</option>`).join("")}
-    </select>
-    <input class="seg-hours input" type="number" step="0.1" min="0" max="24" value="${seg.hours ?? ""}" placeholder="0" style="width:64px;padding:3px 4px;font-size:12px;">
-    <input class="seg-note input" type="text" placeholder="备注" value="${esc(seg.note || "")}" style="flex:1;min-width:90px;padding:3px 4px;font-size:12px;">
-    <button type="button" class="seg-del" onclick="delWorkerSeg(this)" title="删除分段" style="border:none;background:#fee2e2;color:#dc2626;border-radius:4px;width:22px;height:22px;cursor:pointer;font-size:14px;line-height:1;">×</button>
-  </div>`;
-}
-function addWorkerSeg(idx, kind) {
-  const container = document.getElementById((kind === "w" ? "wsegs_" : "osegs_") + idx);
-  if (container) container.insertAdjacentHTML("beforeend", workerSegRowHtml({ type: "地面施工", level: "中级", hours: "", note: "" }));
-}
-function renderCompleteAlloc() {
-  const totalEl = document.getElementById("completeAllocTotal");
-  const sliders = WORK_TYPES.map((_, i) => document.getElementById("completeAllocSlider" + i));
-  if (!totalEl || !sliders[0]) return;
-  const total = Number(totalEl.dataset.total) || 0;
-  const vals = sliders.map(s => Number(s.value));
-  const sum = vals.reduce((a, b) => a + b, 0);
-  let allocated = 0;
-  WORK_TYPES.forEach((_, i) => {
-    const h = sum > 0 ? Math.round((total * vals[i] / sum) * 10) / 10 : 0;
-    const pctEl = document.getElementById("completeAllocPct" + i);
-    const hrsEl = document.getElementById("completeAllocHours" + i);
-    if (pctEl) pctEl.textContent = vals[i] + "%";
-    if (hrsEl) hrsEl.textContent = h + "h";
-    allocated += h;
-  });
-  const sumPctEl = document.getElementById("completeAllocSumPct");
-  if (sumPctEl) sumPctEl.textContent = sum + "%";
-  const sumHoursEl = document.getElementById("completeAllocSumHours");
-  if (sumHoursEl) sumHoursEl.textContent = allocated.toFixed(1) + "h";
-}
-
-function onCompleteSliderInput(idx) {
-  const sliders = WORK_TYPES.map((_, i) => document.getElementById("completeAllocSlider" + i));
-  const FIXED_IDX = 3; // 路程备料固定占 20%
-  if (idx === FIXED_IDX) return;
-  const vals = sliders.map(s => Number(s.value));
-  const fixedVal = vals[FIXED_IDX];
-  const newVal = Math.max(0, Math.min(100 - fixedVal, vals[idx]));
-  vals[idx] = newVal;
-  const others = WORK_TYPES.map((_, i) => i).filter(i => i !== idx && i !== FIXED_IDX);
-  const otherSum = others.reduce((s, i) => s + vals[i], 0);
-  const remaining = 100 - fixedVal - newVal;
-  if (otherSum <= 0) {
-    const base = Math.floor(remaining / others.length);
-    others.forEach(i => { vals[i] = base; });
-    let rem = remaining - base * others.length;
-    for (let k = 0; k < rem; k++) vals[others[k]] += 1;
-  } else {
-    let allocated = 0;
-    others.forEach((i, k) => {
-      if (k === others.length - 1) {
-        vals[i] = remaining - allocated;
-      } else {
-        const v = Math.round((vals[i] / otherSum) * remaining);
-        vals[i] = v;
-        allocated += v;
-      }
-    });
-  }
-  sliders.forEach((s, i) => { if (i !== FIXED_IDX) s.value = vals[i]; });
-  renderCompleteAlloc();
-}
-
-function applyCompletePreset(arr) {
-  const sliders = WORK_TYPES.map((_, i) => document.getElementById("completeAllocSlider" + i));
-  sliders.forEach((s, i) => { if (s) s.value = arr[i] || 0; });
-  renderCompleteAlloc();
-}
-
-function applyCompleteAllocToAll() {
-  const totalEl = document.getElementById("completeAllocTotal");
-  const total = Number(totalEl?.dataset.total) || 0;
-  if (total <= 0) { toast("当前实际工作时长为 0，无法自动分配，请手动填写或先确认施工时间"); return; }
-  const vals = WORK_TYPES.map((_, i) => Number(document.getElementById("completeAllocSlider" + i).value));
-  const sum = vals.reduce((a, b) => a + b, 0);
-  if (sum <= 0) { toast("请至少设置一个作业类型占比"); return; }
-  const p = getProject(currentProjectId);
-  if (!p) return;
-  // 疑似忘点完工：自动工时含空闲/过夜时间，不可靠，禁止用滑块把估算值填回
-  if (getForgottenCompleteInfo(p)) {
-    toast("该项目疑似忘点完工，系统工时估算不可靠，请逐人手动填写真实工时");
-    return;
-  }
-
-  const assignedWorkerIds = p.assignedWorkerIds || [];
-  const allWorkerIds = new Set([...assignedWorkerIds]);
-  (p.workerChangeHistory || []).forEach(ch => { if (ch.workerId) allWorkerIds.add(ch.workerId); });
-  (p.workLogs || []).forEach(log => { if (log.workerId && !log.workerId.startsWith("outsourced:")) allWorkerIds.add(log.workerId); });
-  const workers = Array.from(allWorkerIds).map(wid => getWorker(wid) || { id: wid, name: "未知" });
-  
-  const autoHours = window._completeWorkerAutoHours || {};
-  workers.forEach((w, idx) => {
-    const perTotal = autoHours[w.id] || 0;
-    if (perTotal <= 0) return;
-    const container = document.getElementById("wsegs_" + idx);
-    if (!container) return;
-    const raw = WORK_TYPES.map((t, i) => ({ t, hours: Math.round((perTotal * vals[i] / sum) * 10) / 10 }));
-    const allocated = raw.reduce((s, r) => s + r.hours, 0);
-    const diff = Math.round((perTotal - allocated) * 10) / 10;
-    if (diff !== 0) {
-      let maxIdx = 0;
-      raw.forEach((r, i) => { if (r.hours > raw[maxIdx].hours) maxIdx = i; });
-      raw[maxIdx].hours = Math.round((raw[maxIdx].hours + diff) * 10) / 10;
-    }
-    const segs = raw.filter(r => r.hours > 0).map(r => ({
-      type: r.t,
-      level: WORK_TYPE_LEVEL[r.t] || "中级",
-      hours: r.hours.toFixed(1),
-      note: "滑块自动分配"
-    }));
-    container.innerHTML = segs.map(s => workerSegRowHtml(s)).join("");
-  });
-  toast("已按滑块比例分配到所有施工人员");
-}
-
-/* 个人滑块分配（完工弹窗内每人独立设置） */
-function workerAllocPanelHtml(prefix, idx, kind, name, total) {
-  const defaultAlloc = [0, 0, 80, 20];
-  const sliderRows = WORK_TYPES.map((t, i) => {
-    const isFixed = i === 3;
-    return `
-      <div class="alloc-row">
-        <div class="alloc-label">${t}${isFixed ? ' <span style="font-size:11px;color:#9ca3af;">(固定)</span>' : ''} <span class="alloc-pct" id="${prefix}Pct${i}">${defaultAlloc[i]}%</span></div>
-        <input type="range" min="0" max="100" value="${defaultAlloc[i]}" id="${prefix}Slider${i}" ${isFixed ? 'disabled' : `oninput="onWorkerAllocInput('${prefix}', ${i})"`} class="alloc-slider" />
-        <div class="alloc-hours" id="${prefix}Hours${i}">0h</div>
-      </div>`;
-  }).join("");
-  return `
-    <div class="alloc-form" style="width:100%;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-        <label style="font-weight:500;">${esc(name)} 的分配比例</label>
-        <span style="font-size:12px;color:#6b7280;">拖动滑块，按实际工作时长自动分配</span>
-      </div>
-      <div class="alloc-presets" style="margin-bottom:8px;">
-        <button type="button" class="chip" onclick="applyWorkerAllocPreset('${prefix}', [0,0,80,20])">地面为主</button>
-        <button type="button" class="chip" onclick="applyWorkerAllocPreset('${prefix}', [80,0,0,20])">高空为主</button>
-        <button type="button" class="chip" onclick="applyWorkerAllocPreset('${prefix}', [0,80,0,20])">高级为主</button>
-        <button type="button" class="chip" onclick="applyWorkerAllocPreset('${prefix}', [27,27,26,20])">均衡</button>
-      </div>
-      <div class="alloc-sliders">${sliderRows}</div>
-      <div class="alloc-summary">
-        预计总工时 <span id="${prefix}Total" data-total="${Number(total).toFixed(1)}">${Number(total).toFixed(1)}h</span>
-        · 占比之和 <span id="${prefix}SumPct">100%</span>
-        · 分配合计 <span id="${prefix}SumHours">0.0h</span>
-      </div>
-      <small style="font-size:11px;color:#9ca3af;">路程备料固定占 20%，其余在 高空/高级/地面 间分配。</small>
-      <button type="button" class="btn primary small" onclick="applyWorkerAllocTo('${prefix}', ${idx}, '${kind}')" style="margin-top:8px;align-self:flex-start;">应用给 ${esc(name)}</button>
-    </div>
-  `;
-}
-
-function toggleWorkerAlloc(idx, kind) {
-  const panel = document.getElementById((kind === "w" ? "walloc_" : "oalloc_") + idx);
-  if (!panel) return;
-  const willShow = panel.style.display === "none";
-  panel.style.display = willShow ? "block" : "none";
-  if (willShow) {
-    const prefix = (kind === "w" ? "walloc" : "oalloc") + idx;
-    renderWorkerAlloc(prefix);
-  }
-}
-
-function renderWorkerAlloc(prefix) {
-  const totalEl = document.getElementById(prefix + "Total");
-  const sliders = WORK_TYPES.map((_, i) => document.getElementById(prefix + "Slider" + i));
-  if (!totalEl || !sliders[0]) return;
-  const total = Number(totalEl.dataset.total) || 0;
-  const vals = sliders.map(s => Number(s.value));
-  const sum = vals.reduce((a, b) => a + b, 0);
-  let allocated = 0;
-  WORK_TYPES.forEach((_, i) => {
-    const h = sum > 0 ? Math.round((total * vals[i] / sum) * 10) / 10 : 0;
-    const pctEl = document.getElementById(prefix + "Pct" + i);
-    const hrsEl = document.getElementById(prefix + "Hours" + i);
-    if (pctEl) pctEl.textContent = vals[i] + "%";
-    if (hrsEl) hrsEl.textContent = h + "h";
-    allocated += h;
-  });
-  const sumPctEl = document.getElementById(prefix + "SumPct");
-  if (sumPctEl) sumPctEl.textContent = sum + "%";
-  const sumHoursEl = document.getElementById(prefix + "SumHours");
-  if (sumHoursEl) sumHoursEl.textContent = allocated.toFixed(1) + "h";
-}
-
-function onWorkerAllocInput(prefix, idx) {
-  const FIXED_IDX = 3;
-  if (idx === FIXED_IDX) return;
-  const sliders = WORK_TYPES.map((_, i) => document.getElementById(prefix + "Slider" + i));
-  const vals = sliders.map(s => Number(s.value));
-  const fixedVal = vals[FIXED_IDX];
-  const newVal = Math.max(0, Math.min(100 - fixedVal, vals[idx]));
-  vals[idx] = newVal;
-  const others = WORK_TYPES.map((_, i) => i).filter(i => i !== idx && i !== FIXED_IDX);
-  const otherSum = others.reduce((s, i) => s + vals[i], 0);
-  const remaining = 100 - fixedVal - newVal;
-  if (otherSum <= 0) {
-    const base = Math.floor(remaining / others.length);
-    others.forEach(i => { vals[i] = base; });
-    let rem = remaining - base * others.length;
-    for (let k = 0; k < rem; k++) vals[others[k]] += 1;
-  } else {
-    let allocated = 0;
-    others.forEach((i, k) => {
-      if (k === others.length - 1) {
-        vals[i] = remaining - allocated;
-      } else {
-        const v = Math.round((vals[i] / otherSum) * remaining);
-        vals[i] = v;
-        allocated += v;
-      }
-    });
-  }
-  sliders.forEach((s, i) => { if (i !== FIXED_IDX) s.value = vals[i]; });
-  renderWorkerAlloc(prefix);
-}
-
-function applyWorkerAllocPreset(prefix, arr) {
-  const sliders = WORK_TYPES.map((_, i) => document.getElementById(prefix + "Slider" + i));
-  sliders.forEach((s, i) => { if (s) s.value = arr[i] || 0; });
-  renderWorkerAlloc(prefix);
-}
-
-function applyWorkerAllocTo(prefix, idx, kind) {
-  // 疑似忘点完工：自动工时含空闲/过夜时间，不可靠，禁止用滑块把估算值填回
-  const _p = getProject(currentProjectId);
-  if (_p && getForgottenCompleteInfo(_p)) {
-    toast("该项目疑似忘点完工，系统工时估算不可靠，请手动填写真实工时");
-    return;
-  }
-  const totalEl = document.getElementById(prefix + "Total");
-  const perTotal = Number(totalEl?.dataset.total) || 0;
-  if (perTotal <= 0) { toast("该人员当前实际工作时长为 0，无法自动分配"); return; }
-  const vals = WORK_TYPES.map((_, i) => Number(document.getElementById(prefix + "Slider" + i).value));
-  const sum = vals.reduce((a, b) => a + b, 0);
-  if (sum <= 0) { toast("请至少设置一个作业类型占比"); return; }
-  const container = document.getElementById((kind === "w" ? "wsegs_" : "osegs_") + idx);
-  if (!container) return;
-  const raw = WORK_TYPES.map((t, i) => ({ t, hours: Math.round((perTotal * vals[i] / sum) * 10) / 10 }));
-  const allocated = raw.reduce((s, r) => s + r.hours, 0);
-  const diff = Math.round((perTotal - allocated) * 10) / 10;
-  if (diff !== 0) {
-    let maxIdx = 0;
-    raw.forEach((r, i) => { if (r.hours > raw[maxIdx].hours) maxIdx = i; });
-    raw[maxIdx].hours = Math.round((raw[maxIdx].hours + diff) * 10) / 10;
-  }
-  const segs = raw.filter(r => r.hours > 0).map(r => ({
-    type: r.t,
-    level: WORK_TYPE_LEVEL[r.t] || "中级",
-    hours: r.hours.toFixed(1),
-    note: "滑块自动分配"
-  }));
-  container.innerHTML = segs.map(s => workerSegRowHtml(s)).join("");
-  toast("已应用给该人员");
-}
-
-function onSegType(sel) {
-  const levelSel = sel.parentElement.querySelector(".seg-level");
-  if (levelSel) levelSel.value = WORK_TYPE_LEVEL[sel.value] || "中级";
-}
-function delWorkerSeg(btn) {
-  const seg = btn.closest(".worker-seg");
-  const container = seg && seg.parentElement;
-  if (container && container.querySelectorAll(".worker-seg").length > 1) seg.remove();
-  else toast("至少保留一段");
-}
-
 function openCompleteProjectForm(id) {
   if (window._openingCompleteProject === id) return;
   const p0 = getProject(id);
@@ -15995,9 +16453,7 @@ function openCompleteProjectForm(id) {
   const originalStartedAt = p.originalStartedAt || p.startedAt;
   const displayStartedAt = originalStartedAt ? new Date(originalStartedAt) : null;
   const now = new Date();
-  
-  const accumulatedWorkHours = p.accumulatedWorkHours || 0;
-  
+
   let currentWorkDuration = 0;
   if (p.startedAt) {
     const sessionStartedAt = new Date(p.startedAt);
@@ -16008,22 +16464,48 @@ function openCompleteProjectForm(id) {
     currentWorkDuration = (endTime - sessionStartedAt) / (1000 * 60 * 60);
   }
   
-  const actualHours = Math.max(0, accumulatedWorkHours + currentWorkDuration);
-  const durationHours = displayStartedAt ? actualHours.toFixed(2) : "未知";
-  
-  const startTimeStr = displayStartedAt ? `${displayStartedAt.getFullYear()}/${String(displayStartedAt.getMonth() + 1).padStart(2, "0")}/${String(displayStartedAt.getDate()).padStart(2, "0")} ${String(displayStartedAt.getHours()).padStart(2, "0")}:${String(displayStartedAt.getMinutes()).padStart(2, "0")}` : "未记录";
-  const endTimeStr = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  // 施工时段汇总（顶部时间卡与分段明细共用）：历史施工段 + 当前未关闭时段
+  const completeWorkSessions = p.workSessions || [];
+  const allSessions = [...completeWorkSessions];
+  if (p.startedAt && p.status === STATUS.WORKING) {
+    const nowT = new Date();
+    const sessionStarted = new Date(p.startedAt);
+    allSessions.push({
+      startTime: p.startedAt,
+      endTime: nowT.toISOString(),
+      duration: (nowT - sessionStarted) / (1000 * 60 * 60),
+    });
+  } else if (p.startedAt && [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && p.finishedAt && completeWorkSessions.length === 0) {
+    const endT = new Date(p.finishedAt);
+    const sessionStarted = new Date(p.startedAt);
+    allSessions.push({
+      startTime: p.startedAt,
+      endTime: p.finishedAt,
+      duration: (endT - sessionStarted) / (1000 * 60 * 60),
+    });
+  }
+  // 墙钟施工时长 = 各段之和（暂停段已天然排除）；人均考勤工时另在「包活分成」图例中展示
+  const wallClockHours = allSessions.reduce((s, x) => s + (Number(x.duration) || 0), 0);
+  const wcH = Math.floor(wallClockHours);
+  const wcM = Math.floor((wallClockHours - wcH) * 60);
+  const wallClockStr = wallClockHours > 0
+    ? (wcH > 0 ? `${wcH}小时${wcM ? wcM + "分钟" : ""}` : `${wcM}分钟`)
+    : "--";
+
+  // 完工弹窗三列窄屏空间紧张：省略年份（记录自带日期），避免 "2026/10/18 14:03" 折成两行
+  const shortDT = (d) => `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const startTimeStr = displayStartedAt ? shortDT(displayStartedAt) : "未记录";
+  const endTimeStr = shortDT(now);
   
   let form = `<div class="form-grid">`;
-  
-  form += `<div class="form-row">
-    <label>项目名称</label>
-    <input type="text" value="${esc(p.name || "")}" disabled class="input">
-  </div>`;
-  
-  form += `<div class="form-row">
-    <label>门店</label>
-    <input type="text" value="${esc(storeName(p.storeId))}" disabled class="input">
+
+  // 项目名称 + 门店：只读信息不该伪装成禁用输入框（每项各占 label+边框两行），
+  // 改为一行紧凑的只读摘要，省下两行纵向空间。
+  form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
+    <div class="complete-subject">
+      <span class="complete-subject__name">${esc(p.name || "（未命名项目）")}</span>
+      <span class="complete-subject__store">🏪 ${esc(storeName(p.storeId))}</span>
+    </div>
   </div>`;
   
   if (forgottenInfo) {
@@ -16031,10 +16513,10 @@ function openCompleteProjectForm(id) {
       <div style="display:flex;align-items:flex-start;gap:8px;">
         <span style="font-size:18px;line-height:1.2;">⚠️</span>
         <div>
-          <div style="font-weight:600;color:#b91c1c;font-size:13px;margin-bottom:4px;">疑似忘记点完工 — 自动工时不可直接采用</div>
+          <div style="font-weight:600;color:#b91c1c;font-size:13px;margin-bottom:4px;">疑似忘记点完工 — 请先核对施工状态</div>
           <div style="font-size:12px;color:#7f1d1d;line-height:1.6;">
-            该项目已「<b>${esc(forgottenInfo.text)}</b>」却仍显示「施工中」。系统按"当前时刻 − 开工时间"自动算出的工时会<b>包含忘记点完工期间的空闲/过夜时间，不等于实际施工工时</b>，不能直接填入。<br>
-            请在下方<b>逐人手动填写真实工时</b>；不修改直接确认将无法通过校验。
+            该项目已「<b>${esc(forgottenInfo.text)}</b>」却仍显示「施工中」。若实际早已完工，请改状态（完工 / 暂停后再恢复）；<br>
+            若仍在施工，直接确认完工即可（系统按在场时段自动生成考勤工时，不影响包活分成）。
           </div>
         </div>
       </div>
@@ -16053,69 +16535,29 @@ function openCompleteProjectForm(id) {
             请确认是否真的提前完工：<br>
             · 若当天施工已结束、后面还要继续，应点<b>「暂停」</b>而非完工；<br>
             · 次日开工后点<b>「恢复」</b>，最后一天再点<b>「完工」</b>。<br>
-            若确实今天就要结束全部施工，请<b>逐人手动填写真实工时</b>，不要依赖系统自动计算。
+            若确实今天就要结束全部施工，直接点<b>「确认完工」</b>即可。
           </div>
         </div>
       </div>
     </div>`;
   }
 
-  // 异常短工期提示：开工到完工仅几分钟，疑似未实际施工、只为登记工时
-  const shortWorkMinutes = (p.startedAt && currentWorkDuration > 0) ? Math.round(currentWorkDuration * 60) : null;
-  if (shortWorkMinutes !== null && shortWorkMinutes < SHORT_WORK_WARN_MINUTES) {
-    form += `<div class="form-row" style="grid-column:1/-1;background:#fff7ed;padding:12px 14px;border-radius:8px;border-left:4px solid #ea580c;margin-bottom:12px;">
-      <div style="display:flex;align-items:flex-start;gap:8px;">
-        ${svgCal(18)}
-        <div>
-          <div style="font-weight:600;color:#c2410c;font-size:13px;margin-bottom:4px;">⚠️ 施工时长过短（${shortWorkMinutes} 分钟）</div>
-          <div style="font-size:12px;color:#9a3412;line-height:1.6;">
-            开工到完工仅 <b>${shortWorkMinutes} 分钟</b>，疑似未实际施工、仅登记工时。<br>
-            请确认是否真实完成：若确为极短施工（如简单更换）可继续；若仅为登记工时而未施工，应先正常走施工流程再点完工。
-          </div>
-        </div>
-      </div>
-    </div>`;
-  }
+  // 注：原「施工用时偏短（<30 分钟）」告警已于 2026-10-18 移除——包活制下施工时长不参与
+  // 客户费用与工资结算，仅作内部考勤参考，长短不作为考核点，故不再拦截/提示。
 
-  // 极短施工：开工到完工 < SHORT_WORK_WARN_MINUTES 分钟，疑似未实际施工/仅登记工时。
-  // 与上方橙色警告保持一致——这类情况系统估算不可靠，禁止自动填，改逐人手动。
-  const shortWorkWarning = shortWorkMinutes !== null && shortWorkMinutes < SHORT_WORK_WARN_MINUTES;
-
-  form += `<div class="form-row" style="grid-column:1/-1;background:#f0f9ff;padding:12px;border-radius:8px;margin-bottom:8px;">
-    <div style="display:flex;justify-content:space-between;gap:16px;">
+  form += `<div class="form-row complete-time-row" style="grid-column:1/-1;background:#f0f9ff;padding:12px;border-radius:8px;margin-bottom:8px;">
+    <div class="complete-time-grid">
       <div>
-        <div style="font-size:12px;color:#6b7280;">开工时间</div>
-        <div style="font-weight:600;color:#1e40af;">${esc(startTimeStr)}</div>
+        <div class="k">开工时间</div>
+        <div class="v" style="color:#1e40af;">${esc(startTimeStr)}</div>
       </div>
       <div>
-        <div style="font-size:12px;color:#6b7280;">完工时间</div>
-        <div style="font-weight:600;color:#1e40af;">${esc(endTimeStr)}</div>
+        <div class="k">完工时间</div>
+        <div class="v" style="color:#1e40af;">${esc(endTimeStr)}</div>
       </div>
       <div>
-        <div style="font-size:12px;color:#6b7280;">总用时</div>
-        <div style="font-weight:600;color:#059669;">${(() => {
-          const projectEndTime = getProjectEffectiveEndTime(p);
-          let totalHours = 0;
-          (p.assignedWorkerIds || []).forEach(wid => {
-            const periods = buildWorkerPeriods(p, wid);
-            periods.forEach(pr => {
-              const start = new Date(pr.start);
-              const end = pr.end ? new Date(pr.end) : projectEndTime;
-              let dur = (end - start) / (1000 * 60 * 60);
-              (p.pauseHistory || []).forEach(ph => {
-                if (ph.pauseAt && ph.resumedAt) {
-                  const ps = new Date(ph.pauseAt);
-                  const pe = new Date(ph.resumedAt);
-                  const os = ps > start ? ps : start;
-                  const oe = pe < end ? pe : end;
-                  if (oe > os) dur -= (oe - os) / (1000 * 60 * 60);
-                }
-              });
-              totalHours += dur;
-            });
-          });
-          return Math.round(totalHours * 10) / 10;
-        })().toFixed(1)} 小时</div>
+        <div class="k">施工时长</div>
+        <div class="v" style="color:#059669;">${wallClockStr}</div>
       </div>
     </div>
   </div>`;
@@ -16137,32 +16579,11 @@ function openCompleteProjectForm(id) {
     </div>`;
   }
   
-  const workSessions = p.workSessions || [];
-  if (workSessions.length > 0 || p.startedAt) {
+  // 单段施工时，顶部时间卡已含起止时间与总时长；分段明细仅在跨天/多段时展示，避免信息重复
+  if (allSessions.length > 1) {
     form += `<div class="form-row" style="grid-column:1/-1;background:#eff6ff;padding:10px;border-radius:6px;border-left:4px solid #3b82f6;margin-bottom:8px;">
-      <div style="font-size:12px;color:#1d4ed8;font-weight:500;margin-bottom:6px;">🔧 施工时间段明细</div>
+      <div style="font-size:12px;color:#1d4ed8;font-weight:500;margin-bottom:6px;">🔧 施工时间段明细（共 ${allSessions.length} 段）</div>
       <div style="display:flex;flex-direction:column;gap:4px;">`;
-    
-    const allSessions = [...workSessions];
-    if (p.startedAt && p.status === STATUS.WORKING) {
-      const now = new Date();
-      const sessionStarted = new Date(p.startedAt);
-      const duration = (now - sessionStarted) / (1000 * 60 * 60);
-      allSessions.push({
-        startTime: p.startedAt,
-        endTime: now.toISOString(),
-        duration: duration
-      });
-    } else if (p.startedAt && [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && p.finishedAt && workSessions.length === 0) {
-      const endTime = new Date(p.finishedAt);
-      const sessionStarted = new Date(p.startedAt);
-      const duration = (endTime - sessionStarted) / (1000 * 60 * 60);
-      allSessions.push({
-        startTime: p.startedAt,
-        endTime: p.finishedAt,
-        duration: duration
-      });
-    }
     
     let totalDuration = 0;
     allSessions.forEach((session, idx) => {
@@ -16192,213 +16613,24 @@ function openCompleteProjectForm(id) {
       </div></div></div>`;
   }
   
-  if (workers.length > 0) {
-    const workerPeriods = {};
-    assignedWorkerIds.forEach((wid) => {
-      workerPeriods[wid] = buildWorkerPeriods(p, wid);
-    });
-    outsourcedWorkers.forEach((name) => {
-      workerPeriods["outsourced:" + name] = buildWorkerPeriods(p, "outsourced:" + name);
-    });
-    
-    (p.workerChangeHistory || []).forEach((ch) => {
-      const wid = ch.workerId;
-      if (ch.action === "unassign" && workerPeriods[wid]) {
-        const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
-        if (lastPeriod) {
-          lastPeriod.end = ch.time;
-          lastPeriod.autoHours = ch.autoHours;
-        }
-      }
-    });
-    
-    const periodEndTime = getProjectEffectiveEndTime(p).toISOString();
-    assignedWorkerIds.forEach((wid) => {
-      if (workerPeriods[wid] && workerPeriods[wid].length > 0) {
-        const lastPeriod = workerPeriods[wid][workerPeriods[wid].length - 1];
-        if (!lastPeriod.end) {
-          lastPeriod.end = periodEndTime;
-        }
-      }
-    });
-    
-    let totalAutoHours = 0;
-    const workerAutoHours = {};
-    workers.forEach((w) => {
-      const periods = workerPeriods[w.id] || [];
-      const rtHours = calcWorkerRealtimeHours(p, w.id, periods);
-      workerAutoHours[w.id] = Math.round(rtHours * 10) / 10;
-      totalAutoHours += workerAutoHours[w.id];
-    });
-    const allAutoHours = { ...workerAutoHours };
-    outsourcedWorkers.forEach(name => {
-      const workerId = "outsourced:" + name;
-      const periods = workerPeriods[workerId] || [];
-      const rtHours = calcWorkerRealtimeHours(p, workerId, periods);
-      allAutoHours[workerId] = Math.round(rtHours * 10) / 10;
-    });
-    window._completeWorkerAutoHours = allAutoHours;
+  // 包活制：完工时不再手动填写工时，系统按实际在场时段自动统计（仅考勤参考），分成只靠比例条拖动
+  form += `<div class="form-row" style="grid-column:1/-1;" id="completeCommissionWrap">${renderCompleteCommission(p)}</div>`;
 
-    // 疑似忘点完工 / 跨天提前完工 / 极短施工：系统自动估算的工时不可靠，禁止用滑块自动分配，只能逐人手动填写
-    // 注意：projectAlreadySettled 已在函数开头声明（外协块也要用，避开块作用域 ReferenceError）。
-    if (!forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled && !shortWorkWarning) {
-      const defaultAlloc = [0, 0, 80, 20];
-      const sliderRows = WORK_TYPES.map((t, i) => {
-        const isFixed = i === 3; // 路程备料固定占 20%
-        return `
-        <div class="alloc-row">
-          <div class="alloc-label">${t}${isFixed ? ' <span style="font-size:11px;color:#9ca3af;">(固定)</span>' : ''} <span class="alloc-pct" id="completeAllocPct${i}">${defaultAlloc[i]}%</span></div>
-          <input type="range" min="0" max="100" value="${defaultAlloc[i]}" id="completeAllocSlider${i}" ${isFixed ? 'disabled' : `oninput="onCompleteSliderInput(${i})"`} class="alloc-slider" />
-          <div class="alloc-hours" id="completeAllocHours${i}">0h</div>
-        </div>`;
-      }).join("");
-      form += `<div class="form-row" style="grid-column:1/-1;">
-        <div class="alloc-form" style="width:100%;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-            <label style="font-weight:500;">自动分配比例</label>
-            <span style="font-size:12px;color:#6b7280;">拖动滑块，按实际工作时长自动分配各等级工时</span>
-          </div>
-          <div class="alloc-presets" style="margin-bottom:8px;">
-            <button type="button" class="chip" onclick="applyCompletePreset([0,0,80,20])">地面为主</button>
-            <button type="button" class="chip" onclick="applyCompletePreset([80,0,0,20])">高空为主</button>
-            <button type="button" class="chip" onclick="applyCompletePreset([0,80,0,20])">高级为主</button>
-            <button type="button" class="chip" onclick="applyCompletePreset([27,27,26,20])">均衡</button>
-          </div>
-          <div class="alloc-sliders">${sliderRows}</div>
-          <div class="alloc-summary">
-            预计总工时 <span id="completeAllocTotal" data-total="${totalAutoHours.toFixed(1)}">${totalAutoHours.toFixed(1)}h</span>
-            · 占比之和 <span id="completeAllocSumPct">100%</span>
-            · 分配合计 <span id="completeAllocSumHours">0.0h</span>
-          </div>
-          <small style="font-size:11px;color:#9ca3af;">路程备料固定占 20%，其余在 高空/高级/地面 间分配；默认按地面施工比例（80%地面 + 20%路程备料），高空、高级默认为 0，仅点对应预设才激活。</small>
-          <button type="button" class="btn primary small" onclick="applyCompleteAllocToAll()" style="margin-top:8px;align-self:flex-start;">应用到所有施工人员</button>
-        </div>
-      </div>`;
-    }
-    
-    form += `<div class="form-row" style="grid-column:1/-1;">
-      <label>施工人员工时</label>
-      <span style="font-size:12px;color:#6b7280;">根据实际工作时间填写</span>
-    </div>`;
-    
-    const hintUnreliable = forgottenInfo || crossDayEarlyInfo || projectAlreadySettled || shortWorkWarning;
-    form += `<div class="form-row" style="grid-column:1/-1;background:${hintUnreliable ? '#fef2f2' : '#f0fdf4'};padding:10px;border-radius:6px;border-left:4px solid ${hintUnreliable ? '#dc2626' : '#22c55e'};margin-bottom:8px;">
-      <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:12px;">
-        <div><span style="color:#6b7280;">${hintUnreliable ? '系统估算总时长（不可靠）' : '总工作时长'}：</span><span style="font-weight:600;color:${hintUnreliable ? '#b91c1c' : '#15803d'};">${totalAutoHours.toFixed(1)} 小时</span>${hintUnreliable ? ' <span style="font-size:11px;color:#dc2626;">⚠️请逐人手动填写</span>' : ''}</div>
-        <div><span style="color:#6b7280;">施工人数：</span><span style="font-weight:600;color:${hintUnreliable ? '#b91c1c' : '#15803d'};">${workers.length} 人</span></div>
+  // 考勤工时已合并进「包活分成」图例（每人金额后跟工时）；仅当无内部分成对象时（如纯外协项目）
+  // 分成面板不列人员，才在此补一条紧凑考勤行，避免信息丢失
+  const completionAttendance = attendancePreview(p);
+  const hasInternalWorkers = (p.assignedWorkerIds || []).some((wid) => getWorker(wid));
+  if (completionAttendance.length && !hasInternalWorkers) {
+    const attTotal = completionAttendance.reduce((s, a) => s + a.hours, 0);
+    form += `<div class="form-row" style="grid-column:1/-1;background:#f8fafc;padding:10px;border-radius:6px;border:1px solid var(--border);margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:12px;color:#64748b;">
+        👷 施工人员工时（系统按实际在场自动统计 · 仅考勤参考，不计入工资）
       </div>
-      <div style="margin-top:4px;font-size:11px;color:${hintUnreliable ? '#b91c1c' : '#86efac'};">${hintUnreliable ? (forgottenInfo ? '⚠️ 系统估算可能包含非实际施工时段，不等于真实工时，请逐人手动填写' : (projectAlreadySettled ? '⚠️ 项目处于已暂停/已延期状态，上次暂停时已结算过工时，估算可能不准确，请逐人手动填写。若今天的工时已结清，请保持空行即可' : (shortWorkWarning ? '⚠️ 施工时长过短（疑似未实际施工/仅登记工时），系统估算不可靠，请逐人手动填写真实工时' : '⚠️ 跨天项目尚未到预约结束日，请逐人手动填写真实工时'))) : '💡 系统已根据工作时长和人数自动计算每人工时，如有特殊情况可手动调整'}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:13px;">
+        ${completionAttendance.map((a) => `<span>${esc(a.name)}：<b style="color:#374151;">${a.hours.toFixed(1)}h</b></span>`).join("")}
+        <span style="margin-left:auto;color:#16a34a;font-weight:600;">合计 ${attTotal.toFixed(1)}h</span>
+      </div>
     </div>`;
-    
-    workers.forEach((w, idx) => {
-      const isAssigned = assignedWorkerIds.includes(w.id);
-      const dayLogs = (p.workLogs || []).filter(l => l.workerId === w.id && l.date === dateStr);
-      let segs;
-      if (dayLogs.length > 0) {
-        segs = dayLogs.map(l => ({
-          type: normWorkType(l.workType),
-          level: l.level || WORK_TYPE_LEVEL[l.workType || "地面作业"] || "中级",
-          hours: (Number(l.hours) || 0).toFixed(1),
-          note: l.note || ""
-        }));
-      } else {
-        const autoHours = workerAutoHours[w.id] || 0;
-        const workerLoggedHours = (p.workLogs || []).filter(l => l.workerId === w.id).reduce((s, l) => s + (Number(l.hours) || 0), 0);
-        let segHours = "";
-        let segNote = "";
-        if (!isAssigned) {
-          // 已移除人员：其历史工时已记入 workLogs，本次完工不应再自动新增，避免重复记入
-          segNote = "（已移除，历史工时已记录，无需重复填写）";
-        } else if (projectAlreadySettled && workerLoggedHours > 0 && workerLoggedHours >= autoHours - 0.1) {
-          // 已暂停/已延期且已结清：不预填，避免重复记入完工工时
-          segNote = `✅ 已结清 ${workerLoggedHours.toFixed(1)}h（上次暂停），本次完工不自动填`;
-        } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled && !shortWorkWarning) {
-          // 正常完工：按实际施工时长自动填入；不足 0.1h 或极短施工(shortWorkWarning) 不预填，避免填入无意义/不可靠小数
-          segHours = autoHours.toFixed(1);
-          segNote = "自动·完工";
-        } else {
-          // 其余边界（疑似忘点完工 / 跨天提前 / 极短施工）：留空，提示手动填写真实工时
-          segNote = forgottenInfo ? "⚠️请填真实工时" : "（请手动填写实际工时）";
-        }
-        segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
-      }
-      // 疑似忘点完工：系统内任何工时（含当日已登记记录、自动估算）均可能包含空闲/过夜时间，不可靠，强制清空并要求逐人手动填写真实工时
-      if (forgottenInfo) {
-        segs = [{ type: "地面施工", level: "中级", hours: "", note: "⚠️请填真实工时" }];
-      }
-
-      form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
-        <div style="width:100%;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-            <span style="min-width:80px;font-weight:500;flex-shrink:0;color:${isAssigned ? "#1f2937" : "#9ca3af"};">👷 ${esc(w.name)}${!isAssigned ? ` <span style="font-size:11px;color:#d1d5db;">(已移除)</span>` : ""}</span>
-            <button type="button" class="btn small" onclick="addWorkerSeg(${idx},'w')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
-            ${(forgottenInfo || crossDayEarlyInfo || projectAlreadySettled || !isAssigned) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'w')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
-          </div>
-          <div class="worker-alloc-panel" id="walloc_${idx}" style="display:none; margin-bottom:8px;">
-            ${workerAllocPanelHtml("walloc" + idx, idx, "w", w.name, (forgottenInfo || crossDayEarlyInfo || projectAlreadySettled || !isAssigned) ? 0 : (workerAutoHours[w.id] || 0))}
-          </div>
-          <div class="worker-segs" id="wsegs_${idx}">
-            ${segs.map(s => workerSegRowHtml(s)).join("")}
-          </div>
-        </div>
-      </div>`;
-    });
-  }
-  
-  if (outsourcedWorkers.length > 0) {
-    form += `<div class="form-row" style="grid-column:1/-1;margin-top:8px;">
-      <label>外协人员工时</label>
-      <span style="font-size:12px;color:#6b7280;">根据实际工作时间填写</span>
-    </div>`;
-    
-    outsourcedWorkers.forEach((name, idx) => {
-      const workerId = "outsourced:" + name;
-      const dayLogs = (p.workLogs || []).filter(l => l.workerId === workerId && l.date === dateStr);
-      let segs;
-      if (dayLogs.length > 0) {
-        segs = dayLogs.map(l => ({
-          type: normWorkType(l.workType),
-          level: l.level || WORK_TYPE_LEVEL[l.workType || "地面作业"] || "中级",
-          hours: (Number(l.hours) || 0).toFixed(1),
-          note: l.note || ""
-        }));
-      } else {
-        const autoHours = window._completeWorkerAutoHours[workerId] || 0;
-        const oLoggedHours = (p.workLogs || []).filter(l => l.workerId === workerId).reduce((s, l) => s + (Number(l.hours) || 0), 0);
-        let segHours = "";
-        let segNote = "";
-        if (projectAlreadySettled && oLoggedHours > 0 && oLoggedHours >= autoHours - 0.1) {
-          segHours = "";
-          segNote = `✅ 已结清 ${oLoggedHours.toFixed(1)}h（上次暂停），本次完工不自动填`;
-        } else if (autoHours >= 0.1 && !forgottenInfo && !crossDayEarlyInfo && !projectAlreadySettled && !shortWorkWarning) {
-          segHours = autoHours.toFixed(1);
-          segNote = "自动·完工";
-        } else {
-          segNote = forgottenInfo ? "⚠️请填真实工时" : "（请手动填写实际工时）";
-        }
-        segs = [{ type: "地面施工", level: "中级", hours: segHours, note: segNote }];
-      }
-      // 疑似忘点完工：系统内任何工时（含当日已登记记录、自动估算）均可能包含空闲/过夜时间，不可靠，强制清空并要求逐人手动填写真实工时
-      if (forgottenInfo) {
-        segs = [{ type: "地面施工", level: "中级", hours: "", note: "⚠️请填真实工时" }];
-      }
-
-      form += `<div class="form-row" style="grid-column:1/-1;margin-bottom:8px;">
-        <div style="width:100%;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-            <span style="min-width:80px;font-weight:500;flex-shrink:0;color:#8b5cf6;">👤 ${esc(name)}（外协）</span>
-            <button type="button" class="btn small" onclick="addWorkerSeg(${idx},'o')" style="padding:2px 8px;font-size:12px;">+ 分段</button>
-            ${(forgottenInfo || crossDayEarlyInfo || projectAlreadySettled) ? "" : `<button type="button" class="btn small" onclick="toggleWorkerAlloc(${idx},'o')" style="padding:2px 8px;font-size:12px;">设置比例</button>`}
-          </div>
-          <div class="worker-alloc-panel" id="oalloc_${idx}" style="display:none; margin-bottom:8px;">
-            ${workerAllocPanelHtml("oalloc" + idx, idx, "o", name, (forgottenInfo || crossDayEarlyInfo || projectAlreadySettled) ? 0 : (window._completeWorkerAutoHours[workerId] || 0))}
-          </div>
-          <div class="worker-segs" id="osegs_${idx}">
-            ${segs.map(s => workerSegRowHtml(s)).join("")}
-          </div>
-        </div>
-      </div>`;
-    });
   }
   
   const canUploadCompletion = perm.photoUploadCompletion(p0) || isManager();
@@ -16418,9 +16650,16 @@ function openCompleteProjectForm(id) {
   
   form += `</div>`;
   
-  setTimeout(() => renderCompleteAlloc(), 0);
+  // 弹窗 DOM 就绪后重新渲染分成比例条（确保拖动监听正确绑定到本实例的 bar）
+  setTimeout(() => {
+    const w = document.getElementById("completeCommissionWrap");
+    if (w) {
+      w.innerHTML = renderCompleteCommission(p);
+      restoreCommissionDraft("completeCommissionWrap", p.id);
+    }
+  }, 0);
   
-  modal.open("完成项目 - 填写工时", form, {
+  modal.open("完成项目", form, {
     confirmText: "确认完工",
     cancelText: "取消",
     onClose: () => { window._openingCompleteProject = null; window._completeFormFiles = []; },
@@ -16428,67 +16667,40 @@ function openCompleteProjectForm(id) {
       if (window._savingCompleteProject) return false;
       window._savingCompleteProject = true;
       try {
-        let totalHours = 0;
-        const logs = [];
-
-        workers.forEach((w, idx) => {
-          const segEls = document.querySelectorAll(`#wsegs_${idx} .worker-seg`);
-          segEls.forEach(seg => {
-            const hoursInput = seg.querySelector(".seg-hours");
-            const hours = hoursInput ? Number(hoursInput.value) : 0;
-            const type = seg.querySelector(".seg-type").value;
-            const level = seg.querySelector(".seg-level").value;
-            const note = seg.querySelector(".seg-note").value;
-            if (!isNaN(hours) && hours > 0) {
-              totalHours += hours;
-              logs.push({
-                workerId: w.id,
-                workerName: w.name,
-                hours: hours,
-                level: level,
-                workType: type,
-                date: dateStr,
-                note: note || null,
-                auto: !!(note && note.indexOf("自动·") === 0)
-              });
-            }
-          });
-        });
-
-        outsourcedWorkers.forEach((name, idx) => {
-          const segEls = document.querySelectorAll(`#osegs_${idx} .worker-seg`);
-          segEls.forEach(seg => {
-            const hoursInput = seg.querySelector(".seg-hours");
-            const hours = hoursInput ? Number(hoursInput.value) : 0;
-            const type = seg.querySelector(".seg-type").value;
-            const level = seg.querySelector(".seg-level").value;
-            const note = seg.querySelector(".seg-note").value;
-            if (!isNaN(hours) && hours > 0) {
-              totalHours += hours;
-              logs.push({
-                workerId: "outsourced:" + name,
-                workerName: name,
-                hours: hours,
-                level: level,
-                workType: type,
-                date: dateStr,
-                note: note || null,
-                isOutsourced: true,
-                auto: !!(note && note.indexOf("自动·") === 0)
-              });
-            }
-          });
-        });
+        // 包活制：工时不再手动填写，由系统按实际在场时段自动统计（考勤参考），分成靠比例条
+        const autoLogs = autoAttendanceLogs(p);
+        let totalHours = autoLogs.reduce((s, l) => s + l.hours, 0);
+        const logs = autoLogs;
 
         if (workers.length === 0 && outsourcedWorkers.length === 0) {
-          toast("项目未分配施工人员，无法登记工时");
+          toast("项目未分配施工人员，无法完工（分成需至少一名安装人员）");
           return false;
         }
 
-        if (totalHours <= 0) {
-          toast("请至少填写一个人员的工时");
+        // 同步完工时调整的分成方式（模式 + 内部比例 + 外协固定金额）一并持久化
+        const cc = getCompleteCommissionAlloc(p);
+        const outFixedTotal = cc.custom.reduce((s, c) => s + (c.fixed || 0), 0);
+        const pool = getCommissionPool(p);
+        if (outFixedTotal > pool + 0.01) {
+          toast(`外协固定金额合计 ¥${outFixedTotal.toFixed(2)} 超过分成池 ¥${pool.toFixed(2)}，请调低后再确认`);
+          window._savingCompleteProject = false;
           return false;
         }
+        // 外协忘填提醒：空输入=未填，完工后将按 ¥0 结算（该外协本次不参与分成）。
+        // 确认后仍可完工（合法 ¥0 场景：已现金结清/别处结算）；明确填 0 不触发本提醒。取消留在弹窗补填。
+        const unfilledOuts = outsourcedUnfilledNames(cc.custom);
+        if (unfilledOuts.length) {
+          const proceed = await confirmDialog(
+            `⚠️ 有外协未填固定工钱：${unfilledOuts.map(esc).join("、")}<br><br>未填将按 ¥0 结算（该外协本次不参与分成）。确定仍要完工吗？`,
+            "外协工钱未填"
+          );
+          if (!proceed) {
+            window._savingCompleteProject = false;
+            return false;
+          }
+        }
+        p.commissionMode = cc.mode;
+        p.commissionCustom = cc.custom;
 
         const now = new Date();
         const nowStr = now.toISOString();
@@ -16588,6 +16800,8 @@ function openCompleteProjectForm(id) {
               work_sessions: workSessions,
               action_logs: completionActionLogs,
               in_rework: false,
+              commission_mode: cc.mode,
+              commission_custom: cc.custom,
               updated_at: nowStr
             }).eq("id", id),
             ...newLogs.map(log =>
@@ -16627,6 +16841,7 @@ function openCompleteProjectForm(id) {
         logOperation("PROJECT_COMPLETE", p.name || "项目", `ID: ${id}, 总工时: ${totalHours.toFixed(1)} 工时`);
         repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] 完工后台同步失败：", e));
         renderAll();
+        clearCommissionDraft(id);
         return true;
       } catch (error) {
         console.error("确认完工失败:", error);
@@ -16634,8 +16849,7 @@ function openCompleteProjectForm(id) {
         return false;
       } finally {
         window._savingCompleteProject = false;
-      }
-    }
+      }    }
   });
   } catch (error) {
     console.error("打开完工表单失败:", error);
@@ -16856,7 +17070,7 @@ async function saveAcceptance(id) {
 }
 
 /* ============================================================
- * 月底工时统计模块
+ * 月底提成统计模块
  * ============================================================ */
 function refreshWorkerSelectors() {
   const sel = document.getElementById("statsWorker");
@@ -16884,13 +17098,10 @@ function refreshStoreSelectors() {
   if (prev) sel.value = prev;
 }
 
-/* 返工工时是否计入工资：仅当该项目该返工周期被标记为 payable 时才计入。
-   默认不计入，避免「已结算并发过工资的工时」被重复发放。 */
+/* 返工工时是否计入工资：包活制下工资按分成池计算，不再按工时计薪，
+   此处保留函数但恒为 true，保证返工工时仍作为考勤统计。 */
 function isReworkLogPayable(p, log) {
-  if (!log || !log.isRework) return true; // 非返工工时照常计入
-  const cycles = p.reworkCycles || [];
-  const c = cycles.find(c => c.cycle === log.reworkCycle);
-  return !!(c && c.payable);
+  return true;
 }
 
 function collectStats() {
@@ -16923,18 +17134,15 @@ function collectStats() {
   const rows = {};
   cache.projects.forEach((p) => {
     if (storeFilter && p.storeId !== storeFilter) return;
-    // 返工单未计入工资：其工时不进工人工资/统计（仍可在「返工工时」成本卡查看）
-    if (p.reworkOf && p.reworkPayable === false) return;
+    // 免费返工（工程金额 0）无包活分成，但考勤工时仍进统计；计费返工与正常项目一致。
     (p.workLogs || []).forEach((l) => {
       const logMonth = monthKey(l.date);
       if (!isInPeriod(l.date)) return;
       if (workerFilter && l.workerId !== workerFilter) return;
-      // 不计入工资的返工/保修工时（reworkCycles[].payable=false 或免费保修）不进工资核算
-      if (!isReworkLogPayable(p, l)) return;
       const isOutsourced = l.isOutsourced || (l.workerId && l.workerId.startsWith("outsourced:"));
       const key = l.workerId || l.workerName || l.id;
       if (!rows[key]) {
-        rows[key] = { name: l.workerName || "未知", hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
+        rows[key] = { name: l.workerName || "未知", hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, id: key, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
       }
       if (isOutsourced) rows[key].isOutsourced = true;
       const level = l.level || "中级";
@@ -16957,7 +17165,7 @@ function collectStats() {
     const key = l.workerId || l.workerName || l.id;
     if (!rows[key]) {
       const w = getWorker(l.workerId);
-      rows[key] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
+      rows[key] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, id: key, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
     }
     const level = l.level || "中级";
     const hours = Number(l.hours) || 0;
@@ -16983,7 +17191,7 @@ function collectStats() {
         const key = l.workerId || l.name || l.id;
         if (!rows[key]) {
           const w = getWorker(l.workerId);
-          rows[key] = { name: l.name || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
+          rows[key] = { name: l.name || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, id: key, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
         }
         const level = l.level || "中级";
         const hours = Number(l.hours) || 0;
@@ -17003,7 +17211,7 @@ function collectStats() {
     if (workerFilter && l.workerId !== workerFilter) return;
     if (!rows[l.workerId]) {
       const w = getWorker(l.workerId);
-      rows[l.workerId] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
+      rows[l.workerId] = { name: l.workerName || (w ? w.name : "未知"), hours: 0, levelHours: {初级:0, 中级:0, 高级:0, 特级:0}, id: l.workerId, days: new Set(), projects: new Set(), daily: {}, leaveDays: new Set(), leaveRecords: [], restDays: new Set(), restRecords: [], isOutsourced: false };
     }
     // 轮休属于正常周末休息，与真正的请假分开统计（与请假管理页口径一致）
     const isRest = l.leaveType === "rotational";
@@ -17022,6 +17230,7 @@ function collectStats() {
   });
   
   return Object.values(rows).map((r) => ({
+    id: r.id,
     name: r.name,
     hours: r.hours,
     levelHours: r.levelHours,
@@ -17266,10 +17475,7 @@ function collectProjectStats() {
 
 function renderStats() {
   const rows = collectStats();
-  const totalHours = rows.reduce((s, r) => s + r.hours, 0);
 
-  const projRows = collectProjectStats();
-  
   const period = document.getElementById("statsPeriod").value;
   const month = document.getElementById("statsMonth").value;
   let storeFilter = document.getElementById("statsStore").value;
@@ -17309,69 +17515,26 @@ function renderStats() {
     if (storeFilter && p.storeId !== storeFilter) return false;
     return true;
   });
-  const recorded = projRows.filter((r) => r.hasActual);
-  const totalEst = allProjects.reduce((s, r) => s + (Number(r.estimatedHours) || 0), 0);
-  const totalAct = allProjects.reduce((s, r) => s + ((r.workLogs || []).filter(l => isReworkLogPayable(r, l)).reduce((sum, l) => sum + (Number(l.hours) || 0), 0)), 0);
-  const totalReworkAct = allProjects.reduce((s, r) => s + projectReworkHours(r), 0);
-  const totalDiff = totalAct - totalEst;
-  
-  const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
+  // 包活分成聚合：本期按 workerId 汇总提成 + 按天 + 工程金额/工费/分成池合计（工时仅考勤参考，不计工资）
+  const agg = aggregateCommission(allProjects);
+  const commOf = (wid) => Math.round((agg.byWorker[wid] || 0) * 100) / 100;
+  const dayComm = (wid, ds) => Math.round(((agg.byWorkerDate[wid] || {})[ds] || 0) * 100) / 100;
   const totalOutsourcedWorkers = rows.filter(r => r.isOutsourced).length;
-
-  const typeHours = {};
-  WORK_TYPES.forEach(t => typeHours[t] = 0);
-  allProjects.forEach(p => (p.workLogs || []).forEach(l => {
-    const t = normWorkType(l.workType);
-    if (typeof typeHours[t] !== "number") typeHours[t] = 0;
-    typeHours[t] += (Number(l.hours) || 0);
-  }));
-  const typeCards = WORK_TYPES.map(t => `<div class="stat-card"><div class="num">${fmtHours(typeHours[t] || 0)}</div><div class="lbl">${t}工时</div></div>`).join("");
-
+  const yuan = (n) => `¥${(Math.round((n || 0) * 100) / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const internalRows = rows.filter(r => !r.isOutsourced);
-  const avgHours = internalRows.length > 0 ? (internalRows.reduce((s, r) => s + r.hours, 0) / internalRows.length).toFixed(1) : 0;
-  const topWorker = internalRows.length > 0 ? internalRows[0].name : "";
-  const topHours = internalRows.length > 0 ? internalRows[0].hours : 0;
-  
-  const efficiencyRate = totalEst > 0 ? ((totalAct / totalEst) * 100).toFixed(0) : 0;
-  let efficiencyColor = "#10b981";
-  let efficiencyLabel = "高效";
-  if (efficiencyRate < 80) { efficiencyColor = "#ef4444"; efficiencyLabel = "低效"; }
-  else if (efficiencyRate < 100) { efficiencyColor = "#f59e0b"; efficiencyLabel = "正常"; }
   
   const summary = document.getElementById("statsSummary");
-
-  // 返工工时汇总卡（独立返工单工时，单列用于成本分析；仍正常计入工资）
-  const reworkCardHtml = totalReworkAct > 0
-    ? `<div class="stat-card rework-stat"><div class="num">${fmtHours(totalReworkAct)}h</div><div class="lbl">返工工时</div></div>`
-    : "";
-
-  if (!perm.viewGlobalStats() && myStore()) {
-    summary.innerHTML = `
-      <div class="stat-card"><div class="num">${fmtHours(totalEst)}</div><div class="lbl">预计工时(小时)</div></div>
-      <div class="stat-card"><div class="num">${fmtHours(totalAct)}</div><div class="lbl">实际工时(小时)</div></div>
-      ${reworkCardHtml}
-      <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
-      <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
-      ${typeCards}
-    `;
-  } else {
-    summary.innerHTML = `
-      <div class="stat-card"><div class="num">${rows.length}</div><div class="lbl">参与施工人数</div></div>
-      <div class="stat-card"><div class="num">${fmtHours(totalHours)}</div><div class="lbl">合计工时(小时)</div></div>
-      <div class="stat-card"><div class="num">${fmtHours(totalEst)}</div><div class="lbl">预计工时(小时)</div></div>
-      <div class="stat-card"><div class="num">${fmtHours(totalAct)}</div><div class="lbl">实际工时(小时)</div></div>
-      ${reworkCardHtml}
-      <div class="stat-card"><div class="num" style="color:#8b5cf6">${fmtHours(totalOutsourcedHours)}h</div><div class="lbl">外协工时</div></div>
+  const commCards = `
+      <div class="stat-card"><div class="num">${agg.workerCount}</div><div class="lbl">参与施工人数</div></div>
+      <div class="stat-card"><div class="num" style="color:#16a34a">${yuan(agg.totalAmount)}</div><div class="lbl">本期提成合计</div></div>
+      <div class="stat-card"><div class="num">${yuan(agg.totalProjectAmount)}</div><div class="lbl">本期工程金额</div></div>
+      <div class="stat-card"><div class="num">${yuan(agg.totalPool)}</div><div class="lbl">工人分成池(工费÷2)</div></div>
       <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedWorkers}人</div><div class="lbl">外协人员</div></div>
-      <div class="stat-card"><div class="num" style="color:${diffColor(totalDiff)}">${fmtSignedDiff(totalDiff)}</div><div class="lbl">工时差异</div></div>
-      <div class="stat-card"><div class="num">${avgHours}</div><div class="lbl">人均工时(小时)</div></div>
-      <div class="stat-card"><div class="num" style="color:${efficiencyColor}">${efficiencyRate}%</div><div class="lbl">效率(${efficiencyLabel})</div></div>
-      ${typeCards}
     `;
-  }
+  summary.innerHTML = commCards;
 
   const workerTable = rows.length === 0
-    ? `<div class="empty">所选月份暂无施工工时记录。</div>`
+    ? `<div class="empty">所选月份暂无施工记录。</div>`
     : rows.map((r) => {
         const monthVal = document.getElementById("statsMonth").value;
         let calGrid = "";
@@ -17394,13 +17557,13 @@ function renderStats() {
           for (let day = 1; day <= daysInMonth; day++) {
             const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
             const dayLogs = r.daily[dateKey] || [];
-            const hours = dayLogs.length > 0 ? dayLogs.reduce((sum, log) => sum + log.hours, 0) : 0;
+            const amt = dayComm(r.id, dateKey);
             const isLeaveDay = r.leaveRecords.some((lr) => dateKey >= lr.startDate && dateKey <= lr.endDate);
             const isRestDay = !isLeaveDay && (r.restRecords || []).some((lr) => dateKey >= lr.startDate && dateKey <= lr.endDate);
             const hasInternal = dayLogs.some(log => log.isInternal);
-            calGrid += `<div class="worker-cal-cell ${hours ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""} ${isRestDay ? "rest-day" : ""} ${hasInternal ? "internal-hours" : ""}">
+            calGrid += `<div class="worker-cal-cell ${amt > 0 ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""} ${isRestDay ? "rest-day" : ""} ${hasInternal ? "internal-hours" : ""}">
               <div class="day-num">${day}</div>
-              ${hours ? `<div class="day-hours">${fmtHours(hours)}h</div>` : ""}
+              ${amt > 0 ? `<div class="day-hours">¥${amt.toFixed(0)}</div>` : ""}
               ${hasInternal ? `<div class="day-internal">📋</div>` : ""}
               ${isLeaveDay ? `<div class="day-leave">🏥</div>` : ""}
               ${isRestDay ? `<div class="day-rest">🌴</div>` : ""}
@@ -17418,33 +17581,27 @@ function renderStats() {
         
         const dailyTable = monthVal ? `
           <div class="worker-cal-container">
-            <div class="worker-cal-label">${svgCal(16)} 本月工时日历</div>
+            <div class="worker-cal-label">${svgCal(16)} 本月提成日历</div>
             <div class="worker-cal">${calGrid}</div>
           </div>` : `
           <div class="daily-hours-list">
-            ${Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).flatMap(([date, logs]) => 
-              logs.map((log) => `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">${fmtHours(log.hours)}h</span><span class="daily-level">${esc(normWorkType(log.workType))} · ${esc(log.level)}</span><span class="daily-project">${log.isInternal ? '📋 ' : ''}${esc(log.project || '')}</span></div>`)
-            ).join("")}
+            ${Object.keys(r.daily).sort().map((date) => {
+              const amt = dayComm(r.id, date);
+              return `<div class="daily-item"><span class="daily-date">${esc(date)}</span><span class="daily-hours">¥${amt.toFixed(2)}</span></div>`;
+            }).join("")}
           </div>`;
           
         const rowColor = r.isOutsourced ? 'color:#8b5cf6' : '';
-        const vsAvg = r.isOutsourced ? "" : ((r.hours - avgHours) >= 0 ? "+" : "") + (r.hours - avgHours).toFixed(1);
-        const vsAvgColor = r.isOutsourced ? "" : (r.hours >= avgHours ? "#10b981" : "#ef4444");
         return `
         <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
           <table class="data">
             <thead>
-              <tr><th>施工人员</th><th>工时(小时)</th><th>vs平均</th><th>初级</th><th>中级</th><th>高级</th><th>特级</th><th>施工天数</th><th>请假天数</th><th>轮休天数</th><th>参与项目数</th></tr>
+              <tr><th>施工人员</th><th>本月提成</th><th>施工天数</th><th>请假天数</th><th>轮休天数</th><th>参与项目数</th></tr>
             </thead>
             <tbody>
               <tr>
                 <td style="${rowColor}">${esc(r.name)}${r.isOutsourced ? ' (外协)' : ''}</td>
-                <td style="${rowColor}"><b>${fmtHours(r.hours)}</b></td>
-                <td style="${vsAvgColor}">${vsAvg || "—"}</td>
-                <td style="color:#6b7280">${fmtHours(r.levelHours?.初级 || 0)}</td>
-                <td style="color:#3b82f6">${fmtHours(r.levelHours?.中级 || 0)}</td>
-                <td style="color:#f59e0b">${fmtHours(r.levelHours?.高级 || 0)}</td>
-                <td style="color:#dc2626">${fmtHours(r.levelHours?.特级 || 0)}</td>
+                <td style="${rowColor}"><b style="color:#16a34a">${yuan(commOf(r.id))}</b></td>
                 <td>${r.days}</td>
                 <td>${r.leaveDays > 0 ? `<span style="color:#ef4444;font-weight:600">${r.leaveDays}天</span>` : "0"}</td>
                 <td>${r.restDays > 0 ? `<span style="color:#10b981;font-weight:600">${r.restDays}天</span>` : "0"}</td>
@@ -17478,13 +17635,7 @@ function renderStats() {
       <div class="detail-block" style="padding:0;overflow:hidden">
         <table class="data">
           <tbody>
-            <tr><td><b>合计</b></td><td><b>${fmtHours(totalHours)}</b></td><td></td>
-              <td>${fmtHours(rows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0))}</td>
-              <td>${fmtHours(rows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0))}</td>
-              <td>${fmtHours(rows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0))}</td>
-              <td>${fmtHours(rows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0))}</td>
-              <td colspan="4"></td>
-            </tr>
+            <tr><td><b>合计</b></td><td><b style="color:#16a34a">${yuan(agg.totalAmount)}</b></td><td colspan="4"></td></tr>
           </tbody>
         </table>
       </div>`;
@@ -17511,7 +17662,9 @@ function renderStats() {
     ).join('<span class="note-sep">；</span>');
   }
 
-  const projectTable = projRows.length === 0
+  // 明细表与合计口径一致：仅列已完工/已验收/已审核项目（合计来自 aggregateCommission）
+  const commissionProjects = allProjects.filter(p => isCommissionCounted(p) && (resolveCommissionAlloc(p).items.length > 0 || Number(p.projectAmount) > 0));
+  const projectTable = commissionProjects.length === 0
     ? `<div class="empty">所选月份暂无项目。</div>`
     : `
     <div class="detail-block hours-diff-wrap" style="padding:0">
@@ -17520,67 +17673,39 @@ function renderStats() {
           <tr>
             <th class="col-date">日期</th>
             <th class="col-time">预约开工</th>
-            <th class="col-time">实际开工</th>
             <th class="col-store">店面</th>
             <th class="col-name">项目</th>
             <th class="col-status">状态</th>
-            <th class="col-num">预计<br>工时</th>
-            <th class="col-num">实际<br>工时</th>
-            <th class="col-num">差异</th>
-            <th class="col-num">初级</th>
-            <th class="col-num">中级</th>
-            <th class="col-num">高级</th>
-            <th class="col-num">特级</th>
-            <th class="col-workers">施工人员工时</th>
-            <th class="col-outsourced" style="color:#8b5cf6">外协人数</th>
-            <th class="col-auto">系统自动工时</th>
-            <th class="col-notes">工时备注</th>
+            <th class="col-money">工程金额</th>
+            <th class="col-money">工费</th>
+            <th class="col-workers">工人提成(¥)</th>
           </tr>
         </thead>
         <tbody>
-          ${projRows.map((r) => {
-            const workerChips = [
-              ...r.workerHours.map((w) => `<span class="worker-chip internal">${esc(w.name)} <b>${fmtHours(w.hours)}h</b></span>`),
-              ...r.outsourcedWorkerHours.map((w) => `<span class="worker-chip outsourced">${esc(w.name)} <b>${fmtHours(w.hours)}h</b></span>`)
-            ].join("");
-            const outsourcedCount = r.outsourcedWorkerHours.length;
-            const autoChips = (r.autoWorkerHours || []).map((w) => `<span class="worker-chip auto">${esc(w.name)} <b>${fmtHours(w.hours)}h</b></span>`).join("");
+          ${commissionProjects.map((p) => {
+            const alloc = resolveCommissionAlloc(p);
+            const chips = alloc.items.map((it) => `<span class="worker-chip internal">${esc(it.workerName)} <b>¥${it.amount.toFixed(2)}</b></span>`).join("");
+            const d = p.appointmentTime ? new Date(p.appointmentTime) : null;
             return `
             <tr>
-              <td class="col-date">${r.date ? fmtDate(r.date) : "—"}</td>
-              <td class="col-time">${r.appointmentTime ? fmtTime(r.appointmentTime) : "—"}</td>
-              <td class="col-time">${r.startedAt ? fmtTime(r.startedAt) : "—"}</td>
-              <td class="col-store">${esc(r.store || "—")}</td>
-              <td class="col-name">${esc(r.name)}</td>
-              <td class="col-status"><span class="badge ${r.status}">${r.status}</span></td>
-              <td class="col-num">${fmtHours(r.est)}</td>
-              <td class="col-num">${r.hasActual ? fmtHours(r.act) : "—"}</td>
-              <td class="col-num" style="color:${r.hasActual ? diffColor(r.diff) : "var(--muted)"};font-weight:600">${r.hasActual ? fmtSignedDiff(r.diff) : "未登记"}</td>
-              <td class="col-num" style="color:#6b7280">${fmtHours(r.levelHours?.初级 || 0)}</td>
-              <td class="col-num" style="color:#3b82f6">${fmtHours(r.levelHours?.中级 || 0)}</td>
-              <td class="col-num" style="color:#f59e0b">${fmtHours(r.levelHours?.高级 || 0)}</td>
-              <td class="col-num" style="color:#dc2626">${fmtHours(r.levelHours?.特级 || 0)}</td>
-            <td class="col-workers wrap"><div class="chip-stack">${workerChips || `<span class="worker-chip placeholder">—</span>`}</div></td>
-            <td class="col-outsourced" style="color:#8b5cf6;font-weight:600">${outsourcedCount > 0 ? outsourcedCount + "人" : "—"}</td>
-            <td class="col-auto wrap"><div class="chip-stack">${autoChips || `<span class="worker-chip placeholder">—</span>`}</div></td>
-            <td class="col-notes wrap">${compactNotes(r.notes) || `<span style="color:var(--muted)">—</span>`}</td>
+              <td class="col-date">${d ? fmtDate(d) : "—"}</td>
+              <td class="col-time">${p.appointmentTime ? fmtTime(p.appointmentTime) : "—"}</td>
+              <td class="col-store">${esc(storeName(p.storeId))}</td>
+              <td class="col-name">${esc(p.name)}</td>
+              <td class="col-status"><span class="badge ${p.status}">${p.status}</span></td>
+              <td class="col-money">¥${(Number(p.projectAmount) || 0).toFixed(0)}</td>
+              <td class="col-money">¥${getLaborFee(p).toFixed(0)}</td>
+              <td class="col-workers wrap"><div class="chip-stack">${chips || `<span class="worker-chip placeholder">—</span>`}</div></td>
             </tr>`;
           }).join("")}
         </tbody>
         <tfoot>
-          <tr><td colspan="6">合计（已登记实际）</td><td>${fmtHours(totalEst)}</td><td>${fmtHours(totalAct)}</td><td style="color:${diffColor(totalDiff)};font-weight:600">${fmtSignedDiff(totalDiff)}</td>
-            <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0))}</td>
-            <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0))}</td>
-            <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0))}</td>
-            <td>${fmtHours(projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0))}</td>
-            <td></td><td class="col-outsourced" style="color:#8b5cf6;font-weight:600">${totalOutsourcedWorkers}人</td>
-            <td class="col-auto" style="color:#f59e0b;font-weight:600">${fmtHours(projRows.reduce((s, r) => s + (r.autoHours || 0), 0))}</td><td></td>
-          </tr>
+          <tr><td colspan="5">合计</td><td>${yuan(agg.totalProjectAmount)}</td><td>${yuan(agg.totalLaborFee)}</td><td style="color:#16a34a;font-weight:600">${yuan(agg.totalAmount)}</td></tr>
         </tfoot>
       </table>
     </div>`;
 
-  // ===== 调度履约概览（放在工时统计页最底部，店长/经理均可见，按当前筛选范围计） =====
+  // ===== 调度履约概览（放在提成统计页最底部，店长/经理均可见，按当前筛选范围计） =====
   const ON_TIME_GRACE_MIN = 30; // 开工偏差在 ±30 分钟内视为准时
   const startedProjects = allProjects.filter(p => p.startedAt && p.appointmentTime);
   let onTimeCount = 0, totalDevMs = 0;
@@ -17639,36 +17764,44 @@ function renderStats() {
 
   let smartAnalysis = "";
   if (rows.length > 0 && perm.viewGlobalStats()) {
-    const lowEfficiencyWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
+    // 提成维度：本月提成之星（仅内部工人参与包活分成）
+    const earners = Object.keys(agg.byWorker)
+      .map((wid) => ({ wid, name: agg.workerNames[wid] || "未知", amt: agg.byWorker[wid] }))
+      .sort((a, b) => b.amt - a.amt);
+    const topEarner = earners[0];
+    if (topEarner && topEarner.amt > 0) {
+      smartAnalysis += `<div class="stats-analysis success">⭐ <strong>本月提成之星</strong>：${esc(topEarner.name)} 以 ${yuan(topEarner.amt)} 领跑全队！</div>`;
+    }
+    // 考勤维度（工时仅作参考，不计工资）：高负荷预警
     const highWorkloadWorkers = internalRows.filter(r => r.hours > monthStandardHours);
-
     if (highWorkloadWorkers.length > 0) {
-      smartAnalysis += `<div class="stats-analysis warning">🔥 <strong>高负荷预警</strong>：${highWorkloadWorkers.map(w => esc(w.name)).join("、")} 本月工时超过 ${monthStandardHours} 小时（按每月休息4天、每日满负荷10小时计），建议关注工作强度！</div>`;
+      smartAnalysis += `<div class="stats-analysis warning">🔥 <strong>高负荷预警</strong>：${highWorkloadWorkers.map(w => esc(w.name)).join("、")} 本月在场工时超过 ${monthStandardHours} 小时（考勤参考），建议关注工作强度！</div>`;
     }
-    
-    if (lowEfficiencyWorkers.length > 0) {
-      smartAnalysis += `<div class="stats-analysis info">💡 <strong>效率建议</strong>：${lowEfficiencyWorkers.map(w => esc(w.name)).join("、")} 日均工时不足4小时，可考虑增加任务量或培训提升。</div>`;
+    // 考勤维度：低出勤提示
+    const lowAttendanceWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
+    if (lowAttendanceWorkers.length > 0) {
+      smartAnalysis += `<div class="stats-analysis info">💡 <strong>出勤提示</strong>：${lowAttendanceWorkers.map(w => esc(w.name)).join("、")} 日均在场工时不足4小时（考勤参考）。</div>`;
     }
-    
-    if (topWorker && topHours > 0) {
-      smartAnalysis += `<div class="stats-analysis success">⭐ <strong>本月之星</strong>：${esc(topWorker)} 以 ${fmtHours(topHours)} 小时领跑全队！</div>`;
+    // 外协人员：仅在自定义比例/固定金额模式下参与分成，平均分配不参与
+    if (totalOutsourcedWorkers > 0) {
+      smartAnalysis += `<div class="stats-analysis info">👷 <strong>外协人员</strong>：${totalOutsourcedWorkers} 名外协人员按固定金额先从分成池扣除，剩余池再分给安装人员（平均/自定义均适用）。</div>`;
     }
   }
   
   if (!perm.viewGlobalStats() && myStore()) {
     document.getElementById("statsTable").innerHTML = `
-      <h3 class="stats-subhead">📐 项目工时差异（预计 vs 实际）</h3>
+      <h3 class="stats-subhead">📐 项目提成明细</h3>
       ${projectTable}`;
   } else {
     document.getElementById("statsTable").innerHTML = `
       <h3 class="stats-subhead">🧠 智能分析</h3>
       ${smartAnalysis || `<div class="empty" style="padding:16px">暂无分析数据</div>`}
-      <h3 class="stats-subhead">👷 人员安装工时</h3>
+      <h3 class="stats-subhead">👷 人员提成</h3>
       ${workerTable}
-      <h3 class="stats-subhead">📐 项目工时差异（预计 vs 实际）</h3>
+      <h3 class="stats-subhead">📐 项目提成明细</h3>
       ${projectTable}`;
   }
-  // 调度履约概览：追加到工时统计页最底部
+  // 调度履约概览：追加到提成统计页最底部
   if (typeof fulfillmentHtml === "string" && fulfillmentHtml) {
     document.getElementById("statsTable").innerHTML += fulfillmentHtml;
   }
@@ -17683,27 +17816,6 @@ function __fulfillToggle() {
   const expanded = hb.style.display !== "none";
   hb.style.display = expanded ? "none" : "";
   if (btn) btn.textContent = expanded ? `展开全部 (${hb.children.length} 条)` : "收起";
-}
-
-function getWageConfig() {
-  const stored = localStorage.getItem("wageConfig");
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch (e) {
-      console.error("Failed to parse wage config:", e);
-    }
-  }
-  return {初级: 10, 中级: 15, 高级: 20, 特级: 30};
-}
-
-function saveWageConfig(config) {
-  lsSet("wageConfig", config);
-}
-
-function closeWageConfigModal() {
-  const mask = document.getElementById("wageConfigModal");
-  if (mask) mask.remove();
 }
 
 /* ===== 提醒设置：施工中连续超时阈值（存 localStorage，仅影响本机） ===== */
@@ -18250,70 +18362,6 @@ async function scanOverdueAndNotify() {
   changed = false;
   notStartedSet.forEach((id) => { if (!stillNotStarted.has(id)) { notStartedSet.delete(id); clearNotified(id, "not_started"); changed = true; } });
   if (changed || stillNotStarted.size > 0) saveNotifiedNotStartedSet(notStartedSet);
-}
-
-function showWageConfig() {
-  if (!perm.manageWageConfig()) { toast("权限不足：此功能仅总经理可见"); return; }
-  const config = getWageConfig();
-  const isMobile = window.innerWidth <= 768;
-  const popup = document.createElement("div");
-  popup.id = "wageConfigModal";
-  popup.className = "modal-mask";
-  if (!isMobile) {
-    const btn = document.getElementById("btnWageConfig");
-    const btnRect = btn.getBoundingClientRect();
-    popup.style.alignItems = "flex-start";
-    popup.style.justifyContent = "flex-start";
-    popup.style.paddingLeft = btnRect.left + "px";
-    popup.style.paddingTop = (btnRect.bottom + 8) + "px";
-  }
-  popup.innerHTML = `
-    <div class="modal" onclick="event.stopPropagation()" style="max-width:${isMobile ? '90%' : '280px'};width:${isMobile ? 'auto' : '280px'};max-height:none;overflow:hidden;">
-      <div class="modal-head">
-        <h3>💰 工时单价设置</h3>
-        <button class="modal-close" onclick="closeWageConfigModal()">×</button>
-      </div>
-      <div class="modal-body" style="padding:12px;">
-        <p style="color:#666;margin-bottom:12px;font-size:12px;">设置各等级工时的单价（元/小时）</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-          <div style="display:flex;flex-direction:column;gap:4px;">
-            <label style="font-weight:bold;color:#007bff;font-size:12px;">初级</label>
-            <input type="number" id="wageLevel1" value="${config.初级 || 10}" class="input" placeholder="10" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;" />
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px;">
-            <label style="font-weight:bold;color:#28a745;font-size:12px;">中级</label>
-            <input type="number" id="wageLevel2" value="${config.中级 || 15}" class="input" placeholder="15" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;" />
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px;">
-            <label style="font-weight:bold;color:#ffc107;font-size:12px;">高级</label>
-            <input type="number" id="wageLevel3" value="${config.高级 || 20}" class="input" placeholder="20" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;" />
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px;">
-            <label style="font-weight:bold;color:#dc3545;font-size:12px;">特级</label>
-            <input type="number" id="wageLevel4" value="${config.特级 || 30}" class="input" placeholder="30" style="font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;" />
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeWageConfigModal()">取消</button>
-        <button class="btn" onclick="saveWageConfigFromDialog()">保存</button>
-      </div>
-    </div>`;
-  document.body.appendChild(popup);
-  initCustomSelects(popup);
-}
-
-function saveWageConfigFromDialog() {
-  if (!perm.manageWageConfig()) { toast("无权限管理工时单价"); return; }
-  const config = {
-    初级: Number(document.getElementById("wageLevel1").value) || 10,
-    中级: Number(document.getElementById("wageLevel2").value) || 15,
-    高级: Number(document.getElementById("wageLevel3").value) || 20,
-    特级: Number(document.getElementById("wageLevel4").value) || 30
-  };
-  saveWageConfig(config);
-  closeWageConfigModal();
-  toast("工时单价设置已保存");
 }
 
 function getInternalWorkLogs() {
@@ -20134,49 +20182,82 @@ async function exportStats() {
   const projRows = collectProjectStats();
   if (rows.length === 0 && projRows.length === 0) { toast("暂无数据可导出"); return; }
   const period = document.getElementById("statsPeriod").value;
-  const month = document.getElementById("statsMonth").value || "全部";
-  const wageConfig = getWageConfig();
+  const monthRaw = document.getElementById("statsMonth").value;
+  const month = monthRaw || "全部";
+  let storeFilter = document.getElementById("statsStore").value;
+  if (!perm.viewGlobalStats() && myStore() && !storeFilter) storeFilter = myStore();
 
+  // ===== 考勤聚合（工时仅作参考，不计入工资） =====
   const totalHours = rows.reduce((s, r) => s + r.hours, 0);
-  const totalLevelHours = {初级: 0, 中级: 0, 高级: 0, 特级: 0};
-  rows.forEach(r => {
-    totalLevelHours.初级 += r.levelHours?.初级 || 0;
-    totalLevelHours.中级 += r.levelHours?.中级 || 0;
-    totalLevelHours.高级 += r.levelHours?.高级 || 0;
-    totalLevelHours.特级 += r.levelHours?.特级 || 0;
-  });
-  const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
   const totalOutsourcedWorkers = rows.filter(r => r.isOutsourced).length;
   const totalWorkers = rows.length - totalOutsourcedWorkers;
   const avgHours = totalWorkers > 0 ? Math.round(totalHours / totalWorkers * 10) / 10 : 0;
-  const projRecorded = projRows.filter(r => r.hasActual);
-  const totalEst = projRecorded.reduce((s, r) => s + r.est, 0);
-  const totalAct = projRecorded.reduce((s, r) => s + r.act, 0);
-  const totalDiff = totalAct - totalEst;
+  const totalOutsourcedHours = rows.filter(r => r.isOutsourced).reduce((s, r) => s + r.hours, 0);
   const totalReworkAct = projRows.reduce((s, r) => s + (r.reworkHours || 0), 0);
 
-  const internalRows = rows.filter(r => !r.isOutsourced);
-  const lowEfficiencyWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
-  const highWorkloadWorkers = internalRows.filter(r => r.hours > 40);
-  const topWorkerRow = internalRows.length > 0 ? internalRows.reduce((prev, curr) => (prev.hours > curr.hours ? prev : curr), internalRows[0]) : null;
-  const topWorker = topWorkerRow ? topWorkerRow.name : "";
-  const topHours = topWorkerRow ? topWorkerRow.hours : 0;
-
+  // ===== 包活提成聚合（与「提成统计」页同口径：按预约时间归期 + 门店筛选） =====
   function isInPeriod(dateStr) {
-    if (!month) return true;
-    const [year, m] = month.split("-").map(Number);
+    if (!monthRaw) return true;
+    const [year, m] = monthRaw.split("-").map(Number);
     if (period === "month") {
-      return monthKey(dateStr) === month;
+      return monthKey(dateStr) === monthRaw;
     } else if (period === "quarter") {
       const quarter = Math.ceil(m / 3);
       const [logYear, logMonth] = monthKey(dateStr).split("-").map(Number);
-      const logQuarter = Math.ceil(logMonth / 3);
-      return logYear === year && logQuarter === quarter;
+      return logYear === year && Math.ceil(logMonth / 3) === quarter;
     } else if (period === "year") {
       return dateStr.startsWith(year + "-");
     }
     return true;
   }
+  // 与「提成统计」页同口径：明细/每日/个人提成单一律只取已完工（已验收/已审核）项目，
+  // 否则明细行与合计行会对不上（合计来自 aggregateCommission，已按完工门槛过滤）
+  const commissionProjects = (cache.projects || []).filter((p) => {
+    if (!isInPeriod(p.appointmentTime)) return false;
+    if (storeFilter && p.storeId !== storeFilter) return false;
+    if (!isCommissionCounted(p)) return false;
+    return true;
+  });
+  const agg = aggregateCommission(commissionProjects);
+  const commOf = (wid) => Math.round((agg.byWorker[wid] || 0) * 100) / 100;
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+  // 本月标准工时（考勤参考）：每月固定休息4天（每周休1天）× 每日满负荷 10 小时
+  const _ms = monthRaw ? monthRaw.split("-").map(Number) : [];
+  const _year = _ms.length === 2 ? _ms[0] : new Date().getFullYear();
+  const _mo = _ms.length === 2 ? _ms[1] : (new Date().getMonth() + 1);
+  const workdaysInMonth = Math.max(0, new Date(_year, _mo, 0).getDate() - 4);
+  const monthStandardHours = workdaysInMonth * DAILY_WORK_HOURS;
+
+  const internalRows = rows.filter(r => !r.isOutsourced);
+  const highWorkloadWorkers = internalRows.filter(r => r.hours > monthStandardHours);
+  const lowAttendanceWorkers = internalRows.filter(r => r.hours > 0 && r.days > 0 && (r.hours / r.days) < 4);
+  const topEarner = Object.keys(agg.byWorker)
+    .map((wid) => ({ wid, name: agg.workerNames[wid] || "未知", amt: agg.byWorker[wid] }))
+    .sort((a, b) => b.amt - a.amt)[0];
+  const topEarnerText = topEarner && topEarner.amt > 0 ? `${topEarner.name}（¥${topEarner.amt.toFixed(2)}）` : "无";
+
+  // 每日提成明细数据（按人 × 按天 × 项目，来自 commissionDaily 跨天拆分）
+  const rowById = {};
+  rows.forEach((r) => { if (r.id != null) rowById[r.id] = r; });
+  const dailyCommRows = [];
+  commissionProjects.forEach((p) => {
+    const daily = commissionDaily(p);
+    Object.keys(daily).forEach((d) => {
+      Object.keys(daily[d]).forEach((wid) => {
+        const r = rowById[wid];
+        if (!r) return; // 工人筛选后不在列表则跳过
+        dailyCommRows.push({ id: wid, name: r.name, isOutsourced: r.isOutsourced, date: d, amt: daily[d][wid], project: p.name, row: r });
+      });
+    });
+  });
+  dailyCommRows.sort((a, b) => a.name.localeCompare(b.name, "zh-CN") || a.date.localeCompare(b.date) || (a.project || "").localeCompare(b.project || "", "zh-CN"));
+  const dayStateOf = (r, date) => {
+    if (!r) return "";
+    if ((r.leaveRecords || []).some((lr) => date >= lr.startDate && date <= lr.endDate)) return "请假";
+    if ((r.restRecords || []).some((lr) => date >= lr.startDate && date <= lr.endDate)) return "轮休";
+    return "";
+  };
 
   // ===== Excel 主题与样式工具 =====
   // 方案A：去掉单元格框线，仅表头下方/合计上方保留粗分隔线，行与行靠斑马纹区分
@@ -20185,7 +20266,6 @@ async function exportStats() {
   const borderHeader = { top: thinLine, left: thinLine, bottom: { style: 'medium', color: { argb: 'FF1E3A8A' } }, right: thinLine };
   const borderTotal = { top: { style: 'medium', color: { argb: 'FF1E3A8A' } }, left: thinLine, bottom: thinLine, right: thinLine };
   const titleStyle = { font: { bold: true, size: 16, color: { argb: 'FF1E3A8A' } }, alignment: { horizontal: 'center', vertical: 'middle' } };
-  const infoStyle = { font: { size: 11, color: { argb: 'FF374151' } }, alignment: { vertical: 'middle' } };
   const sectionTitleStyle = { font: { bold: true, size: 12, color: { argb: 'FF1E3A8A' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } }, alignment: { horizontal: 'left', vertical: 'middle' }, border: borderThin };
   const headerStyle = { font: { bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } }, alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }, border: borderHeader };
   const totalStyle = { font: { bold: true, color: { argb: 'FF1F2937' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderTotal };
@@ -20193,10 +20273,9 @@ async function exportStats() {
   const centerDataStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }, border: borderThin };
   const numStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '0.0' };
   const leaveStyle = { font: { color: { argb: 'FFDC2626' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF2F2' } }, alignment: { vertical: 'middle', wrapText: true }, border: borderThin };
-  const savedStyle = { font: { color: { argb: 'FF047857' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDF4' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '+0.0;-0.0;0.0' };
-  const exceededStyle = { font: { color: { argb: 'FFB91C1C' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF2F2' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '+0.0;-0.0;0.0' };
   const highlightStyle = { font: { bold: true, color: { argb: 'FF92400E' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '0.0' };
   const moneyStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: borderThin, numFmt: '¥#,##0.00' };
+  const moneyTotalStyle = { font: { bold: true, color: { argb: 'FF92400E' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: borderThin, numFmt: '¥#,##0.00' };
   const labelStyle = { font: { bold: true, color: { argb: 'FF1E3A8A' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: borderThin };
   const valueStyle = { font: { color: { argb: 'FF374151' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }, alignment: { horizontal: 'left', vertical: 'middle' }, border: borderThin };
 
@@ -20248,13 +20327,6 @@ async function exportStats() {
     cell.border = borderThin;
   }
 
-  function styleDiffCell(cell, value) {
-    if (typeof value !== 'number') return;
-    if (value > 0) cell.style = { ...exceededStyle };
-    else if (value < 0) cell.style = { ...savedStyle };
-    else cell.style = { ...numStyle };
-  }
-
   if (typeof ExcelJS === "undefined") await ensureExcelJS();
   const workbook = new ExcelJS.Workbook();
   workbook.creator = '广告施工预约系统';
@@ -20264,14 +20336,19 @@ async function exportStats() {
 
   const summarySheet = workbook.addWorksheet("统计概览");
   let sr = 1;
-  summarySheet.addRow(['广告施工预约系统 — 工时统计报表']);
+  summarySheet.addRow(['广告施工预约系统 — 提成统计报表']);
   summarySheet.mergeCells(`A${sr}:D${sr}`);
   summarySheet.getRow(sr).getCell(1).style = { ...titleStyle };
   summarySheet.getRow(sr).height = 34;
   sr++;
 
-  summarySheet.addRow(['统计周期', month === '全部' ? '全部' : month, '统计类型', period === 'month' ? '月度' : period === 'quarter' ? '季度' : '年度']);
-  summarySheet.getRow(sr).eachCell((cell, ci) => { cell.style = ci % 2 === 1 ? { ...labelStyle } : { ...valueStyle }; });
+  summarySheet.addRow(['统计周期', month, '统计类型', period === 'month' ? '月度' : period === 'quarter' ? '季度' : '年度']);
+  summarySheet.getRow(sr).eachCell((cell, ci) => { cell.style = ci % 2 === 1 ? { ...labelStyle } : { ...valueStyle } });
+  sr++;
+  summarySheet.addRow(['统计口径', '仅统计已完工 / 已验收 / 已审核项目（施工中、暂停、延期、预约中、已取消不计）', '', '']);
+  summarySheet.getRow(sr).getCell(1).style = { ...labelStyle };
+  summarySheet.getRow(sr).getCell(2).style = { ...valueStyle };
+  summarySheet.mergeCells(`B${sr}:D${sr}`);
   sr += 2;
 
   function addSectionTitle(sheet, title) {
@@ -20282,10 +20359,10 @@ async function exportStats() {
     return r.number;
   }
 
-  function addKV(sheet, label, value, isNum) {
+  function addKV(sheet, label, value, isNum, cellStyleOverride) {
     const r = sheet.addRow([label, value, '', '']);
     r.getCell(1).style = { ...labelStyle };
-    r.getCell(2).style = isNum ? { ...numStyle } : { ...valueStyle };
+    r.getCell(2).style = cellStyleOverride || (isNum ? { ...numStyle } : { ...valueStyle });
     r.getCell(3).style = { ...valueStyle };
     r.getCell(4).style = { ...valueStyle };
     sheet.mergeCells(`B${r.number}:D${r.number}`);
@@ -20296,50 +20373,45 @@ async function exportStats() {
   addKV(summarySheet, '施工人员总数', rows.length, true);
   addKV(summarySheet, '内部人员', totalWorkers, true);
   addKV(summarySheet, '外协人员', totalOutsourcedWorkers, true);
+  addKV(summarySheet, '参与分成人数', agg.participantCount != null ? agg.participantCount : agg.workerCount, true);
+
+  addSectionTitle(summarySheet, '包活提成');
+  addKV(summarySheet, '本期工程金额(元)', round2(agg.totalProjectAmount), false, { ...moneyStyle });
+  addKV(summarySheet, '工费合计(元)', round2(agg.totalLaborFee), false, { ...moneyStyle });
+  addKV(summarySheet, '工人分成池(工费÷2)(元)', round2(agg.totalPool), false, { ...moneyStyle });
+  addKV(summarySheet, '工人提成合计(元)', round2(agg.totalAmount), false, { ...moneyTotalStyle });
+
+  addSectionTitle(summarySheet, '考勤参考（不计入工资）');
   addKV(summarySheet, '总工时(小时)', fmtHoursNum(totalHours), true);
   addKV(summarySheet, '人均工时(小时)', fmtHoursNum(avgHours), true);
-
-  addSectionTitle(summarySheet, '工时等级');
-  addKV(summarySheet, '初级工时', fmtHoursNum(totalLevelHours.初级), true);
-  addKV(summarySheet, '中级工时', fmtHoursNum(totalLevelHours.中级), true);
-  addKV(summarySheet, '高级工时', fmtHoursNum(totalLevelHours.高级), true);
-  addKV(summarySheet, '特级工时', fmtHoursNum(totalLevelHours.特级), true);
-  addKV(summarySheet, '外协工时', fmtHoursNum(totalOutsourcedHours), true);
-
-  addSectionTitle(summarySheet, '项目工时');
-  addKV(summarySheet, '预计工时(小时)', fmtHoursNum(totalEst), true);
-  addKV(summarySheet, '实际工时(小时)', fmtHoursNum(totalAct), true);
-  const diffRowNum = addKV(summarySheet, '工时差异', totalDiff, true);
-  styleDiffCell(summarySheet.getRow(diffRowNum).getCell(2), totalDiff);
-  addKV(summarySheet, '返工工时', fmtHoursNum(totalReworkAct), true);
+  addKV(summarySheet, '外协工时(小时)', fmtHoursNum(totalOutsourcedHours), true);
+  addKV(summarySheet, '返工工时(小时)', fmtHoursNum(totalReworkAct), true);
 
   addSectionTitle(summarySheet, '分析与预警');
+  addKV(summarySheet, '提成之星', topEarnerText, false);
   addKV(summarySheet, '高负荷预警', highWorkloadWorkers.length > 0 ? highWorkloadWorkers.map(w => w.name).join("、") : '无', false);
-  addKV(summarySheet, '效率建议', lowEfficiencyWorkers.length > 0 ? lowEfficiencyWorkers.map(w => w.name).join("、") : '无', false);
-  addKV(summarySheet, '本月之星', topWorker && topHours > 0 ? topWorker + ' (' + fmtHours(topHours) + '小时)' : '无', false);
+  addKV(summarySheet, '出勤提示', lowAttendanceWorkers.length > 0 ? lowAttendanceWorkers.map(w => w.name).join("、") : '无', false);
+  addKV(summarySheet, '外协说明', totalOutsourcedWorkers > 0 ? `${totalOutsourcedWorkers} 名外协人员：按固定金额先从分成池扣除，剩余池再分给安装人员（平均/自定义均适用）` : '无', false);
 
-  summarySheet.columns = [{ key: 'A', width: 18 }, { key: 'B', width: 20 }, { key: 'C', width: 18 }, { key: 'D', width: 18 }];
+  summarySheet.columns = [{ key: 'A', width: 24 }, { key: 'B', width: 22 }, { key: 'C', width: 18 }, { key: 'D', width: 18 }];
 
-  const workerData = [['施工人员', '类型', '工时(小时)', 'vs平均', '初级工时', '中级工时', '高级工时', '特级工时', '施工天数', '请假天数', '轮休天数', '参与项目数']];
+  const workerData = [['施工人员', '类型', '本期提成(元)', '施工天数', '请假天数', '轮休天数', '参与项目数']];
+  let workerSheetTotal = 0;
   rows.forEach((r) => {
-    const vsAvg = r.isOutsourced ? null : fmtHoursNum(r.hours - avgHours);
+    const amt = commOf(r.id);
+    workerSheetTotal = round2(workerSheetTotal + amt);
     workerData.push([
       r.name,
       r.isOutsourced ? '外协' : '内部',
-      fmtHoursNum(r.hours),
-      vsAvg,
-      fmtHoursNum(r.levelHours?.初级 || 0),
-      fmtHoursNum(r.levelHours?.中级 || 0),
-      fmtHoursNum(r.levelHours?.高级 || 0),
-      fmtHoursNum(r.levelHours?.特级 || 0),
+      amt,
       r.days,
       r.leaveDays || 0,
       r.restDays || 0,
       r.projects
     ]);
   });
-  workerData.push(['合计', '', fmtHoursNum(totalHours), '', fmtHoursNum(totalLevelHours.初级), fmtHoursNum(totalLevelHours.中级), fmtHoursNum(totalLevelHours.高级), fmtHoursNum(totalLevelHours.特级), '', '', '', '']);
-  const workerSheet = workbook.addWorksheet("人员安装工时");
+  workerData.push(['合计', '', round2(workerSheetTotal), '', '', '', '']);
+  const workerSheet = workbook.addWorksheet("人员提成");
   workerData.forEach((row, rowIndex) => {
     const excelRow = workerSheet.addRow(row);
     row.forEach((cell, colIndex) => {
@@ -20348,51 +20420,55 @@ async function exportStats() {
         excelCell.style = { ...headerStyle };
       } else if (rowIndex === workerData.length - 1 && row[0] === '合计') {
         excelCell.style = { ...totalStyle };
+      } else if (colIndex === 2) {
+        excelCell.style = { ...moneyStyle };
       } else {
         excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
-        if (colIndex === 3 && typeof cell === 'number') styleDiffCell(excelCell, cell);
       }
     });
   });
-  applyAutoFilter(workerSheet, 1, 12);
+  applyAutoFilter(workerSheet, 1, 7);
   freezeTopRow(workerSheet);
   applyZebraStripes(workerSheet, 2, workerData.length - 2);
   applyTotalRow(workerSheet, workerData.length);
-  workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 10 }, { key: 'K', width: 10 }, { key: 'L', width: 12 }];
+  workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 16 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }, { key: 'G', width: 12 }];
 
-  const dailyData = [['施工人员', '类型', '日期', '工时(小时)', '作业类型', '工时等级', '项目/工作类型', '当日状态']];
-  rows.forEach((r) => {
-    Object.entries(r.daily).sort(([a], [b]) => a.localeCompare(b)).forEach(([date, logs]) => {
-      const isLeave = r.leaveRecords && r.leaveRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
-      const isRest = r.restRecords && r.restRecords.some((lr) => date >= lr.startDate && date <= lr.endDate);
-      const dayState = isLeave ? '请假' : (isRest ? '轮休' : '');
-      logs.forEach((log) => {
-        dailyData.push([r.name, r.isOutsourced ? '外协' : '内部', date, fmtHoursNum(log.hours), normWorkType(log.workType) || '', log.level, log.project || '', dayState]);
-      });
-    });
+  const dailyData = [['施工人员', '类型', '日期', '当日提成(元)', '项目', '当日状态']];
+  let dailyTotal = 0;
+  dailyCommRows.forEach((d) => {
+    const amt = round2(d.amt);
+    dailyTotal = round2(dailyTotal + amt);
+    dailyData.push([d.name, d.isOutsourced ? '外协' : '内部', d.date, amt, d.project || '', dayStateOf(d.row, d.date)]);
   });
-  const dailySheet = workbook.addWorksheet("每日工时明细");
+  const hasDailyTotal = dailyData.length > 1;
+  if (hasDailyTotal) dailyData.push(['合计', '', '', round2(dailyTotal), '', '']);
+  const dailySheet = workbook.addWorksheet("每日提成明细");
   dailyData.forEach((row, rowIndex) => {
     const excelRow = dailySheet.addRow(row);
+    const isTotal = hasDailyTotal && rowIndex === dailyData.length - 1 && row[0] === '合计';
     row.forEach((cell, colIndex) => {
       const excelCell = excelRow.getCell(colIndex + 1);
       if (rowIndex === 0) {
         excelCell.style = { ...headerStyle };
+      } else if (isTotal) {
+        excelCell.style = { ...totalStyle };
+      } else if (colIndex === 3) {
+        excelCell.style = { ...moneyStyle };
+      } else if (colIndex === 5 && cell === '请假') {
+        excelCell.style = { ...leaveStyle };
+      } else if (colIndex === 5 && cell === '轮休') {
+        excelCell.font = { color: { argb: 'FF92400E' } };
+        excelCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+        excelCell.alignment = { horizontal: 'center', vertical: 'middle' };
       } else {
         excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
-        if (colIndex === 7 && cell === '请假') excelCell.style = { ...leaveStyle };
-        if (colIndex === 7 && cell === '轮休') {
-          excelCell.font = { color: { argb: 'FF92400E' } };
-          excelCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
-          excelCell.alignment = { horizontal: 'center', vertical: 'middle' };
-        }
       }
     });
   });
-  applyAutoFilter(dailySheet, 1, 8);
+  applyAutoFilter(dailySheet, 1, 6);
   freezeTopRow(dailySheet);
-  applyZebraStripes(dailySheet, 2, dailyData.length - 1);
-  dailySheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 12 }, { key: 'F', width: 12 }, { key: 'G', width: 28 }, { key: 'H', width: 10 }];
+  applyZebraStripes(dailySheet, 2, hasDailyTotal ? dailyData.length - 2 : dailyData.length - 1);
+  dailySheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 12 }, { key: 'D', width: 16 }, { key: 'E', width: 28 }, { key: 'F', width: 10 }];
 
   const hasLeaves = rows.some((r) => r.leaveRecords && r.leaveRecords.length > 0);
   if (hasLeaves) {
@@ -20446,13 +20522,18 @@ async function exportStats() {
     restSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 14 }, { key: 'D', width: 8 }];
   }
 
-  const projectData = [['日期', '预约开工时间', '实际开工时间', '店面', '项目', '状态', '预计工时', '实际工时', '差异', '初级', '中级', '高级', '特级', '施工人员工时', '外协人数', '系统自动工时', '工时备注']];
+  const projectData = [['日期', '预约开工时间', '实际开工时间', '店面', '项目', '状态', '工程金额(元)', '工费(元)', '工人提成(元)', '外协人数', '备注']];
+  let pjAmount = 0, pjLabor = 0, pjComm = 0;
   projRows.forEach((r) => {
-    const internalWorkers = r.workerHours.map((w) => w.name + ' ' + fmtHours(w.hours) + 'h').join('、');
-    const outsourcedWorkers = r.outsourcedWorkerHours.map((w) => w.name + ' ' + fmtHours(w.hours) + 'h').join('、');
-    const workerText = (internalWorkers || '') + (internalWorkers && outsourcedWorkers ? '、' : '') + (outsourcedWorkers || '');
-    const outsourcedCount = r.outsourcedWorkerHours.length;
-    const autoWorkerText = (r.autoWorkerHours || []).map((w) => w.name + ' ' + fmtHours(w.hours) + 'h').join('、');
+    const p = (cache.projects || []).find((pp) => pp.id === r.id);
+    const alloc = p ? resolveCommissionAlloc(p) : { items: [] };
+    const amount = p ? (Number(p.projectAmount) || 0) : 0;
+    const laborFee = p ? getLaborFee(p) : 0;
+    const comm = alloc.items.reduce((s, it) => s + it.amount, 0);
+    const commText = alloc.items.map((it) => `${it.workerName} ¥${it.amount.toFixed(2)}`).join('、');
+    pjAmount = round2(pjAmount + amount);
+    pjLabor = round2(pjLabor + laborFee);
+    pjComm = round2(pjComm + comm);
     projectData.push([
       r.date ? fmtDate(r.date) : '',
       r.appointmentTime ? fmtTime(r.appointmentTime) : '',
@@ -20460,61 +20541,181 @@ async function exportStats() {
       r.store || '',
       r.name,
       r.status,
-      r.hasActual ? fmtHoursNum(r.est) : null,
-      r.hasActual ? fmtHoursNum(r.act) : null,
-      r.hasActual ? r.diff : '未登记',
-      fmtHoursNum(r.levelHours?.初级 || 0),
-      fmtHoursNum(r.levelHours?.中级 || 0),
-      fmtHoursNum(r.levelHours?.高级 || 0),
-      fmtHoursNum(r.levelHours?.特级 || 0),
-      workerText,
-      outsourcedCount > 0 ? outsourcedCount + '人' : '',
-      autoWorkerText,
+      amount,
+      laborFee,
+      commText || '—',
+      r.outsourcedCount > 0 ? r.outsourcedCount + '人' : '',
       r.notes || ''
     ]);
   });
-  projectData.push(['', '', '', '', '', '合计', fmtHoursNum(totalEst), fmtHoursNum(totalAct), totalDiff,
-    fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.初级 || 0), 0)),
-    fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.中级 || 0), 0)),
-    fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.高级 || 0), 0)),
-    fmtHoursNum(projRows.reduce((s, r) => s + (r.levelHours?.特级 || 0), 0)),
-    '', '', fmtHoursNum(projRows.reduce((s, r) => s + (r.autoHours || 0), 0)), '']);
-  const projectSheet = workbook.addWorksheet("项目工时差异");
+  projectData.push(['', '', '', '', '', '合计', round2(pjAmount), round2(pjLabor), round2(pjComm), '', '']);
+  const projectSheet = workbook.addWorksheet("项目提成明细");
   projectData.forEach((row, rowIndex) => {
     const excelRow = projectSheet.addRow(row);
+    const isTotal = rowIndex === projectData.length - 1 && row[5] === '合计';
     row.forEach((cell, colIndex) => {
       const excelCell = excelRow.getCell(colIndex + 1);
       if (rowIndex === 0) {
         excelCell.style = { ...headerStyle };
-      } else if (rowIndex === projectData.length - 1 && row[5] === '合计') {
+      } else if (isTotal) {
         excelCell.style = { ...totalStyle };
+      } else if (colIndex === 5) {
+        styleStatusCell(excelCell, cell);
+      } else if (colIndex === 6 || colIndex === 7) {
+        excelCell.style = { ...moneyStyle };
+      } else if (colIndex === 9) {
+        excelCell.style = { ...centerDataStyle };
       } else {
-        if (colIndex === 5) {
-          styleStatusCell(excelCell, cell);
-        } else if (colIndex === 8) {
-          if (typeof cell === 'number') styleDiffCell(excelCell, cell);
-          else {
-            excelCell.style = { ...dataStyle };
-            excelCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF9C3' } };
-            excelCell.font = { color: { argb: 'FFA16207' }, bold: true };
-            excelCell.alignment = { horizontal: 'center', vertical: 'middle' };
-          }
-        } else {
-          if ([13, 14, 15, 16].includes(colIndex)) {
-            excelCell.style = { ...centerDataStyle };
-          } else {
-            excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
-          }
-        }
+        excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
       }
     });
   });
-  applyAutoFilter(projectSheet, 1, 17);
+  applyAutoFilter(projectSheet, 1, 11);
   freezeTopRow(projectSheet);
   applyZebraStripes(projectSheet, 2, projectData.length - 2);
   applyTotalRow(projectSheet, projectData.length);
-  styleDiffCell(projectSheet.getRow(projectData.length).getCell(9), totalDiff);
-  projectSheet.columns = [{ key: 'A', width: 10 }, { key: 'B', width: 12 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 28 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 10 }, { key: 'I', width: 10 }, { key: 'J', width: 8 }, { key: 'K', width: 8 }, { key: 'L', width: 8 }, { key: 'M', width: 8 }, { key: 'N', width: 32 }, { key: 'O', width: 10 }, { key: 'P', width: 22 }, { key: 'Q', width: 16 }];
+  projectSheet.columns = [{ key: 'A', width: 10 }, { key: 'B', width: 12 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 28 }, { key: 'F', width: 10 }, { key: 'G', width: 14 }, { key: 'H', width: 12 }, { key: 'I', width: 32 }, { key: 'J', width: 10 }, { key: 'K', width: 16 }];
+
+  // ===== 项目人员提成明细：按「项目 × 施工人员」逐行列示 =====
+  // 列：日期/预约开工/店面/项目名称/状态/施工内容·注意事项/效果图/工程金额/工费金额/施工人员/分配比例/个人提成
+  const detailSheet = workbook.addWorksheet("项目人员提成明细");
+
+  // 拉取并缩放效果图（完成效果图首张），返回 ExcelJS 可嵌的 base64；失败返回 null
+  const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(",")[1] || "");
+    fr.onerror = () => reject(new Error("read failed"));
+    fr.readAsDataURL(blob);
+  });
+  const fetchImageThumbForExcel = async (url, maxW, maxH) => {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 9000);
+      const resp = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!resp.ok) return null;
+      const blob = await resp.blob();
+      const type = (blob.type || "").toLowerCase();
+      const extFromType = type.includes("png") ? "png" : type.includes("gif") ? "gif" : type.includes("jpeg") || type.includes("jpg") ? "jpeg" : "";
+      const decodeImg = () => new Promise((resolve, reject) => {
+        const img = new Image();
+        const objUrl = URL.createObjectURL(blob);
+        img.onload = () => { URL.revokeObjectURL(objUrl); resolve(img); };
+        img.onerror = () => { URL.revokeObjectURL(objUrl); reject(new Error("decode failed")); };
+        img.src = objUrl;
+      });
+      try {
+        const bmp = await decodeImg();
+        const scale = Math.min(maxW / bmp.width, maxH / bmp.height, 1);
+        const w = Math.max(1, Math.round(bmp.width * scale));
+        const h = Math.max(1, Math.round(bmp.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d").drawImage(bmp, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+        return { base64: dataUrl.split(",")[1], extension: "jpeg", width: w, height: h };
+      } catch (_) {
+        // 画布被污染（跨域）等：退而用原始字节，仅限小体积且 Excel 可渲染的格式
+        if (blob.size <= 1200 * 1024 && (extFromType === "jpeg" || extFromType === "png" || extFromType === "gif")) {
+          return { base64: await blobToBase64(blob), extension: extFromType, width: maxW, height: maxH };
+        }
+        return null;
+      }
+    } catch (_) {
+      return null;
+    }
+  };
+  const loadEffectThumb = async (p) => {
+    const photos = normalizePhotos(p);
+    const list = (photos.completion || []).filter((it) => it.key && !it.uploading && !it.error);
+    const info = { count: (photos.completion || []).length, thumb: null };
+    if (!list.length) return info;
+    let urls = {};
+    try { urls = await cosGetViewUrls(list.map((it) => it.key)); } catch (_) { /* 断网：仅用缓存 */ }
+    for (const it of list.slice(0, 2)) { // 最多尝试 2 张，避免首张失败即丢图
+      const url = it.url || urls[it.key] || _cosViewCache[it.key];
+      if (!url) continue;
+      const th = await fetchImageThumbForExcel(url, 132, 96);
+      if (th) { info.thumb = th; break; }
+    }
+    return info;
+  };
+  const effectThumbs = {};
+  const EFF_THUMB_LIMIT = 80; // 效果图内嵌数量上限，防止超大周期报表体积/耗时失控
+  const thumbProjects = commissionProjects.slice(0, EFF_THUMB_LIMIT);
+  if (thumbProjects.length) toast("正在生成报表（含效果图）…");
+  for (let i = 0; i < thumbProjects.length; i += 4) { // 每批 4 张并发，避免打满签名/下载
+    const batch = thumbProjects.slice(i, i + 4);
+    await Promise.all(batch.map(async (p) => { effectThumbs[p.id] = await loadEffectThumb(p); }));
+  }
+
+  detailSheet.addRow(['日期', '预约开工', '店面', '项目名称', '状态', '施工内容 / 注意事项', '效果图', '工程金额(元)', '工费金额(元)', '施工人员', '分配比例', '个人提成(元)']);
+  applyHeaderRow(detailSheet, 1);
+  let detailRowNum = 2;
+  let detailCommTotal = 0;
+  const EFF_COL = 7; // G 列（1-based）
+  commissionProjects.forEach((p) => {
+    const wc = (p.workContent || []).filter(Boolean);
+    const contentParts = [];
+    if (wc.length) contentParts.push("施工内容：" + wc.join("、"));
+    if (p.note) contentParts.push("注意事项：" + p.note);
+    const contentText = contentParts.join("\n") || "—";
+    const eff = effectThumbs[p.id] || { count: 0, thumb: null };
+    const effCount = eff.thumb ? eff.count : (normalizePhotos(p).completion || []).length;
+    const effText = eff.thumb ? "" : (effCount > 0 ? `效果图×${effCount}（详见项目）` : "—");
+    const alloc = resolveCommissionAlloc(p);
+    const items = alloc.items.length ? alloc.items : [null];
+    const base = [
+      p.appointmentTime ? fmtDate(p.appointmentTime) : "",
+      p.appointmentTime ? fmtTime(p.appointmentTime) : "",
+      p.storeId ? storeName(p.storeId) : "未指定门店",
+      p.name || "",
+      p.status || "",
+      contentText,
+      effText,
+      Number(p.projectAmount) || 0,
+      getLaborFee(p),
+    ];
+    items.forEach((it, idx) => {
+      detailSheet.addRow([...base, it ? it.workerName : "—", it ? it.ratio + "%" : "", it ? round2(it.amount) : ""]);
+      const row = detailSheet.getRow(detailRowNum);
+      if (eff.thumb && idx === 0) { // 同一项目多工人时只嵌一次图，避免重复占体积
+        row.height = Math.ceil(eff.thumb.height * 0.75) + 8;
+        const imgId = workbook.addImage({ base64: eff.thumb.base64, extension: eff.thumb.extension });
+        detailSheet.addImage(imgId, {
+          tl: { col: EFF_COL - 1, row: detailRowNum - 1 },
+          editAs: "oneCell",
+          ext: { width: eff.thumb.width, height: eff.thumb.height },
+        });
+      }
+      row.eachCell((cell, ci) => {
+        if (ci === 5) styleStatusCell(cell, cell.value);
+        else if (ci === 8 || ci === 9 || ci === 12) cell.style = { ...moneyStyle };
+        else if (ci === 11) cell.style = { ...centerDataStyle };
+        else cell.style = { ...dataStyle };
+      });
+      if (it) detailCommTotal = round2(detailCommTotal + it.amount);
+      detailRowNum++;
+    });
+  });
+  if (detailRowNum > 2) {
+    detailSheet.addRow(['合计', '', '', '', '', '', '', '', '', '', '', round2(detailCommTotal)]);
+    applyTotalRow(detailSheet, detailRowNum);
+    detailSheet.getRow(detailRowNum).getCell(12).style = { ...moneyTotalStyle };
+    applyZebraStripes(detailSheet, 2, detailRowNum - 1);
+    applyAutoFilter(detailSheet, 1, 12);
+  } else {
+    detailSheet.addRow(['本期暂无项目数据']);
+    detailSheet.getRow(2).getCell(1).style = { ...dataStyle };
+    detailSheet.mergeCells("A2:L2");
+  }
+  freezeTopRow(detailSheet);
+  detailSheet.columns = [
+    { key: 'A', width: 11 }, { key: 'B', width: 11 }, { key: 'C', width: 12 }, { key: 'D', width: 26 },
+    { key: 'E', width: 9 }, { key: 'F', width: 40 }, { key: 'G', width: 20 }, { key: 'H', width: 13 },
+    { key: 'I', width: 13 }, { key: 'J', width: 11 }, { key: 'K', width: 10 }, { key: 'L', width: 14 },
+  ];
 
   const usedNames = {};
   rows.forEach((r) => {
@@ -20526,18 +20727,36 @@ async function exportStats() {
       usedNames[workerName] = 1;
     }
     const sheetName = workerName;
-    
+
     const sheet = workbook.addWorksheet(sheetName);
     let rowNum = 1;
-    
-    sheet.addRow(['施工人员工时统计与工资核算表']);
+
+    // 该工人的包活提成项目明细
+    const myCommissionProjects = commissionProjects.filter((p) => (p.assignedWorkerIds || []).includes(r.id));
+    const myCommRows = [];
+    myCommissionProjects.forEach((p) => {
+      const alloc = resolveCommissionAlloc(p);
+      const it = alloc.items.find((i) => i.workerId === r.id);
+      if (!it) return;
+      myCommRows.push({
+        name: p.name,
+        amount: Number(p.projectAmount) || 0,
+        laborFee: getLaborFee(p),
+        pool: getCommissionPool(p),
+        ratio: it.ratio,
+        comm: it.amount,
+      });
+    });
+    const myCommTotal = round2(myCommRows.reduce((s, x) => s + x.comm, 0));
+
+    sheet.addRow(['施工人员提成核算表']);
     sheet.getRow(rowNum).getCell(1).style = { ...titleStyle };
     sheet.mergeCells(`A${rowNum}:I${rowNum}`);
     rowNum++;
-    
+
     rowNum++;
-    
-    const infoRow1 = sheet.addRow(['姓名', r.name, '', '类型', r.isOutsourced ? '外协人员' : '内部人员', '', '统计周期', month === '全部' ? '全部' : month]);
+
+    const infoRow1 = sheet.addRow(['姓名', r.name, '', '类型', r.isOutsourced ? '外协人员' : '内部人员', '', '统计周期', month]);
     infoRow1.getCell(1).style = { ...labelStyle };
     infoRow1.getCell(2).style = { ...valueStyle };
     infoRow1.getCell(4).style = { ...labelStyle };
@@ -20549,9 +20768,9 @@ async function exportStats() {
     sheet.mergeCells(`H${rowNum}:I${rowNum}`);
     rowNum++;
 
-    const infoRow2 = sheet.addRow(['总工时', fmtHoursNum(r.hours || 0), '小时', '施工天数', (r.days || 0), '天', '请假天数', (r.leaveDays || 0), '天']);
+    const infoRow2 = sheet.addRow(['本期提成(元)', myCommTotal, '', '施工天数', (r.days || 0), '天', '请假天数', (r.leaveDays || 0), '天']);
     infoRow2.getCell(1).style = { ...labelStyle };
-    infoRow2.getCell(2).style = { ...numStyle };
+    infoRow2.getCell(2).style = { ...moneyStyle };
     infoRow2.getCell(3).style = { ...valueStyle };
     infoRow2.getCell(4).style = { ...labelStyle };
     infoRow2.getCell(5).style = { ...numStyle };
@@ -20561,7 +20780,7 @@ async function exportStats() {
     infoRow2.getCell(9).style = { ...valueStyle };
     rowNum++;
 
-    const infoRow3 = sheet.addRow(['轮休天数', (r.restDays || 0), '天', '（周末轮流休息，不计入请假）', '', '', '', '', '']);
+    const infoRow3 = sheet.addRow(['轮休天数', (r.restDays || 0), '天', '（周末轮流休息，不计入请假；工时仅作考勤参考，不计入工资）', '', '', '', '', '']);
     infoRow3.getCell(1).style = { ...labelStyle };
     infoRow3.getCell(2).style = { ...numStyle };
     infoRow3.getCell(3).style = { ...valueStyle };
@@ -20571,104 +20790,94 @@ async function exportStats() {
 
     rowNum++;
 
-    sheet.addRow(['工时等级统计']);
+    sheet.addRow(['包活提成明细']);
     sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
     sheet.mergeCells(`A${rowNum}:I${rowNum}`);
     sheet.getRow(rowNum).height = 26;
     rowNum++;
 
-    const levelHeaderRowNum = rowNum;
-    sheet.addRow(['等级', '工时(小时)', '占比', '单价(元/小时)', '金额(元)', '', '', '', '']);
+    sheet.addRow(['项目', '工程金额(元)', '工费(元)', '分成池(元)', '分成比例', '提成(元)', '', '', '']);
     sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci <= 5) cell.style = { ...headerStyle }; });
-    sheet.mergeCells(`E${rowNum}:I${rowNum}`);
+    sheet.mergeCells(`F${rowNum}:I${rowNum}`);
     rowNum++;
 
-    const levels = ['初级', '中级', '高级', '特级'];
-    const levelRowNums = [];
-    levels.forEach((level) => {
-      const hours = fmtHoursNum(r.levelHours?.[level] || 0);
-      const percentage = r.hours > 0 ? fmtHoursNum((hours / r.hours) * 100) : 0;
-      const price = wageConfig[level] || 0;
-      levelRowNums.push(rowNum);
-      sheet.addRow([level, hours, percentage / 100, price, '']);
-      const amountCell = sheet.getRow(rowNum).getCell(5);
-      amountCell.value = { formula: `=B${rowNum}*D${rowNum}`, result: fmtHoursNum(hours * price) };
-      amountCell.style = { ...moneyStyle };
-      sheet.getRow(rowNum).eachCell((cell, ci) => {
-        if (ci === 5) return;
-        if (ci === 1) cell.style = { ...dataStyle };
-        else if (ci === 2 || ci === 4) cell.style = { ...numStyle };
-        else if (ci === 3) cell.style = { ...numStyle, numFmt: '0.00%' };
-        else cell.style = { ...dataStyle };
+    let myCommTotalRowNum = null;
+    if (myCommRows.length) {
+      const commRowNums = [];
+      myCommRows.forEach((x) => {
+        commRowNums.push(rowNum);
+        sheet.addRow([x.name, x.amount, x.laborFee, x.pool, x.ratio + '%', x.comm, '', '', '']);
+        sheet.getRow(rowNum).eachCell((cell, ci) => {
+          if (ci === 1) cell.style = { ...dataStyle };
+          else if (ci === 2 || ci === 3 || ci === 4) cell.style = { ...moneyStyle };
+          else if (ci === 5) cell.style = { ...centerDataStyle };
+          else if (ci === 6) cell.style = { ...moneyStyle };
+          else cell.style = { ...dataStyle };
+        });
+        sheet.mergeCells(`F${rowNum}:I${rowNum}`);
+        rowNum++;
       });
-      sheet.mergeCells(`E${rowNum}:I${rowNum}`);
+      sheet.addRow(['合计', '', '', '', '', '', '', '', '']);
+      const totalCell = sheet.getRow(rowNum).getCell(6);
+      totalCell.value = { formula: `=SUM(F${commRowNums[0]}:F${commRowNums[commRowNums.length - 1]})`, result: myCommTotal };
+      totalCell.style = { ...moneyTotalStyle };
+      sheet.getRow(rowNum).eachCell((cell, ci) => {
+        if (ci === 6) return;
+        cell.style = { ...totalStyle };
+      });
+      sheet.mergeCells(`F${rowNum}:I${rowNum}`);
+      myCommTotalRowNum = rowNum;
       rowNum++;
+    } else {
+      sheet.addRow([r.isOutsourced ? '（外协人员：按固定金额先从分成池扣除，剩余池再分给安装人员）' : '（本期无包活提成项目）', '', '', '', '', '', '', '', '']);
+      sheet.getRow(rowNum).getCell(1).style = { ...dataStyle };
+      sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+      rowNum++;
+    }
+
+    rowNum++;
+
+    // 每日提成日历
+    const commByDate = {};
+    const projByDate = {};
+    myCommissionProjects.forEach((p) => {
+      const daily = commissionDaily(p);
+      Object.keys(daily).forEach((d) => {
+        const v = (daily[d] || {})[r.id];
+        if (v == null) return;
+        commByDate[d] = round2((commByDate[d] || 0) + v);
+        projByDate[d] = (projByDate[d] ? projByDate[d] + '、' : '') + p.name;
+      });
     });
 
-    const totalAmount = levels.reduce((sum, level) => sum + (r.levelHours?.[level] || 0) * (wageConfig[level] || 0), 0);
-    sheet.addRow(['合计', '', '', '', '']);
-    const totalCell = sheet.getRow(rowNum).getCell(5);
-    totalCell.value = { formula: `=SUM(E${levelRowNums[0]}:E${levelRowNums[levelRowNums.length-1]})`, result: totalAmount };
-    totalCell.style = { ...highlightStyle, numFmt: '¥#,##0.00' };
-    sheet.getRow(rowNum).eachCell((cell, ci) => {
-      if (ci === 5) return;
-      cell.style = { ...totalStyle };
-    });
-    sheet.mergeCells(`E${rowNum}:I${rowNum}`);
-    rowNum++;
-    const totalAmountRowNum = rowNum - 1;
-    
-    rowNum++;
-    
-    const calTitleRow = sheet.addRow(['每日工时日历']);
+    const calTitleRow = sheet.addRow(['每日提成日历']);
     calTitleRow.getCell(1).style = { ...sectionTitleStyle };
     sheet.mergeCells(`A${rowNum}:I${rowNum}`);
     sheet.getRow(rowNum).height = 26;
     rowNum++;
 
     const calHeaderRowNum = rowNum;
-    sheet.addRow(['日期', '星期', '初级工时', '中级工时', '高级工时', '特级工时', '合计工时', '项目', '请假/轮休']);
+    sheet.addRow(['日期', '星期', '当日提成(元)', '项目', '请假/轮休']);
     applyHeaderRow(sheet, rowNum);
     rowNum++;
-    
+
     const dates = [];
-    const hoursMap = {};
     const leaveMap = {};
     const restMap = {};
-    const projectMap = {};
-    const levelHoursMap = {初级: {}, 中级: {}, 高级: {}, 特级: {}};
-    
-    if (month) {
-      const [year, m] = month.split("-").map(Number);
+
+    if (monthRaw) {
+      const [year, m] = monthRaw.split("-").map(Number);
       const daysInMonth = new Date(year, m, 0).getDate();
       for (let i = 1; i <= daysInMonth; i++) {
         const dateStr = `${year}-${String(m).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-        if (isInPeriod(dateStr)) {
-          dates.push(dateStr);
-          hoursMap[dateStr] = 0;
-          projectMap[dateStr] = '';
-          levels.forEach(l => levelHoursMap[l][dateStr] = 0);
-        }
+        if (isInPeriod(dateStr)) dates.push(dateStr);
       }
     } else {
-      Object.keys(r.daily).forEach(date => {
-        dates.push(date);
-        hoursMap[date] = 0;
-        projectMap[date] = '';
-        levels.forEach(l => levelHoursMap[l][date] = 0);
-      });
+      const dateSet = new Set([...Object.keys(r.daily || {}), ...Object.keys(commByDate)]);
+      dateSet.forEach((d) => dates.push(d));
       dates.sort();
     }
-    
-    Object.entries(r.daily).forEach(([date, logs]) => {
-      if (!hoursMap[date]) hoursMap[date] = 0;
-      logs.forEach(log => {
-        hoursMap[date] += log.hours;
-        levelHoursMap[log.level][date] += log.hours;
-        projectMap[date] += (projectMap[date] ? '、' : '') + (log.project || '');
-      });
-    });
-    
+
     if (r.leaveRecords) {
       r.leaveRecords.forEach(lr => {
         const start = new Date(lr.startDate);
@@ -20679,7 +20888,7 @@ async function exportStats() {
         }
       });
     }
-    
+
     if (r.restRecords) {
       r.restRecords.forEach(lr => {
         const start = new Date(lr.startDate);
@@ -20689,28 +20898,26 @@ async function exportStats() {
         }
       });
     }
-    
-    let calTotalHours = 0;
-    const calLevelTotals = {初级: 0, 中级: 0, 高级: 0, 特级: 0};
+
+    let calTotalComm = 0;
     dates.forEach(date => {
       const d = new Date(date);
       const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
       const weekDay = weekDays[d.getDay()];
-      const hours = hoursMap[date] || 0;
-      calTotalHours += hours;
-      levels.forEach(l => calLevelTotals[l] += levelHoursMap[l][date] || 0);
+      const amt = commByDate[date] || 0;
+      calTotalComm = round2(calTotalComm + amt);
       const isLeaveDay = !!leaveMap[date];
       const isRestDay = !isLeaveDay && !!restMap[date];
-      sheet.addRow([date, weekDay, levelHoursMap.初级[date] || 0, levelHoursMap.中级[date] || 0, levelHoursMap.高级[date] || 0, levelHoursMap.特级[date] || 0, hours, projectMap[date] || '', isLeaveDay ? leaveMap[date] : (isRestDay ? '轮休' : '')]);
+      sheet.addRow([date, weekDay, amt, projByDate[date] || '', isLeaveDay ? leaveMap[date] : (isRestDay ? '轮休' : '')]);
       sheet.getRow(rowNum).eachCell((cell, ci) => {
-        if (isLeaveDay && ci === 9) {
+        if (isLeaveDay && ci === 5) {
           cell.style = { ...leaveStyle };
-        } else if (isRestDay && ci === 9) {
+        } else if (isRestDay && ci === 5) {
           cell.font = { color: { argb: 'FF92400E' } };
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
           cell.alignment = { horizontal: 'center', vertical: 'middle' };
-        } else if (ci >= 3 && ci <= 7) {
-          cell.style = { ...numStyle };
+        } else if (ci === 3) {
+          cell.style = { ...moneyStyle };
         } else {
           cell.style = { ...dataStyle };
         }
@@ -20718,18 +20925,18 @@ async function exportStats() {
       rowNum++;
     });
 
-    sheet.addRow(['合计', '', calLevelTotals.初级, calLevelTotals.中级, calLevelTotals.高级, calLevelTotals.特级, calTotalHours, '', '']);
+    sheet.addRow(['合计', '', calTotalComm, '', '']);
     sheet.getRow(rowNum).eachCell((cell, ci) => {
-      if (ci >= 3 && ci <= 7) cell.style = { ...highlightStyle };
+      if (ci === 3) cell.style = { ...moneyTotalStyle };
       else cell.style = { ...totalStyle };
     });
     rowNum++;
 
     sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: calHeaderRowNum }];
     applyZebraStripes(sheet, calHeaderRowNum + 1, rowNum - 2);
-    
+
     rowNum++;
-    
+
     if (r.leaveRecords && r.leaveRecords.length > 0) {
       sheet.addRow(['请假记录']);
       sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
@@ -20801,9 +21008,11 @@ async function exportStats() {
     rowNum++;
 
     const wageRowNum = rowNum;
-    sheet.addRow(['工时工资合计', '', '', '各等级工时 x 对应单价之和']);
+    sheet.addRow(['包活提成工资', '', '', '包活分成合计（工时仅作考勤参考，不计入工资）']);
     const wageCell = sheet.getRow(rowNum).getCell(2);
-    wageCell.value = { formula: `=E${totalAmountRowNum}`, result: totalAmount };
+    wageCell.value = myCommTotalRowNum
+      ? { formula: `=F${myCommTotalRowNum}`, result: myCommTotal }
+      : myCommTotal;
     wageCell.style = { ...moneyStyle };
     sheet.getRow(rowNum).eachCell((cell, ci) => {
       if (ci === 2) return;
@@ -20823,10 +21032,10 @@ async function exportStats() {
     rowNum++;
 
     const grossRowNum = rowNum;
-    sheet.addRow(['应发工资合计', '', '', '工时工资 + 其他补贴']);
+    sheet.addRow(['应发工资合计', '', '', '包活提成工资 + 其他补贴']);
     const grossCell = sheet.getRow(rowNum).getCell(2);
-    grossCell.value = { formula: `=B${wageRowNum}+B${rowNum - 1}`, result: totalAmount };
-    grossCell.style = { ...highlightStyle, numFmt: '¥#,##0.00' };
+    grossCell.value = { formula: `=B${wageRowNum}+B${rowNum - 1}`, result: myCommTotal };
+    grossCell.style = { ...moneyTotalStyle };
     sheet.getRow(rowNum).eachCell((cell, ci) => {
       if (ci === 2) return;
       if (ci === 1) cell.style = { ...labelStyle };
@@ -20846,8 +21055,8 @@ async function exportStats() {
 
     sheet.addRow(['实发工资', '', '', '应发工资 - 扣款']);
     const netCell = sheet.getRow(rowNum).getCell(2);
-    netCell.value = { formula: `=B${grossRowNum}-B${rowNum - 1}`, result: totalAmount };
-    netCell.style = { ...highlightStyle, numFmt: '¥#,##0.00' };
+    netCell.value = { formula: `=B${grossRowNum}-B${rowNum - 1}`, result: myCommTotal };
+    netCell.style = { ...moneyTotalStyle };
     sheet.getRow(rowNum).eachCell((cell, ci) => {
       if (ci === 2) return;
       if (ci === 1) cell.style = { ...labelStyle };
@@ -20867,7 +21076,7 @@ async function exportStats() {
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = '工时统计_' + month + '.xlsx';
+    a.download = '提成统计_' + month + '.xlsx';
     a.click();
     URL.revokeObjectURL(a.href);
     toast('已导出 Excel');
@@ -20887,7 +21096,8 @@ function collectStoreStats() {
     if (!buckets[id]) {
       buckets[id] = {
         id, name: id ? storeName(id) : "未指定门店",
-        count: 0, byStatus: {}, recordedEst: 0, act: 0, recordedDiff: 0,
+        count: 0, byStatus: {},
+        amount: 0, laborFee: 0,
       };
     }
     return buckets[id];
@@ -20900,8 +21110,8 @@ function collectStoreStats() {
       const b = ensure(p.storeId || "");
       b.count++;
       b.byStatus[p.status] = (b.byStatus[p.status] || 0) + 1;
-      const { est, act, diff, hasActual } = hoursDiff(p);
-      if (hasActual) { b.recordedEst += est; b.act += act; b.recordedDiff += diff; }
+      b.amount += Number(p.projectAmount) || 0;
+      b.laborFee += getLaborFee(p);
     });
   return Object.values(buckets).sort((a, b) => {
     // 未指定门店排第一
@@ -20947,14 +21157,14 @@ function renderStoreStats() {
   const rows = collectStoreStats();
   if (rows.length === 0) { box.innerHTML = `<div class="empty">暂无门店数据。</div>`; return; }
   const statuses = Object.values(STATUS);
-  const tot = { count: 0, est: 0, act: 0, diff: 0, byStatus: {} };
+  const tot = { count: 0, amount: 0, laborFee: 0, byStatus: {} };
   rows.forEach((r) => {
-    tot.count += r.count; tot.est += r.recordedEst; tot.act += r.act; tot.diff += r.recordedDiff;
+    tot.count += r.count; tot.amount += r.amount; tot.laborFee += r.laborFee;
     statuses.forEach((s) => { tot.byStatus[s] = (tot.byStatus[s] || 0) + (r.byStatus[s] || 0); });
   });
+  const money = (n) => `¥${(Math.round((n || 0) * 100) / 100).toLocaleString("zh-CN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
   // 状态配色：直接派生自全局 STATUS_COLOR，与徽章/导出完全一致
   const SS_FG = Object.fromEntries(Object.entries(STATUS_COLOR).map(([s, c]) => [s, c.fg]));
-  const diffArrow = (d) => (d > 0 ? '▲' : (d < 0 ? '▼' : '—'));
   // 生成一行「预约分布」堆叠条
   const distBar = (r) => {
     if (!r.count) return `<span style="color:var(--muted)">—</span>`;
@@ -20980,9 +21190,8 @@ function renderStoreStats() {
             <th class="ss-store">门店</th>
             <th class="ss-num">预约数</th>
             <th class="ss-dist">预约分布</th>
-            <th class="ss-num ss-hours">预计工时</th>
-            <th class="ss-num ss-hours">实际工时</th>
-            <th class="ss-num ss-diff">差异</th>
+            <th class="ss-num ss-hours">工程金额</th>
+            <th class="ss-num ss-hours">工费</th>
             <th class="ss-num ss-fulfill">开工准点率</th>
             <th class="ss-num ss-fulfill">平均偏差</th>
             <th class="ss-num ss-fulfill">完工率</th>
@@ -21001,9 +21210,8 @@ function renderStoreStats() {
               </td>
               <td class="ss-num"><b>${r.count}</b></td>
               <td class="ss-dist">${distBar(r)}</td>
-              <td class="ss-num ss-hours">${fmtHours(r.recordedEst)}</td>
-              <td class="ss-num ss-hours">${fmtHours(r.act)}</td>
-              <td class="ss-num ss-diff" style="color:${diffColor(r.recordedDiff)}">${diffArrow(r.recordedDiff)} ${fmtSignedDiff(r.recordedDiff)}</td>
+              <td class="ss-num ss-hours">${money(r.amount)}</td>
+              <td class="ss-num ss-hours">${money(r.laborFee)}</td>
               <td class="ss-num ss-fulfill" style="color:${rateColor(f.onTimeRate)}">${f.startedCount ? f.onTimeRate + '%' : '—'}</td>
               <td class="ss-num ss-fulfill" style="color:${Math.abs(f.avgDev) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${f.startedCount ? (f.avgDev > 0 ? '+' : '') + f.avgDev + '分' : '—'}</td>
               <td class="ss-num ss-fulfill" style="color:${rateColor(f.completion)}">${f.total ? f.completion + '%' : '—'}</td>
@@ -21016,9 +21224,8 @@ function renderStoreStats() {
             <td class="ss-store">合计</td>
             <td class="ss-num">${tot.count}</td>
             <td class="ss-dist"></td>
-            <td class="ss-num ss-hours">${fmtHours(tot.est)}</td>
-            <td class="ss-num ss-hours">${fmtHours(tot.act)}</td>
-            <td class="ss-num ss-diff" style="color:${diffColor(tot.diff)}">${diffArrow(tot.diff)} ${fmtSignedDiff(tot.diff)}</td>
+            <td class="ss-num ss-hours">${money(tot.amount)}</td>
+            <td class="ss-num ss-hours">${money(tot.laborFee)}</td>
             <td class="ss-num ss-fulfill" style="color:${rateColor(tfFulfill.onTimeRate)}">${tfFulfill.startedCount ? tfFulfill.onTimeRate + '%' : '—'}</td>
             <td class="ss-num ss-fulfill" style="color:${Math.abs(tfFulfill.avgDev) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${tfFulfill.startedCount ? (tfFulfill.avgDev > 0 ? '+' : '') + tfFulfill.avgDev + '分' : '—'}</td>
             <td class="ss-num ss-fulfill" style="color:${rateColor(tfFulfill.completion)}">${tfFulfill.total ? tfFulfill.completion + '%' : '—'}</td>
@@ -21044,9 +21251,8 @@ function buildStoreDetailSheet(wb, sheetName, projects) {
     { header: "实际开工", key: "startedAt", width: 16 },
     { header: "完工时间", key: "finishedAt", width: 16 },
     { header: "开工偏差", key: "deviation", width: 14 },
-    { header: "预计工时", key: "est", width: 11 },
-    { header: "实际工时", key: "act", width: 11 },
-    { header: "差异", key: "diff", width: 11 },
+    { header: "工程金额", key: "amount", width: 12 },
+    { header: "工费", key: "laborFee", width: 12 },
     { header: "施工人员", key: "workers", width: 26 }
   ];
   const headerFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2E8F0" } };
@@ -21059,7 +21265,6 @@ function buildStoreDetailSheet(wb, sheetName, projects) {
   detailSheet.views = [{ state: "frozen", ySplit: 1 }];
   const ON_TIME_GRACE_MIN = 30; // 与店面统计页一致：开工偏差 ±30 分钟内视为准时
   projects.forEach((p) => {
-    const h = hoursDiff(p);
     const workers = (p.assignedWorkerIds || [])
       .map((wid) => (getWorker(wid) && getWorker(wid).name) || wid)
       .filter(Boolean)
@@ -21091,24 +21296,13 @@ function buildStoreDetailSheet(wb, sheetName, projects) {
       startedAt: p.startedAt ? fmtExcelRelativeTime(p.startedAt, p.appointmentTime) : "",
       finishedAt: p.finishedAt ? fmtExcelRelativeTime(p.finishedAt, p.appointmentTime) : "",
       deviation,
-      est: h.hasActual ? h.est : (h.est > 0 ? h.est : ""),
-      act: h.hasActual ? h.act : "",
-      diff: h.hasActual ? h.diff : "",
+      amount: Number(p.projectAmount) || 0,
+      laborFee: getLaborFee(p),
       workers
     });
-    row.getCell("est").alignment = { horizontal: "right" };
-    row.getCell("act").alignment = { horizontal: "right" };
-    row.getCell("diff").alignment = { horizontal: "right" };
+    ["amount", "laborFee"].forEach((k) => { row.getCell(k).alignment = { horizontal: "right" }; });
     row.getCell("deviation").alignment = { horizontal: "center" };
     row.getCell("deviation").font = { color: { argb: devColor } };
-    if (h.hasActual) {
-      const diffStyle = diffExcelStyle(h.diff);
-      const diffCell = row.getCell("diff");
-      diffCell.font = { color: { argb: diffStyle.fg } };
-      if (diffStyle.bg) {
-        diffCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: diffStyle.bg } };
-      }
-    }
   });
   return detailSheet;
 }
@@ -21187,9 +21381,8 @@ async function exportStoreStats() {
       { header: "门店", key: "name", width: 22 },
       { header: "预约数", key: "count", width: 10 },
       ...statuses.map((s) => ({ header: s, key: s, width: 10 })),
-      { header: "预计工时(已登记)", key: "recordedEst", width: 16 },
-      { header: "实际工时(已登记)", key: "act", width: 16 },
-      { header: "差异", key: "diff", width: 12 },
+      { header: "工程金额", key: "amount", width: 14 },
+      { header: "工费", key: "laborFee", width: 14 },
       { header: "开工准点率", key: "onTimeRate", width: 12 },
       { header: "平均偏差(分)", key: "avgDev", width: 12 },
       { header: "完工率", key: "completion", width: 10 },
@@ -21210,9 +21403,8 @@ async function exportStoreStats() {
         name: r.name,
         count: r.count,
         ...Object.fromEntries(statuses.map((s) => [s, r.byStatus[s] || 0])),
-        recordedEst: r.recordedEst,
-        act: r.act,
-        diff: r.recordedDiff,
+        amount: r.amount,
+        laborFee: r.laborFee,
         onTimeRate: f.startedCount ? `${f.onTimeRate}%` : "—",
         avgDev: f.startedCount ? `${f.avgDev > 0 ? "+" : ""}${f.avgDev}` : "—",
         completion: f.total ? `${f.completion}%` : "—",
@@ -21220,15 +21412,7 @@ async function exportStoreStats() {
       });
       row.getCell("count").alignment = { horizontal: "right" };
       statuses.forEach((s) => row.getCell(s).alignment = { horizontal: "right" });
-      row.getCell("recordedEst").alignment = { horizontal: "right" };
-      row.getCell("act").alignment = { horizontal: "right" };
-      row.getCell("diff").alignment = { horizontal: "right" };
-      const sumDiffStyle = diffExcelStyle(r.recordedDiff);
-      const sumDiffCell = row.getCell("diff");
-      sumDiffCell.font = { color: { argb: sumDiffStyle.fg } };
-      if (sumDiffStyle.bg) {
-        sumDiffCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: sumDiffStyle.bg } };
-      }
+      ["amount", "laborFee"].forEach((k) => { row.getCell(k).alignment = { horizontal: "right" }; });
       // 履约指标配色（与店面统计页一致）
       const setFulfillColor = (key, value, isNegativeBad) => {
         const cell = row.getCell(key);
@@ -21254,22 +21438,15 @@ async function exportStoreStats() {
     const total = rows.reduce((acc, r) => {
       acc.count += r.count;
       statuses.forEach((s) => { acc[s] = (acc[s] || 0) + (r.byStatus[s] || 0); });
-      acc.recordedEst += r.recordedEst;
-      acc.act += r.act;
-      acc.diff += r.recordedDiff;
+      acc.amount += r.amount;
+      acc.laborFee += r.laborFee;
       return acc;
-    }, { name: "合计", count: 0, recordedEst: 0, act: 0, diff: 0 });
+    }, { name: "合计", count: 0, amount: 0, laborFee: 0 });
     const totalRow = summarySheet.addRow(total);
     totalRow.eachCell((cell) => {
       cell.font = { bold: true };
       if (cell.col > 1) cell.alignment = { horizontal: "right" };
     });
-    const totalDiffStyle = diffExcelStyle(total.diff);
-    const totalDiffCell = totalRow.getCell("diff");
-    totalDiffCell.font = { bold: true, color: { argb: totalDiffStyle.fg } };
-    if (totalDiffStyle.bg) {
-      totalDiffCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: totalDiffStyle.bg } };
-    }
     // 合计行的履约指标：直接取全部门店聚合（非各行相加）
     const tfFulfill = storeFulfillment(null, month);
     const setTotalFulfillColor = (key, value, isDelay) => {
@@ -21363,9 +21540,6 @@ function showStoreProjects(storeId, storeNameParam, monthFilter) {
       const fmtH = (v) => v > 0 ? Math.round(v * 10) / 10 + "h" : "—";
       const estText = fmtH(h.est);
       const actText = h.hasActual ? fmtH(h.act) : "—";
-      const diffText = h.hasActual && h.est > 0
-        ? `<span style="color:${diffColor(h.diff)};font-weight:600;margin-left:4px">${h.diff > 0 ? "+" : ""}${h.diff.toFixed(1)}h</span>`
-        : "";
       const workers = (p.assignedWorkerIds || [])
         .map((wid) => (getWorker(wid) && getWorker(wid).name) || wid)
         .filter(Boolean);
@@ -21402,7 +21576,9 @@ function showStoreProjects(storeId, storeNameParam, monthFilter) {
           ${devMin !== null ? `<div class="detail-row"><span class="detail-label">⏰ 开工偏差</span><span class="detail-value">${devHtml}</span></div>` : ""}
           ${p.finishedAt ? `<div class="detail-row"><span class="detail-label">🏁 完工</span><span class="detail-value">${fmtDateTime(p.finishedAt)}</span></div>` : ""}
           ${workers.length ? `<div class="detail-row"><span class="detail-label">👷 人员</span><span class="detail-value">${esc(workers.join(", "))}</span></div>` : ""}
-          <div class="detail-row"><span class="detail-label">⏱ 工时</span><span class="detail-value">预计 ${estText} / 实际 ${actText}${diffText}</span></div>
+          <div class="detail-row"><span class="detail-label">💰 工程金额</span><span class="detail-value" style="font-weight:600;color:#16a34a">¥${(Number(p.projectAmount) || 0).toLocaleString("zh-CN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}${p.contractType ? `（${esc(p.contractType)}）` : ""}</span></div>
+          <div class="detail-row"><span class="detail-label">🔧 工费</span><span class="detail-value">¥${getLaborFee(p).toLocaleString("zh-CN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}</span></div>
+          <div class="detail-row"><span class="detail-label">⏱ 考勤工时</span><span class="detail-value">${actText}</span></div>
         </div>
       </div>`;
     }).join("");
@@ -22580,7 +22756,10 @@ function downloadCSV(filename, data) {
 
 function exportProjects() {
   if (!perm.exportProjects() && !perm.exportAll()) { toast("权限不足"); hideExportMenu(); return; }
-  const headers = ["项目ID", "项目名称", "门店", "客户名称", "联系电话", "地址", "状态", "预约时间", "结束时间", "预计工时", "外协工时", "实际工时", "施工人数", "施工人员", "外协人员", "开工时间", "完工时间", "备注", "创建时间", "更新时间"];
+  // 包活金额（当前工资真源：包活分成）；工时列仅作考勤参考
+  const headers = ["项目ID", "项目名称", "门店", "客户名称", "联系电话", "地址", "状态", "预约时间", "结束时间",
+    "工程金额", "材料费", "工费金额", "工人分成合计", "分成池(工费÷2)", "包活方式", "分成方式",
+    "预计工时", "外协工时", "实际工时(考勤)", "施工人数", "施工人员", "外协人员", "开工时间", "完工时间", "备注", "创建时间", "更新时间"];
   const rows = cache.projects.map(p => [
     p.id,
     p.name || "",
@@ -22591,6 +22770,13 @@ function exportProjects() {
     p.status || "",
     p.appointmentTime || "",
     p.endTime || "",
+    Number(p.projectAmount) || 0,
+    Number(p.materialFee) || 0,
+    getLaborFee(p),
+    resolveCommissionAlloc(p).total,
+    getCommissionPool(p),
+    p.contractType || "",
+    p.commissionMode === "custom" ? "自定义比例" : p.commissionMode === "custom_amount" ? "按金额分配" : "平均分配",
     p.estimatedHours || 0,
     p.outsourcedHours || 0,
     p.actualHours || 0,
@@ -22610,10 +22796,10 @@ function exportProjects() {
 
 function exportWorkLogs() {
   if (!perm.exportWorkLogs() && !perm.exportAll()) { toast("权限不足"); hideExportMenu(); return; }
-  const headers = ["日志ID", "项目ID", "项目名称", "门店", "员工ID", "员工姓名", "日期", "工时", "工时等级", "开始时间", "结束时间", "备注", "是否外协", "是否返工", "是否计薪"];
-  // 与工资统计口径一致：剔除「不计入工资的返工工时」(isReworkLogPayable 为 false 的返工段)
+  // 工时为**考勤参考**：包活制下工资 = 包活分成，工时不再参与工资计算（故导出全部考勤记录，不做计薪过滤）
+  const headers = ["日志ID", "项目ID", "项目名称", "门店", "员工ID", "员工姓名", "日期", "工时(考勤)", "工时等级", "开始时间", "结束时间", "备注", "是否外协", "是否返工"];
   const rows = cache.projects.flatMap(p =>
-    (p.workLogs || []).filter(l => isReworkLogPayable(p, l)).map(l => [
+    (p.workLogs || []).map(l => [
       l.id || "",
       p.id,
       p.name || "",
@@ -22627,8 +22813,7 @@ function exportWorkLogs() {
       l.endTime || "",
       l.note || "",
       l.isOutsourced ? "是" : "否",
-      l.isRework ? "是" : "否",
-      "是"
+      l.isRework ? "是" : "否"
     ])
   );
   const csv = [headers.join(","), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
@@ -23070,8 +23255,8 @@ function renderMine() {
     { tab: "schedules", icon: svgCal(18), label: "个人日程", color: "#fef3c7", show: perm.viewSchedule() },
     { tab: "stores", icon: "🏪", label: "门店管理", color: "#f0fdf4", show: perm.manageStores() },
     { tab: "storeStats", icon: "📊", label: "店面统计", color: "#eff6ff", show: perm.viewStoreStats() },
-    { tab: "stats", icon: "📈", label: "工时统计", color: "#f0f9ff", show: perm.viewStats() },
-    { tab: "internalTasks", icon: "✅", label: "内部任务", color: "#fef2f2", show: perm.viewTask() },
+    { tab: "stats", icon: "💰", label: "提成统计", color: "#f0f9ff", show: perm.viewStats() },
+    // 「内部任务」菜单项已随功能下线移除（2026-10-18）
     { tab: "help", icon: "❓", label: "使用帮助", color: "#fef3c7", show: true },
   ].filter(i => i.show);
 
@@ -23508,6 +23693,9 @@ function switchTab(name) {
     updateConstructionSelectLabel();
     renderConstruction();
   }
+  if (name === "measurements") {
+    renderMeasurements();
+  }
   /* 全局初始化当前可见区域内的自定义下拉组件 */
   requestAnimationFrame(() => {
     const panel = document.getElementById(name);
@@ -23903,9 +24091,9 @@ function applyPermissions() {
     if (el) el.classList.toggle("hidden", hidden);
   };
   setHidden("btnNewProject", !perm.createProject());
+  document.querySelectorAll('[data-tab="measurements"]').forEach((b) => b.classList.toggle("hidden", !perm.measurementView()));
   setHidden("btnNewStore", !perm.manageStores());
   setHidden("btnManageVehicles", !(perm.vehicleManage() && MODE === "cloud"));
-  setHidden("btnWageConfig", !perm.manageWageConfig());
   setHidden("btnNewSchedule", !perm.addSchedule());
   setHidden("btnNewInternalTask", !perm.addTask());
   setHidden("btnExportStats", !perm.viewGlobalStats());
@@ -23969,6 +24157,7 @@ function renderAll() {
   renderWorkerSchedules();
   initInternalTasks();
   renderVehicleTrips();
+  renderMeasurements();
 }
 
 /* 下拉刷新时只重绘当前可见 Tab（含公共选择器），避免 renderAll 全量重绘带来的卡顿。
@@ -23988,7 +24177,7 @@ function renderActiveTabOnly() {
     case "calendar": renderCalendar(); break;
     case "construction": updateConstructionSelectLabel(); renderConstruction(); break;
     case "stats": renderStats(); break;
-    case "internalTasks": initInternalTasks(); break;
+    // case "internalTasks" / case "measurements"：功能已下线（2026-10-18），入口与面板已从 index.html 移除
     case "storeStats": renderStoreStats(); break;
     case "workers": renderWorkers(); renderOutsourcedWorkers(); break;
     case "stores": renderStores(); break;
@@ -25564,8 +25753,7 @@ function openTimelineActionMenu(taskEl, projectId) {
       <button class="btn small primary" onclick="closeTimelineActionMenu(); gotoConstruction('${p.id}')">施工管理</button>
       ${(p.repairOrders || []).filter(ro => ro.status === "待维修").map(ro => `<button class="btn small" onclick="closeTimelineActionMenu(); completeRepair('${p.id}','${ro.id}')">✅ 完成维修${(p.repairOrders.filter(r => r.status === "待维修").length > 1) ? " #" + (ro.seq || "") : ""}</button>`).join("")}
       ${perm.editProject(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); editProject('${p.id}')">编辑</button>` : ""}
-      ${(perm.editAppointment(p) || perm.editHours(p)) && !isAppointmentLocked(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); quickEditProjectTime('${p.id}')">✏️ 修改预约</button>` : ""}
-      ${perm.editWorkLog(p) && (p.workLogs || []).length > 0 ? `<button class="btn small ${isReviewed(p) ? 'warning' : ''}" onclick="closeTimelineActionMenu(); openEditWorkHoursForm('${p.id}')">✏️ 修改工时</button>` : ""}
+      ${perm.editAppointment(p) && !isAppointmentLocked(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); quickEditProjectTime('${p.id}')">✏️ 修改预约</button>` : ""}
       ${perm.reviewProject(p) && !isReviewed(p) && p.status === STATUS.ACCEPTED ? `<button class="btn small" onclick="closeTimelineActionMenu(); reviewProject('${p.id}')">审核</button>` : ""}
       ${perm.deleteProject(p) ? `<button class="btn small danger" onclick="closeTimelineActionMenu(); deleteProject('${p.id}')">删除</button>` : ""}
     </div>`;
@@ -25638,10 +25826,10 @@ async function timelineQuickAssignWorker(pid, wid) {
       return;
     }
   }
-  await repo.setAssignedWorkers(pid, cur.concat(wid));
-  // 乐观更新内存，秒级反馈；云端全量 loadAll 改为后台静默
+  const nextIds = cur.concat(wid);
   const tlP = getProject(pid);
-  if (tlP) tlP.assignedWorkerIds = cur.concat(wid);
+  if (tlP) tlP.assignedWorkerIds = nextIds;
+  guardLocalAssign(pid, nextIds);
   renderTimelineInDetail();
   setTimeout(() => {
     const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
@@ -25650,6 +25838,15 @@ async function timelineQuickAssignWorker(pid, wid) {
     }
   }, 100);
   toast(conflicts.length ? "已分配（存在时间冲突）" : "已分配安装人员");
+  const tlOk = await repo.setAssignedWorkers(pid, nextIds);
+  if (!tlOk) {
+    clearAssignGuard(pid);
+    toast("分配失败，已恢复为云端数据");
+    await repo.loadAll(false);
+    renderTimelineInDetail();
+    return;
+  }
+  confirmLocalAssign(pid);
   repo.loadAll().then(() => renderTimelineInDetail()).catch((e) => console.warn("时间轴分配后台同步失败：", e));
 }
 
@@ -25658,10 +25855,9 @@ async function timelineUnassignWorker(pid, wid) {
   const p = getProject(pid);
   if (!p) return;
   const next = (p.assignedWorkerIds || []).filter((x) => x !== wid);
-  await repo.setAssignedWorkers(pid, next);
-  // 乐观更新内存，秒级反馈；云端全量 loadAll 改为后台静默
   const tlP = getProject(pid);
   if (tlP) tlP.assignedWorkerIds = next;
+  guardLocalAssign(pid, next);
   renderTimelineInDetail();
   setTimeout(() => {
     const taskEl = document.querySelector(`.timeline-task[data-project-id="${pid}"]`);
@@ -25670,6 +25866,15 @@ async function timelineUnassignWorker(pid, wid) {
     }
   }, 100);
   toast("已移除人员");
+  const tlOk = await repo.setAssignedWorkers(pid, next);
+  if (!tlOk) {
+    clearAssignGuard(pid);
+    toast("移除失败，已恢复为云端数据");
+    await repo.loadAll(false);
+    renderTimelineInDetail();
+    return;
+  }
+  confirmLocalAssign(pid);
   repo.loadAll().then(() => renderTimelineInDetail()).catch((e) => console.warn("时间轴移除后台同步失败：", e));
 }
 
@@ -27036,7 +27241,6 @@ function bindEvents() {
   document.getElementById("statsWorker").addEventListener("change", renderStats);
   document.getElementById("statsStatus").addEventListener("change", renderStats);
   document.getElementById("btnExportStats").addEventListener("click", exportStats);
-  document.getElementById("btnWageConfig").addEventListener("click", showWageConfig);
   document.getElementById("btnInternalWorkLog").addEventListener("click", showInternalWorkLogModal);
 
   document.getElementById("storeStatsMonth").value = thisMonth;
@@ -27313,8 +27517,8 @@ function registerSubmitGuards() {
     // —— 原有：表单保存类（弹窗内确认按钮双击由 _modalConfirmLock 拦截，这里补一层函数级兜底）——
     "saveWorker", "saveOutsourcedWorker", "saveWorkerSchedule",
     "saveStoreForm", "saveAcceptance", "saveUseVehicle", "saveReturnVehicle",
-    "addWorkLog", "submitRepairOrder", "submitLeaveForm",
-    "saveWageConfigFromDialog", "saveInternalWorkLog", "saveNewInternalTask",
+    "submitRepairOrder", "submitLeaveForm",
+    "saveInternalWorkLog", "saveNewInternalTask",
     // —— 新增：直接点击 / 下拉 / onchange 触发的云写操作（不走弹窗确认按钮，需函数级防重入）——
     // 项目生命周期 / 状态
     "deleteProject", "cancelProject", "pauseProject", "resumeProject",
@@ -27580,7 +27784,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v608a0651";
+  const APP_VERSION = "v58319589";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -29470,3 +29674,436 @@ async function deleteVehicleTripHandler(id) {
       repo.loadAll().then(() => renderVehicleTrips()).catch(() => {});
     });
 }
+
+/* ============================================================
+ * 上门量尺模块（2026-09-30）
+ * 门店建单/派单 → 施工人员现场拍照+录尺寸 → 一键转施工预约
+ * 复用既有 COS 照片基建：cosGetSignedUrls / putFileToCos / cosGetViewUrls
+ *                     / onCosImgError / cosSafeId / openCosLightboxByKey
+ * ============================================================ */
+const MEASUREMENT_STATUS = { PENDING: "待量尺", MEASURING: "量尺中", DONE: "已量尺", CONVERTED: "已转单" };
+const MEASUREMENT_STATUS_COLOR = {
+  "待量尺": { fg: "#b45309", bg: "#fffbeb", border: "#fde68a" },
+  "量尺中": { fg: "#1d4ed8", bg: "#eef6ff", border: "#bfdbfe" },
+  "已量尺": { fg: "#047857", bg: "#ecfdf5", border: "#a7f3d0" },
+  "已转单": { fg: "#7c3aed", bg: "#f5f3ff", border: "#ddd6fe" },
+};
+
+const mapMeasurement = (r) => ({
+  id: r.id,
+  customer: r.customer || "",
+  phone: r.phone || "",
+  address: r.address || "",
+  appointmentTime: r.appointment_time || "",
+  status: r.status || MEASUREMENT_STATUS.PENDING,
+  note: r.note || "",
+  dimensions: (r.dimensions && typeof r.dimensions === "string") ? safeJsonParse(r.dimensions, []) : (r.dimensions || []),
+  photos: (r.photos && typeof r.photos === "string") ? safeJsonParse(r.photos, []) : (r.photos || []),
+  storeId: r.store_id || "",
+  createdBy: r.created_by || null,
+  assignedWorkerIds: Array.isArray(r.assigned_workers) ? r.assigned_workers : (r.assignedWorkerIds || []),
+  measuredBy: r.measured_by || "",
+  orderId: r.order_id || "",
+  createdAt: r.created_at,
+});
+
+const measurementToRow = (m) => ({
+  id: m.id,
+  customer: m.customer || null,
+  phone: m.phone || null,
+  address: m.address || null,
+  appointment_time: m.appointmentTime || null,
+  status: m.status || MEASUREMENT_STATUS.PENDING,
+  note: m.note || null,
+  dimensions: Array.isArray(m.dimensions) ? JSON.stringify(m.dimensions) : "[]",
+  photos: Array.isArray(m.photos) ? JSON.stringify(m.photos) : "[]",
+  store_id: m.storeId || null,
+  created_by: m.createdBy || null,
+  assigned_workers: JSON.stringify(m.assignedWorkerIds || []),
+  measured_by: m.measuredBy || null,
+  order_id: m.orderId || null,
+  version: m.version || 0,
+});
+
+function getMeasurement(id) {
+  return (cache.measurements || []).find((m) => m.id === id) || null;
+}
+
+function workerName(id) {
+  const w = (cache.workers || []).find((x) => x.id === id);
+  return w ? w.name : (id || "");
+}
+
+function measurementStatusBadge(status) {
+  const c = MEASUREMENT_STATUS_COLOR[status] || { fg: "#475569", bg: "#f1f5f9", border: "#e2e8f0" };
+  return `<span class="m-status" style="color:${c.fg};background:${c.bg};border-color:${c.border}">${esc(status)}</span>`;
+}
+
+function measurementCardHtml(m) {
+  const dims = (m.dimensions || []);
+  const dimSummary = dims.length ? dims.length + " 组尺寸" : "未录尺寸";
+  const photoCount = (m.photos || []).length;
+  const assigned = (m.assignedWorkerIds || []).map(workerName).filter(Boolean).join("、") || "未派单";
+  return `<div class="m-card" onclick="editMeasurement('${esc(m.id)}')">
+    <div class="m-card__head">
+      <div class="m-card__title">${esc(m.customer || "未填客户")}</div>
+      ${measurementStatusBadge(m.status)}
+    </div>
+    <div class="m-card__row">📍 ${esc(m.address || "未填地址")}</div>
+    ${m.phone ? `<div class="m-card__row">📞 ${esc(m.phone)}</div>` : ""}
+    <div class="m-card__row">👷 派单：${esc(assigned)}</div>
+    <div class="m-card__meta">${dimSummary} · ${photoCount} 张照片${m.measuredBy ? " · 测量人：" + esc(m.measuredBy) : ""}</div>
+  </div>`;
+}
+
+function renderMeasurements() {
+  const panel = document.getElementById("measurements");
+  if (!panel) return;
+  document.querySelectorAll('[data-tab="measurements"]').forEach((b) => b.classList.toggle("hidden", !perm.measurementView()));
+  if (!perm.measurementView()) { panel.innerHTML = `<div class="empty">无权访问上门量尺</div>`; return; }
+
+  const storeId = myStore();
+  let list = (cache.measurements || []).slice();
+  if (!isManager() && storeId) list = list.filter((m) => !m.storeId || m.storeId === storeId);
+  // 施工人员：仅看派给自己或自己创建的
+  if (isWorker() && !isStoreManager() && !isManager()) {
+    const me = (currentProfile && currentProfile.id) || "";
+    list = list.filter((m) =>
+      (m.assignedWorkerIds || []).some((wid) => workerName(wid) === (currentProfile && currentProfile.name)) ||
+      m.createdBy === me
+    );
+  }
+  list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+
+  const listEl = document.getElementById("measurementList");
+  if (!listEl) return;
+  if (!list.length) {
+    listEl.innerHTML = `<div class="empty">暂无量尺单。${perm.measurementCreate() ? "点击右上角「新建量尺」创建。" : ""}</div>`;
+  } else {
+    listEl.innerHTML = list.map((m) => measurementCardHtml(m)).join("");
+  }
+  const newBtn = document.getElementById("btnNewMeasurement");
+  if (newBtn) newBtn.style.display = perm.measurementCreate() ? "" : "none";
+}
+
+function newMeasurement() {
+  if (!perm.measurementCreate()) { toast("无权新建量尺单"); return; }
+  window._mEdit = {
+    id: uid(), customer: "", phone: "", address: "", appointmentTime: "",
+    status: MEASUREMENT_STATUS.PENDING, note: "", dimensions: [], photos: [],
+    storeId: (isStoreManager() || isWorker()) ? (myStore() || "") : ((cache.stores && cache.stores[0] && cache.stores[0].id) || ""),
+    assignedWorkerIds: [], measuredBy: "", orderId: "", createdBy: (currentUser ? currentUser.id : null), version: 0,
+  };
+  openMeasurementModal(window._mEdit);
+}
+
+function editMeasurement(id) {
+  const m = getMeasurement(id);
+  if (!m) { toast("量尺单不存在"); return; }
+  if (!perm.measurementView()) { toast("无权查看"); return; }
+  window._mEdit = JSON.parse(JSON.stringify(m));
+  openMeasurementModal(window._mEdit);
+}
+
+function openMeasurementModal(m) {
+  const isExisting = !!(m.id && getMeasurement(m.id));
+  modal.open(isExisting ? "量尺详情" : "新建量尺", measurementForm(m));
+  setTimeout(() => {
+    renderMeasurementWorkerChecks();
+    renderMeasurementDimensions();
+    renderMeasurementPhotoArea();
+  }, 50);
+}
+
+function measurementForm(m) {
+  const canEdit = perm.measurementEdit(m);
+  const isExisting = !!(m.id && getMeasurement(m.id));
+  const storeOpts = (cache.stores || []).map((s) => `<option value="${esc(s.id)}" ${s.id === m.storeId ? "selected" : ""}>${esc(s.name)}</option>`).join("");
+  const storeSel = isManager()
+    ? `<select class="input" id="mStore">${storeOpts}</select>`
+    : `<input class="input" id="mStore" value="${esc(storeName(m.storeId))}" disabled>`;
+  const statusOpts = [MEASUREMENT_STATUS.PENDING, MEASUREMENT_STATUS.MEASURING, MEASUREMENT_STATUS.DONE, MEASUREMENT_STATUS.CONVERTED]
+    .map((s) => `<option value="${s}" ${s === m.status ? "selected" : ""}>${s}</option>`).join("");
+  return `<div class="m-form">
+    <div class="form-row"><label>客户名称</label><input class="input" id="mCustomer" value="${esc(m.customer)}" placeholder="如：某某超市" ${canEdit ? "" : "disabled"}></div>
+    <div class="form-row"><label>联系电话</label><input class="input" id="mPhone" value="${esc(m.phone)}" placeholder="手机号" ${canEdit ? "" : "disabled"}></div>
+    <div class="form-row"><label>现场地址</label><input class="input" id="mAddress" value="${esc(m.address)}" placeholder="量尺地点" ${canEdit ? "" : "disabled"}></div>
+    <div class="form-row"><label>预约量尺时间</label><input class="input" id="mAppt" type="datetime-local" value="${esc(m.appointmentTime || "")}" ${canEdit ? "" : "disabled"}></div>
+    <div class="form-row"><label>所属门店</label>${storeSel}</div>
+    <div class="form-row"><label>状态</label><select class="input" id="mStatus" ${canEdit ? "" : "disabled"}>${statusOpts}</select></div>
+    <div class="form-block">
+      <div class="form-block__title">派给施工人员</div>
+      <div id="mWorkerArea" class="m-worker-area"></div>
+    </div>
+    <div class="form-block">
+      <div class="form-block__title">尺寸记录 <button type="button" class="btn small" id="mAddDim" onclick="addMeasurementDimRow()">＋ 添加尺寸</button></div>
+      <div id="mDimArea" class="m-dim-area"></div>
+    </div>
+    <div class="form-block">
+      <div class="form-block__title">现场照片</div>
+      <div id="mPhotoArea" class="m-photo-area"></div>
+    </div>
+    <div class="form-row"><label>备注</label><textarea class="input" id="mNote" rows="2" ${canEdit ? "" : "disabled"}>${esc(m.note || "")}</textarea></div>
+    <div class="form-actions">
+      ${perm.measurementDelete() && isExisting ? `<button class="btn danger" onclick="deleteMeasurement('${esc(m.id)}')">删除</button>` : ""}
+      ${perm.measurementConvert() && isExisting && !m.orderId ? `<button class="btn" onclick="convertMeasurementToOrder('${esc(m.id)}')">转预约</button>` : ""}
+      <button class="btn" onclick="modal.close()">取消</button>
+      ${canEdit ? `<button class="btn primary" id="mSaveBtn" onclick="saveMeasurement('${esc(m.id)}')">保存</button>` : ""}
+    </div>
+  </div>`;
+}
+
+function renderMeasurementWorkerChecks() {
+  const area = document.getElementById("mWorkerArea");
+  if (!area) return;
+  const m = window._mEdit;
+  const workers = (cache.workers || []).filter((w) => !myStore() || !w.storeId || w.storeId === myStore());
+  area.innerHTML = workers.map((w) => `<label class="m-check"><input type="checkbox" value="${esc(w.id)}" ${(m.assignedWorkerIds || []).includes(w.id) ? "checked" : ""} onchange="onMeasurementWorkerToggle('${esc(w.id)}', this.checked)"> ${esc(w.name)}</label>`).join("") || `<span class="hint">暂无施工人员</span>`;
+}
+
+function onMeasurementWorkerToggle(id, checked) {
+  const m = window._mEdit; if (!m) return;
+  m.assignedWorkerIds = m.assignedWorkerIds || [];
+  if (checked) { if (!m.assignedWorkerIds.includes(id)) m.assignedWorkerIds.push(id); }
+  else { m.assignedWorkerIds = m.assignedWorkerIds.filter((x) => x !== id); }
+}
+
+function renderMeasurementDimensions() {
+  const area = document.getElementById("mDimArea");
+  if (!area) return;
+  const m = window._mEdit;
+  if (!m.dimensions || !m.dimensions.length) { area.innerHTML = `<div class="hint">暂无尺寸，点击右上「＋ 添加尺寸」</div>`; return; }
+  area.innerHTML = m.dimensions.map((d, i) => `<div class="m-dim-row" data-i="${i}">
+    <input class="input m-dim-surface" placeholder="部位(如门头)" value="${esc(d.surface || "")}">
+    <input class="input m-dim-w" type="number" step="0.01" placeholder="宽(m)" value="${esc(d.w != null ? d.w : "")}">
+    <input class="input m-dim-h" type="number" step="0.01" placeholder="高(m)" value="${esc(d.h != null ? d.h : "")}">
+    <input class="input m-dim-note" placeholder="备注" value="${esc(d.note || "")}">
+    <button type="button" class="m-dim-del" onclick="removeMeasurementDimRow(${i})">✕</button>
+  </div>`).join("");
+}
+
+function addMeasurementDimRow() {
+  const m = window._mEdit; m.dimensions = m.dimensions || [];
+  m.dimensions.push({ surface: "", w: "", h: "", note: "" });
+  renderMeasurementDimensions();
+}
+
+function removeMeasurementDimRow(i) {
+  const m = window._mEdit; if (!m || !m.dimensions) return;
+  m.dimensions.splice(i, 1); renderMeasurementDimensions();
+}
+
+function renderMeasurementPhotoArea() {
+  const area = document.getElementById("mPhotoArea");
+  if (!area) return;
+  const m = window._mEdit;
+  const photos = m.photos || [];
+  const items = photos.map((it, i) => {
+    const sid = cosSafeId(it.key);
+    const img = it.uploading ? `<div class="cos-thumb__ph">⏳</div>` : `<img data-cos-key="${esc(it.key)}" data-m-photo="${i}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">`;
+    const del = perm.measurementEdit(m) ? `<button type="button" class="cos-thumb__del" onclick="removeMeasurementPhoto(${i})">✕</button>` : "";
+    const prog = it.uploading ? `<div class="cos-thumb__prog"><div class="cos-thumb__bar" id="cos-prog-${sid}" style="width:0%"></div></div>` : "";
+    return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}" id="cos-item-${sid}">${img}${prog}${del}</div>`;
+  }).join("");
+  const addBtn = perm.measurementEdit(m) ? `<button type="button" class="cos-add" onclick="document.getElementById('mFile').click()">＋ 添加照片</button><input id="mFile" type="file" accept="image/*" multiple class="hidden" onchange="handleMeasurementFiles(this)">` : "";
+  area.innerHTML = `<div class="cos-grid">${items}${addBtn}</div>`;
+  fillMeasurementPhotos(m);
+}
+
+async function fillMeasurementPhotos(m) {
+  const keys = (m.photos || []).filter((it) => !it.uploading && it.key).map((it) => it.key);
+  if (!keys.length) return;
+  const viewMap = await cosGetViewUrls(keys);
+  (m.photos || []).forEach((it, i) => {
+    if (it.uploading) return;
+    const img = document.querySelector(`#mPhotoArea img[data-m-photo="${i}"]`);
+    if (!img) return;
+    const signed = viewMap[it.key] || "";
+    if (signed) { img.src = signed; img.onerror = () => onCosImgError(img, img.alt, it.key); }
+    else onCosImgError(img, img.alt, it.key);
+    img.onclick = () => openCosLightboxByKey(it.key, it.name, (m.photos || []).filter((p) => !p.uploading).map((p) => p.key), i);
+  });
+}
+
+async function handleMeasurementFiles(input) {
+  const m = window._mEdit; if (!m) return;
+  const files = Array.from(input.files || []); input.value = "";
+  if (!files.length) return;
+  if (MODE !== "cloud") { toast("离线模式暂不支持上传照片，请联网后重试"); return; }
+  const prepared = files.map((file) => {
+    const nameExt = (file.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const ext = extFromMime(file.type, nameExt) || "jpg";
+    const key = `gg/measurements/${m.id}/site/${uid()}.${ext}`;
+    const item = { key, url: "", name: file.name, size: file.size, by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "匿名", at: Date.now(), uploading: true };
+    m.photos = m.photos || []; m.photos.push(item);
+    return { file, item };
+  });
+  renderMeasurementPhotoArea();
+  try {
+    const signed = await cosGetSignedUrls(prepared.map((x) => ({ key: x.item.key, contentType: (x.file.type || "image/jpeg") })));
+    const map = {}; signed.forEach((s) => (map[s.key] = s));
+    for (const { file, item } of prepared) {
+      const s = map[item.key];
+      if (!s) { item.uploading = false; item.error = true; renderMeasurementPhotoArea(); continue; }
+      try {
+        await putFileToCos(s.url, file, (pct) => { const bar = document.getElementById("cos-prog-" + cosSafeId(item.key)); if (bar) bar.style.width = pct + "%"; });
+        item.uploading = false; item.error = false;
+      } catch (e) {
+        item.uploading = false; item.error = true;
+        toast("上传失败：" + (e.message || e));
+      }
+      renderMeasurementPhotoArea();
+    }
+  } catch (e) {
+    toast("获取上传授权失败：" + (e.message || e));
+    prepared.forEach(({ item }) => { item.uploading = false; item.error = true; });
+    renderMeasurementPhotoArea();
+  }
+}
+
+function removeMeasurementPhoto(i) {
+  const m = window._mEdit; if (!m) return;
+  m.photos.splice(i, 1); renderMeasurementPhotoArea();
+}
+
+async function saveMeasurement(id) {
+  const m = window._mEdit; if (!m) return;
+  const customer = document.getElementById("mCustomer").value.trim();
+  const address = document.getElementById("mAddress").value.trim();
+  if (!customer && !address) { toast("请填写客户名称或现场地址"); return; }
+  if (!perm.measurementEdit(m)) { toast("无权编辑该量尺单"); return; }
+  const dimRows = Array.from(document.querySelectorAll("#mDimArea .m-dim-row"));
+  const dimensions = dimRows.map((row) => ({
+    surface: row.querySelector(".m-dim-surface").value.trim(),
+    w: row.querySelector(".m-dim-w").value,
+    h: row.querySelector(".m-dim-h").value,
+    note: row.querySelector(".m-dim-note").value.trim(),
+  })).filter((d) => d.surface || d.w || d.h || d.note);
+  const storeSel = document.getElementById("mStore");
+  const payload = {
+    id: m.id,
+    customer,
+    phone: document.getElementById("mPhone").value.trim(),
+    address,
+    appointmentTime: document.getElementById("mAppt").value || "",
+    status: document.getElementById("mStatus").value,
+    note: document.getElementById("mNote").value.trim(),
+    dimensions,
+    photos: (m.photos || []).map((it) => ({ key: it.key, url: "", name: it.name || "", size: it.size || 0, by: it.by || "", at: it.at || Date.now() })),
+    storeId: (storeSel && storeSel.tagName === "SELECT") ? storeSel.value : m.storeId,
+    assignedWorkerIds: m.assignedWorkerIds || [],
+    measuredBy: m.measuredBy || "",
+    orderId: m.orderId || "",
+    version: m.version || 0,
+    createdBy: m.createdBy || (currentUser ? currentUser.id : null),
+  };
+  if (window._savingMeasurement) return;
+  window._savingMeasurement = true;
+  const btn = document.getElementById("mSaveBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "保存中..."; }
+  try {
+    const saved = await repo.saveMeasurement(payload, id || null);
+    if (!saved) { toast("保存失败"); return; }
+    modal.close();
+    renderAll();
+    toast(id ? "已保存量尺单" : "已新建量尺单");
+    logOperation(id ? "MEASUREMENT_EDIT" : "MEASUREMENT_CREATE", customer, "ID: " + saved.id);
+    repo.loadAll().catch((e) => console.warn("[sync] 量尺后台同步失败：", e));
+  } catch (e) {
+    console.error(e); toast("保存失败：" + (e.message || "未知错误"));
+  } finally {
+    window._savingMeasurement = false;
+  }
+}
+
+async function deleteMeasurement(id) {
+  if (!perm.measurementDelete()) { toast("无权删除"); return; }
+  if (!(await confirmDialog("确定删除该量尺单？此操作不可撤销。", "删除量尺单"))) return;
+  try {
+    const ok = await repo.deleteMeasurement(id);
+    if (!ok) { toast("删除失败"); return; }
+    modal.close(); renderAll(); toast("已删除");
+    repo.loadAll().then(() => renderAll()).catch(() => {});
+  } catch (e) {
+    console.error(e); toast("删除失败：" + (e.message || "未知错误"));
+  }
+}
+
+async function convertMeasurementToOrder(id) {
+  const m = getMeasurement(id);
+  if (!m) { toast("量尺单不存在"); return; }
+  if (!perm.measurementConvert()) { toast("无权转预约"); return; }
+  if (m.orderId) { toast("该量尺单已转预约"); switchTab("projects"); return; }
+  const baseDate = m.appointmentTime ? m.appointmentTime.split("T")[0] : todayStr();
+  const baseStart = m.appointmentTime ? m.appointmentTime.split("T")[1].slice(0, 5) : "09:00";
+  const baseEnd = m.appointmentTime ? (() => { const d = new Date(m.appointmentTime); d.setHours(d.getHours() + 2); return d.toTimeString().slice(0, 5); })() : "11:00";
+  const dimText = (m.dimensions || []).map((d) => `${(d.surface || "部位")} ${d.w || "?"}×${d.h || "?"}m ${d.note || ""}`.trim()).join("； ");
+  const note = `【量尺单 ${id}】\n尺寸：${dimText || "无"}\n${m.note || ""}`.trim();
+  const newProject = {
+    name: (m.customer || "客户") + " 量尺单",
+    customer: m.customer,
+    phone: m.phone,
+    address: m.address,
+    appointmentTime: m.appointmentTime || buildLocalDateTime(baseDate, baseStart),
+    endTime: m.appointmentTime ? buildLocalDateTime(baseDate, baseEnd) : buildLocalDateTime(baseDate, "11:00"),
+    workSegments: [{ date: baseDate, start: baseStart, end: baseEnd }],
+    estimatedHours: 0,
+    workerCount: (m.assignedWorkerIds || []).length || 1,
+    status: STATUS.BOOKED,
+    note,
+    workContent: [],
+    storeId: m.storeId,
+    assignedWorkerIds: m.assignedWorkerIds || [],
+    projectPhotos: {
+      plan: [], material: [], completion: [],
+      site: (m.photos || []).map((it) => ({ key: it.key, url: "", name: it.name || "", size: it.size || 0, by: it.by || "", at: it.at || Date.now() })),
+    },
+  };
+  try {
+    const saved = await repo.saveProject(newProject, null);
+    if (!saved) { toast("生成预约失败"); return; }
+    const patch = {
+      id: m.id, status: MEASUREMENT_STATUS.CONVERTED, orderId: saved.id,
+      dimensions: m.dimensions, photos: m.photos, assignedWorkerIds: m.assignedWorkerIds,
+      measuredBy: m.measuredBy, note: m.note, customer: m.customer, phone: m.phone,
+      address: m.address, appointmentTime: m.appointmentTime, storeId: m.storeId, version: m.version || 0,
+    };
+    await repo.saveMeasurement(patch, m.id);
+    modal.close();
+    renderAll();
+    toast("已生成施工预约，可在「项目预约」查看");
+    switchTab("projects");
+    repo.loadAll().then(() => renderAll()).catch(() => {});
+  } catch (e) {
+    console.error(e); toast("转预约失败：" + (e.message || "未知错误"));
+  }
+}
+
+/* 量尺数据访问（云端走 insert/update，本地走 cache+saveLocal） */
+repo.saveMeasurement = async function (m, id) {
+  if (MODE === "cloud") {
+    const base = id ? { ...getMeasurement(id), ...m } : { id: m.id || uid(), ...m };
+    const row = measurementToRow(base);
+    if (!id && currentUser) row.created_by = currentUser.id;
+    let { error } = id
+      ? await sb.from("measurements").update(row).eq("id", id)
+      : await sb.from("measurements").insert(row);
+    if (error) { console.error(error); return null; }
+    return base;
+  }
+  if (id) { const cur = getMeasurement(id); if (cur) Object.assign(cur, m); }
+  else { cache.measurements.push({ id: m.id || uid(), createdAt: new Date().toISOString(), ...m }); }
+  saveLocal();
+  return id ? getMeasurement(id) : cache.measurements[cache.measurements.length - 1];
+};
+
+repo.deleteMeasurement = async function (id) {
+  if (MODE === "cloud") {
+    const { error } = await sb.from("measurements").delete().eq("id", id);
+    if (error) return false;
+  } else {
+    cache.measurements = cache.measurements.filter((m) => m.id !== id);
+    saveLocal();
+  }
+  return true;
+};

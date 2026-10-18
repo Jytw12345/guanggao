@@ -2750,6 +2750,89 @@ select.input {
 .card-hours__val { font-size: 13px; font-weight: 700; color: #1e293b; white-space: nowrap; }
 .card-hours__sep { width: 1px; background: #e2e8f0; }
 
+/* 包活制金额条：淡绿渐变块（区别于下方淡蓝时间卡），工程金额为主视觉、分成池次级 */
+.card-contract {
+  display: flex;
+  align-items: baseline;
+  gap: 6px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding: 7px 12px;
+  font-size: 12px;
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+}
+.card-contract__tag {
+  background: #16a34a;
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  align-self: center;
+}
+/* 「工程 ¥150」：卡片内最大字号，近黑高对比 */
+.card-contract__amt {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  color: #0f172a;
+}
+.card-contract__amt i {
+  font-style: normal;
+  font-size: 11px;
+  color: #64748b;
+}
+.card-contract__amt b {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+/* 「分成池 ¥75」：次级，深绿 */
+.card-contract__pool {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  color: #15803d;
+}
+.card-contract__pool i {
+  font-style: normal;
+  font-size: 11px;
+  color: #16a34a;
+  opacity: 0.8;
+}
+.card-contract__pool b {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+/* 有包活编辑权限：整块可点修改金额（hover 加深 + 绿光晕，与详情页 .info-item.is-editable 同风格） */
+.card-contract.is-editable {
+  cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+}
+.card-contract.is-editable:hover {
+  border-color: #4ade80;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, .14);
+}
+.card-contract__edit {
+  margin-left: auto;
+  font-size: 11px;
+  color: #16a34a;
+  opacity: .75;
+  align-self: center;
+  white-space: nowrap;
+}
+.card-contract.is-editable:hover .card-contract__edit { opacity: 1; }
+@media (max-width: 480px) {
+  .card-contract { padding: 6px 10px; }
+  .card-contract__amt b { font-size: 15px; }
+  .card-contract__pool b { font-size: 13px; }
+}
+
 .card-progress {
   display: flex;
   align-items: center;
@@ -3566,6 +3649,112 @@ textarea.input { resize: vertical; min-height: 50px; }
   margin-bottom: 10px;
 }
 .form-row-cols .form-row { margin-bottom: 0; }
+/* 包活制金额区（预约弹窗）：窄屏改为单列，输入框撑满避免溢出 */
+@media (max-width: 480px) {
+  .contract-grid { grid-template-columns: 1fr; gap: 8px; }
+  .contract-grid .input { width: 100%; min-width: 0; }
+}
+
+/* 完工弹窗：包活金额推导链（原 2×2 四格 info-grid，占四行高度）。
+   「包工 ¥352 → 工费 ¥352 → 分成池 ¥176」本就是推导关系，用箭头串成一行更直观也更省高。 */
+.money-chain {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.money-chain__tag {
+  font-size: 11px;
+  color: #15803d;
+  background: #dcfce7;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.money-chain__step {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  background: #fafbfc;
+  border: 1px solid #f0f2f5;
+  border-radius: 8px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+.money-chain__step i {
+  font-style: normal;
+  font-size: 11px;
+  color: #9aa4b2;
+}
+.money-chain__step b {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+}
+.money-chain__step.is-pool {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+.money-chain__step.is-pool b { color: #16a34a; }
+.money-chain__arrow {
+  color: #cbd5e1;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+/* 完工弹窗：项目名称 + 门店 —— 只读摘要（原为两个禁用 input，各占 label+边框两行） */
+.complete-subject {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.complete-subject__name {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+  word-break: break-all;
+}
+.complete-subject__store {
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+/* 完工弹窗：开工/完工/时长三列。窄屏放不下会被挤成两行（"施工时长"断成两行、
+   日期时间折行），改为日期与时刻上下两行、字号收紧，保证三列恒定一行三列。 */
+.complete-time-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.85fr;
+  gap: 6px 10px;
+}
+.complete-time-grid .k {
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 2px;
+  white-space: nowrap;
+}
+.complete-time-grid .v {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
+@media (max-width: 480px) {
+  .complete-time-row { padding: 10px 8px !important; }
+  .complete-time-grid { gap: 4px 6px; }
+  .complete-time-grid .v { font-size: 12px; }
+}
+
+/* 分成面板信息格：默认 4 列，窄屏降为 2 列但收窄内边距/字号，减少纵向占高 */
+@media (max-width: 480px) {
+  .commission-panel .info-grid { gap: 6px; }
+  .commission-panel .info-item { padding: 6px 8px; }
+  .commission-panel .info-item .v { font-size: 13px; }
+}
 
 /* 项目延期弹窗：开始时间 + 箭头 + 结束时间 并排一行 */
 .delay-time-row {
@@ -5930,6 +6119,284 @@ body.modal-open {
   margin-bottom: 16px;
   box-shadow: var(--shadow);
 }
+
+/* 包活制：分成分配面板 + 表单内联单选 */
+.radio-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  margin: 0;
+}
+.commission-panel .info-grid {
+  margin-bottom: 10px;
+}
+/* 分成面板标题行：标题左、右侧「保存分成」按钮（窄屏下不再单独占一行） */
+.commission-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.commission-head h3 { margin: 0; }
+.commission-head .comm-save-btn { flex-shrink: 0; }
+/* 分成方式三个选项：始终排在一行（窄屏自动压缩），按钮已移出故不再用 margin-left:auto */
+.commission-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  padding: 8px 0 10px;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 10px;
+}
+.commission-mode .radio-inline {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.commission-mode .radio-inline input { flex-shrink: 0; margin: 0; }
+.commission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* 汇总比例条：分段彩条 + 可拖动分隔点 */
+.comm-bar {
+  position: relative;
+  width: 100%;
+  height: 38px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f1f5f9;
+  border: 1px solid var(--border);
+  touch-action: none;
+}
+.comm-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  line-height: 1.2;
+  overflow: hidden;
+  white-space: nowrap;
+  user-select: none;
+  transition: none;
+}
+.comm-seg-name {
+  font-weight: 700;
+  font-size: 14px;
+}
+.comm-seg-pct {
+  font-size: 12px;
+  opacity: 0.95;
+}
+.comm-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  margin-left: -9px;
+  z-index: 2;
+  cursor: ew-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+.comm-handle span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(15, 23, 42, 0.55);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.comm-handle:hover span,
+.comm-handle:active span {
+  background: #fde047;
+  border-color: #ca8a04;
+}
+/* 图例：每人一个同色圆点 */
+.comm-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.comm-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.comm-legend-name {
+  flex: 1;
+}
+.comm-legend-amt {
+  font-weight: 600;
+  color: #16a34a;
+}
+/* 图例内合并的考勤工时（系统自动统计 · 仅参考不计入工资） */
+.comm-legend-hrs {
+  font-size: 12px;
+  color: #64748b;
+  min-width: 42px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* 图例内「固定」只读小标（外协固定工钱，只读态） */
+.comm-item-tag {
+  font-size: 11px;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: 4px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+/* 外协固定工钱区：先从分成池扣除，剩余再分给安装人员（外协不进比例条）。
+   视觉强化（2026-10-18）：虚线→实线琥珀边框避免被忽略；有未填时整块转红；
+   标题带数量徽标；空输入红框提示；金额加大加粗。 */
+.comm-outsourced {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: #fffbeb;
+}
+.comm-outsourced.has-unfilled {
+  border-color: #dc2626;
+  background: #fef2f2;
+}
+.comm-outsourced-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #b45309;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* 标题右侧数量徽标：N 名外协 / N 名未填（未填时转红） */
+.comm-out-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #92400e;
+  background: #fde68a;
+  border-radius: 999px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+.comm-out-badge.is-warn {
+  color: #b91c1c;
+  background: #fecaca;
+}
+.comm-outsourced .comm-legend-item {
+  flex-wrap: wrap;
+}
+.comm-out-input {
+  width: 76px;
+  font-size: 12px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+.comm-amount-input {
+  width: 80px;
+  font-size: 13px;
+  padding: 3px 6px;
+  flex-shrink: 0;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  text-align: right;
+}
+/* 金额模式：手动填写/拖动过 → 蓝框蓝底＝固定值；灰框＝自动均分出来的 */
+.comm-amount-input.is-locked {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+/* 未填状态：红框 + 淡红底 + 红色 placeholder */
+.comm-out-input.is-empty {
+  border-color: #dc2626;
+  background: #fef2f2;
+}
+.comm-out-input.is-empty::placeholder {
+  color: #dc2626;
+  opacity: 0.75;
+}
+.comm-out-amt {
+  font-weight: 700;
+  font-size: 14px;
+  color: #b45309;
+  min-width: 64px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* 未填警告行（保存/完工前也会弹确认，这里做常驻提醒） */
+.comm-out-warn {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b91c1c;
+  line-height: 1.5;
+  padding: 4px 8px;
+  background: #fef2f2;
+  border-radius: 6px;
+}
+.comm-out-note {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #92400e;
+}
+.comm-legend-item {
+  flex-wrap: wrap;
+}
+.comm-legend-item.is-outsourced .comm-legend-name {
+  color: #64748b;
+}
+/* 图例下方合计脚注：分成合计 + 人均工时合计 */
+.commission-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  color: #374151;
+}
+.comm-total-amt {
+  color: #16a34a;
+  font-weight: 700;
+}
+.commission-foot-note {
+  font-size: 11px;
+  color: #94a3b8;
+}
+@media (max-width: 480px) {
+  .comm-bar {
+    height: 34px;
+  }
+  .comm-seg-name {
+    font-size: 13px;
+  }
+  .comm-seg-pct {
+    font-size: 11px;
+  }
+}
 .detail-block h3 {
   margin: 0 0 12px;
   font-size: 15px;
@@ -5950,6 +6417,114 @@ body.modal-open {
 }
 .info-item .k { color: #9aa4b2; font-size: 11px; margin-bottom: 2px; }
 .info-item .v { font-size: 14px; font-weight: 600; margin-top: 2px; }
+/* 包活金额摘要块：可点编辑态（权限内才加 .is-editable） */
+.info-item.is-editable {
+  cursor: pointer;
+  transition: box-shadow .15s, border-color .15s;
+}
+.info-item.is-editable:hover {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, .15);
+}
+.info-item__edit {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: #16a34a;
+  white-space: nowrap;
+  opacity: .75;
+}
+.info-item.is-editable:hover .info-item__edit { opacity: 1; }
+
+/* 快捷修改包活金额弹窗 */
+.quick-contract__calc {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #166534;
+}
+.quick-contract__calc b { font-weight: 700; }
+.quick-contract__calc .is-pool { color: #16a34a; }
+/* 「修改包活金额」弹窗金额区：包工包料时「工程金额 / 材料费」两栏并排一行，省一行高度。
+   包工时材料费隐藏，只剩一个子项 flex:1 → 自然占满整行，无需额外分支。
+   min-width:0 防止 input 在 flex 里撑破容器（窄屏溢出）。 */
+.quick-contract__amounts {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+.quick-contract__amounts > .form-row {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* 「修改包活金额」弹窗：每人分成变化实时预览。
+   完工后改金额会直接改变已计入统计的提成，必须让操作者一眼看清每个人的前后差额。 */
+.qc-alloc-preview { margin: 0 0 8px; }
+.qc-alloc-preview__title {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.qc-alloc-preview__list { display: flex; flex-wrap: wrap; gap: 6px; }
+.qc-alloc-preview__none { font-size: 12px; color: #94a3b8; }
+.qc-alloc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 20px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  white-space: nowrap;
+}
+.qc-alloc-chip b { font-weight: 700; }
+.qc-alloc-chip.is-down { border-color: #fecaca; background: #fef2f2; color: #b91c1c; }
+.qc-alloc-chip.is-up { border-color: #bbf7d0; background: #f0fdf4; color: #15803d; }
+.qc-out-tag {
+  font-style: normal;
+  font-size: 10.5px;
+  color: #7c3aed;
+  background: #ede9fe;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.qc-alloc-preview__warn {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+/* 「修改包活金额」留痕：详情页包活块下方的最近修改提示行 */
+.contract-edit-trace {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #bbf7d0;
+  font-size: 11.5px;
+  color: #15803d;
+  opacity: .9;
+  line-height: 1.5;
+}
+/* 「施工记录」区块顶部的指引小字（说明各类改动记在操作日志） */
+.rec-hint {
+  font-size: 11.5px;
+  color: #94a3b8;
+  margin: -4px 0 10px;
+  line-height: 1.5;
+}
+.rec-hint b { color: #64748b; font-weight: 600; }
 
 /* ===== 施工详情：项目概览头部 ===== */
 .proj-hero {
@@ -6257,7 +6832,6 @@ table.data tfoot td { font-weight: 600; background: #fafafa; }
 .store-stats-table .ss-rank--top { background: #fef3c7; color: #b45309; }
 .store-stats-table .ss-dist { min-width: 130px; }
 .store-stats-table .ss-hours { color: #334155; }
-.store-stats-table .ss-diff { font-weight: 600; white-space: nowrap; }
 .store-stats-table .ss-fulfill { white-space: nowrap; min-width: 64px; }
 .ss-bar {
   display: flex;
@@ -6417,6 +6991,7 @@ table.data.project-hours-diff .col-name { width: 120px; min-width: 120px; max-wi
 table.data.project-hours-diff .col-status { width: 64px; min-width: 64px; }
 table.data.project-hours-diff .col-status .badge { white-space: nowrap; }
 table.data.project-hours-diff .col-num { width: 44px; min-width: 44px; }
+table.data.project-hours-diff .col-money { width: 78px; min-width: 78px; white-space: nowrap; }
 table.data.project-hours-diff .col-outsourced { width: 72px; min-width: 72px; }
 table.data.project-hours-diff .col-workers { width: 80px; min-width: 80px; max-width: 110px; }
 table.data.project-hours-diff .col-auto { width: 74px; min-width: 74px; max-width: 100px; }
@@ -6546,6 +7121,18 @@ table.data.project-hours-diff td.wrap {
   color: var(--muted);
   font-weight: 500;
 }
+
+.stats-hint {
+  font-size: 12.5px;
+  color: var(--text-sub, #64748b);
+  background: rgba(22, 163, 74, .07);
+  border: 1px solid rgba(22, 163, 74, .2);
+  border-radius: 8px;
+  padding: 7px 10px;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+.stats-hint b { color: #16a34a; }
 
 .stats-summary {
   display: grid;

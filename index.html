@@ -37,11 +37,10 @@
         <button class="tab-btn" data-tab="calendar"><span class="tab-ico">📅</span>预约日历</button>
         <button class="tab-btn" data-tab="construction"><span class="tab-ico">🏗️</span>施工管理</button>
         <button class="tab-btn" data-tab="vehicleTrips"><span class="tab-ico">🚚</span>车辆里程</button>
-        <button class="tab-btn" data-tab="internalTasks"><span class="tab-ico">✅</span>内部任务</button>
         <button class="tab-btn" data-tab="workers"><span class="tab-ico">👷</span>施工人员</button>
         <button class="tab-btn" data-tab="schedules"><span class="tab-ico">🗓️</span>个人日程</button>
         <button class="tab-btn" data-tab="leaves"><span class="tab-ico">🏖️</span>休假管理</button>
-        <button class="tab-btn" data-tab="stats"><span class="tab-ico">⏱️</span>工时统计</button>
+        <button class="tab-btn" data-tab="stats"><span class="tab-ico">💰</span>提成统计</button>
         <button class="tab-btn" data-tab="storeStats"><span class="tab-ico">🏪</span>店面统计</button>
         <span class="tab-sep" aria-hidden="true"></span>
         <div class="tab-dropdown">
@@ -164,10 +163,6 @@
       <span class="bnav-icon">🚚</span>
       <span class="bnav-label">车辆</span>
     </button>
-    <button class="bottom-nav-item" data-tab="internalTasks" title="任务">
-      <span class="bnav-icon">✅</span>
-      <span class="bnav-label">任务</span>
-    </button>
     <button class="bottom-nav-item" data-tab="workers" title="人员">
       <span class="bnav-icon">👷</span>
       <span class="bnav-label">人员</span>
@@ -284,10 +279,10 @@
       <div id="workerScheduleDescription"></div>
     </section>
 
-    <!-- 工时统计 -->
+    <!-- 提成统计 -->
     <section id="stats" class="tab-panel">
       <div class="section-head">
-        <h2>月底工时统计</h2>
+        <h2>月底提成统计</h2>
       </div>
       <div class="toolbar">
         <select id="statsPeriod" class="input">
@@ -314,62 +309,11 @@
           <option value="已取消">已取消</option>
         </select>
         <button class="btn" id="btnExportStats">导出统计数据</button>
-        <button class="btn" id="btnWageConfig">工时单价设置</button>
         <button class="btn" id="btnInternalWorkLog">内部工时记录</button>
       </div>
+      <div class="stats-hint">💡 提成与金额合计<b>仅统计已完工 / 已验收 / 已审核的项目</b>；施工中、暂停、延期、预约中及已取消项目不提前计入，项目完工后自动计入。</div>
       <div id="statsSummary" class="stats-summary"></div>
       <div id="statsTable"></div>
-    </section>
-
-    <!-- 内部任务管理 -->
-    <section id="internalTasks" class="tab-panel">
-      <div class="section-head it-section-head">
-        <h2>📋 内部任务管理</h2>
-        <button class="btn primary" id="btnNewInternalTask">+ 下达任务</button>
-      </div>
-      <div class="it-toolbar">
-        <select id="internalTaskStatusFilter" class="input" onchange="renderInternalTasks()">
-          <option value="">全部状态</option>
-          <option value="pending">待开始</option>
-          <option value="in_progress">进行中</option>
-          <option value="completed">待审核</option>
-          <option value="verified">已审核</option>
-        </select>
-        <select id="internalTaskWorkerFilter" class="input" onchange="renderInternalTasks()">
-          <option value="">全部人员</option>
-        </select>
-        <select id="internalTaskTypeFilter" class="input" onchange="renderInternalTasks()">
-          <option value="">全部类型</option>
-          <option value="仓库工作">仓库工作</option>
-          <option value="送货">送货</option>
-          <option value="外出安装">外出安装</option>
-          <option value="看现场量尺寸">看现场量尺寸</option>
-          <option value="其他">其他</option>
-        </select>
-        <select id="internalTaskDateFilter" class="input" onchange="renderInternalTasks()">
-          <option value="3days" selected>最近 3 天</option>
-          <option value="7days">最近 7 天</option>
-          <option value="all">全部任务</option>
-        </select>
-        <input id="internalTaskSearch" class="input" placeholder="搜索名称/客户/人员" oninput="renderInternalTasks()" style="min-width:140px;" />
-        <select id="internalTaskSort" class="input" onchange="renderInternalTasks()">
-          <option value="status">按状态排序</option>
-          <option value="date">按日期排序</option>
-          <option value="worker">按人员排序</option>
-        </select>
-        <button class="btn" id="btnBatchInternalTask">批量</button>
-        <button class="btn" id="btnExportInternalTasks">导出</button>
-      </div>
-      <div id="internalTaskBatchBar" class="it-batch-bar" style="display:none;">
-        <label class="it-batch-all"><input type="checkbox" id="batchSelectAll" onchange="toggleBatchSelectAll(this.checked)" /> 全选</label>
-        <span class="it-batch-count">已选 <b id="batchCount">0</b> 条</span>
-        <div class="it-batch-actions">
-          <button class="btn primary" id="btnBatchComplete" onclick="batchCompleteSelected()">批量完成</button>
-          <button class="btn primary" id="btnBatchVerify" onclick="batchVerifySelected()">批量审核</button>
-          <button class="btn" onclick="toggleBatchMode()">退出</button>
-        </div>
-      </div>
-      <div id="internalTaskList" class="card-grid"></div>
     </section>
 
     <!-- 店面统计（总经理） -->
