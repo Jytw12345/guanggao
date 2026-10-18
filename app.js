@@ -2369,9 +2369,11 @@ function getLaborFee(p) {
   if (!p) return 0;
   // 优先用已存储的 labor_fee；历史数据未填时按 contract_type 派生
   if (Number(p.laborFee) > 0) return Number(p.laborFee);
+  // 成本扣项（DB 字段仍叫 material_fee）：包工包料=材料费；包工=吊车/运费等现场成本。
+  // 两种模式统一：工费 = 工程金额 − 扣项（2026-10-19 起包工也支持扣项，
+  // 例：包工工程金额 1100 = 工费 350 + 吊车 800 → 分成池按 350÷2=175，而非 1100÷2=550）。
   const amt = Number(p.projectAmount) || 0;
-  if (p.contractType === "包工包料") return Math.max(0, amt - (Number(p.materialFee) || 0));
-  return amt;
+  return Math.max(0, amt - (Number(p.materialFee) || 0));
 }
 
 function getCommissionPool(p) {
@@ -9355,15 +9357,29 @@ function renderProjects() {
           ${p.address ? `<span class="card-sub__addr">${esc(p.address)}</span>` : ""}
         </div>
 
-        <!-- 包活制：工程金额 / 分成池（视觉重点：淡绿金额条，主数字放大加粗）
-             有包活编辑权限时整块可点，直接弹「修改包活金额」快捷弹窗 -->
-        ${((Number(p.projectAmount) > 0 || canEditContract) ? `
+        <!-- 包活制：工程金额 /（扣项）/ 分成池（视觉重点：淡绿金额条，主数字放大加粗）
+             有包活编辑权限时整块可点，直接弹「修改包活金额」快捷弹窗。
+             ① 金额未填显示「未填金额」而非 ¥0（¥0 会被误读成"这单 0 块钱"）；
+             ② 标签写全「工程金额」而非「工程」，消除歧义；
+             ③ 有扣项时显示被扣除的部分（包工包料=材料，包工=吊车/运费等），
+                让卡片上就能核对「工程 → 工费 → 分成池」的链路。 -->
+        ${(() => {
+          const _a = Number(p.projectAmount) || 0;
+          const _t = p.contractType || "包工";
+          const _m = Number(p.materialFee) || 0;
+          const _pool = getCommissionPool(p);
+          if (!(_a > 0) && !canEditContract) return "";
+          return `
         <div class="card-contract${canEditContract ? " is-editable" : ""}"${canEditContract ? ` onclick="openQuickContractEdit('${p.id}')" title="点击修改包活金额"` : ""}>
-          <span class="card-contract__tag">💰 ${esc(p.contractType || "包工")}</span>
-          <span class="card-contract__amt"><i>工程</i><b>¥${(Number(p.projectAmount) || 0).toFixed(0)}</b></span>
-          <span class="card-contract__pool"><i>分成池</i><b>¥${getCommissionPool(p).toFixed(0)}</b></span>
+          <span class="card-contract__tag">💰 ${esc(_t)}</span>
+          ${_a > 0
+            ? `<span class="card-contract__amt"><i>工程金额</i><b>¥${_a.toFixed(0)}</b></span>`
+            : `<span class="card-contract__unfilled">未填金额</span>`}
+          ${_a > 0 && _m > 0 ? `<span class="card-contract__mat"><i>${_t === "包工包料" ? "材料" : "扣项"}</i><b>−¥${_m.toFixed(0)}</b></span>` : ""}
+          ${_pool > 0 ? `<span class="card-contract__pool"><i>分成池</i><b>¥${_pool.toFixed(0)}</b></span>` : ""}
           ${canEditContract ? `<span class="card-contract__edit">✏️ 改金额</span>` : ""}
-        </div>` : "")}
+        </div>`;
+        })()}
 
         <!-- 预约时段（高亮 + 时长标签） -->
         ${(() => {
@@ -9657,11 +9673,11 @@ function projectForm(p = {}) {
             <input class="input" type="number" min="0" step="0.01" id="pProjectAmount" value="${esc(p.projectAmount != null ? p.projectAmount : "")}" placeholder="客户应付总额" oninput="updateContractCalc()" ${contractDisabled ? "disabled" : ""} />
           </div>
         </div>
-        <div class="form-row" id="pMaterialFeeRow" style="margin:0;${p.contractType === "包工包料" ? "" : "display:none;"}">
-          <label><span style="color:#16a34a;">📦</span> 材料费</label>
+        <div class="form-row" id="pMaterialFeeRow" style="margin:0;">
+          <label id="pMaterialFeeLabel"><span style="color:#16a34a;">📦</span> ${p.contractType === "包工包料" ? "材料费" : "成本扣项"}</label>
           <div style="display:flex;align-items:center;gap:6px;min-width:0;">
             <span style="color:#64748b;flex-shrink:0;">¥</span>
-            <input class="input" type="number" min="0" step="0.01" id="pMaterialFee" value="${esc(p.materialFee != null ? p.materialFee : "")}" placeholder="材料成本" oninput="updateContractCalc()" ${contractDisabled ? "disabled" : ""} />
+            <input class="input" type="number" min="0" step="0.01" id="pMaterialFee" value="${esc(p.materialFee != null ? p.materialFee : "")}" placeholder="${p.contractType === "包工包料" ? "材料成本" : "吊车/运费等现场成本"}" oninput="updateContractCalc()" ${contractDisabled ? "disabled" : ""} />
           </div>
         </div>
       </div>
@@ -9742,11 +9758,15 @@ function projectForm(p = {}) {
     </div>`;
 }
 
-/* 包活方式切换：包工包料时显示材料费输入框 */
+/* 包活方式切换：扣项输入框两种模式都显示，仅切换标签文案
+   （包工包料=材料费；包工=吊车/运费等现场成本。数学统一：工费 = 工程金额 − 扣项） */
 function onContractTypeChange() {
   const type = document.querySelector('input[name="contractType"]:checked');
-  const row = document.getElementById("pMaterialFeeRow");
-  if (row) row.style.display = (type && type.value === "包工包料") ? "" : "none";
+  const isMaterial = !!(type && type.value === "包工包料");
+  const label = document.getElementById("pMaterialFeeLabel");
+  const input = document.getElementById("pMaterialFee");
+  if (label) label.innerHTML = `<span style="color:#16a34a;">${isMaterial ? "📦" : "🏷️"}</span> ${isMaterial ? "材料费" : "成本扣项"}`;
+  if (input) input.placeholder = isMaterial ? "材料成本" : "吊车/运费等现场成本";
   updateContractCalc();
 }
 
@@ -9760,15 +9780,16 @@ function updateContractCalc() {
   if (!amtEl || !laborTxt || !poolTxt) return;
   const type = document.querySelector('input[name="contractType"]:checked');
   const isMaterial = type && type.value === "包工包料";
+  const matLabel = isMaterial ? "材料费" : "成本扣项";
   const amt = Number(amtEl.value) || 0;
-  const mat = isMaterial ? (Number(matEl && matEl.value) || 0) : 0;
-  const labor = isMaterial ? Math.max(0, amt - mat) : amt;
+  const mat = Number(matEl && matEl.value) || 0;
+  const labor = Math.max(0, amt - mat);
   const pool = labor / 2;
   laborTxt.textContent = "¥" + labor.toFixed(2);
   poolTxt.textContent = "¥" + pool.toFixed(2);
   if (noteEl) {
     noteEl.textContent = amt > 0
-      ? (isMaterial ? `（工程金额 ¥${amt.toFixed(2)} − 材料费 ¥${mat.toFixed(2)}）` : "（包工：工费=工程金额）")
+      ? (mat > 0 ? `（工程金额 ¥${amt.toFixed(2)} − ${matLabel} ¥${mat.toFixed(2)}）` : (isMaterial ? "（包工包料：未填材料费，工费=工程金额）" : "（包工：未填扣项，工费=工程金额）"))
       : "（请填写工程金额）";
   }
 }
@@ -9832,8 +9853,8 @@ function openQuickContractEdit(id) {
         <label class="radio-inline"><input type="radio" name="qcType" value="包工包料" ${isMaterial ? "checked" : ""} onchange="onQuickContractChange()"> 包工包料</label>
       </div>
     </div>
-    <!-- 金额区：包工时「工程金额」独占整行；包工包料时两栏并排（flex，子项 flex:1，
-         只剩一个子元素时自然占满整行，无需额外判断列数） -->
+    <!-- 金额区：两栏并排（flex，子项 flex:1）。扣项两种模式都显示：
+         包工包料=材料费；包工=吊车/运费等现场成本（例：包工 1100 = 工费 350 + 吊车 800）。 -->
     <div class="quick-contract__amounts">
       <div class="form-row" style="margin-bottom:0;">
         <label>工程金额 *</label>
@@ -9842,11 +9863,11 @@ function openQuickContractEdit(id) {
           <input class="input" type="number" min="0" step="0.01" id="qcAmount" value="${Number(p.projectAmount) || 0}" placeholder="客户应付总额" style="flex:1;min-width:0;" oninput="onQuickContractChange()" />
         </div>
       </div>
-      <div class="form-row" id="qcMaterialRow" style="${isMaterial ? "" : "display:none;"}">
-        <label>材料费</label>
+      <div class="form-row" id="qcMaterialRow" style="margin-bottom:0;">
+        <label id="qcMaterialLabel">${isMaterial ? "材料费" : "成本扣项"}</label>
         <div style="display:flex;align-items:center;gap:6px;min-width:0;">
           <span style="color:#64748b;flex-shrink:0;">¥</span>
-          <input class="input" type="number" min="0" step="0.01" id="qcMaterial" value="${Number(p.materialFee) || 0}" placeholder="材料成本" style="flex:1;min-width:0;" oninput="onQuickContractChange()" />
+          <input class="input" type="number" min="0" step="0.01" id="qcMaterial" value="${Number(p.materialFee) || 0}" placeholder="${isMaterial ? "材料成本" : "吊车/运费等"}" style="flex:1;min-width:0;" oninput="onQuickContractChange()" />
         </div>
       </div>
     </div>
@@ -9862,8 +9883,10 @@ function openQuickContractEdit(id) {
       const amt = Number(document.getElementById("qcAmount").value) || 0;
       if (!(amt > 0)) { toast("请填写工程金额（需大于 0）"); return false; }
       const newType = (document.querySelector('input[name="qcType"]:checked') || {}).value || "包工";
-      const mat = newType === "包工包料" ? Math.max(0, Number(document.getElementById("qcMaterial").value) || 0) : 0;
-      const labor = newType === "包工包料" ? Math.max(0, amt - mat) : amt;
+      // 扣项两种模式都有效：包工包料=材料费；包工=吊车/运费等现场成本
+      const mat = Math.max(0, Number(document.getElementById("qcMaterial").value) || 0);
+      const matLabel = newType === "包工包料" ? "材料费" : "成本扣项";
+      const labor = Math.max(0, amt - mat);
 
       /* 留痕：金额直接决定工费与工人分成，属于对工钱有影响的改动，必须可追溯。
          先取保存前快照（saveProject 会就地改写缓存对象，用活引用对比会全变成「无变更」）。 */
@@ -9874,7 +9897,7 @@ function openQuickContractEdit(id) {
       const changes = [];
       if (oldType !== newType) changes.push(`包活方式: ${oldType} → ${newType}`);
       if (Math.abs(oldAmt - amt) > 0.005) changes.push(`工程金额: ¥${oldAmt.toFixed(2)} → ¥${amt.toFixed(2)}`);
-      if (newType === "包工包料" && Math.abs(oldMat - mat) > 0.005) changes.push(`材料费: ¥${oldMat.toFixed(2)} → ¥${mat.toFixed(2)}`);
+      if (Math.abs(oldMat - mat) > 0.005) changes.push(`${matLabel}: ¥${oldMat.toFixed(2)} → ¥${mat.toFixed(2)}`);
 
       const payload = {
         contractType: newType,
@@ -9947,16 +9970,19 @@ function openQuickContractEdit(id) {
 function onQuickContractChange() {
   const amtEl = document.getElementById("qcAmount");
   const calcEl = document.getElementById("qcCalc");
-  const matRow = document.getElementById("qcMaterialRow");
   if (!amtEl || !calcEl) return;
   const newType = (document.querySelector('input[name="qcType"]:checked') || {}).value || "包工";
   const isMaterial = newType === "包工包料";
-  if (matRow) matRow.style.display = isMaterial ? "" : "none";
+  // 扣项标签随包活方式切换（包工包料=材料费；包工=吊车/运费等现场成本）
+  const matLabel = document.getElementById("qcMaterialLabel");
+  const matInput = document.getElementById("qcMaterial");
+  if (matLabel) matLabel.textContent = isMaterial ? "材料费" : "成本扣项";
+  if (matInput) matInput.placeholder = isMaterial ? "材料成本" : "吊车/运费等";
   const amt = Number(amtEl.value) || 0;
-  const mat = isMaterial ? (Number(document.getElementById("qcMaterial").value) || 0) : 0;
-  const labor = isMaterial ? Math.max(0, amt - mat) : amt;
+  const mat = Number(matInput && matInput.value) || 0;
+  const labor = Math.max(0, amt - mat);
   const pool = labor / 2;
-  calcEl.innerHTML = `工费 <b>¥${labor.toFixed(2)}</b> · 工人分成池 <b class="is-pool">¥${pool.toFixed(2)}</b>`;
+  calcEl.innerHTML = `工费 <b>¥${labor.toFixed(2)}</b> · 工人分成池 <b class="is-pool">¥${pool.toFixed(2)}</b>${mat > 0 ? ` <span style="color:#64748b;">（¥${amt.toFixed(2)} − ${isMaterial ? "材料" : "扣项"} ¥${mat.toFixed(2)}）</span>` : ""}`;
   // 当前弹窗对应的项目 id：由 openQuickContractEdit 挂到弹窗容器上。
   // 不能从函数参数取——本函数被 inline oninput/onchange 无参调用，取不到闭包变量。
   const pid = document.getElementById("qcProjectId");
@@ -10614,11 +10640,12 @@ async function saveProject(id) {
     .split(/[、,，\s]+/).map((s) => s.trim()).filter(Boolean);
   const workContent = [...new Set([...wcChecks, ...wcCustom])];
 
-  // 包活制字段
+  // 包活制字段。成本扣项两种模式都有效：包工包料=材料费；包工=吊车/运费等现场成本。
+  // 统一公式：工费 = 工程金额 − 扣项（例：包工 1100 = 工费 350 + 吊车 800 → 池 175）
   const contractType = (document.querySelector('input[name="contractType"]:checked') || {}).value || "包工";
   const projectAmount = Number(document.getElementById("pProjectAmount").value) || 0;
-  const materialFee = contractType === "包工包料" ? (Number(document.getElementById("pMaterialFee").value) || 0) : 0;
-  const laborFee = contractType === "包工包料" ? Math.max(0, projectAmount - materialFee) : projectAmount;
+  const materialFee = Math.max(0, Number(document.getElementById("pMaterialFee") && document.getElementById("pMaterialFee").value) || 0);
+  const laborFee = Math.max(0, projectAmount - materialFee);
   // 新建项目必须填写工程金额（包活制下工资来自工程金额分成）
   if (!id && projectAmount <= 0) { toast("请填写工程金额（包活制下工资按工程金额分成）"); return; }
 
@@ -12815,6 +12842,7 @@ function renderConstruction() {
           <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:#166534;align-items:center;">
             <span>💰 包活：<b>${esc(p.contractType || "包工")}</b></span>
             <span>工程金额：<b${Number(p.projectAmount) > 0 ? "" : ' style="color:#dc2626"'}>¥${(Number(p.projectAmount) || 0).toFixed(2)}${Number(p.projectAmount) > 0 ? "" : " 未填"}</b></span>
+            ${(Number(p.materialFee) || 0) > 0 ? `<span>${(p.contractType === "包工包料") ? "材料费" : "成本扣项"}：<b style="color:#b91c1c">−¥${(Number(p.materialFee) || 0).toFixed(2)}</b></span>` : ""}
             <span>工费：<b>¥${getLaborFee(p).toFixed(2)}</b></span>
             <span>工人分成池：<b>¥${getCommissionPool(p).toFixed(2)}</b></span>
             ${canEditContract ? `<span class="info-item__edit">✏️ 改金额</span>` : ""}
@@ -27784,7 +27812,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v58319589";
+  const APP_VERSION = "v00bbd771";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
