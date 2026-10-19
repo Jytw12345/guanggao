@@ -10405,6 +10405,49 @@ async function uploadFormPhotos(projectId, fpOverride) {
   }
 }
 
+/* 摄像头能力检测：无摄像头 API / 拒绝权限 / 无视频输入设备 / 桌面（capture 被忽略）时隐藏「拍照」按钮。
+ * 默认 undefined（渲染期安全显示），检测完成后置 true/false；表单均为用户点击后打开，彼时检测早已完成。 */
+window.__ggHasCamera = undefined;
+(function ggDetectCamera() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { window.__ggHasCamera = false; return; }
+    var done = function (has) { window.__ggHasCamera = !!has; };
+    var enumChk = function () {
+      navigator.mediaDevices.enumerateDevices().then(function (devs) {
+        done(devs.some(function (d) { return d.kind === "videoinput"; }));
+      }).catch(function () { done(true); });
+    };
+    if (navigator.permissions && navigator.permissions.query) {
+      try {
+        navigator.permissions.query({ name: "camera" }).then(function (st) {
+          if (st.state === "denied") { done(false); return; }   // 明确拒绝权限 -> 隐藏
+          enumChk();                                            // granted/prompt -> 再确认是否有摄像头设备
+        }).catch(function () { enumChk(); });                    // 该 name 不支持（如 iOS）-> 走设备枚举
+        return;
+      } catch (e) { /* 同步抛错也走枚举 */ }
+    }
+    enumChk();
+  } catch (e) { window.__ggHasCamera = false; }
+})();
+
+/* 是否应当显示「拍照」按钮：摄像头未被判定为「无/拒绝」且为触摸设备（桌面 capture 无意义）。 */
+function ggShowCameraButton() {
+  if (window.__ggHasCamera === false) return false;
+  var coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+  var touch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+  if (!coarse && !touch) return false; // 桌面：capture 被忽略，拍照与相册等价且易误导 -> 隐藏
+  return true;
+}
+
+/* 相机按钮 + 隐藏 input（按能力检测条件渲染；onChangeAttr 为该 input 的 onchange 表达式）。 */
+function ggCamButton(idBase, onChangeAttr) {
+  if (!ggShowCameraButton()) return "";
+  return (
+    `<button type="button" class="cos-add cos-add--cam" onclick="document.getElementById('${idBase}_cam').click()">📷 拍照</button>` +
+    `<input id="${idBase}_cam" type="file" accept="image/*" capture="environment" class="hidden" onchange="${onChangeAttr}">`
+  );
+}
+
 /* ===== 通用「拍照 + 相册/文件夹」双入口图片上传 =====
  * 旧的单 file input 改为：📷 拍照（capture=environment 直接调相机）+ 🖼️ 相册（普通 file 弹相册/文件夹），
  * 两个 input 共用同一个 onchange handler（handler 内部读 input.files，与具体哪个 input 触发无关）。
@@ -10414,9 +10457,8 @@ function dualPhotoInputHTML(idBase, onChange, opts) {
   const multiple = opts.multiple !== false;
   const m = multiple ? " multiple" : "";
   return (
-    `<button type="button" class="cos-add cos-add--cam" onclick="document.getElementById('${idBase}_cam').click()">📷 拍照</button>` +
+    ggCamButton(idBase, onChange) +
     `<button type="button" class="cos-add" onclick="document.getElementById('${idBase}_file').click()">🖼️ 相册</button>` +
-    `<input id="${idBase}_cam" type="file" accept="image/*" capture="environment" class="hidden" onchange="${onChange}">` +
     `<input id="${idBase}_file" type="file" accept="image/*"${m} class="hidden" onchange="${onChange}">`
   );
 }
@@ -10428,9 +10470,8 @@ function repairPhotoBlockHTML(prefix, label) {
       `<label>${label}</label>` +
       `<div class="photo-block">` +
         `<div class="photo-block__actions">` +
-          `<button type="button" class="cos-add cos-add--cam" onclick="document.getElementById('${prefix}_cam').click()">📷 拍照</button>` +
+          ggCamButton(prefix, `stagePhotoBlock(this,'${prefix}')`) +
           `<button type="button" class="cos-add" onclick="document.getElementById('${prefix}_file').click()">🖼️ 相册</button>` +
-          `<input id="${prefix}_cam" type="file" accept="image/*" capture="environment" class="hidden" onchange="stagePhotoBlock(this,'${prefix}')">` +
           `<input id="${prefix}_file" type="file" accept="image/*" multiple class="hidden" onchange="stagePhotoBlock(this,'${prefix}')">` +
         `</div>` +
         `<div class="cos-grid" id="phGrid_${prefix}"></div>` +
@@ -16975,10 +17016,9 @@ function openCompleteProjectForm(id) {
     form += `<div class="form-row" style="grid-column:1/-1;">
       <label>上传完工图</label>
       <div id="completePhotosWrap" class="cos-grid"></div>
-      <input id="completePhotoInput_cam" type="file" accept="image/*" capture="environment" class="hidden" onchange="stageCompletePhotos(this)">
+      ${ggCamButton("completePhotoInput", "stageCompletePhotos(this)")}
       <input id="completePhotoInput_file" type="file" accept="image/*" multiple class="hidden" onchange="stageCompletePhotos(this)">
       <div class="photo-block__actions" style="margin-top:8px;">
-        <button type="button" class="cos-add cos-add--cam" onclick="document.getElementById('completePhotoInput_cam').click()">📷 拍照</button>
         <button type="button" class="cos-add" onclick="document.getElementById('completePhotoInput_file').click()">🖼️ 相册</button>
       </div>
     </div>`;
@@ -28164,7 +28204,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc474c8c9";
+  const APP_VERSION = "v2db8f7eb";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
