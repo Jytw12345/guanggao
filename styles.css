@@ -6537,31 +6537,145 @@ body.modal-open {
 }
 .info-item.is-editable:hover .info-item__edit { opacity: 1; }
 
-/* 快捷修改包活金额弹窗 */
+/* 快捷修改包活金额弹窗（小而精：紧凑行高、压缩纵向间距，手机端不臃肿） */
+/* 结果区容器：视觉交给内部 .qc-calc 卡片，这里只控间距 */
 .quick-contract__calc {
   margin: 0 0 8px;
-  padding: 8px 10px;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
-  border-radius: 8px;
+  padding: 0;
+  background: none;
+  border: none;
   font-size: 13px;
-  color: #166534;
 }
-.quick-contract__calc b { font-weight: 700; }
-.quick-contract__calc .is-pool { color: #16a34a; }
-/* 「修改包活金额」弹窗金额区：包工包料时「工程金额 / 材料费」两栏并排一行，省一行高度。
-   包工时材料费隐藏，只剩一个子项 flex:1 → 自然占满整行，无需额外分支。
-   min-width:0 防止 input 在 flex 里撑破容器（窄屏溢出）。 */
-.quick-contract__amounts {
+/* 包活方式行：标签与分段控件同行，省一整行高度 */
+.quick-contract__mode-row {
   display: flex;
+  align-items: center;
   gap: 10px;
-  align-items: flex-start;
   margin-bottom: 10px;
 }
-.quick-contract__amounts > .form-row {
-  flex: 1 1 0;
-  min-width: 0;
+.quick-contract__mode-row > label { margin: 0; flex-shrink: 0; }
+/* 「工费 ÷ 2 = 工人分成池」双栏结果卡片：左工费、右分成池（绿色高亮），
+   中间 ÷ 号直观表达池=工费÷2；副标算式仅在有扣项时出现（JS 条件渲染），常驻高度压到最低。 */
+.qc-calc {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
 }
+.qc-calc__cell { flex: 1 1 0; min-width: 0; }
+.qc-calc__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #166534;
+  margin-bottom: 1px;
+  white-space: nowrap;
+}
+.qc-calc__value {
+  font-size: 17px;
+  font-weight: 700;
+  color: #14532d;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+.qc-calc__value.is-pool { color: #16a34a; }
+.qc-calc__sub {
+  font-size: 11px;
+  color: #4d7c0f;
+  margin-top: 2px;
+  line-height: 1.35;
+  word-break: break-all;
+}
+.qc-calc__op {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  flex-shrink: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #16a34a;
+}
+/* 「修改包活金额」弹窗金额区：浅底分组面板，工程金额/扣项恒两栏（手机也两栏压高度，
+   标签在上不占横向）、扣项说明独占整行（grid 让行内 grid-column:1/-1 生效）。
+   包工=吊车/运费等现场成本；包工包料=材料费，两种模式都显示。min-width:0 防窄屏溢出。 */
+.quick-contract__amounts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 10px;
+  align-items: start;
+  margin: 0 0 10px;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+.quick-contract__amounts > .form-row { min-width: 0; margin-bottom: 0; }
+/* 预约金额默认只读：灰底只读条 + 「改金额」小链接；解锁后该格被替换为普通输入框，样式随之消失 */
+.qc-amount-readonly {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: #eef2f7;
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
+  padding: 6px 9px;
+}
+.qc-amount-readonly__val {
+  font-size: 14px;
+  font-weight: 600;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+.qc-link {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #185fa5;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.qc-link:hover { text-decoration: underline; }
+.qc-flag {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: #94a3b8;
+  background: #eef2f7;
+  border: 1px solid #dbe3ec;
+  border-radius: 4px;
+  padding: 0 4px;
+  vertical-align: middle;
+}
+.quick-contract__amounts > .form-row > label { margin-bottom: 3px; }
+.quick-contract__amounts .input { padding: 6px 9px; }
+/* 底部提示 callout：未完工=中性说明；已完工=橙红强警示（提成已计入统计，改动立即生效） */
+.qc-callout {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #475569;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #94a3b8;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.qc-callout--done {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fdba74;
+  border-left-color: #f97316;
+}
+
+/* 窄弹窗（小而精）：仅对 modal.open({narrow:true}) 的弹窗生效，默认 420px → 360px，手机端更聚焦 */
+.modal.modal--narrow { width: 84%; max-width: 360px; }
 
 /* 「修改包活金额」弹窗：每人分成变化实时预览。
    完工后改金额会直接改变已计入统计的提成，必须让操作者一眼看清每个人的前后差额。 */

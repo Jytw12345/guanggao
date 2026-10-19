@@ -9967,23 +9967,30 @@ function openQuickContractEdit(id) {
   if (!p) return;
   if (!perm.editContract(p)) { toast("权限不足，无法修改包活金额"); return; }
   const isMaterial = (p.contractType || "包工") === "包工包料";
+  // 底部提示分级：已完工项目（提成已计入统计）用橙红强警示；未完工用中性说明
+  const isCounted = typeof isCommissionCounted === "function" && isCommissionCounted(p);
+  const callout = isCounted
+    ? `<div class="qc-callout qc-callout--done">⚠️ <b>已完工项目，提成已计入统计</b>——保存后立即按新金额重算，请确认后再保存。</div>`
+    : `<div class="qc-callout">改金额后分成按新分成池<b>重算（比例不变）</b>，下方「分成变化预览」可看清每人前后差额。</div>`;
   const body = `<div class="quick-contract">
     <input type="hidden" id="qcProjectId" value="${esc(id)}" />
-    <div class="form-row">
+    <div class="quick-contract__mode-row">
       <label>包活方式</label>
-      <div class="commission-mode" style="border:none;padding:0;margin:0;">
+      <div class="commission-mode" style="border:none;padding:0;margin:0;flex:1;">
         <label class="radio-inline"><input type="radio" name="qcType" value="包工" ${isMaterial ? "" : "checked"} onchange="onQuickContractChange()"> 包工</label>
         <label class="radio-inline"><input type="radio" name="qcType" value="包工包料" ${isMaterial ? "checked" : ""} onchange="onQuickContractChange()"> 包工包料</label>
       </div>
     </div>
-    <!-- 金额区：两栏并排（flex，子项 flex:1）。扣项两种模式都显示：
-         包工包料=材料费；包工=吊车/运费等现场成本（例：包工 1100 = 工费 350 + 吊车 800）。 -->
+    <!-- 金额区：工程金额来自预约单，默认只读（避免施工人员误改），点「改金额」才解锁；成本扣项恒可编辑，
+         由工程部/店长/施工人员完善。扣项两种模式都显示：包工包料=材料费；包工=吊车/运费等现场成本。 -->
     <div class="quick-contract__amounts">
       <div class="form-row" style="margin-bottom:0;">
-        <label>工程金额 *</label>
-        <div style="display:flex;align-items:center;gap:6px;min-width:0;">
-          <span style="color:#64748b;flex-shrink:0;">¥</span>
-          <input class="input" type="number" min="0" step="0.01" id="qcAmount" value="${Number(p.projectAmount) || 0}" placeholder="客户应付总额" style="flex:1;min-width:0;" oninput="onQuickContractChange()" />
+        <label>预约金额 <span class="qc-flag">预约时填写</span></label>
+        <div id="qcAmountView">
+          <div class="qc-amount-readonly">
+            <span class="qc-amount-readonly__val">¥${(Number(p.projectAmount) || 0).toFixed(2)}</span>
+            <button type="button" class="qc-link" onclick="qcUnlockAmount()">改金额</button>
+          </div>
         </div>
       </div>
       <div class="form-row" id="qcMaterialRow" style="margin-bottom:0;">
@@ -10000,14 +10007,18 @@ function openQuickContractEdit(id) {
     </div>
     <div class="quick-contract__calc" id="qcCalc"></div>
     <div class="qc-alloc-preview" id="qcAllocPreview"></div>
-    <p class="hint" style="margin:0;">改金额后工人分成会按新分成池重算（比例不变）；<b>已完工项目改动会直接改变已计入统计的提成</b>，请确认后再保存。</p>
+    ${callout}
   </div>`;
   modal.open("修改包活金额", body, {
     titleHtml: "💰 修改包活金额",
+    narrow: true,
     confirmText: "保存",
     cancelText: "取消",
     onConfirm: async () => {
-      const amt = Number(document.getElementById("qcAmount").value) || 0;
+      // 预约金额默认只读：未解锁时取预约单原值（qcAmount 输入框不存在），解锁后取输入值
+      const amtEl = document.getElementById("qcAmount");
+      const _sp = getProject(id);
+      const amt = amtEl ? (Number(amtEl.value) || 0) : (_sp ? (Number(_sp.projectAmount) || 0) : 0);
       if (!(amt > 0)) { toast("请填写工程金额（需大于 0）"); return false; }
       const newType = (document.querySelector('input[name="qcType"]:checked') || {}).value || "包工";
       // 扣项两种模式都有效：包工包料=材料费；包工=吊车/运费等现场成本
@@ -10101,9 +10112,14 @@ function openQuickContractEdit(id) {
   onQuickContractChange();
 }
 function onQuickContractChange() {
-  const amtEl = document.getElementById("qcAmount");
   const calcEl = document.getElementById("qcCalc");
-  if (!amtEl || !calcEl) return;
+  if (!calcEl) return;
+  const pidEl = document.getElementById("qcProjectId");
+  const pid = pidEl ? pidEl.value : "";
+  const src = pid ? getProject(pid) : null;
+  // 预约金额默认只读：未解锁时取预约单原值，解锁后取输入框值
+  const amtEl = document.getElementById("qcAmount");
+  const amt = amtEl ? (Number(amtEl.value) || 0) : (src ? (Number(src.projectAmount) || 0) : 0);
   const newType = (document.querySelector('input[name="qcType"]:checked') || {}).value || "包工";
   const isMaterial = newType === "包工包料";
   // 扣项标签随包活方式切换（包工包料=材料费；包工=吊车/运费等现场成本）
@@ -10115,15 +10131,40 @@ function onQuickContractChange() {
   const noteInput = document.getElementById("qcMaterialNote");
   if (noteLabel) noteLabel.textContent = "扣项说明";
   if (noteInput) noteInput.placeholder = isMaterial ? "如：板材/辅料" : "如：吊车费/运费";
-  const amt = Number(amtEl.value) || 0;
   const mat = Number(matInput && matInput.value) || 0;
   const labor = Math.max(0, amt - mat);
   const pool = labor / 2;
-  calcEl.innerHTML = `工费 <b>¥${labor.toFixed(2)}</b> · 工人分成池 <b class="is-pool">¥${pool.toFixed(2)}</b>${mat > 0 ? ` <span style="color:#64748b;">（¥${amt.toFixed(2)} − ${isMaterial ? "材料" : "扣项"} ¥${mat.toFixed(2)}）</span>` : ""}`;
+  calcEl.innerHTML = `<div class="qc-calc">
+      <div class="qc-calc__cell">
+        <div class="qc-calc__label">工费</div>
+        <div class="qc-calc__value">¥${labor.toFixed(2)}</div>
+        ${mat > 0 ? `<div class="qc-calc__sub">工程金额 ¥${amt.toFixed(2)} − ${isMaterial ? "材料" : "扣项"} ¥${mat.toFixed(2)}</div>` : ""}
+      </div>
+      <div class="qc-calc__op" title="工费 ÷ 2">÷</div>
+      <div class="qc-calc__cell qc-calc__cell--pool">
+        <div class="qc-calc__label">工人分成池</div>
+        <div class="qc-calc__value is-pool">¥${pool.toFixed(2)}</div>
+      </div>
+    </div>`;
   // 当前弹窗对应的项目 id：由 openQuickContractEdit 挂到弹窗容器上。
   // 不能从函数参数取——本函数被 inline oninput/onchange 无参调用，取不到闭包变量。
-  const pid = document.getElementById("qcProjectId");
-  renderQuickAllocPreview(pid ? pid.value : "", newType, amt, mat);
+  renderQuickAllocPreview(pid, newType, amt, mat);
+}
+
+/* 解锁预约金额：把只读展示替换为可编辑输入框（预约单原值带入），改金额需谨慎。 */
+function qcUnlockAmount() {
+  const pid = (document.getElementById("qcProjectId") || {}).value;
+  const p = pid ? getProject(pid) : null;
+  const amt = p ? (Number(p.projectAmount) || 0) : 0;
+  const box = document.getElementById("qcAmountView");
+  if (!box) return;
+  box.innerHTML = `<div style="display:flex;align-items:center;gap:6px;min-width:0;">
+      <span style="color:#64748b;flex-shrink:0;">¥</span>
+      <input class="input" type="number" min="0" step="0.01" id="qcAmount" value="${amt}" placeholder="客户应付总额" style="flex:1;min-width:0;" oninput="onQuickContractChange()" />
+    </div>`;
+  const inp = document.getElementById("qcAmount");
+  if (inp) { inp.focus(); }
+  onQuickContractChange();
 }
 
 /* 快捷金额弹窗内：实时显示「每人分成 旧 → 新」，金额变了的标红/标绿；
@@ -22689,6 +22730,9 @@ const modal = {
     
     modalOnClose = options.onClose || null;
     modalCloseOnMask = options.closeOnMask === true;
+    // 窄弹窗选项：.modal--narrow 比默认 420px 更窄，手机端更聚焦（小而精），关闭/开其他弹窗时自动移除
+    const modalBox = document.getElementById("modal").firstElementChild;
+    if (modalBox) modalBox.classList.toggle("modal--narrow", !!(options && options.narrow));
 
     if (options.hideFooter) {
       modalFooter.classList.add("hidden");
@@ -28204,7 +28248,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2db8f7eb";
+  const APP_VERSION = "vc4fedbd0";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
