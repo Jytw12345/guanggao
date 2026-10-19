@@ -2842,6 +2842,49 @@ select.input {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+.card-contract__mat-note {
+  font-style: normal;
+  font-size: 10px;
+  color: #64748b;
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 2px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+/* 维修单虚拟卡片：琥珀色区分，区别于普通项目卡片 */
+.card-repair {
+  border-left: 4px solid #f59e0b;
+  background: linear-gradient(135deg, #fffbeb, #ffffff);
+}
+.card-repair__tag {
+  font-size: 11px;
+  color: #b45309;
+  background: #fde68a;
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.card-repair__items {
+  font-size: 12px;
+  color: #92400e;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin: 6px 0;
+}
+.badge.repair {
+  background: #fff7ed;
+  color: #b45309;
+  border-color: #fcd34d;
+}
 /* 有包活编辑权限：整块可点修改金额（hover 加深 + 绿光晕，与详情页 .info-item.is-editable 同风格） */
 .card-contract.is-editable {
   cursor: pointer;
