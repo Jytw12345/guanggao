@@ -8216,7 +8216,7 @@ function renderProjectPhotosHtml(p) {
       })
       .join("");
     const addBtn = canUpload
-      ? `<button type="button" class="cos-add" onclick="document.getElementById('cosFile_${kind}_${esc(p.id)}').click()">＋ 添加${title}</button><input id="cosFile_${kind}_${esc(p.id)}" type="file" accept="image/*" multiple class="hidden" onchange="handleCosFiles(this,'${esc(p.id)}','${kind}')">`
+      ? dualPhotoInputHTML(`cosFile_${kind}_${esc(p.id)}`, `handleCosFiles(this,'${esc(p.id)}','${kind}')`)
       : "";
     return `<div class="detail-block cos-section">
       <h3>${title} <span class="cos-count">${items.length}</span></h3>
@@ -9160,10 +9160,13 @@ function makeVirtualRepairCard(src, ro) {
   };
 }
 
-/* 维修单虚拟卡片模板：琥珀色区分，含维修内容、包活金额条、查看原单/完成维修按钮。 */
+/* 维修单虚拟卡片模板：琥珀色区分，内容/时间/人员拆成独立行，向普通项目卡片布局对齐。 */
 function virtualRepairCardHtml(p) {
   const ro = p.repairOrder || {};
-  const apt = p.appointmentTime ? fmtDateTime(p.appointmentTime) : "未定时间";
+  const aptDate = p.appointmentTime ? new Date(p.appointmentTime) : null;
+  const pad = (n) => String(n).padStart(2, "0");
+  const dateStr = aptDate ? `${aptDate.getFullYear()}-${pad(aptDate.getMonth() + 1)}-${pad(aptDate.getDate())}` : "—";
+  const timeStr = aptDate ? `${pad(aptDate.getHours())}:${pad(aptDate.getMinutes())}` : "—";
   const _a = Number(p.projectAmount) || 0;
   const _t = p.contractType || "包工";
   const _m = Number(p.materialFee) || 0;
@@ -9192,11 +9195,23 @@ function virtualRepairCardHtml(p) {
           <span class="card-meta__sep">·</span>
           <span class="card-meta__item">${esc(p.customer || "—")}</span>
         </div>
-        <div class="card-sub">
-          <span class="card-sub__item">🕒 ${esc(apt)}</span>
-          ${workerNames ? `<span class="card-sub__item">👷 ${esc(workerNames)}</span>` : ""}
+        ${ro.items ? `
+        <div class="card-repair-content">
+          <span class="card-repair-content__icon">🔧</span>
+          <span class="card-repair-content__text">${esc(ro.items)}</span>
+        </div>` : ""}
+        <div class="card-highlight card-highlight--repair">
+          <span class="card-highlight__icon">🕐</span>
+          <div class="card-highlight__body">
+            <span class="card-highlight__date">${dateStr}</span>
+            <span class="card-highlight__time">${timeStr}</span>
+          </div>
         </div>
-        ${ro.items ? `<div class="card-repair__items">🔧 维修内容：${esc(ro.items)}</div>` : ""}
+        ${workerNames ? `
+        <div class="card-repair-workers">
+          <span class="card-repair-workers__label">👷 派工人员</span>
+          <span class="card-repair-workers__list">${esc(workerNames)}</span>
+        </div>` : ""}
         ${contractHtml}
         <div class="card-actions">
           <button class="btn small" onclick="event.stopPropagation();gotoConstruction('${esc(p._repairOf)}')">查看原单</button>
@@ -10275,7 +10290,7 @@ function renderFormPhotos() {
       return `<div class="cos-thumb" id="cos-item-${sid}">${img}${dn}${del}</div>`;
     }).join("");
     const addBtn = canUpload
-      ? `<button type="button" class="cos-add" onclick="document.getElementById('cosFormFile_${kind}').click()">＋ 添加${title}</button><input id="cosFormFile_${kind}" type="file" accept="image/*" multiple class="hidden" onchange="formStagePhotos(this,'${kind}')">`
+      ? dualPhotoInputHTML(`cosFormFile_${kind}`, `formStagePhotos(this,'${kind}')`)
       : "";
     return `<div class="detail-block cos-section">
       <h3>${title} <span class="cos-count">${items ? items.length : 0}</span></h3>
@@ -10388,6 +10403,146 @@ async function uploadFormPhotos(projectId, fpOverride) {
   } catch (e) {
     toast("照片上传失败：" + (e.message || e));
   }
+}
+
+/* ===== 通用「拍照 + 相册/文件夹」双入口图片上传 =====
+ * 旧的单 file input 改为：📷 拍照（capture=environment 直接调相机）+ 🖼️ 相册（普通 file 弹相册/文件夹），
+ * 两个 input 共用同一个 onchange handler（handler 内部读 input.files，与具体哪个 input 触发无关）。
+ * 桌面端点「相册」弹文件管理器、点「拍照」多数浏览器也回退为文件选择；移动端点「拍照」直接调相机。 */
+function dualPhotoInputHTML(idBase, onChange, opts) {
+  opts = opts || {};
+  const multiple = opts.multiple !== false;
+  const m = multiple ? " multiple" : "";
+  return (
+    `<button type="button" class="cos-add cos-add--cam" onclick="document.getElementById('${idBase}_cam').click()">📷 拍照</button>` +
+    `<button type="button" class="cos-add" onclick="document.getElementById('${idBase}_file').click()">🖼️ 相册</button>` +
+    `<input id="${idBase}_cam" type="file" accept="image/*" capture="environment" class="hidden" onchange="${onChange}">` +
+    `<input id="${idBase}_file" type="file" accept="image/*"${m} class="hidden" onchange="${onChange}">`
+  );
+}
+
+/* 维修单照片（问题照片 / 修复后效果）：暂存工作集按 prefix 区分，提交时再上传 COS。 */
+function repairPhotoBlockHTML(prefix, label) {
+  return (
+    `<div class="form-row" style="grid-column:1/-1;">` +
+      `<label>${label}</label>` +
+      `<div class="photo-block">` +
+        `<div class="photo-block__actions">` +
+          `<button type="button" class="cos-add cos-add--cam" onclick="document.getElementById('${prefix}_cam').click()">📷 拍照</button>` +
+          `<button type="button" class="cos-add" onclick="document.getElementById('${prefix}_file').click()">🖼️ 相册</button>` +
+          `<input id="${prefix}_cam" type="file" accept="image/*" capture="environment" class="hidden" onchange="stagePhotoBlock(this,'${prefix}')">` +
+          `<input id="${prefix}_file" type="file" accept="image/*" multiple class="hidden" onchange="stagePhotoBlock(this,'${prefix}')">` +
+        `</div>` +
+        `<div class="cos-grid" id="phGrid_${prefix}"></div>` +
+      `</div>` +
+    `</div>`
+  );
+}
+
+function stagePhotoBlock(input, prefix) {
+  const files = Array.from(input.files || []);
+  input.value = "";
+  if (!files.length) return;
+  if (!window._stagedPhotoSets) window._stagedPhotoSets = {};
+  if (!window._stagedPhotoSets[prefix]) window._stagedPhotoSets[prefix] = [];
+  const by = (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "匿名";
+  files.forEach((file) => {
+    window._stagedPhotoSets[prefix].push({
+      file, url: URL.createObjectURL(file), name: file.name, size: file.size, by, at: Date.now(), _staged: true,
+    });
+  });
+  renderPhotoBlockGrid(prefix);
+}
+
+function renderPhotoBlockGrid(prefix) {
+  const grid = document.getElementById("phGrid_" + prefix);
+  if (!grid) return;
+  const items = (window._stagedPhotoSets && window._stagedPhotoSets[prefix]) || [];
+  grid.innerHTML = items.map((it, i) => {
+    const sid = cosSafeId((it.key || it.url || it.name) + "_" + i);
+    const inner = (it._staged && it.file && isUnsupportedImageType(it.file.type))
+      ? `<div class="cos-thumb__ph">HEIC<br>将转 JPG 上传</div>`
+      : `<img src="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`;
+    return `<div class="cos-thumb" id="ph-item-${sid}">${inner}` +
+      `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removePhotoBlockItem('${prefix}',${i})">✕</button>` +
+      `</div>`;
+  }).join("");
+}
+
+function removePhotoBlockItem(prefix, idx) {
+  const sets = window._stagedPhotoSets;
+  if (!sets || !sets[prefix]) return;
+  sets[prefix].splice(idx, 1);
+  renderPhotoBlockGrid(prefix);
+}
+
+// 上传某 prefix 的暂存照片到 COS（cosSubPath 形如 repair/{roId}/issue），返回元数据数组并清空该 prefix
+async function uploadPhotoBlock(projectId, prefix, cosSubPath) {
+  const sets = window._stagedPhotoSets;
+  const staged = (sets && sets[prefix]) ? sets[prefix].filter((it) => it._staged && it.file) : [];
+  if (sets) delete sets[prefix];
+  if (!staged.length) return [];
+  if (MODE !== "cloud") { toast("离线模式暂不支持上传照片，请联网后重试"); return []; }
+  const hasHeic = staged.some((it) => isUnsupportedImageType(it.file.type));
+  if (hasHeic) toast("正在将 HEIC/HEIF 图片转为 JPEG，以便各端都能预览…");
+  const prepared = [];
+  for (const it of staged) {
+    let file = it.file, name = it.name;
+    if (isUnsupportedImageType(file.type)) {
+      try { const jpg = await convertHeicToJpeg(file); file = jpg; name = jpg.name; }
+      catch (e) { console.warn("维修照片 HEIC 转换失败，按原格式上传：", e); toast("有 HEIC 图片转换失败，已按原格式上传（可能仍无法在线预览）"); }
+    }
+    const nameExt = (name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const ext = extFromMime(file.type, nameExt) || "jpg";
+    const key = `gg/projects/${projectId}/${cosSubPath}/${uid()}.${ext}`;
+    prepared.push({ file, key, name });
+  }
+  const signed = await cosGetSignedUrls(prepared.map(({ file, key }) => ({ key, contentType: file.type || "image/jpeg" })));
+  const map = {}; signed.forEach((s) => { if (s && s.key) map[s.key] = s; });
+  const out = [];
+  for (const { file, key, name } of prepared) {
+    const s = map[key];
+    if (!s || !s.url) { console.warn("未获取到上传授权:", key); continue; }
+    await putFileToCos(s.url, file);
+    out.push({ key, url: "", name, size: file.size, by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "匿名", at: Date.now() });
+  }
+  return out;
+}
+
+// 维修单详情：只读展示问题照片 / 修复后效果（data-cos-key 由 fillRepairPhotos 补签名 URL）
+function repairPhotosHtml(ro) {
+  const block = (title, items) => {
+    if (!items || !items.length) return "";
+    const thumbs = items.map((it) => {
+      const sid = cosSafeId(it.key);
+      const dn = `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`;
+      return `<div class="cos-thumb" id="ro-ph-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}')">` +
+        `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">${dn}</div>`;
+    }).join("");
+    return `<div class="detail-block cos-section" style="border-left-color:#f59e0b">
+      <h3>${title} <span class="cos-count">${items.length}</span></h3>
+      <div class="cos-grid">${thumbs}</div>
+    </div>`;
+  };
+  const issue = (ro.issuePhotos || []).filter((x) => x && x.key);
+  const fixed = (ro.fixedPhotos || []).filter((x) => x && x.key);
+  return block("🔧 问题照片", issue) + block("✅ 修复后效果", fixed);
+}
+
+// 为维修单照片补签名查看 URL（私有桶）
+async function fillRepairPhotos() {
+  const imgs = document.querySelectorAll(".repair-order-item img[data-cos-key]");
+  if (!imgs.length) return;
+  const keys = [];
+  imgs.forEach((img) => { const k = img.getAttribute("data-cos-key"); if (k) keys.push(k); });
+  if (!keys.length) return;
+  const viewMap = await cosGetViewUrls(keys);
+  imgs.forEach((img) => {
+    const k = img.getAttribute("data-cos-key");
+    const signed = viewMap[k] || "";
+    if (signed) { img.src = signed; img.onerror = () => onCosImgError(img, img.alt, k); }
+    else onCosImgError(img, img.alt, k);
+  });
 }
 
 function switchAssignTab(btn) {
@@ -11058,6 +11213,7 @@ function openRepairOrderForm(projectId) {
         <label>维修人员</label>
         ${workerRows}
       </div>
+      ${repairPhotoBlockHTML("repairIssue", "问题照片（维修前拍照/上传）")}
       <div class="form-row">
         <label>备注 / 注意事项</label>
         <textarea class="input" id="repairNotes" placeholder="填写上门维修注意事项、需携带物料等" style="min-height:50px;"></textarea>
@@ -11069,6 +11225,9 @@ function openRepairOrderForm(projectId) {
     </div>`;
   
   modal.open("🔧 发起维修单", form);
+  if (!window._stagedPhotoSets) window._stagedPhotoSets = {};
+  window._stagedPhotoSets.repairIssue = [];
+  setTimeout(() => renderPhotoBlockGrid("repairIssue"), 0);
 }
 
 async function submitRepairOrder(projectId) {
@@ -11130,6 +11289,7 @@ async function submitRepairOrder(projectId) {
     contractType: pay.contractType,
     projectAmount: pay.projectAmount,
     materialFee: pay.materialFee,
+    materialFeeNote: pay.materialFeeNote || "",
     laborFee: pay.laborFee,
     commissionPool: pay.pool,
     payable: pay.payType === "paid", // 兼容旧字段（工资核算/详情展示）
@@ -11138,6 +11298,8 @@ async function submitRepairOrder(projectId) {
     status: "待维修",
     createdAt: new Date().toISOString(),
   };
+  // 问题照片：随维修单一起上传（COS key 绑定本维修单 id，避免串单）
+  newRepair.issuePhotos = await uploadPhotoBlock(projectId, "repairIssue", `repair/${newRepair.id}/issue`);
   repairOrders.push(newRepair);
 
   // 注意：维修单挂在原项目上（数组，支持同一项目多次维修），预约时间只存 repairOrder.appointmentTime，
@@ -11203,12 +11365,16 @@ function openCompleteRepairForm(projectId, repairId) {
         💵 工钱分成：分成池 ¥${pool.toFixed(2)} 均分给勾选人员<span id="repairAllocPreview"></span>
       </div>` : `
       <div class="form-row" style="font-size:12px;color:#6b7280;">🆓 免费维修：工人无包活分成，工时仅作考勤记录。</div>`}
+      ${repairPhotoBlockHTML("repairFixed", "修复后效果（拍照/上传）")}
       <div class="form-actions">
         <button class="btn" onclick="modal.close()">取消</button>
         <button class="btn primary" onclick="submitCompleteRepair('${projectId}','${repairId}')">完成维修</button>
       </div>
     </div>`;
   modal.open("✅ 完成维修", form);
+  if (!window._stagedPhotoSets) window._stagedPhotoSets = {};
+  window._stagedPhotoSets.repairFixed = [];
+  setTimeout(() => renderPhotoBlockGrid("repairFixed"), 0);
   updateRepairCompletePreview();
 }
 
@@ -11256,6 +11422,7 @@ async function submitCompleteRepair(projectId, repairId) {
   if (!lockAction(lockKey)) { toast("操作处理中，请勿重复点击"); return; }
   try {
     clearTimeout(reloadTimer);
+    const fixedPhotos = await uploadPhotoBlock(projectId, "repairFixed", `repair/${repairId}/fixed`);
     const repairOrders = p.repairOrders.slice();
     repairOrders[idx] = {
       ...repairOrders[idx],
@@ -11265,6 +11432,7 @@ async function submitCompleteRepair(projectId, repairId) {
       actualHours,
       commissionAlloc,
       payable: isPaid,
+      fixedPhotos,
     };
     await repo.patchProject(projectId, { repairOrders });
     const p2 = getProject(projectId);
@@ -11853,6 +12021,10 @@ function repairPayBlockHtml(prefix, state) {
               <input class="input" type="number" min="0" step="0.01" id="${prefix}MaterialFee" value="${esc(mat)}" placeholder="材料成本" style="width:auto;max-width:160px;" oninput="updateRepairContractCalc('${prefix}')" />
             </div>
           </div>
+          <div class="form-row" id="${prefix}MaterialFeeNoteRow" style="margin:0;${ct === "包工包料" ? "" : "display:none;"}">
+            <label><span style="color:#16a34a;">🏷️</span> 扣项说明</label>
+            <input class="input" type="text" id="${prefix}MaterialFeeNote" value="${esc(st.materialFeeNote || "")}" maxlength="60" placeholder="如：板材/辅料 或 吊车费/运费" style="flex:1;min-width:0;" />
+          </div>
         </div>
         <div id="${prefix}PayCalc" style="margin-top:8px;font-size:13px;color:#166534;line-height:1.7;">
           <span>工费：<b id="${prefix}LaborFeeTxt">—</b></span> · <span>工人分成池（工费÷2）：<b id="${prefix}PoolTxt">—</b></span>
@@ -11875,8 +12047,11 @@ function onRepairPayTypeChange(prefix) {
 
 function onRepairContractTypeChange(prefix) {
   const ctEl = document.querySelector(`input[name="${prefix}ContractType"]:checked`);
+  const isMaterial = !!(ctEl && ctEl.value === "包工包料");
   const row = document.getElementById(prefix + "MaterialFeeRow");
-  if (row) row.style.display = (ctEl && ctEl.value === "包工包料") ? "" : "none";
+  if (row) row.style.display = isMaterial ? "" : "none";
+  const noteRow = document.getElementById(prefix + "MaterialFeeNoteRow");
+  if (noteRow) noteRow.style.display = isMaterial ? "" : "none";
   updateRepairContractCalc(prefix);
 }
 
@@ -11907,7 +12082,7 @@ function readRepairPayBlock(prefix) {
   const paidEl = document.querySelector(`input[name="${prefix}PayType"]:checked`);
   const payType = paidEl && paidEl.value === "paid" ? "paid" : "free";
   if (payType === "free") {
-    return { payType: "free", contractType: "包工", projectAmount: 0, materialFee: 0, laborFee: 0, pool: 0 };
+    return { payType: "free", contractType: "包工", projectAmount: 0, materialFee: 0, laborFee: 0, pool: 0, materialFeeNote: "" };
   }
   const ctEl = document.querySelector(`input[name="${prefix}ContractType"]:checked`);
   const contractType = ctEl && ctEl.value === "包工包料" ? "包工包料" : "包工";
@@ -11915,12 +12090,16 @@ function readRepairPayBlock(prefix) {
   const materialFee = contractType === "包工包料"
     ? Math.round((Number(document.getElementById(prefix + "MaterialFee").value) || 0) * 100) / 100
     : 0;
+  const materialFeeNote = contractType === "包工包料"
+    ? ((document.getElementById(prefix + "MaterialFeeNote") || {}).value || "").trim()
+    : "";
   const laborFee = contractType === "包工包料" ? Math.max(0, projectAmount - materialFee) : projectAmount;
   return {
     payType: "paid",
     contractType,
     projectAmount,
     materialFee,
+    materialFeeNote,
     laborFee: Math.round(laborFee * 100) / 100,
     pool: Math.round(laborFee / 2 * 100) / 100,
   };
@@ -11957,7 +12136,7 @@ function repairPaySummaryHtml(ro) {
   return `<div class="info-item"><div class="k">收费方式</div><div class="v" style="color:#16a34a;font-weight:600;">💵 付费维修 · ${esc(ro.contractType || "包工")}</div></div>
     <div class="info-item"><div class="k">工程金额</div><div class="v">¥${amt.toFixed(2)}</div></div>
     <div class="info-item"><div class="k">工费</div><div class="v">¥${labor.toFixed(2)}</div></div>
-    <div class="info-item"><div class="k">工人分成池</div><div class="v">¥${pool.toFixed(2)}${alloc.length ? `（${alloc.length} 人均分）` : ""}</div></div>`;
+    <div class="info-item"><div class="k">工人分成池</div><div class="v">¥${pool.toFixed(2)}${alloc.length ? `（${alloc.length} 人均分）` : ""}</div></div>${ro.materialFeeNote ? `<div class="info-item"><div class="k">扣项说明</div><div class="v">${esc(ro.materialFeeNote)}</div></div>` : ""}`;
 }
 
 
@@ -13102,6 +13281,7 @@ function renderConstruction() {
             <div class="info-item"><div class="k">维修工时（考勤参考）</div><div class="v">${(ro.actualHours || ro.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0)).toFixed(1)} 小时</div></div>
             ${Array.isArray(ro.commissionAlloc) && ro.commissionAlloc.length ? `<div class="info-item" style="grid-column:1/-1;"><div class="k">工钱分成</div><div class="v">${ro.commissionAlloc.map((a) => `${esc(a.name || a.workerId)} ¥${(Number(a.amount) || 0).toFixed(2)}`).join(" · ")}</div></div>` : ""}
           </div>` : ""}
+          ${repairPhotosHtml(ro)}
           ${(ro.status === "待维修") ? `
           <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
             ${perm.completeRepair() ? `<button class="btn small success" onclick="completeRepair('${p.id}','${ro.id}')">✅ 完成</button>` : ""}
@@ -13402,6 +13582,7 @@ function renderConstruction() {
       box.appendChild(photosWrap);
     }
     refreshPhotosUI(p);
+    fillRepairPhotos().catch((e) => console.warn("维修单照片补签名失败:", e));
   } catch (e) {
     console.warn("渲染项目照片失败:", e);
   }
@@ -15453,6 +15634,7 @@ async function confirmRework(id) {
         contractType: pay.contractType,
         projectAmount: pay.projectAmount,
         materialFee: pay.materialFee,
+        materialFeeNote: pay.materialFeeNote || "",
         laborFee: pay.laborFee,
         startedAt: null,
         finishedAt: null,
@@ -15472,6 +15654,7 @@ async function confirmRework(id) {
         contractType: pay.contractType,
         projectAmount: pay.projectAmount,
         materialFee: pay.materialFee,
+        materialFeeNote: pay.materialFeeNote || "",
         laborFee: pay.laborFee,
         startedAt: null,
         finishedAt: null,
@@ -15508,6 +15691,7 @@ async function confirmRework(id) {
       contractType: pay.contractType,
       projectAmount: pay.projectAmount,
       materialFee: pay.materialFee,
+      materialFeeNote: pay.materialFeeNote || "",
       laborFee: pay.laborFee,
       repairOrders: [],
       actionLogs: [{ time: new Date().toISOString(), action: "rework_create", description: `基于「${p.name}」生成返工预约（第 ${reworkCount} 次返工）`, operator, operatorRole: currentProfile.role }],
@@ -16791,8 +16975,12 @@ function openCompleteProjectForm(id) {
     form += `<div class="form-row" style="grid-column:1/-1;">
       <label>上传完工图</label>
       <div id="completePhotosWrap" class="cos-grid"></div>
-      <input type="file" id="completePhotoInput" accept="image/*" multiple class="hidden" onchange="stageCompletePhotos(this)">
-      <button type="button" class="btn small" onclick="document.getElementById('completePhotoInput').click()" style="margin-top:8px;">＋ 添加完工图</button>
+      <input id="completePhotoInput_cam" type="file" accept="image/*" capture="environment" class="hidden" onchange="stageCompletePhotos(this)">
+      <input id="completePhotoInput_file" type="file" accept="image/*" multiple class="hidden" onchange="stageCompletePhotos(this)">
+      <div class="photo-block__actions" style="margin-top:8px;">
+        <button type="button" class="cos-add cos-add--cam" onclick="document.getElementById('completePhotoInput_cam').click()">📷 拍照</button>
+        <button type="button" class="cos-add" onclick="document.getElementById('completePhotoInput_file').click()">🖼️ 相册</button>
+      </div>
     </div>`;
   }
   
@@ -17829,6 +18017,7 @@ function renderStats() {
             <th class="col-store">店面</th>
             <th class="col-name">项目</th>
             <th class="col-status">状态</th>
+            <th class="col-note">扣项说明</th>
             <th class="col-money">工程金额</th>
             <th class="col-money">工费</th>
             <th class="col-workers">工人提成(¥)</th>
@@ -17837,6 +18026,9 @@ function renderStats() {
         <tbody>
           ${commissionProjects.map((p) => {
             const alloc = resolveCommissionAlloc(p);
+            const _deduct = Number(p.materialFee) || 0;
+            const _note = (p.materialFeeNote || "").trim();
+            const _noteCell = _deduct > 0 ? (yuan(_deduct) + (_note ? " " + esc(_note) : "")) : (_note || "—");
             const chips = alloc.items.map((it) => `<span class="worker-chip internal">${esc(it.workerName)} <b>¥${it.amount.toFixed(2)}</b></span>`).join("");
             const d = p.appointmentTime ? new Date(p.appointmentTime) : null;
             return `
@@ -17846,6 +18038,7 @@ function renderStats() {
               <td class="col-store">${esc(storeName(p.storeId))}</td>
               <td class="col-name">${esc(p.name)}</td>
               <td class="col-status"><span class="badge ${p.status}">${p.status}</span></td>
+              <td class="col-note">${_noteCell}</td>
               <td class="col-money">¥${(Number(p.projectAmount) || 0).toFixed(0)}</td>
               <td class="col-money">¥${getLaborFee(p).toFixed(0)}</td>
               <td class="col-workers wrap"><div class="chip-stack">${chips || `<span class="worker-chip placeholder">—</span>`}</div></td>
@@ -17853,7 +18046,7 @@ function renderStats() {
           }).join("")}
         </tbody>
         <tfoot>
-          <tr><td colspan="5">合计</td><td>${yuan(agg.totalProjectAmount)}</td><td>${yuan(agg.totalLaborFee)}</td><td style="color:#16a34a;font-weight:600">${yuan(agg.totalAmount)}</td></tr>
+          <tr><td colspan="5">合计</td><td>—</td><td>${yuan(agg.totalProjectAmount)}</td><td>${yuan(agg.totalLaborFee)}</td><td style="color:#16a34a;font-weight:600">${yuan(agg.totalAmount)}</td></tr>
         </tfoot>
       </table>
     </div>`;
@@ -25110,11 +25303,34 @@ function projectsOnDate(ds) {
     return segs.some((s) => s.date === ds);
   });
   const mainIds = new Set(main.map((p) => p.id));
-  // 待维修的维修单（挂在原项目上、不写回项目 appointmentTime）也作为该日的事件显示
-  const repairItems = cache.projects.filter((p) => {
-    if (mainIds.has(p.id)) return false;
-    return (p.repairOrders || []).some(ro => ro && ro.status === "待维修" && ro.appointmentTime && dateKey(new Date(ro.appointmentTime)) === ds);
-  }).map((p) => p);
+  // 待维修的维修单：以维修单自身预约时间生成影子事件（2 小时预估时长），
+  // 避免复用原项目的施工时间段导致时间线被画成全天长条并压住其他预约。
+  const repairItems = [];
+  cache.projects.forEach((p) => {
+    if (mainIds.has(p.id)) return;
+    (p.repairOrders || []).forEach((ro) => {
+      if (!ro || ro.status !== "待维修" || !ro.appointmentTime) return;
+      if (dateKey(new Date(ro.appointmentTime)) !== ds) return;
+      const start = new Date(ro.appointmentTime);
+      const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+      repairItems.push({
+        id: ro.id,
+        isVirtualRepair: true,
+        _repairOf: p.id,
+        repairOrder: ro,
+        name: p.name,
+        appointmentTime: ro.appointmentTime,
+        endTime: end.toISOString(),
+        status: "待维修",
+        storeId: p.storeId || "",
+        customer: ro.customer || p.customer || "",
+        assignedWorkerIds: Array.isArray(ro.assignedWorkerIds) && ro.assignedWorkerIds.length
+          ? ro.assignedWorkerIds.slice()
+          : (p.assignedWorkerIds || []),
+        estimatedHours: 2,
+      });
+    });
+  });
   return main.concat(repairItems).sort((a, b) => projectStart(a) - projectStart(b));
 }
 
@@ -25167,10 +25383,11 @@ function renderCalendar() {
     const isHolidayDate = isHoliday(ds);
     const holidayIcon = isHolidayDate ? "🎊" : "";
     const evHtml = items.slice(0, 3).map((p) => {
-      const isRepair = (p.repairOrders || []).some(ro => ro && ro.status === "待维修");
+      const isRepair = p.isVirtualRepair || (p.repairOrders || []).some(ro => ro && ro.status === "待维修");
       const dotClass = isRepair ? "repair" : (STATUS_DOT[p.status] || "");
       const prefix = isRepair ? "🔧" : "";
-      return `<div class="cal-ev" data-project-id="${esc(p.id)}"><span class="dot ${dotClass}"></span>${prefix}${esc(p.name)}</div>`;
+      const clickTarget = p.isVirtualRepair ? (p._repairOf || p.id) : p.id;
+      return `<div class="cal-ev" data-project-id="${esc(clickTarget)}"><span class="dot ${dotClass}"></span>${prefix}${esc(p.name)}</div>`;
     }).join("");
     const more = items.length > 3 ? `<div class="cal-more">+${items.length - 3} 更多</div>` : "";
     const countBadge = items.length ? `<span class="cal-count">${items.length}</span>` : "";
@@ -25557,9 +25774,12 @@ function renderTimelineInDetail() {
       const isOvertime = (startH < TL_WORK_START_HOUR - 10/60) || (endH > TL_WORK_END_HOUR + 10/60) ||
                          startH >= TL_WORK_END_HOUR || endH <= TL_WORK_START_HOUR;
 
+      const isVirtualRepairTask = !!p.isVirtualRepair;
+      const taskClickTarget = isVirtualRepairTask ? (p._repairOf || p.id) : p.id;
       const hasInternal = (p.assignedWorkerIds || []).length > 0;
       const isOutsourcedTask = isOutsourced(p);
-      const statusClass = isOutsourcedTask ? "timeline-task-outsourced" :
+      const statusClass = isVirtualRepairTask ? "timeline-task-repair" :
+                         isOutsourcedTask ? "timeline-task-outsourced" :
                          p.status === STATUS.WORKING ? "timeline-task-working" :
                          p.status === STATUS.DONE ? "timeline-task-done" :
                          p.status === STATUS.ACCEPTED ? "timeline-task-accepted" :
@@ -25575,8 +25795,8 @@ function renderTimelineInDetail() {
       const feas = checkProjectHourFeasibility(p, calSelectedDate);
       const feasClass = !feas.ok ? (feas.level === "critical" ? " timeline-task-infeasible-critical" : " timeline-task-infeasible-warn") : "";
       const isCrossDay = Array.isArray(p.workSegments) && p.workSegments.length > 1;
-      // 跨天多段项目禁止时间线拖拽（避免破坏分段数据，改期请到预约弹窗）
-      const canDrag = p.status === STATUS.BOOKED && !isCrossDay;
+      // 跨天多段项目禁止时间线拖拽；维修单影子事件也不可拖拽
+      const canDrag = !isVirtualRepairTask && p.status === STATUS.BOOKED && !isCrossDay;
       const dragAttr = canDrag
         ? `draggable="true" ondragstart="timelineDragStart(event)" ondragend="timelineDragEnd(event)" onmousedown="timelineDragMouseDown(event)"`
         : `draggable="false"`;
@@ -25644,18 +25864,18 @@ function renderTimelineInDetail() {
       return `
         <div class="timeline-task ${statusClass} ${conflictClass} ${overtimeClass} ${feasClass} ${lockClass} ${overdueClass}"
              ${dragAttr}
-             data-project-id="${p.id}"
+             data-project-id="${esc(taskClickTarget)}"
              data-start="${start.toISOString()}"
              data-end="${end.toISOString()}"
              data-original-left="${left}"
              style="left: ${left}px; width: ${width}px; top: ${top}px; height: ${TL_LANE_HEIGHT - 8}px;"
-             onmousedown="timelineTaskMouseDown(event)"
-             onclick="timelineTaskClick(event, '${p.id}')">
+             ${isVirtualRepairTask ? "" : `onmousedown="timelineTaskMouseDown(event)"`}
+             onclick="${isVirtualRepairTask ? `gotoConstruction('${esc(taskClickTarget)}')` : `timelineTaskClick(event, '${esc(taskClickTarget)}')`}">
           <div class="timeline-task-header">
             <span class="timeline-task-name">${esc(p.name)}</span>
             <div class="timeline-task-chips">
-              ${p.reworkCount > 0 ? `<span class="timeline-task-rework-badge" style="cursor:pointer" title="查看返工记录" onclick="showReworkInfo('${esc(p.id)}')">🔄 返工 ${p.reworkCount}</span>` : ""}
-              ${(p.repairOrders || []).some(ro => ro && ro.status === "待维修") ? `<span class="timeline-task-repair-badge">🔧 维修</span>` : ""}
+              ${p.reworkCount > 0 && !isVirtualRepairTask ? `<span class="timeline-task-rework-badge" style="cursor:pointer" title="查看返工记录" onclick="showReworkInfo('${esc(p.id)}')">🔄 返工 ${p.reworkCount}</span>` : ""}
+              ${isVirtualRepairTask || (p.repairOrders || []).some(ro => ro && ro.status === "待维修") ? `<span class="timeline-task-repair-badge">🔧 维修</span>` : ""}
               ${isOverdue ? `<span class="timeline-task-overdue-badge" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
               ${hasOutsourced(p) ? `<span class="timeline-task-outsourced-badge">🤝 外协</span>` : ""}
               ${isProjectTimeModified(p) ? `<span class="timeline-task-modified-badge" style="cursor:pointer" title="查看改期信息" onclick="showRescheduleInfo('${esc(p.id)}')">${svgCal(12)} 已改期</span>` : ""}
@@ -25664,7 +25884,7 @@ function renderTimelineInDetail() {
               ${conflicts >= 1 ? `<span class="timeline-task-conflict-badge">⚠ ${conflicts} 冲突</span>` : ""}
               ${!feas.ok ? `<span class="timeline-task-infeasible-badge">⚠ ${feas.level === "critical" ? "工时严重异常" : "工时异常"}</span>` : ""}
             </div>
-            <span class="timeline-task-status status-${p.status}">${p.status}</span>
+            <span class="timeline-task-status ${isVirtualRepairTask ? 'timeline-task-status-repair' : `status-${esc(p.status)}`}">${isVirtualRepairTask ? '待维修' : esc(p.status)}</span>
           </div>
           ${infoHtml}
           <div class="timeline-task-workers">👤 ${esc(workers)}</div>
@@ -27944,7 +28164,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v4e7cb002";
+  const APP_VERSION = "vc474c8c9";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -30065,7 +30285,7 @@ function renderMeasurementPhotoArea() {
     const prog = it.uploading ? `<div class="cos-thumb__prog"><div class="cos-thumb__bar" id="cos-prog-${sid}" style="width:0%"></div></div>` : "";
     return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}" id="cos-item-${sid}">${img}${prog}${del}</div>`;
   }).join("");
-  const addBtn = perm.measurementEdit(m) ? `<button type="button" class="cos-add" onclick="document.getElementById('mFile').click()">＋ 添加照片</button><input id="mFile" type="file" accept="image/*" multiple class="hidden" onchange="handleMeasurementFiles(this)">` : "";
+  const addBtn = perm.measurementEdit(m) ? dualPhotoInputHTML("mFile", "handleMeasurementFiles(this)") : "";
   area.innerHTML = `<div class="cos-grid">${items}${addBtn}</div>`;
   fillMeasurementPhotos(m);
 }
