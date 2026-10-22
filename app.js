@@ -8611,13 +8611,11 @@ function isBlobLike(v) {
 // 因此优先用 sb.functions.invoke 调用 cos-proxy；失败时尝试 refreshSession 后重试。
 //
 // cos-proxy 运行区域固定（2026-10-22，跨国网络坑）：
-// Supabase 按客户端位置把函数派到最近的边缘节点执行，国内用户的请求多落在
-// ap-southeast-1（新加坡）——该节点到腾讯 COS 的跨境网络会丢包，无超时的 fetch
-// 实测挂死 40s+（东京/us-west-1/香港均 2-6s 正常返回；新加坡复测又能通=丢包不稳定）。
-// 因此统一固定到 ap-northeast-1（东京）：
-//   · invoke 路径用 region 选项（发 x-region 头 + forceFunctionRegion 查询参数）；
-//   · 直连 fetch 路径用 forceFunctionRegion 查询参数（不触发 CORS 预检，
-//     函数 CORS 未放行 x-region 时这条依然生效——预检失败会自动落到这里）。
+// ⚠️ 2026-10-22 实测推翻"固定东京"方案（v17830b0a 的误诊）：
+// 本机配了系统代理，此前多区域对比测试全走了代理（代理下东京 2-6s 正常）；
+// 但浏览器直连（无代理）时，forceFunctionRegion=ap-northeast-1 / x-region 头的请求
+// 会永久挂死（实测 15s 无响应 HTTP=000），而默认区域 4.4s 正常、cos-sign 2.1s 正常、
+// 签名 URL 直连 COS 1s 正常。结论：**默认区域优先，东京只作末位兜底**。
 const COS_PROXY_REGION = "ap-northeast-1";
 
 async function getCosProxyBlob(key, timeoutMs = 20000) {
@@ -8654,8 +8652,7 @@ async function getCosProxyBlob(key, timeoutMs = 20000) {
     const { data, error, response } = await sb.functions.invoke("cos-proxy", {
       body: { key },
       headers: headersArg,
-      // 固定运行区域到东京，避开新加坡节点→COS 跨境丢包。该 option 不被旧版 supabase-js 识别时
-      // 会静默忽略（仍走最近节点），此时由 viaManualFetch 的 forceFunctionRegion 查询参数兜底。
+      // forceRegion=true 时固定东京（仅作末位兜底通道；默认区域实测直连 4.4s 正常）
       ...(forceRegion ? { region: COS_PROXY_REGION } : {}),
     });
     if (error) {
@@ -8696,7 +8693,7 @@ async function getCosProxyBlob(key, timeoutMs = 20000) {
   }
 
   // 备用：手动 fetch（兼容 supabase-js 内部异常 / invoke 预检失败）。forceRegion=true 时
-  // 用 forceFunctionRegion 查询参数固定东京；false 时走默认最近区域（=「之前能通过代理看」的路径）。
+  // 用 forceFunctionRegion 查询参数固定东京（末位兜底）；false 时走默认最近区域（实测直连正常）。
   async function viaManualFetch(forceRegion) {
     const token = await _getSupabaseAccessToken();
     if (!token) throw new Error("未获取到登录令牌，请重新登录");
@@ -8731,13 +8728,15 @@ async function getCosProxyBlob(key, timeoutMs = 20000) {
     });
   }
 
-  // 三级通道回退：① invoke 东京 → ② 手动 fetch 东京 → ③ 手动 fetch 默认区域。
-  // 任一通道超 6s 即放弃转下一通道；登录态错误直接抛出（换通道也没用）。
+  // 三级通道回退：① invoke 默认区域 → ② 手动 fetch 默认区域 → ③ 手动 fetch 东京。
+  // 实测（2026-10-22，绕过系统代理直连）：默认区域 4.4s 正常，东京强制 15s 挂死——
+  // 故默认区域优先，东京仅作末位兜底。任一通道超 5s 即放弃转下一通道；
+  // 登录态错误直接抛出（换通道也没用）。
   async function tryOnce() {
     const steps = [
-      () => withTimeout(viaInvoke(true), 5000, "invoke(东京)"),
+      () => withTimeout(viaInvoke(false), 5000, "invoke(默认)"),
+      () => withTimeout(viaManualFetch(false), 5000, "fetch(默认)"),
       () => withTimeout(viaManualFetch(true), 5000, "fetch(东京)"),
-      () => withTimeout(viaManualFetch(false), 5000, "fetch(默认区域)"),
     ];
     let lastErr = null;
     for (const step of steps) {
@@ -9183,7 +9182,8 @@ async function cosLightboxTryRecover(img, key, name) {
         const txt = m ? m[2] : "";
         tip.textContent = `代理加载失败[${code || "?"}] ${txt || ""}`.trim();
       } else if (msg.includes("网络") || msg.includes("fetch") || msg.includes("Failed")) {
-        tip.textContent = "网络错误，无法连接到代理";
+        // 调试期：显示真实错误（通道超时/Failed to fetch 具体形态），避免泛化文案掩盖根因
+        tip.textContent = `网络错误，无法连接到代理（${msg.slice(0, 150)}）`;
       } else if (msg.includes("heic2any") || msg.includes("转码库")) {
         tip.textContent = "HEIC 转码库未加载，请下载原图查看";
       } else if (msg.includes("转码") || msg.includes("HEIC")) {
@@ -28623,7 +28623,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v781fcfcd";
+  const APP_VERSION = "v8caf4af6";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
