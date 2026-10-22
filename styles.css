@@ -7756,6 +7756,40 @@ table.data.project-hours-diff thead th {
 .toast-error::before   { content: "\2715"; }   /* ✕ */
 .toast-warning { background: #d97706; }
 .toast-warning::before { content: "\26A0"; }   /* ⚠ */
+
+/* 上传进度浮层（独立于 .toast，可更新文本并保持显示，结束才淡出） */
+.upload-prog {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  padding: 10px 18px 10px 14px;
+  border-radius: 10px;
+  z-index: 99999;
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  max-width: 86vw;
+  background: #2563eb;
+}
+.upload-prog--show { display: flex; animation: fadein 0.2s; }
+.upload-prog::before {
+  content: "";
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,.45);
+  border-top-color: #fff;
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: spin 0.8s linear infinite;
+}
+.upload-prog--done { background: #16a34a; }
+.upload-prog--done::before { content: "\2713"; border: none; animation: none; width: auto; height: auto; }
+@keyframes spin { to { transform: rotate(360deg); } }
 @keyframes fadein { from { opacity: 0; transform: translate(-50%, 10px);} to {opacity:1;} }
 
 /* ===== 自定义下拉刷新指示器（移动端手势触发，替代浏览器原生下拉=整页reload） ===== */

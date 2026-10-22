@@ -8093,10 +8093,28 @@ function onCosImgError(img, name, key) {
   async function tryRecover() {
     if (MODE !== "cloud" || !k) throw new Error("非云端模式或缺少 key");
 
-    // 清除缓存，强制重新拿签名（可能之前的已过期/失败）
-    delete _cosViewCache[k];
-    const m = await cosGetViewUrls([k]);
-    const signed = m[k] || "";
+    // 步骤 0：代理 blob 缓存命中——这张图之前已通过代理取回过，直接复用，秒显示
+    const cachedBlob = cosBlobCacheGet(k);
+    if (cachedBlob) {
+      img.src = cachedBlob;
+      img.classList.remove("cos-img--err");
+      if (parent) {
+        const t = parent.querySelector(".cos-thumb__errtxt");
+        if (t) t.remove();
+      }
+      return;
+    }
+
+    // 步骤 1：重新换取签名 URL（轻量，不下载图片）——仅当原 URL 可能已陈旧（签发超 90s）才有意义；
+    // 刚签过就失败的 URL 重签必然同样失败（PakePlus 直连 COS 常失败），跳过重签直接走代理，省 2s+ 等待
+    const signedAt = _cosViewSignedAt[k] || 0;
+    const justSigned = Date.now() - signedAt < 90 * 1000;
+    let signed = "";
+    if (!justSigned) {
+      delete _cosViewCache[k];
+      const m = await cosGetViewUrls([k]);
+      signed = m[k] || "";
+    }
     if (signed) {
       img.src = signed;
       img.classList.remove("cos-img--err");
@@ -8113,6 +8131,7 @@ function onCosImgError(img, name, key) {
     const blob = await getCosProxyBlob(k, 18000);
     if (!blob) throw new Error("代理返回空数据");
     const url = URL.createObjectURL(blob);
+    cosBlobCachePut(k, url);
     img.src = url;
     img.classList.remove("cos-img--err");
     if (parent) {
@@ -8183,6 +8202,26 @@ let _cosViewSignedAt = {};
 const _COS_URL_STALE_MS = 50 * 60 * 1000;
 let _cosViewHost = "";
 try { _cosViewHost = localStorage.getItem("cosViewHost") || ""; } catch (_) {}
+
+// 代理取回的图片 blob URL 缓存（key → {url,at}）。PakePlus/WebView2 直连 COS 常失败，
+// 每次查看都要「签名→失败→代理(~3s)」；把代理成功的结果按 key 缓存后，同一张图
+// 第二次查看（缩略图→大图、翻页回来、关开弹窗）直接复用 blob URL，秒开。
+// 上限 40 张，超出按最旧淘汰；blob URL 会话内有效（SPA 不重载），无需 revoke。
+let _cosBlobCache = {};
+const _COS_BLOB_CACHE_MAX = 40;
+function cosBlobCachePut(key, blobUrl) {
+  if (!key || !blobUrl) return;
+  const keys = Object.keys(_cosBlobCache);
+  if (keys.length >= _COS_BLOB_CACHE_MAX && !_cosBlobCache[key]) {
+    keys.sort((a, b) => (_cosBlobCache[a].at || 0) - (_cosBlobCache[b].at || 0));
+    delete _cosBlobCache[keys[0]];
+  }
+  _cosBlobCache[key] = { url: blobUrl, at: Date.now() };
+}
+function cosBlobCacheGet(key) {
+  const e = key && _cosBlobCache[key];
+  return e ? e.url : "";
+}
 
 // ===== cos-sign 调用统一封装：并发限流 + 429 退避重试 + 登录态失效刷新重试 =====
 // 背景（2026-10-23）：移动端拍照上传偶发「429 queue.waiting.title」。这是 Supabase
@@ -8380,6 +8419,89 @@ function putFileToCos(putUrl, file, onProgress) {
     xhr.onerror = () => reject(new Error("网络错误"));
     xhr.send(file);
   });
+}
+
+// 上传进度浮层（独立于 #toast：可更新文本且保持显示，直至 isFinal 才自动隐藏 1.4s）
+let _uploadProgEl = null;
+function showUploadProgress(msg) {
+  if (!_uploadProgEl) {
+    _uploadProgEl = document.createElement("div");
+    _uploadProgEl.id = "uploadProg";
+    _uploadProgEl.className = "upload-prog";
+    document.body.appendChild(_uploadProgEl);
+  }
+  _uploadProgEl.textContent = msg;
+  _uploadProgEl.classList.add("upload-prog--show");
+  _uploadProgEl.classList.remove("upload-prog--done", "hidden");
+  return _uploadProgEl;
+}
+function updateUploadProgress(msg, isFinal) {
+  if (!_uploadProgEl) showUploadProgress(msg);
+  _uploadProgEl.textContent = msg;
+  if (isFinal) {
+    _uploadProgEl.classList.add("upload-prog--done");
+    setTimeout(() => { if (_uploadProgEl) { _uploadProgEl.classList.remove("upload-prog--show"); _uploadProgEl.classList.add("hidden"); } }, 1400);
+  }
+}
+
+// 预处理上传文件：HEIC/HEIF 转 JPEG（浏览器可预览）+ 生成 COS key。
+// 并发上限 2（避免低端机内存爆 + 主线程卡死）；转换结果与 key 写回 job.ref，供调用方组装元数据。
+async function prepareUploadItems(jobs, onProgress) {
+  const total = jobs.length;
+  const prepared = new Array(total);
+  let done = 0, cursor = 0;
+  const worker = async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= total) break;
+      const job = jobs[i];
+      let file = job.file, name = job.name;
+      if (isUnsupportedImageType(file.type)) {
+        try { const jpg = await convertHeicToJpeg(file); file = jpg; name = jpg.name; }
+        catch (e) { console.warn("HEIC 转换失败，按原格式上传：", e); }
+      }
+      const nameExt = (name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const ext = extFromMime(file.type, nameExt) || "jpg";
+      const key = `gg/projects/${job.projectId}/${job.cosSubPath}/${uid()}.${ext}`;
+      job.ref.key = key; job.ref.file = file; job.ref.name = name;
+      prepared[i] = { file, key, name, ref: job.ref };
+      done++;
+      if (onProgress) try { onProgress(done, total); } catch (_) {}
+    }
+  };
+  const n = Math.max(1, Math.min(2, total));
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return prepared;
+}
+
+// 并发直传 COS（PUT 直传，无函数并发限制）。concurrency 默认 3；单张失败按指数退避重试 retries 次。
+// 返回与 prepared 对齐的数组：成功项=原 prepared 对象（含 ref），失败项={__failed:true,item,error}。
+async function uploadItemsToCos(prepared, signedMap, { concurrency = 3, onProgress, retries = 2 } = {}) {
+  const out = new Array(prepared.length);
+  const total = prepared.length;
+  let done = 0, cursor = 0;
+  const tryOnce = async (item) => {
+    const s = signedMap[item.key];
+    if (!s || !s.url) { const e = new Error("未获取到上传授权: " + item.key); e.noAuth = true; throw e; }
+    for (let a = 0; a <= retries; a++) {
+      try { await putFileToCos(s.url, item.file); return; }
+      catch (e) { if (a < retries) await new Promise((r) => setTimeout(r, 400 * (a + 1))); else throw e; }
+    }
+  };
+  const worker = async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= total) break;
+      const item = prepared[i];
+      try { await tryOnce(item); out[i] = item; }
+      catch (e) { out[i] = { __failed: true, item, error: e }; }
+      done++;
+      if (onProgress) try { onProgress(done, total); } catch (_) {}
+    }
+  };
+  const n = Math.max(1, Math.min(concurrency, total));
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return out;
 }
 
 // 把照片元数据落库（云端走 patchProject，本地走 saveLocal）
@@ -9132,6 +9254,9 @@ function _cosLbArg(keys, currentKey) {
 // 取某 key 的查看 URL：统一走 cosGetViewUrls（内部按 50min 陈旧度惰性重签 + 会话保鲜），
 // 避免灯箱直接用缓存里超 1h 的过期 URL 触发 COS 403；彻底失败才回退裸 URL（配合 SW 离线缓存）
 async function cosLightboxLoadKey(key) {
+  // 代理 blob 缓存命中（同一张图的缩略图刚加载过）：直接用 blob URL 打开，秒显示
+  const cachedBlob = cosBlobCacheGet(key);
+  if (cachedBlob) return cachedBlob;
   const m = await cosGetViewUrls([key]);
   if (m[key]) return m[key];
   return _cosViewHost ? `https://${_cosViewHost}/${key}` : "";
@@ -9149,14 +9274,23 @@ async function cosLightboxTryRecover(img, key, name) {
     tip.textContent = "正在通过代理加载…";
   }
   try {
-    let blob = await getCosProxyBlob(key);
-    if (!blob) throw new Error("无法获取原图");
+    // 代理 blob 缓存命中（例如缩略图刚通过代理加载过）：直接复用，跳过 3s 代理往返
+    const cachedBlob = cosBlobCacheGet(key);
+    let blob;
+    if (cachedBlob) {
+      blob = await fetch(cachedBlob).then((r) => r.blob()).catch(() => null);
+    }
+    if (!blob) {
+      blob = await getCosProxyBlob(key);
+      if (!blob) throw new Error("无法获取原图");
+    }
     if (await isHeicBlob(blob)) {
       if (typeof heic2any !== "function") throw new Error("缺少 heic2any 转码库");
       if (tip) tip.textContent = "检测到 HEIC，正在转码为 JPG…";
       blob = await convertHeicToJpeg(blob);
     }
     const url = URL.createObjectURL(blob);
+    cosBlobCachePut(key, url);
     img.src = url;
     img.classList.remove("cos-lightbox__img--err");
     if (tip) {
@@ -10809,35 +10943,19 @@ async function uploadFormPhotos(projectId, fpOverride) {
     (fp[k] || []).forEach((it) => { if (it._staged && it.file) staged.push({ kind: k, it }); });
   });
   if (!staged.length) return;
+  showUploadProgress("准备上传照片…");
   try {
-    // HEIC/HEIF 自动转 JPEG（浏览器才能预览）；失败则按原格式上传
-    const hasHeic = staged.some(({ it }) => isUnsupportedImageType(it.file.type));
-    if (hasHeic) toast("正在将 HEIC/HEIF 图片转为 JPEG，以便各端都能预览…");
-    for (const { it } of staged) {
-      if (!isUnsupportedImageType(it.file.type)) continue;
-      try {
-        const jpg = await convertHeicToJpeg(it.file);
-        it.file = jpg;
-        it.name = jpg.name;
-      } catch (e) {
-        console.warn("HEIC 转换失败，按原格式上传：", e);
-        toast("有 HEIC 图片本地转换失败，已按原格式上传（可能仍无法在线预览）");
-      }
-    }
-    const reqItems = staged.map(({ kind, it }) => {
-      const nameExt = (it.name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-      const ext = extFromMime(it.file.type, nameExt) || "jpg";
-      const key = `gg/projects/${projectId}/${kind}/${uid()}.${ext}`;
-      it.key = key;
-      return { key, contentType: it.file.type || "image/jpeg" };
-    });
+    // HEIC/HEIF 转 JPEG + 生成 key（并发上限 2）；结果写回 fp 条目供下方组装元数据
+    const jobs = staged.map(({ kind, it }) => ({ ref: it, file: it.file, name: it.name, projectId, cosSubPath: kind }));
+    const prepared = await prepareUploadItems(jobs, (d, t) => updateUploadProgress(`正在转换照片 ${d}/${t}…`));
+    if (!prepared.length) return;
+    const reqItems = prepared.map(({ file, key }) => ({ key, contentType: file.type || "image/jpeg" }));
     const signed = await cosGetSignedUrls(reqItems);
-    const map = {};
-    signed.forEach((s) => (map[s.key] = s));
-    for (const { it } of staged) {
-      const s = map[it.key];
-      if (s) await putFileToCos(s.url, it.file);
-    }
+    const map = {}; signed.forEach((s) => { if (s && s.key) map[s.key] = s; });
+    // 直传 COS：并发上限 3 + 单张失败退避重试（手机弱网避免整批 abort）
+    const results = await uploadItemsToCos(prepared, map, { concurrency: 3, onProgress: (d, t) => updateUploadProgress(`正在上传 ${d}/${t}…`) });
+    // 上传失败的条目清空 key，避免写入「有 key 无图」的脏数据
+    results.filter((r) => r && r.__failed).forEach((r) => { if (r.item && r.item.ref) r.item.ref.key = ""; });
     const photos = { plan: [], material: [], site: [], completion: [] };
     ["plan", "material", "site", "completion"].forEach((k) => {
       (fp[k] || []).forEach((it) => {
@@ -10845,8 +10963,11 @@ async function uploadFormPhotos(projectId, fpOverride) {
       });
     });
     await repo.patchProject(projectId, { project_photos: JSON.stringify(photos) });
+    const failed = results.filter((r) => r && r.__failed).length;
+    if (failed) updateUploadProgress(`有 ${failed} 张照片上传失败，请重试`, true);
+    else updateUploadProgress(`已上传 ${prepared.length} 张照片`, true);
   } catch (e) {
-    toast("照片上传失败：" + (e.message || e));
+    updateUploadProgress("照片上传失败：" + (e.message || e), true);
   }
 }
 
@@ -10969,30 +11090,26 @@ async function uploadPhotoBlock(projectId, prefix, cosSubPath) {
   if (sets) delete sets[prefix];
   if (!staged.length) return [];
   if (MODE !== "cloud") { toast("离线模式暂不支持上传照片，请联网后重试"); return []; }
-  const hasHeic = staged.some((it) => isUnsupportedImageType(it.file.type));
-  if (hasHeic) toast("正在将 HEIC/HEIF 图片转为 JPEG，以便各端都能预览…");
-  const prepared = [];
-  for (const it of staged) {
-    let file = it.file, name = it.name;
-    if (isUnsupportedImageType(file.type)) {
-      try { const jpg = await convertHeicToJpeg(file); file = jpg; name = jpg.name; }
-      catch (e) { console.warn("维修照片 HEIC 转换失败，按原格式上传：", e); toast("有 HEIC 图片转换失败，已按原格式上传（可能仍无法在线预览）"); }
-    }
-    const nameExt = (name.split(".").pop() || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    const ext = extFromMime(file.type, nameExt) || "jpg";
-    const key = `gg/projects/${projectId}/${cosSubPath}/${uid()}.${ext}`;
-    prepared.push({ file, key, name });
+  const me = (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "匿名";
+  showUploadProgress("准备上传照片…");
+  try {
+    const jobs = staged.map((it) => ({ ref: it, file: it.file, name: it.name, projectId, cosSubPath }));
+    const prepared = await prepareUploadItems(jobs, (d, t) => updateUploadProgress(`正在转换照片 ${d}/${t}…`));
+    if (!prepared.length) return [];
+    const reqItems = prepared.map(({ file, key }) => ({ key, contentType: file.type || "image/jpeg" }));
+    const signed = await cosGetSignedUrls(reqItems);
+    const map = {}; signed.forEach((s) => { if (s && s.key) map[s.key] = s; });
+    const results = await uploadItemsToCos(prepared, map, { concurrency: 3, onProgress: (d, t) => updateUploadProgress(`正在上传 ${d}/${t}…`) });
+    const ok = results.filter((r) => r && !r.__failed);
+    const failed = results.filter((r) => r && r.__failed);
+    const out = ok.map(({ file, key, name }) => ({ key, url: "", name, size: file.size, by: me, at: Date.now() }));
+    if (failed.length) updateUploadProgress(`有 ${failed.length} 张照片上传失败，请重试`, true);
+    else updateUploadProgress(`已上传 ${out.length} 张照片`, true);
+    return out;
+  } catch (e) {
+    updateUploadProgress("照片上传失败：" + (e.message || e), true);
+    return [];
   }
-  const signed = await cosGetSignedUrls(prepared.map(({ file, key }) => ({ key, contentType: file.type || "image/jpeg" })));
-  const map = {}; signed.forEach((s) => { if (s && s.key) map[s.key] = s; });
-  const out = [];
-  for (const { file, key, name } of prepared) {
-    const s = map[key];
-    if (!s || !s.url) { console.warn("未获取到上传授权:", key); continue; }
-    await putFileToCos(s.url, file);
-    out.push({ key, url: "", name, size: file.size, by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "匿名", at: Date.now() });
-  }
-  return out;
 }
 
 // 维修单详情：只读展示问题照片 / 修复后效果（data-cos-key 由 fillRepairPhotos 补签名 URL）
@@ -28623,7 +28740,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v8caf4af6";
+  const APP_VERSION = "v2de9848c";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
