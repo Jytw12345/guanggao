@@ -468,34 +468,34 @@ function can(cap) {
 
 const perm = {
   createProject: () => can(CAP.PROJECT_CREATE),
-  editProject: (p) => !isSettled(p) && (
+  editProject: (p) => !isReviewed(p) && (
     can(CAP.PROJECT_EDIT_ALL) ||
     ((isManager() || !myStore() || (p && p.storeId === myStore())) && (
       can(CAP.PROJECT_EDIT_OWN) && p && p.createdBy === currentProfile.id
     ))
   ),
-  deleteProject: (p) => !isSettled(p) && (
+  deleteProject: (p) => !isReviewed(p) && (
     can(CAP.PROJECT_DELETE_ALL) ||
     ((isManager() || !myStore() || (p && p.storeId === myStore())) && (
       can(CAP.PROJECT_DELETE_OWN) && p && p.createdBy === currentProfile.id
     ))
   ),
   viewProjectAll: () => can(CAP.PROJECT_VIEW_ALL),
-  startConstruction: (p) => !isSettled(p) && can(CAP.CONSTRUCTION_START),
-  pauseConstruction: (p) => !isSettled(p) && can(CAP.CONSTRUCTION_PAUSE),
-  resumeConstruction: (p) => !isSettled(p) && can(CAP.CONSTRUCTION_RESUME),
-  completeConstruction: (p) => !isSettled(p) && can(CAP.CONSTRUCTION_COMPLETE),
+  startConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_START),
+  pauseConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_PAUSE),
+  resumeConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_RESUME),
+  completeConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_COMPLETE),
   // 「填写施工/外协工时」权限点已随手动工时功能取消而移除（2026-10-18），恒 false：
   // 工时由系统在完工时按在场时段自动生成，任何角色都无需勾选。
   logWorkHours: () => false,
   logOutsourcedHours: () => false,
-  deleteWorkLog: (p) => !isSettled(p) && can(CAP.WORKLOG_DELETE),
-  delayProject: (p) => !isSettled(p) && can(CAP.PROJECT_DELAY),
+  deleteWorkLog: (p) => !isReviewed(p) && can(CAP.WORKLOG_DELETE),
+  delayProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELAY),
   // 取消仅允许「开工前/施工中/暂停/延期」阶段；已完工/已验收/已审核/已取消均不可取消
   // （与 STATUS_TRANSITIONS 状态机、详情页取消按钮可见性保持一致，避免防御性缺口）
   cancelProject: (p) => p && ![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED].includes(p.status) && can(CAP.PROJECT_CANCEL),
-  assignWorker: (p) => !isSettled(p) && !isCompleted(p) && can(CAP.WORKER_ASSIGN),
-  unassignWorker: (p) => !isSettled(p) && !isCompleted(p) && can(CAP.WORKER_UNASSIGN),
+  assignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_ASSIGN),
+  unassignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_UNASSIGN),
   addWorker: () => can(CAP.WORKER_ADD),
   editWorker: () => can(CAP.WORKER_EDIT),
   deleteWorker: () => can(CAP.WORKER_DELETE),
@@ -522,7 +522,7 @@ const perm = {
   // 「管理工时单价」权限点与工资单价配置 UI 已整体移除（2026-10-18 包活制改造），恒 false
   manageWageConfig: () => false,
   // 注意：项目一旦开工或进入终态，预约时间即锁定，任何权限都不能再改（须走「延期」流程）
-  editAppointment: (p) => !isSettled(p) && !isAppointmentLocked(p) && (
+  editAppointment: (p) => !isReviewed(p) && !isAppointmentLocked(p) && (
     // "所有"权限：跨门店，覆盖全部门店的项目
     can(CAP.PROJECT_EDIT_APPOINTMENT_ALL) ||
     can(CAP.PROJECT_EDIT_ALL) ||
@@ -543,13 +543,20 @@ const perm = {
   // 默认模板给 manager / store_manager = true、worker = false（与改造前行为一致）。
   // 门店兜底：与 editProject / rework / reviewProject 同口径 —— 「编辑所有项目」权限 或 总经理 或
   // 未绑定门店（跨店账号）放行；否则仅限本门店项目。防止单独勾了本权限的账号改到别店项目的工钱。
-  editContract: (p) => !isSettled(p) && can(CAP.PROJECT_EDIT_CONTRACT)
-    && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
-  editCommission: (p) => !isSettled(p) && can(CAP.PROJECT_EDIT_COMMISSION)
+  // 改工程金额：管理员（包活金额权限 + 门店兜底）审核前随时可改；
+  // 另加「预约人直改」——验收前，建单人可改自己项目的工程金额（用户口径 2026-10-22：
+  // 「工程金额只有管理员可修改吗？应该是验收前项目预约人可编辑吧，当然管理员肯定也是可以修改的」）。
+  // 预约人路径无需门店兜底（自己的单必然同店）；验收后仅管理员可改，审核后一律锁定。
+  editContract: (p) => !isReviewed(p) && (
+    (can(CAP.PROJECT_EDIT_CONTRACT)
+      && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())))
+    || (isProjectBooker(p) && p.status !== STATUS.ACCEPTED && p.status !== STATUS.CANCELLED)
+  ),
+  editCommission: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COMMISSION)
     && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   // 成本扣项（材料/现场成本/外协工钱）独立权限点：与「工人分成」(editCommission) 分开控制。
   // 默认 manager/store_manager = true、worker = false；门店兜底同口径。
-  editCostDeduction: (p) => !isSettled(p) && can(CAP.PROJECT_EDIT_COST_DEDUCTION)
+  editCostDeduction: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COST_DEDUCTION)
     && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   // 注：「修改完工工时」权限点（project_edit_worklog_own/all）已随手动工时功能取消而移除。
   // 工时由系统在完工时自动生成（仅考勤参考、不计工资），唯一的工时纠错入口是「删除考勤工时记录」
@@ -578,17 +585,17 @@ const perm = {
   addVehicleTrip: () => can(CAP.VEHICLE_TRIP_ADD),
   deleteVehicleTrip: () => can(CAP.VEHICLE_TRIP_DELETE),
   vehicleManage: () => can(CAP.VEHICLE_MANAGE),
-  doConstruction: (p) => !isSettled(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE)),
+  doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE)),
   manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT),
   manageMakeup: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_BATCH_ROTATIONAL),
   viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
   // 照片管理三权分立：上传/删除受「已审核锁定」约束（审核后不可篡改现场证据），下载无此约束
-  photoUploadSite: (p) => !isSettled(p) && can(CAP.PHOTO_UPLOAD_SITE),
-  photoDeleteSite: (p) => !isSettled(p) && can(CAP.PHOTO_DELETE_SITE),
-  photoUploadPm: (p) => !isSettled(p) && can(CAP.PHOTO_UPLOAD_PM),
-  photoDeletePm: (p) => !isSettled(p) && can(CAP.PHOTO_DELETE_PM),
-  photoUploadCompletion: (p) => !isSettled(p) && can(CAP.PHOTO_UPLOAD_COMPLETION),
-  photoDeleteCompletion: (p) => !isSettled(p) && can(CAP.PHOTO_DELETE_COMPLETION),
+  photoUploadSite: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_SITE),
+  photoDeleteSite: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_SITE),
+  photoUploadPm: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_PM),
+  photoDeletePm: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_PM),
+  photoUploadCompletion: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_COMPLETION),
+  photoDeleteCompletion: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_COMPLETION),
   photoDownload: () => can(CAP.PHOTO_DOWNLOAD),
   // 「内部任务」与「上门量尺」已于 2026-10-18 下线，权限项已从 CAP/CAP_GROUPS/DEFAULT_ROLE_PERMS 移除。
   // 这里保留函数名但恒返回 false，避免历史调用点（首页提醒 / 日程聚合 / 卡片渲染等 40+ 处）抛
@@ -608,17 +615,20 @@ const perm = {
   measurementConvert: () => false,
 };
 
+/* 数据锁定规则（用户口径 2026-10-22 定版）：仅「已审核」(REVIEWED) 是封存点。
+   审核后工程金额/成本扣项/工人分成/人员分配/工时/照片等一切业务数据一律锁定，
+   只能走「发起维修 / 发起返工 / 反审核」等治理动作整改；
+   已完工(DONE)/已验收(ACCEPTED) 未审核前，有权限者仍可修正金额/扣项/分成
+   （验收只决定提成统计计入，不封存数据；人员增删自完工起由 isCompleted 另行冻结）。 */
 function isReviewed(p) {
   return p && p.status === STATUS.REVIEWED;
 }
 
-/* 终态锁定（已验收 / 已审核）：项目验收或审核完成后，除「发起维修 / 发起返工 / 反审核」
-   等治理动作外，工程金额、成本扣项、工人分成、人员分配、工时、照片等一切业务数据一律锁定。
-   与 isReviewed（仅「已审核」，用于审核态判断）刻意区分：
-   - DONE（已完工待验收）→ 未锁定，验收前仍可修正金额/扣项/分成；
-   - ACCEPTED（已验收）/ REVIEWED（已审核）→ 锁定，只能走维修/返工整改。 */
-function isSettled(p) {
-  return !!p && (p.status === STATUS.ACCEPTED || p.status === STATUS.REVIEWED);
+/* 是否为该项目的预约人（建单人）：createdBy 存 auth user id，
+   与 currentProfile.id 同源（profiles.id = auth uid，见登录后 newProfile 构造）。
+   本地单机模式 currentProfile 无 id 字段，恒 false（单机本就是全权限管理员）。 */
+function isProjectBooker(p) {
+  return !!p && !!p.createdBy && !!currentProfile && p.createdBy === currentProfile.id;
 }
 
 /* 判断项目是否为系统自动审核（验收满设定时长后自动置为已审核）。
@@ -8097,10 +8107,10 @@ function onCosImgError(img, name, key) {
       return;
     }
 
-    // 步骤 2：签名也拿不到，再走代理下载 blob（缩略图限时 5s，大图/灯箱自己调 15s）
+    // 步骤 2：签名也拿不到，再走代理下载 blob（缩略图限时 10s——冷启动+预检可能吃掉 5s+；大图/灯箱自己调 15s）
     if (img.dataset.proxyTried === "1") throw new Error("代理已尝试");
     img.dataset.proxyTried = "1";
-    const blob = await getCosProxyBlob(k, 5000);
+    const blob = await getCosProxyBlob(k, 18000);
     if (!blob) throw new Error("代理返回空数据");
     const url = URL.createObjectURL(blob);
     img.src = url;
@@ -8174,10 +8184,103 @@ const _COS_URL_STALE_MS = 50 * 60 * 1000;
 let _cosViewHost = "";
 try { _cosViewHost = localStorage.getItem("cosViewHost") || ""; } catch (_) {}
 
+// ===== cos-sign 调用统一封装：并发限流 + 429 退避重试 + 登录态失效刷新重试 =====
+// 背景（2026-10-23）：移动端拍照上传偶发「429 queue.waiting.title」。这是 Supabase
+// Edge Function「并发队列打满」的平台级报错——详情页打开时 fillPhotoImages /
+// fillAcceptancePhotos / fillRepairPhotos / fillMeasurementPhotos / onCosImgError 逐张
+// 重试等会同时发起多路 cos-sign 调用，弱网下耗时拉长、并发堆积撞上项目的函数并发上限，
+// 导致上传那一刻的 cos-sign 被排队拒绝。客户端用「信号量限并发 + 429 指数退避重试」消解，
+// 不伤正常路径。
+const _COS_SIGN_LIMIT = 3;
+let _cosSignActive = 0;
+const _cosSignWaiters = [];
+function _cosSignAcquire() {
+  return new Promise((resolve) => {
+    if (_cosSignActive < _COS_SIGN_LIMIT) { _cosSignActive++; resolve(); }
+    else _cosSignWaiters.push(resolve);
+  });
+}
+function _cosSignRelease() {
+  if (_cosSignWaiters.length) {
+    _cosSignActive = Math.max(0, _cosSignActive - 1); // 当前任务先让出名额
+    const next = _cosSignWaiters.shift();
+    next(); // 唤醒下一个等待者，其 _cosSignAcquire 内会重新 +1
+  } else {
+    _cosSignActive = Math.max(0, _cosSignActive - 1);
+  }
+}
+
+// 判断是否为 Supabase 函数并发队列打满（429）。平台在并发上限到达时返回带 429 状态的
+// FunctionsHttpError，错误信息常含 queue.waiting / Too Many Requests 等字样。
+function isCosSignConcurrencyError(err) {
+  if (!err) return false;
+  const status = err.context && err.context.status;
+  if (status === 429) return true;
+  return /429|queue|too many|并发|too many requests/i.test(String(err.message || err));
+}
+
+// 单次 cos-sign 调用（含超时 + 429 退避重试 + 登录态失效刷新重试），调用方需先经信号量。
+async function _cosSignInvokeOnce(body, timeoutMs, maxRetries) {
+  let lastErr = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let data = null, error = null;
+    try {
+      const p = sb.functions.invoke("cos-sign", { body });
+      const to = new Promise((_, rej) => setTimeout(() => rej(new Error("cos-sign timeout")), timeoutMs));
+      const r = await Promise.race([p, to]);
+      data = r.data; error = r.error;
+    } catch (e) { error = e; }
+    if (error) {
+      // 并发受限：指数退避后重试（最多 maxRetries 次）
+      if (isCosSignConcurrencyError(error) && attempt < maxRetries) {
+        lastErr = error;
+        const backoff = Math.min(8000, 500 * Math.pow(2, attempt)) + Math.random() * 300;
+        console.warn(`[cos-sign] 并发受限(429)，${Math.round(backoff)}ms 后重试(${attempt + 1}/${maxRetries})`);
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+      // 登录态失效：刷新会话后重试一次
+      if (isCosSignAuthError(error)) {
+        console.warn("[cos-sign] 签名返回登录态错误，刷新会话后重试：", String(error.message || error).slice(0, 160));
+        try {
+          const { error: refreshErr } = await sb.auth.refreshSession();
+          if (refreshErr) console.warn("[cos-sign] refreshSession 失败：", refreshErr.message || refreshErr);
+        } catch (refreshEx) { console.warn("[cos-sign] refreshSession 异常：", refreshEx); }
+        try {
+          const p2 = sb.functions.invoke("cos-sign", { body });
+          const to2 = new Promise((_, rej) => setTimeout(() => rej(new Error("cos-sign timeout")), timeoutMs));
+          const r2 = await Promise.race([p2, to2]);
+          if (r2.error) throw r2.error;
+          return r2.data;
+        } catch (e2) { throw e2; }
+      }
+      throw error;
+    }
+    return data;
+  }
+  throw lastErr || new Error("cos-sign 重试耗尽");
+}
+
+// 对外封装：信号量限并发（最多 3 路） + 统一重试。所有 cos-sign 调用必须走这里。
+// 返回形如 { data, error }（与 sb.functions.invoke 一致），调用方据此判断成败。
+async function cosSignInvoke(body, { timeoutMs = 8000, retries = 4 } = {}) {
+  if (MODE !== "cloud" || !sb) return { data: null, error: new Error("离线模式不支持访问云存储签名服务，请联网后重试") };
+  await _cosSignAcquire();
+  try {
+    const data = await _cosSignInvokeOnce(body, timeoutMs, retries);
+    return { data, error: null };
+  } catch (error) {
+    return { data: null, error };
+  } finally {
+    _cosSignRelease();
+  }
+}
+
 // 批量换取预签名 URL。action=put 用于上传直传，action=get 用于私有桶下载查看
 async function cosGetSignedUrls(items, action = "put") {
   if (MODE !== "cloud") throw new Error("离线模式不支持上传到云存储，请联网后重试");
-  const { data, error } = await sb.functions.invoke("cos-sign", { body: { action, items } });
+  // 上传是核心路径：给足超时 + 走统一封装（限并发 / 429 退避重试）
+  const { data, error } = await cosSignInvoke({ action, items }, { timeoutMs: 10000, retries: 4 });
   if (error) throw new Error(error.message || "签名失败");
   if (!data || !Array.isArray(data.items)) throw new Error("签名返回异常");
   return data.items; // [{key,url,host}]
@@ -8247,32 +8350,15 @@ async function cosGetViewUrls(keys) {
   return result;
 }
 
-// cos-sign(action=get) 单次调用：8s 超时；登录态错误时刷新会话重试一次
+// cos-sign(action=get) 单次调用：统一走 cosSignInvoke（限并发 + 429 退避重试 + 登录态失效刷新重试）
 async function cosSignGetOnce(keys) {
-  const invokeOnce = async () => {
-    // 8s 超时：cos-sign 只是服务端签名，不应超过 1s；PakePlus 网络差时防止卡死
-    const p = sb.functions.invoke("cos-sign", {
-      body: { action: "get", items: keys.map((k) => ({ key: k })) },
-    });
-    const to = new Promise((_, rej) => setTimeout(() => rej(new Error("cos-sign timeout")), 8000));
-    const { data, error } = await Promise.race([p, to]);
-    if (error) throw error;
-    if (!data || !Array.isArray(data.items)) throw new Error("签名返回异常");
-    return data;
-  };
-  try {
-    return await invokeOnce();
-  } catch (e) {
-    if (!isCosSignAuthError(e)) throw e;
-    console.warn("[cos-sign] 签名返回登录态错误，刷新会话后重试：", String(e.message || e).slice(0, 160));
-    try {
-      const { error: refreshErr } = await sb.auth.refreshSession();
-      if (refreshErr) console.warn("[cos-sign] refreshSession 失败：", refreshErr.message || refreshErr);
-    } catch (refreshEx) {
-      console.warn("[cos-sign] refreshSession 异常：", refreshEx);
-    }
-    return await invokeOnce();
-  }
+  const { data, error } = await cosSignInvoke(
+    { action: "get", items: keys.map((k) => ({ key: k })) },
+    { timeoutMs: 8000, retries: 4 }
+  );
+  if (error) throw error;
+  if (!data || !Array.isArray(data.items)) throw new Error("签名返回异常");
+  return data;
 }
 
 // XHR PUT 上传（带进度），COS 预签名 URL 无需额外签名头
@@ -8523,7 +8609,18 @@ function isBlobLike(v) {
 // 注意：PakePlus 等 WebView2 环境中，sb.auth.getSession() 可能拿不到有效 token，
 // 但 sb.functions.invoke / sb.from 能正常从 supabase 内部 storage 取到 token 并自动刷新。
 // 因此优先用 sb.functions.invoke 调用 cos-proxy；失败时尝试 refreshSession 后重试。
-async function getCosProxyBlob(key, timeoutMs = 15000) {
+//
+// cos-proxy 运行区域固定（2026-10-22，跨国网络坑）：
+// Supabase 按客户端位置把函数派到最近的边缘节点执行，国内用户的请求多落在
+// ap-southeast-1（新加坡）——该节点到腾讯 COS 的跨境网络会丢包，无超时的 fetch
+// 实测挂死 40s+（东京/us-west-1/香港均 2-6s 正常返回；新加坡复测又能通=丢包不稳定）。
+// 因此统一固定到 ap-northeast-1（东京）：
+//   · invoke 路径用 region 选项（发 x-region 头 + forceFunctionRegion 查询参数）；
+//   · 直连 fetch 路径用 forceFunctionRegion 查询参数（不触发 CORS 预检，
+//     函数 CORS 未放行 x-region 时这条依然生效——预检失败会自动落到这里）。
+const COS_PROXY_REGION = "ap-northeast-1";
+
+async function getCosProxyBlob(key, timeoutMs = 20000) {
   if (MODE !== "cloud") throw new Error("代理不可用（非云端模式）");
   if (!sb) throw new Error("代理不可用（Supabase 未初始化）");
   if (!key) throw new Error("缺少图片 key");
@@ -8537,7 +8634,7 @@ async function getCosProxyBlob(key, timeoutMs = 15000) {
   // 注意：supabase-js@2.112.3 的 functions.invoke 不支持 responseType 选项，
   // 只能根据响应 Content-Type 自动解析；cos-proxy 已统一返回 application/octet-stream，
   // 因此 data 会被自动解析为 Blob。
-  async function viaInvoke() {
+  async function viaInvoke(forceRegion) {
     // PakePlus 电脑版 WebView2 中，sb.functions.invoke 似乎不会自动带有效 token，
     // 因此显式从 sb.auth.getSession() 取 token 并放到 headers 里；sb.functions.invoke 会合并 headers。
     let token = null;
@@ -8557,6 +8654,9 @@ async function getCosProxyBlob(key, timeoutMs = 15000) {
     const { data, error, response } = await sb.functions.invoke("cos-proxy", {
       body: { key },
       headers: headersArg,
+      // 固定运行区域到东京，避开新加坡节点→COS 跨境丢包。该 option 不被旧版 supabase-js 识别时
+      // 会静默忽略（仍走最近节点），此时由 viaManualFetch 的 forceFunctionRegion 查询参数兜底。
+      ...(forceRegion ? { region: COS_PROXY_REGION } : {}),
     });
     if (error) {
       let detail = error.name ? `[${error.name}] ${error.message || ""}` : String(error.message || error);
@@ -8595,32 +8695,62 @@ async function getCosProxyBlob(key, timeoutMs = 15000) {
     return data;
   }
 
-  // 备用：手动 fetch（兼容 supabase-js 内部异常 fallback）
-  async function viaManualFetch() {
+  // 备用：手动 fetch（兼容 supabase-js 内部异常 / invoke 预检失败）。forceRegion=true 时
+  // 用 forceFunctionRegion 查询参数固定东京；false 时走默认最近区域（=「之前能通过代理看」的路径）。
+  async function viaManualFetch(forceRegion) {
     const token = await _getSupabaseAccessToken();
     if (!token) throw new Error("未获取到登录令牌，请重新登录");
-    const url = `${window.APP_CONFIG.SUPABASE_URL}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}`;
+    const regionParam = forceRegion ? `&forceFunctionRegion=${COS_PROXY_REGION}` : "";
+    const url = `${window.APP_CONFIG.SUPABASE_URL}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}${regionParam}`;
     const resp = await fetch(url, {
-      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      headers: { Authorization: "Bearer " + token },
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
       throw new Error(`代理加载失败 [${resp.status}] ${text || resp.statusText}`);
     }
-    return await resp.blob();
+    const blob = await resp.blob();
+    // 用 Edge Function 透传的原始 Content-Type 恢复 blob.type（灯箱靠它判断 HEIC）
+    try {
+      const origCt = resp.headers.get("X-Original-Content-Type");
+      if (origCt && (!blob.type || blob.type === "application/octet-stream")) {
+        Object.defineProperty(blob, "type", { value: origCt, writable: false, configurable: true });
+      }
+    } catch (_) {}
+    return blob;
   }
 
+  // 单通道超时包装：避免某一区域挂死（新加坡→COS 实测 40s+ 无响应）拖垮整体
+  function withTimeout(promise, ms, label) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error(`通道超时(${label})`)), ms);
+      promise.then(
+        (v) => { clearTimeout(t); resolve(v); },
+        (e) => { clearTimeout(t); reject(e); },
+      );
+    });
+  }
+
+  // 三级通道回退：① invoke 东京 → ② 手动 fetch 东京 → ③ 手动 fetch 默认区域。
+  // 任一通道超 6s 即放弃转下一通道；登录态错误直接抛出（换通道也没用）。
   async function tryOnce() {
-    try {
-      return await viaInvoke();
-    } catch (e) {
-      const msg = String(e && e.message ? e.message : e);
-      // invoke 失败（如网络/解析异常）fallback 到手动 fetch
-      if (/Failed to send|fetch|network|格式异常|Unexpected/i.test(msg)) {
-        return await viaManualFetch();
+    const steps = [
+      () => withTimeout(viaInvoke(true), 5000, "invoke(东京)"),
+      () => withTimeout(viaManualFetch(true), 5000, "fetch(东京)"),
+      () => withTimeout(viaManualFetch(false), 5000, "fetch(默认区域)"),
+    ];
+    let lastErr = null;
+    for (const step of steps) {
+      try {
+        return await step();
+      } catch (e) {
+        const msg = String(e && e.message ? e.message : e);
+        if (isAuthError(msg)) throw e;
+        lastErr = e;
+        console.warn("[cos-proxy] 通道失败，尝试下一通道：", msg.slice(0, 140));
       }
-      throw e;
     }
+    throw lastErr || new Error("代理全部通道失败");
   }
 
   try {
@@ -10157,9 +10287,9 @@ function costDeductionNoteSummary(items) {
 }
 
 /* ===== 费用管理 板块（施工管理详情页，2026-10-21）=====
-   工程金额：预约人可改（perm.editContract，包活金额权限）。
-   成本扣项 / 添加明细：仅成本扣项权限（perm.editCostDeduction）可改。
-   见 renderConstruction 中的 .cost-mgmt-block。 */
+   工程金额：验收前预约人（建单人，isProjectBooker）可改，管理员（包活金额权限+门店兜底）
+   审核前随时可改，统一走 perm.editContract；成本扣项 / 添加明细：仅成本扣项权限
+   （perm.editCostDeduction）可改。见 renderConstruction 中的 .cost-mgmt-block。 */
 function cmCalc() {
   // 工费/分成池的实时预览已并入下方「包活分成」面板（money-chain），本板块不再重复展示；
   // 这里只负责把金额输入实时同步进草稿，防止 60s 重绘 / 实时同步冲掉未保存的金额。
@@ -13192,7 +13322,7 @@ function renderConstruction() {
       return `<option value="${w.id}"${disabledAttr}>${esc(w.name)}${conflictTag}</option>`;
     }).join("");
   const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).filter(n => n.trim());
-  // 外协徽章的 ✕ 与内部人员徽章同样受 canAssign 门控：已验收/已审核（isSettled）或已完工后
+  // 外协徽章的 ✕ 与内部人员徽章同样受 canAssign 门控：已完工/已验收/已审核（isCompleted）后
   // 不再允许增删派工人员（removeOutsourcedWorker 会连带改成本扣项与工费，必须一并锁定）
   const allChips = [...(assignedChips ? assignedChips : ""), ...outsourcedNames.map(n =>
     `<span class="assign-chip outsourced"><span class="chip-icon">🤝</span>${esc(n.trim())}${canAssign ? `<button class="chip-x" onclick="removeOutsourcedWorker('${p.id}', '${escJsAttr(n.trim())}')" title="移除">✕</button>` : ""}</span>`
@@ -13263,7 +13393,7 @@ function renderConstruction() {
             ${p.reworkCount > 0 ? `<span class="badge rework" style="cursor:pointer" title="查看返工记录" onclick="showReworkInfo('${esc(p.id)}')">🔄 返工 ${p.reworkCount} 次</span>` : ""}
           </div>
         </div>
-        ${reviewed ? `<p class="hint" style="margin:0;color:var(--warn)">⚠️ 该项目已审核，信息不可更改（如需整改可发起维修或返工）。</p>` : (p.status === STATUS.ACCEPTED ? `<p class="hint" style="margin:0;color:var(--warn)">⚠️ 该项目已验收，信息不可更改（如需整改可发起维修或返工）。</p>` : "")}
+        ${reviewed ? `<p class="hint" style="margin:0;color:var(--warn)">⚠️ 该项目已审核，信息不可更改（如需整改可发起维修或返工）。</p>` : (p.status === STATUS.ACCEPTED ? `<p class="hint" style="margin:0;color:var(--muted)">ℹ️ 已验收，待审核：审核前费用/分成等有权限仍可修改，审核后将全部锁定</p>` : "")}
         ${canEdit || reviewed ? "" : `<p class="hint" style="margin:0">当前角色为只读，施工工时与验收由施工人员/总经理填写。</p>`}
         <div class="proj-hero__meta">
           <span>门店</span><b>${esc(storeName(p.storeId))}</b>
@@ -13443,9 +13573,10 @@ function renderConstruction() {
     ${assignBlock}
 
     ${(() => {
-      // 费用管理 板块：工程金额=管理员可改（editContract，即包活金额权限；默认 manager/store_manager 有、
-      // worker 无，并非预约人专属）；成本扣项（材料/现场成本/外协工钱）仅成本扣项权限
-      // （editCostDeduction）可改。已验收/已审核（isSettled）后整块锁定，只能走维修/返工整改。
+      // 费用管理 板块：工程金额=验收前预约人（建单人）可改 + 管理员（包活金额权限，带门店兜底）
+      // 随时可改，两者都走 perm.editContract；成本扣项（材料/现场成本/外协工钱）仅成本扣项权限
+      // （editCostDeduction）可改。仅已审核（isReviewed）后整块锁定，只能走维修/返工整改；
+      // 已验收(ACCEPTED)未审核前有权限仍可修正（用户口径 2026-10-22）。
       // 板块紧邻下方「包活分成」，金额链（工费/池）在分成面板统一展示，故本板块不再重复。
       const canAmt = canEditContract;
       const canCost = perm.editCostDeduction(p);
@@ -13454,10 +13585,10 @@ function renderConstruction() {
         <div class="detail-block cost-mgmt-block">
           <div class="assign-head" style="display:flex;align-items:center;justify-content:space-between;">
             <h3>💰 费用管理</h3>
-            ${isSettled(p) ? `<span class="hint" style="margin:0;color:var(--warn)">🔒 已${p.status === STATUS.REVIEWED ? "审核" : "验收"}，费用不可改</span>` : (!canAmt && !canCost ? `<span class="hint" style="margin:0">当前角色只读</span>` : "")}
+            ${isReviewed(p) ? `<span class="hint" style="margin:0;color:var(--warn)">🔒 已审核，费用不可改</span>` : (!canAmt && !canCost ? `<span class="hint" style="margin:0">当前角色只读</span>` : "")}
           </div>
           <div class="cost-mgmt__row">
-            <label class="cost-mgmt__label">工程金额<span style="font-size:11px;color:#64748b;font-weight:400;">（管理员可改${canAmt ? "" : " · 只读"}）</span></label>
+            <label class="cost-mgmt__label">工程金额<span style="font-size:11px;color:#64748b;font-weight:400;">（预约人/管理员可改${canAmt ? "" : " · 只读"}）</span></label>
             <div class="cost-mgmt__amount">
               <span class="cost-mgmt__yen">¥</span>
               <input class="input" type="number" min="0" step="0.01" id="cmProjectAmount" value="${amt.toFixed(2)}" ${canAmt ? "" : "disabled"} oninput="cmCalc()" />
@@ -28492,7 +28623,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vffbae7f9";
+  const APP_VERSION = "v781fcfcd";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
