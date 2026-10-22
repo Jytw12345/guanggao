@@ -223,7 +223,7 @@ const getWorkerSchedule = (id) => cache.workerSchedules.find((s) => s.id === id)
 const storeName = (id) => (getStore(id) || {}).name || "—";
 
 /* ---------- 权限判断（前端界面控制，服务端另有 RLS 强制） ---------- */
-const myRole = () => currentProfile.role;
+const myRole = () => currentProfile?.role;
 const myStore = () => currentProfile.storeId;
 const isManager = () => myRole() === ROLE.MANAGER;
 const isStoreManager = () => myRole() === ROLE.STORE;
@@ -468,34 +468,34 @@ function can(cap) {
 
 const perm = {
   createProject: () => can(CAP.PROJECT_CREATE),
-  editProject: (p) => !isReviewed(p) && (
+  editProject: (p) => !isSettled(p) && (
     can(CAP.PROJECT_EDIT_ALL) ||
     ((isManager() || !myStore() || (p && p.storeId === myStore())) && (
       can(CAP.PROJECT_EDIT_OWN) && p && p.createdBy === currentProfile.id
     ))
   ),
-  deleteProject: (p) => !isReviewed(p) && (
+  deleteProject: (p) => !isSettled(p) && (
     can(CAP.PROJECT_DELETE_ALL) ||
     ((isManager() || !myStore() || (p && p.storeId === myStore())) && (
       can(CAP.PROJECT_DELETE_OWN) && p && p.createdBy === currentProfile.id
     ))
   ),
   viewProjectAll: () => can(CAP.PROJECT_VIEW_ALL),
-  startConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_START),
-  pauseConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_PAUSE),
-  resumeConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_RESUME),
-  completeConstruction: (p) => !isReviewed(p) && can(CAP.CONSTRUCTION_COMPLETE),
+  startConstruction: (p) => !isSettled(p) && can(CAP.CONSTRUCTION_START),
+  pauseConstruction: (p) => !isSettled(p) && can(CAP.CONSTRUCTION_PAUSE),
+  resumeConstruction: (p) => !isSettled(p) && can(CAP.CONSTRUCTION_RESUME),
+  completeConstruction: (p) => !isSettled(p) && can(CAP.CONSTRUCTION_COMPLETE),
   // 「填写施工/外协工时」权限点已随手动工时功能取消而移除（2026-10-18），恒 false：
   // 工时由系统在完工时按在场时段自动生成，任何角色都无需勾选。
   logWorkHours: () => false,
   logOutsourcedHours: () => false,
-  deleteWorkLog: (p) => !isReviewed(p) && can(CAP.WORKLOG_DELETE),
-  delayProject: (p) => !isReviewed(p) && can(CAP.PROJECT_DELAY),
+  deleteWorkLog: (p) => !isSettled(p) && can(CAP.WORKLOG_DELETE),
+  delayProject: (p) => !isSettled(p) && can(CAP.PROJECT_DELAY),
   // 取消仅允许「开工前/施工中/暂停/延期」阶段；已完工/已验收/已审核/已取消均不可取消
   // （与 STATUS_TRANSITIONS 状态机、详情页取消按钮可见性保持一致，避免防御性缺口）
   cancelProject: (p) => p && ![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED].includes(p.status) && can(CAP.PROJECT_CANCEL),
-  assignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_ASSIGN),
-  unassignWorker: (p) => !isReviewed(p) && !isCompleted(p) && can(CAP.WORKER_UNASSIGN),
+  assignWorker: (p) => !isSettled(p) && !isCompleted(p) && can(CAP.WORKER_ASSIGN),
+  unassignWorker: (p) => !isSettled(p) && !isCompleted(p) && can(CAP.WORKER_UNASSIGN),
   addWorker: () => can(CAP.WORKER_ADD),
   editWorker: () => can(CAP.WORKER_EDIT),
   deleteWorker: () => can(CAP.WORKER_DELETE),
@@ -522,7 +522,7 @@ const perm = {
   // 「管理工时单价」权限点与工资单价配置 UI 已整体移除（2026-10-18 包活制改造），恒 false
   manageWageConfig: () => false,
   // 注意：项目一旦开工或进入终态，预约时间即锁定，任何权限都不能再改（须走「延期」流程）
-  editAppointment: (p) => !isReviewed(p) && !isAppointmentLocked(p) && (
+  editAppointment: (p) => !isSettled(p) && !isAppointmentLocked(p) && (
     // "所有"权限：跨门店，覆盖全部门店的项目
     can(CAP.PROJECT_EDIT_APPOINTMENT_ALL) ||
     can(CAP.PROJECT_EDIT_ALL) ||
@@ -543,13 +543,13 @@ const perm = {
   // 默认模板给 manager / store_manager = true、worker = false（与改造前行为一致）。
   // 门店兜底：与 editProject / rework / reviewProject 同口径 —— 「编辑所有项目」权限 或 总经理 或
   // 未绑定门店（跨店账号）放行；否则仅限本门店项目。防止单独勾了本权限的账号改到别店项目的工钱。
-  editContract: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_CONTRACT)
+  editContract: (p) => !isSettled(p) && can(CAP.PROJECT_EDIT_CONTRACT)
     && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
-  editCommission: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COMMISSION)
+  editCommission: (p) => !isSettled(p) && can(CAP.PROJECT_EDIT_COMMISSION)
     && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   // 成本扣项（材料/现场成本/外协工钱）独立权限点：与「工人分成」(editCommission) 分开控制。
   // 默认 manager/store_manager = true、worker = false；门店兜底同口径。
-  editCostDeduction: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COST_DEDUCTION)
+  editCostDeduction: (p) => !isSettled(p) && can(CAP.PROJECT_EDIT_COST_DEDUCTION)
     && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   // 注：「修改完工工时」权限点（project_edit_worklog_own/all）已随手动工时功能取消而移除。
   // 工时由系统在完工时自动生成（仅考勤参考、不计工资），唯一的工时纠错入口是「删除考勤工时记录」
@@ -578,17 +578,17 @@ const perm = {
   addVehicleTrip: () => can(CAP.VEHICLE_TRIP_ADD),
   deleteVehicleTrip: () => can(CAP.VEHICLE_TRIP_DELETE),
   vehicleManage: () => can(CAP.VEHICLE_MANAGE),
-  doConstruction: (p) => !isReviewed(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE)),
+  doConstruction: (p) => !isSettled(p) && (can(CAP.CONSTRUCTION_START) || can(CAP.CONSTRUCTION_PAUSE) || can(CAP.CONSTRUCTION_RESUME) || can(CAP.CONSTRUCTION_COMPLETE)),
   manageLeaves: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_REJECT),
   manageMakeup: () => can(CAP.LEAVE_APPROVE) || can(CAP.LEAVE_BATCH_ROTATIONAL),
   viewStats: () => can(CAP.VIEW_STATS_GLOBAL) || can(CAP.VIEW_STATS_STORE),
   // 照片管理三权分立：上传/删除受「已审核锁定」约束（审核后不可篡改现场证据），下载无此约束
-  photoUploadSite: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_SITE),
-  photoDeleteSite: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_SITE),
-  photoUploadPm: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_PM),
-  photoDeletePm: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_PM),
-  photoUploadCompletion: (p) => !isReviewed(p) && can(CAP.PHOTO_UPLOAD_COMPLETION),
-  photoDeleteCompletion: (p) => !isReviewed(p) && can(CAP.PHOTO_DELETE_COMPLETION),
+  photoUploadSite: (p) => !isSettled(p) && can(CAP.PHOTO_UPLOAD_SITE),
+  photoDeleteSite: (p) => !isSettled(p) && can(CAP.PHOTO_DELETE_SITE),
+  photoUploadPm: (p) => !isSettled(p) && can(CAP.PHOTO_UPLOAD_PM),
+  photoDeletePm: (p) => !isSettled(p) && can(CAP.PHOTO_DELETE_PM),
+  photoUploadCompletion: (p) => !isSettled(p) && can(CAP.PHOTO_UPLOAD_COMPLETION),
+  photoDeleteCompletion: (p) => !isSettled(p) && can(CAP.PHOTO_DELETE_COMPLETION),
   photoDownload: () => can(CAP.PHOTO_DOWNLOAD),
   // 「内部任务」与「上门量尺」已于 2026-10-18 下线，权限项已从 CAP/CAP_GROUPS/DEFAULT_ROLE_PERMS 移除。
   // 这里保留函数名但恒返回 false，避免历史调用点（首页提醒 / 日程聚合 / 卡片渲染等 40+ 处）抛
@@ -610,6 +610,15 @@ const perm = {
 
 function isReviewed(p) {
   return p && p.status === STATUS.REVIEWED;
+}
+
+/* 终态锁定（已验收 / 已审核）：项目验收或审核完成后，除「发起维修 / 发起返工 / 反审核」
+   等治理动作外，工程金额、成本扣项、工人分成、人员分配、工时、照片等一切业务数据一律锁定。
+   与 isReviewed（仅「已审核」，用于审核态判断）刻意区分：
+   - DONE（已完工待验收）→ 未锁定，验收前仍可修正金额/扣项/分成；
+   - ACCEPTED（已验收）/ REVIEWED（已审核）→ 锁定，只能走维修/返工整改。 */
+function isSettled(p) {
+  return !!p && (p.status === STATUS.ACCEPTED || p.status === STATUS.REVIEWED);
 }
 
 /* 判断项目是否为系统自动审核（验收满设定时长后自动置为已审核）。
@@ -2385,8 +2394,13 @@ function getLaborFee(p) {
   return Math.max(0, amt - (Number(p.materialFee) || 0));
 }
 
+/* 分成池 = 工费 ÷ 2。工费可能是奇数分（如 ¥0.99 ÷ 2 = ¥0.495）——池是金额，
+   必须在源头落到「分」：否则会出现「池显示 ¥0.49，却按 0.495 分给 3 人、
+   每人 Math.round(0.165)=0.17 集体超分，再把差额全扣成最后一人 0.15」的舍入事故
+   （用户实测截图：33%/33%/34% 对应 ¥0.17/¥0.17/¥0.15，比例最大的人拿最少）。
+   取整后：池显示 / 图例合计 / 分成条 / 保存校验（saveCommissionAlloc）四处口径一致。 */
 function getCommissionPool(p) {
-  return getLaborFee(p) / 2;
+  return Math.round((getLaborFee(p) / 2) * 100) / 100;
 }
 
 // n 人等分比例（合计 100，尾差补最后一人）
@@ -2419,6 +2433,36 @@ function commDisplayRatios(ratios) {
   return out;
 }
 
+/* 整数「分」最大余额法切分：把 totalCents 按 weights 权重分给 n 项，
+   保证 Σ = totalCents，且权重大者不会被尾差压到更小（小数余额从大到小补分，并列按序号）。
+   替代逐项 Math.round + 「尾差全补最后一人」的旧写法——那种写法在半分位上会集体上舍
+   （池 ¥0.495÷3 → 人人 ¥0.17），再把超发差额全扣给最后一人（¥0.15），
+   造成「比例最大的人金额最少」。无有效权重时均分（最大余额，最多相差 1 分）。
+   返回长度 = weights.length 的「分」数组。 */
+function splitCentsByWeights(totalCents, weights) {
+  const n = (weights || []).length;
+  if (!n) return [];
+  const cents = Math.round(Number(totalCents) || 0);
+  if (cents <= 0) return Array(n).fill(0);
+  const sum = weights.reduce((s, w) => s + (Number(w) || 0), 0);
+  if (sum <= 0) {
+    const base = Math.floor(cents / n);
+    const out = Array(n).fill(base);
+    for (let i = 0; i < cents - base * n; i++) out[i] += 1;
+    return out;
+  }
+  const raw = weights.map((w) => (cents * (Number(w) || 0)) / sum);
+  const out = raw.map((v) => Math.floor(v));
+  let rest = cents - out.reduce((s, v) => s + v, 0);
+  const order = raw
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (let j = 0; rest > 0 && j < order.length; j++, rest--) out[order[j].i] += 1;
+  // 安全阀：浮点误差导致仍有残余时按序号轮补（正常不会触发）
+  for (let i = 0; rest > 0; i++, rest--) out[i % n] += 1;
+  return out;
+}
+
 // 解析某项目的工人分成明细，返回 { mode, pool, items:[{workerId, workerName, ratio, amount, fixed}], total, outsourcedTotal }
 // 规则（2026-10-20 起）：
 // - 分成池 = (工程金额 − Σ成本扣项) ÷ 2；**外协费用已计入成本扣项（cost_deductions 中 kind=outsourced）**，不再单独从池扣。
@@ -2437,63 +2481,42 @@ function resolveCommissionAlloc(p) {
   const custom = Array.isArray(p.commissionCustom) ? p.commissionCustom : [];
   const customMap = {};
   custom.forEach((c) => { if (c && c.workerId) customMap[c.workerId] = c; });
-  const items = [];
+  const poolCents = Math.round(pool * 100);
+  // 「分池权重」与「显示比例」分开算：权重喂给整数分最大余额法（Σ 恒 = pool），
+  // 比例仅作展示标签。avg 模式权重取 equalCommissionRatios（33/33/34）而非等权 [1,1,1]：
+  // 段宽标签就是 33/33/34，金额必须与标签同序，否则又出现「比例最大的人拿最少」。
+  let weights = [];
+  let ratioOf = [];
   if (mode === "custom_amount" && custom.length) {
-    // 自定义金额：直接用保存的金额；合计≠pool 时按金额占比缩放（保存时会校验合计=pool）
+    // 自定义金额：权重=各人填写金额；合计为 0 时退化为均分
     const amountOf = (w) => { const c = customMap[w.id]; return Number(c && c.amount) || 0; };
-    const amountSum = internal.reduce((s, w) => s + amountOf(w), 0);
-    internal.forEach((w) => {
-      const rawAmt = amountOf(w);
-      const amt = amountSum > 0 ? Math.round(pool * (rawAmt / amountSum) * 100) / 100 : Math.round((pool / internal.length) * 100) / 100;
-      items.push({
-        workerId: w.id,
-        workerName: w.name,
-        ratio: amountSum > 0 ? Math.round((rawAmt / amountSum) * 1000) / 10 : Math.round((1000 / internal.length)) / 10,
-        amount: amt,
-        fixed: null,
-      });
-    });
+    const amounts = internal.map(amountOf);
+    const amountSum = amounts.reduce((s, v) => s + v, 0);
+    weights = amountSum > 0 ? amounts : internal.map(() => 1);
+    ratioOf = internal.map((w) => amountSum > 0 ? Math.round((amountOf(w) / amountSum) * 1000) / 10 : Math.round(1000 / internal.length) / 10);
   } else if (mode === "custom" && custom.length) {
-    // 内部工人按自定义比例分池（权重归一化；保存的合计=100 时即真实占比）
-    const ratioOf = (w) => { const c = customMap[w.id]; return Number(c && c.ratio) || 0; };
-    const ratioSum = internal.reduce((s, w) => s + ratioOf(w), 0);
-    const amountOf = (w) => {
-      if (ratioSum > 0) return Math.round(pool * (ratioOf(w) / ratioSum) * 100) / 100;
-      // 比例合计为 0 时，池在内部工人间均分兜底
-      return Math.round((pool / internal.length) * 100) / 100;
-    };
-    internal.forEach((w) => {
-      items.push({
-        workerId: w.id,
-        workerName: w.name,
-        ratio: ratioSum > 0 ? Math.round((ratioOf(w) / ratioSum) * 1000) / 10 : Math.round((1000 / internal.length)) / 10,
-        amount: amountOf(w),
-        fixed: null,
-      });
-    });
+    // 自定义比例：权重=各人比例（helper 内按合计归一）；合计为 0 时均分兜底
+    const ratioOfW = (w) => { const c = customMap[w.id]; return Number(c && c.ratio) || 0; };
+    const ratios = internal.map(ratioOfW);
+    const ratioSum = ratios.reduce((s, v) => s + v, 0);
+    weights = ratioSum > 0 ? ratios : internal.map(() => 1);
+    ratioOf = internal.map((w) => ratioSum > 0 ? Math.round((ratioOfW(w) / ratioSum) * 1000) / 10 : Math.round(1000 / internal.length) / 10);
   } else {
-    // avg（或 custom 无保存记录）：内部工人均分池
-    const each = Math.round((pool / internal.length) * 100) / 100;
-    const ratios = equalCommissionRatios(internal.length);
-    internal.forEach((w, idx) => {
-      items.push({
-        workerId: w.id,
-        workerName: w.name,
-        ratio: ratios[idx] != null ? ratios[idx] : Math.round((100 / internal.length) * 10) / 10,
-        amount: each,
-        fixed: null,
-      });
-    });
+    // avg（或 custom 无保存记录）：内部工人等分池
+    weights = equalCommissionRatios(internal.length);
+    ratioOf = weights.slice();
   }
-  // 尾差补最后一个内部项，保证内部合计 = pool
-  const last = items[items.length - 1];
-  if (last) {
-    const others = items.reduce((s, it, i) => (i === items.length - 1 ? s : s + it.amount), 0);
-    last.amount = Math.round((pool - others) * 100) / 100;
-  }
+  const centsArr = splitCentsByWeights(poolCents, weights);
+  const items = internal.map((w, i) => ({
+    workerId: w.id,
+    workerName: w.name,
+    ratio: ratioOf[i] != null ? ratioOf[i] : 0,
+    amount: centsArr[i] / 100,
+    fixed: null,
+  }));
   return {
     mode, pool, items,
-    total: Math.round(items.reduce((s, i) => s + i.amount, 0) * 100) / 100,
+    total: centsArr.reduce((s, c) => s + c, 0) / 100,
     outsourcedTotal: 0,
   };
 }
@@ -2747,7 +2770,7 @@ function notify(title, message) {
 
 // —— 门店店长「待验收」提醒：进入软件时若有「完成安装未验收」的项目，顶部横幅提示请尽快验收 ——
 function checkStoreAcceptanceNotice() {
-  if (!currentProfile || currentProfile.role !== ROLE.STORE) return;   // 仅门店店长
+  if (!currentProfile || currentProfile?.role !== ROLE.STORE) return;   // 仅门店店长
   if (sessionStorage.getItem("acceptNoticeShown")) return;            // 本次会话只提示一次
   // 只统计本门店的「完成安装未验收」项目（店长通常只负责本门店；无绑定门店时不提示，避免误报全公司）
   const myStoreId = myStore();
@@ -2781,7 +2804,7 @@ function gotoAcceptanceFilter() {
   const sel = document.getElementById("projectStatusFilter");
   if (sel) sel.value = STATUS.DONE;
   // 店长视角下把门店筛选锁定本门店，确保「去验收」只列出本店待验收项，与提醒数字一致
-  if (currentProfile && currentProfile.role === ROLE.STORE) {
+  if (currentProfile && currentProfile?.role === ROLE.STORE) {
     const storeSel = document.getElementById("projectStoreFilter");
     const myId = myStore();
     if (storeSel && myId) storeSel.value = myId;
@@ -4575,7 +4598,7 @@ async function hydrateFromCloudCache(profileId) {
     const snap = await loadCloudCache(profileId);
     if (!snap) return { hydrated: false, cachedProfile: null };
     const hydrated = applyCloudCacheSnapshot(snap);
-    const cachedProfile = (hydrated && snap.currentProfile && snap.currentProfile.role)
+    const cachedProfile = (hydrated && snap.currentProfile && snap.currentProfile?.role)
       ? snap.currentProfile : null;
     return { hydrated, cachedProfile };
   } catch (e) {
@@ -5938,7 +5961,7 @@ function renderWorkerScheduleForWorker(dateStr) {
   const isTomorrow = dateStr === tomorrowStr;
   const isDayAfter = dateStr === dayAfterStr;
 
-  const currentWorker = cache.workers.find((w) => w.name === currentProfile.name) ||
+  const currentWorker = cache.workers.find((w) => w.name === currentProfile?.name) ||
                         (currentUser ? cache.workers.find((w) => w.id === currentUser.id) : null);
   const workerId = currentWorker ? currentWorker.id : null;
 
@@ -6670,7 +6693,7 @@ async function saveWorkerSchedule(id) {
     endTime: document.getElementById("wsEndTime").value,
     description: document.getElementById("wsDescription").value.trim(),
     createdBy: currentUser ? currentUser.id : null,
-    createdByName: currentProfile.name || currentUser?.email || null,
+    createdByName: currentProfile?.name || currentUser?.email || null,
   };
   
   await repo.saveWorkerSchedule(payload, id);
@@ -8055,7 +8078,8 @@ function onCosImgError(img, name, key) {
   tip.textContent = "预览加载中…";
   if (parent) parent.appendChild(tip);
 
-  // 步骤 1：先重新换取签名 URL（轻量，不下载图片）。很多情况是 legacy/fallback URL 失效，但签名 URL 可用。
+  // 步骤 1：先重新换取签名 URL（轻量，不下载图片）。很多情况是 legacy/fallback URL 失效或缓存 URL 超 1h 过期，但签名 URL 可用。
+  // cosGetViewUrls 内部已含「会话保鲜预检 + 401 刷新会话重试一次」（2026-10-22），大部分过期场景在这里静默自愈。
   async function tryRecover() {
     if (MODE !== "cloud" || !k) throw new Error("非云端模式或缺少 key");
 
@@ -8143,6 +8167,10 @@ function normalizePhotos(p) {
 
 // 私有桶：按 key 缓存签名下载 URL（避免每张图重复请求），并缓存 host 供离线 fallback
 let _cosViewCache = {};
+// 签名 URL 签发时间（ms）：cos-sign 的 GET 签名 TTL 只有 1h，页面/弹窗开久了缓存里的 URL 会过期 401，
+// 靠 onCosImgError 逐张恢复既闪「登录失效」又慢——这里超过 50min 即视为陈旧，取用时惰性重签（2026-10-22）。
+let _cosViewSignedAt = {};
+const _COS_URL_STALE_MS = 50 * 60 * 1000;
 let _cosViewHost = "";
 try { _cosViewHost = localStorage.getItem("cosViewHost") || ""; } catch (_) {}
 
@@ -8155,32 +8183,96 @@ async function cosGetSignedUrls(items, action = "put") {
   return data.items; // [{key,url,host}]
 }
 
-// 批量换取签名下载 URL（私有桶查看用），结果按 key 缓存到内存；断网时依赖 SW 已缓存图片
+/* 会话新鲜度预检：access token 已过期 / 5 分钟内过期时主动 refreshSession。
+   手机 PWA 后台冻结后 supabase-js 的 autoRefresh 定时器不跑，会出现「数据接口正常、
+   但 functions.invoke 401」的半死会话——预检刷新可消掉这类偶发「登录失效」。 */
+async function ensureFreshSessionForSign() {
+  if (MODE !== "cloud" || !sb) return;
+  try {
+    const { data } = await sb.auth.getSession();
+    const exp = data && data.session && data.session.expires_at;
+    if (exp && exp * 1000 - Date.now() < 5 * 60 * 1000) {
+      const { error } = await sb.auth.refreshSession();
+      if (error) console.warn("[cos-sign] 会话即将过期，主动刷新失败：", error.message || error);
+    }
+  } catch (e) {
+    console.warn("[cos-sign] 检查会话状态失败：", e);
+  }
+}
+
+/* 判断 functions.invoke 的 error 是否属于登录态类（401/403 / 未登录 / 令牌失效）。
+   supabase-js 的 FunctionsHttpError 把 HTTP 状态放在 error.context.status。 */
+function isCosSignAuthError(err) {
+  if (!err) return false;
+  const status = err.context && err.context.status;
+  if (status === 401 || status === 403) return true;
+  return /401|403|未登录|登录态|令牌|token|jwt|auth/i.test(String(err.message || err));
+}
+
+// 批量换取签名下载 URL（私有桶查看用），结果按 key 缓存到内存；断网时依赖 SW 已缓存图片。
+// 2026-10-22 加固（用户实测偶发「登录失效，无法查看图片」「KEY 失效」）：
+//   ① 缓存 URL 超 50min 自动重签——GET 签名 TTL 1h，陈旧 URL 必 401，从源头减少大面积失败；
+//   ② 签名前会话保鲜预检（PWA 冻结 tab 的半死会话）；
+//   ③ invoke 返回登录态错误时，强制 refreshSession 后重试一次（与 getCosProxyBlob 同范式）；
+//   ④ 失败不再完全静默：console.warn 留痕（key 数+原因），便于反馈时定位是网络/登录态/函数哪层；
+//   ⑤ 重签失败时保留旧缓存URL不删——离线/瞬时失败时 fillPhotoImages 等仍可拿到（可能过期）的 URL 走恢复链。
 async function cosGetViewUrls(keys) {
   const result = {};
   if (!keys || !keys.length) return result;
-  keys.forEach((k) => { if (_cosViewCache[k]) result[k] = _cosViewCache[k]; });
-  const need = keys.filter((k) => !_cosViewCache[k]);
-  if (need.length && MODE === "cloud") {
+  const now = Date.now();
+  const isFresh = (k) => _cosViewCache[k] && now - (_cosViewSignedAt[k] || 0) < _COS_URL_STALE_MS;
+  keys.forEach((k) => { if (isFresh(k)) result[k] = _cosViewCache[k]; });
+  const need = keys.filter((k) => !isFresh(k));
+  if (need.length && MODE === "cloud" && sb) {
+    await ensureFreshSessionForSign();
     try {
-      // 8s 超时：cos-sign 只是服务端签名，不应超过 1s；PakePlus 网络差时防止卡死，仍返回已缓存结果
-      const p = sb.functions.invoke("cos-sign", {
-        body: { action: "get", items: need.map((k) => ({ key: k })) },
-      });
-      const to = new Promise((_, rej) => setTimeout(() => rej(new Error("cos-sign timeout")), 8000));
-      const { data, error } = await Promise.race([p, to]);
-      if (!error && data && Array.isArray(data.items)) {
-        data.items.forEach((it) => {
-          if (it.key && it.url) { _cosViewCache[it.key] = it.url; result[it.key] = it.url; }
-        });
-        if (data.host) {
-          _cosViewHost = data.host;
-          try { localStorage.setItem("cosViewHost", data.host); } catch (_) {}
+      const data = await cosSignGetOnce(need);
+      (data.items || []).forEach((it) => {
+        if (it.key && it.url) {
+          _cosViewCache[it.key] = it.url;
+          _cosViewSignedAt[it.key] = Date.now();
+          result[it.key] = it.url;
         }
+      });
+      if (data.host) {
+        _cosViewHost = data.host;
+        try { localStorage.setItem("cosViewHost", data.host); } catch (_) {}
       }
-    } catch (_) { /* 断网/超时：依赖已缓存/已下载的 SW 缓存图片 */ }
+    } catch (e) {
+      // 断网/超时/函数异常：保留已缓存结果交上层降级；仅登录态真死（刷新后仍 401）才值得 warn 关注
+      const msg = String(e && e.message ? e.message : e);
+      console.warn(`[cos-sign] 获取 ${need.length} 个签名 URL 失败：`, msg.slice(0, 160));
+    }
   }
   return result;
+}
+
+// cos-sign(action=get) 单次调用：8s 超时；登录态错误时刷新会话重试一次
+async function cosSignGetOnce(keys) {
+  const invokeOnce = async () => {
+    // 8s 超时：cos-sign 只是服务端签名，不应超过 1s；PakePlus 网络差时防止卡死
+    const p = sb.functions.invoke("cos-sign", {
+      body: { action: "get", items: keys.map((k) => ({ key: k })) },
+    });
+    const to = new Promise((_, rej) => setTimeout(() => rej(new Error("cos-sign timeout")), 8000));
+    const { data, error } = await Promise.race([p, to]);
+    if (error) throw error;
+    if (!data || !Array.isArray(data.items)) throw new Error("签名返回异常");
+    return data;
+  };
+  try {
+    return await invokeOnce();
+  } catch (e) {
+    if (!isCosSignAuthError(e)) throw e;
+    console.warn("[cos-sign] 签名返回登录态错误，刷新会话后重试：", String(e.message || e).slice(0, 160));
+    try {
+      const { error: refreshErr } = await sb.auth.refreshSession();
+      if (refreshErr) console.warn("[cos-sign] refreshSession 失败：", refreshErr.message || refreshErr);
+    } catch (refreshEx) {
+      console.warn("[cos-sign] refreshSession 异常：", refreshEx);
+    }
+    return await invokeOnce();
+  }
 }
 
 // XHR PUT 上传（带进度），COS 预签名 URL 无需额外签名头
@@ -8908,18 +9000,12 @@ function _cosLbArg(keys, currentKey) {
   return `, [${arr}], ${idx}`;
 }
 
-// 取某 key 的查看 URL（优先缓存，否则现取签名 URL，断网回退裸 URL）
+// 取某 key 的查看 URL：统一走 cosGetViewUrls（内部按 50min 陈旧度惰性重签 + 会话保鲜），
+// 避免灯箱直接用缓存里超 1h 的过期 URL 触发 COS 403；彻底失败才回退裸 URL（配合 SW 离线缓存）
 async function cosLightboxLoadKey(key) {
-  let url = _cosViewCache[key] || "";
-  if (!url) {
-    try {
-      const m = await cosGetViewUrls([key]);
-      url = m[key] || (_cosViewHost ? `https://${_cosViewHost}/${key}` : "");
-    } catch (_) {
-      url = _cosViewHost ? `https://${_cosViewHost}/${key}` : "";
-    }
-  }
-  return url;
+  const m = await cosGetViewUrls([key]);
+  if (m[key]) return m[key];
+  return _cosViewHost ? `https://${_cosViewHost}/${key}` : "";
 }
 
 // 灯箱大图加载失败时，先尝试经 cos-proxy 代理取 blob URL 显示（PakePlus/WebView2 常无法直连 COS）。
@@ -9973,7 +10059,8 @@ function updateContractCalc() {
   const amt = Number(amtEl.value) || 0;
   const mat = costDeductionSum("pf");
   const labor = Math.max(0, amt - mat);
-  const pool = labor / 2;
+  // 池是金额，与 getCommissionPool 同口径取整到分（否则表单显示 ¥0.49、详情存算 ¥0.50）
+  const pool = Math.round(labor / 2 * 100) / 100;
   laborTxt.textContent = "¥" + labor.toFixed(2);
   poolTxt.textContent = "¥" + pool.toFixed(2);
   if (noteEl) {
@@ -9990,26 +10077,32 @@ function updateContractCalc() {
  *   状态即 DOM：渲染由 items 生成行；保存时 readCostDeductions(prefix) 收集（不依赖下标，按 data-cd-id）。
  *   各表单通过 window.onCDChange_<prefix> 注册联动回调（如实时重算工费/池）。
  * ============================================================ */
-function costDeductionRowHTML(prefix, d) {
+function costDeductionRowHTML(prefix, d, readonly) {
   const isOut = d.kind === "outsourced";
   const id = d.id || ("cd_" + Date.now().toString(36) + Math.floor(Math.random() * 1000));
   const nameEsc = esc(d.name || "");
   const noteEsc = esc(d.note || "");
-  return `<div class="cd-row${isOut ? " cd-row--out" : ""}" data-cd-id="${esc(id)}" data-cd-kind="${d.kind}" data-cd-name="${nameEsc}" data-cd-note="${noteEsc}">`
+  // 只读态：输入框禁用 + 不渲染删除按钮（行退化为两列，见 .cd-row--ro），
+  // 从模板侧保证「提示只读就真的只读」——不依赖渲染后的 JS 兜底禁用。
+  // 注意 .cd-row--ro 只加在材料行：外协行自带 disabled ✕（仍占第三列），不能塌成两列。
+  const dis = readonly ? " disabled" : "";
+  const roCls = (readonly && !isOut) ? " cd-row--ro" : "";
+  return `<div class="cd-row${isOut ? " cd-row--out" : ""}${roCls}" data-cd-id="${esc(id)}" data-cd-kind="${d.kind}" data-cd-name="${nameEsc}" data-cd-note="${noteEsc}">`
     + (isOut
       // 外协行：徽标+姓名包进一个格子（.cd-who），保证单行 3 列不换行；金额框写「外协费用」
-      ? `<span class="cd-who"><span class="cd-badge cd-badge--out">🤝</span><span class="cd-name-static">${nameEsc}</span></span><input class="input cd-amount" type="number" min="0" step="0.01" value="${Number(d.amount) || 0}" placeholder="外协费用" title="外协费用（计入成本扣项，不从分成池扣）" oninput="onCostDeductionChange('${prefix}')" /><button type="button" class="cd-x" title="在派单区移除外协即可删除此项" disabled>✕</button>`
-      : `<input class="input cd-name" type="text" value="${nameEsc}" placeholder="名称（如：板材/吊车费）" maxlength="30" oninput="onCostDeductionChange('${prefix}')" /><input class="input cd-amount" type="number" min="0" step="0.01" value="${Number(d.amount) || 0}" placeholder="金额" oninput="onCostDeductionChange('${prefix}')" /><button type="button" class="cd-x" onclick="removeCostDeductionRow('${prefix}', '${esc(id)}')" title="删除">✕</button>`)
+      ? `<span class="cd-who"><span class="cd-badge cd-badge--out">🤝</span><span class="cd-name-static">${nameEsc}</span></span><input class="input cd-amount" type="number" min="0" step="0.01" value="${Number(d.amount) || 0}" placeholder="外协费用" title="外协费用（计入成本扣项，不从分成池扣）" oninput="onCostDeductionChange('${prefix}')"${dis} /><button type="button" class="cd-x" title="在派单区移除外协即可删除此项" disabled>✕</button>`
+      : `<input class="input cd-name" type="text" value="${nameEsc}" placeholder="名称（如：板材/吊车费）" maxlength="30" oninput="onCostDeductionChange('${prefix}')"${dis} /><input class="input cd-amount" type="number" min="0" step="0.01" value="${Number(d.amount) || 0}" placeholder="金额" oninput="onCostDeductionChange('${prefix}')"${dis} />${readonly ? "" : `<button type="button" class="cd-x" onclick="removeCostDeductionRow('${prefix}', '${esc(id)}')" title="删除">✕</button>`}`)
     + `</div>`;
 }
-function renderCostDeductionEditor(prefix, items) {
+function renderCostDeductionEditor(prefix, items, readonly) {
   const wrap = document.getElementById(prefix + "CostDeductions");
   if (!wrap) return;
   const arr = Array.isArray(items) ? items : [];
-  const list = arr.map((d) => costDeductionRowHTML(prefix, d)).join("");
+  const list = arr.map((d) => costDeductionRowHTML(prefix, d, readonly)).join("");
   const sum0 = Math.round(arr.reduce((s, d) => s + (Number(d.amount) || 0), 0) * 100) / 100;
+  // 只读态不渲染「＋ 添加扣项」按钮（合计仍展示）；输入框禁用与删除按钮缺失均在行模板侧完成
   wrap.innerHTML = `<div class="cd-list">${list}</div>`
-    + `<div class="cd-foot"><button type="button" class="btn cd-add" onclick="addCostDeductionRow('${prefix}')">＋ 添加扣项</button>`
+    + `<div class="cd-foot">${readonly ? "" : `<button type="button" class="btn cd-add" onclick="addCostDeductionRow('${prefix}')">＋ 添加扣项</button>`}`
     + `<span class="cd-sum">合计 <b id="${prefix}CostDeductionsSum">¥${sum0}</b></span></div>`;
   if (typeof window["onCDChange_" + prefix] === "function") window["onCDChange_" + prefix]();
 }
@@ -10068,15 +10161,17 @@ function costDeductionNoteSummary(items) {
    成本扣项 / 添加明细：仅成本扣项权限（perm.editCostDeduction）可改。
    见 renderConstruction 中的 .cost-mgmt-block。 */
 function cmCalc() {
+  // 工费/分成池的实时预览已并入下方「包活分成」面板（money-chain），本板块不再重复展示；
+  // 这里只负责把金额输入实时同步进草稿，防止 60s 重绘 / 实时同步冲掉未保存的金额。
   const p = getProject(currentProjectId);
+  if (!p) return;
   const amtEl = document.getElementById("cmProjectAmount");
-  const amt = Number(amtEl && amtEl.value) || 0;
-  const cdSum = costDeductionSum("cm");
-  const labor = Math.max(0, amt - cdSum);
-  const laborEl = document.getElementById("cmLabor");
-  const poolEl = document.getElementById("cmPool");
-  if (laborEl) laborEl.textContent = "¥" + labor.toFixed(2);
-  if (poolEl) poolEl.textContent = "¥" + (labor / 2).toFixed(2);
+  const amtVal = amtEl ? amtEl.value : "";
+  if (window._cmDraft && window._cmDraft.pid === p.id) {
+    window._cmDraft.amount = amtVal;
+  } else {
+    window._cmDraft = { pid: p.id, amount: amtVal, items: readCostDeductions("cm") };
+  }
 }
 function cmOnChange() {
   onCostDeductionChange("cm");
@@ -10100,16 +10195,19 @@ async function saveCostMgmt(id) {
   if (perm.editCostDeduction(p)) {
     const cd = readCostDeductions("cm");
     const materialFee = Math.round(sumCostDeductions({ costDeductions: cd }) * 100) / 100;
-    const effAmt = (payload.projectAmount != null) ? payload.projectAmount : (Number(p.projectAmount) || 0);
-    const laborFee = Math.round(Math.max(0, effAmt - materialFee) * 100) / 100;
     payload.costDeductions = cd;
     payload.materialFee = materialFee;
     payload.materialFeeNote = joinCostNotes({ costDeductions: cd });
-    payload.laborFee = laborFee;
   }
   if (!Object.keys(payload).length) { toast("当前角色无修改权限"); return; }
+  // 工费 = 有效工程金额 − 有效成本扣项。无论只改金额（无扣项权限）还是只改扣项（无金额权限），
+  // 都必须重算冗余 laborFee：getLaborFee 优先读存储的 laborFee，漏算会让工费/分成池/提成持续算旧值。
+  const effAmt = (payload.projectAmount != null) ? payload.projectAmount : (Number(p.projectAmount) || 0);
+  const effCd = (payload.costDeductions != null) ? payload.costDeductions : getCostDeductions(p);
+  payload.laborFee = Math.round(Math.max(0, effAmt - sumCostDeductions({ costDeductions: effCd })) * 100) / 100;
   try {
-    await repo.patchProject(id, payload);
+    const saved = await repo.patchProject(id, payload);
+    if (saved === false) { renderConstruction(); return; } // 版本冲突：patchProject 已 toast + loadAll 补偿，不假成功
     const p2 = getProject(id);
     if (p2) Object.assign(p2, payload);
     window._cmDraft = null;
@@ -10265,7 +10363,7 @@ function openQuickContractEdit(id) {
           if (_t) _t.checked = true;
           const _a = document.getElementById("qcAmount");
           if (_a) _a.value = _keep.amt;
-          renderCostDeductionEditor("qc", _keep.cd);
+          renderCostDeductionEditor("qc", _keep.cd, !canCostQc);
           onQuickContractChange();
           return false;
         }
@@ -10275,9 +10373,9 @@ function openQuickContractEdit(id) {
       actionLogs.push({
         time: new Date().toISOString(),
         action: "contract_edit",
-        description: `修改包活金额：${changes.join("；")}（工费 ¥${labor.toFixed(2)}，分成池 ¥${(labor / 2).toFixed(2)}）`,
-        operator: currentProfile.name || currentUser?.email || "系统",
-        operatorRole: currentProfile.role,
+        description: `修改包活金额：${changes.join("；")}（工费 ¥${labor.toFixed(2)}，分成池 ¥${(Math.round(labor / 2 * 100) / 100).toFixed(2)}）`,
+        operator: currentProfile?.name || currentUser?.email || "系统",
+        operatorRole: currentProfile?.role,
       });
       payload.actionLogs = actionLogs;
 
@@ -10289,13 +10387,10 @@ function openQuickContractEdit(id) {
       return true;
     },
   });
-  renderCostDeductionEditor("qc", p.costDeductions);
+  // 只读态由模板侧保证（与施工管理「费用管理」板块同源权限 editCostDeduction）：
+  // 无成本扣项权限时不渲染「＋ 添加扣项」与删除按钮，输入框禁用
+  renderCostDeductionEditor("qc", p.costDeductions, !perm.editCostDeduction(p));
   window.onCDChange_qc = onQuickContractChange;
-  // 无成本扣项权限（editCostDeduction）：成本扣项编辑器只读（与施工管理「费用管理」板块同源权限）
-  if (!perm.editCostDeduction(p)) {
-    document.querySelectorAll("#qcCostDeductions .cd-row input").forEach((el) => { el.disabled = true; });
-    document.querySelectorAll("#qcCostDeductions .cd-x").forEach((el) => { el.style.display = "none"; });
-  }
   onQuickContractChange();
 }
 function onQuickContractChange() {
@@ -10314,7 +10409,8 @@ function onQuickContractChange() {
   if (cdLabel) cdLabel.textContent = isMaterial ? "材料费与成本扣项（多行）" : "现场成本与外协工钱（多行）";
   const mat = costDeductionSum("qc");
   const labor = Math.max(0, amt - mat);
-  const pool = labor / 2;
+  // 池取整到分，与 getCommissionPool 同口径（表单预览与保存后详情一致）
+  const pool = Math.round(labor / 2 * 100) / 100;
   calcEl.innerHTML = `<div class="qc-calc">
       <div class="qc-calc__cell">
         <div class="qc-calc__label">工费</div>
@@ -11665,7 +11761,9 @@ function openCompleteRepairForm(projectId, repairId) {
   updateRepairCompletePreview();
 }
 
-/* 完成维修弹窗：付费维修的均分预览（随勾选人员实时刷新） */
+/* 完成维修弹窗：付费维修的均分预览（随勾选人员实时刷新）。
+   与 submitCompleteRepair 的 splitCommissionEvenly 同源（整数分最大余额法）——
+   预览即最终到账金额；金额不能整除时尾差补小数余额最大者，最多相差 1 分。 */
 function updateRepairCompletePreview() {
   const form = document.querySelector(".repair-complete-form");
   if (!form) return;
@@ -11677,11 +11775,19 @@ function updateRepairCompletePreview() {
   const n = checked.length;
   amounts.forEach((el) => { el.textContent = ""; });
   if (!(pool > 0) || !n) { if (preview) preview.textContent = n ? "" : "（请至少勾选 1 人）"; return; }
-  const per = Math.floor(pool * 100 / n) / 100;
-  amounts.forEach((el) => { el.textContent = "¥" + per.toFixed(2); });
+  const cents = splitCentsByWeights(Math.round(pool * 100), checked.map(() => 1));
+  const amtByWid = {};
+  amounts.forEach((el) => { if (el.dataset.wid) amtByWid[el.dataset.wid] = el; });
+  checked.forEach((cb, i) => {
+    const el = amtByWid[(cb.id || "").replace("repairW_", "")];
+    if (el) el.textContent = "¥" + (cents[i] / 100).toFixed(2);
+  });
   if (preview) {
-    const tail = Math.round((pool - per * n) * 100) / 100;
-    preview.textContent = `：勾选 ${n} 人，每人约 ¥${per.toFixed(2)}${tail > 0 ? `（尾差 ¥${tail.toFixed(2)} 补最后一人）` : ""}`;
+    const vals = cents.map((c) => c / 100);
+    const allSame = vals.every((v) => Math.abs(v - vals[0]) < 0.005);
+    preview.textContent = allSame
+      ? `：勾选 ${n} 人，每人 ¥${vals[0].toFixed(2)}`
+      : `：勾选 ${n} 人，每人 ¥${Math.min.apply(null, vals).toFixed(2)}~¥${Math.max.apply(null, vals).toFixed(2)}（金额不能整除，尾差按最大余额法分配，最多相差 1 分）`;
   }
 }
 
@@ -11870,8 +11976,8 @@ async function cancelProject(id) {
       time: now,
       action: "cancel",
       description: `取消项目，原因：${reason}`,
-      operator: currentProfile.name || currentUser?.email || "系统",
-      operatorRole: currentProfile.role
+      operator: currentProfile?.name || currentUser?.email || "系统",
+      operatorRole: currentProfile?.role
     });
     const cancelPatch = { 
       status: STATUS.CANCELLED, 
@@ -12169,7 +12275,7 @@ function renderCommissionPanel(p) {
     ? commBarCalcFromAmounts(workers.map((w) => w.id), initialAmounts, remaining)
     : commBarCalc(workers.map((w) => w.id), initialRatios, remaining);
   const widths = barCalc.widths;
-  // 金额模式一律以「归一后」的金额为准（尾差补最后一人）：
+  // 金额模式一律以「归一后」的金额为准（整数分最大余额法，Σ 恒 = 剩余池）：
   // 保证 dataset / 段上显示 / 图例输入框 / 保存校验四处同源，
   // 否则 3 人均分 33.33×3=99.99 会因合计≠剩余池被保存校验拦下。
   const barAmounts = isAmountMode ? barCalc.amounts : initialAmounts;
@@ -12314,7 +12420,8 @@ function updateRepairContractCalc(prefix) {
   const mat = costDeductionSum(prefix);
   const labor = Math.max(0, amt - mat);
   laborTxt.textContent = "¥" + labor.toFixed(2);
-  poolTxt.textContent = "¥" + (labor / 2).toFixed(2);
+  // 池取整到分，与 getCommissionPool 同口径（预览与保存后详情一致）
+  poolTxt.textContent = "¥" + (Math.round(labor / 2 * 100) / 100).toFixed(2);
   if (noteEl) {
     noteEl.textContent = amt > 0
       ? (mat > 0 ? `（工程金额 ¥${amt.toFixed(2)} − 成本扣项 ¥${mat.toFixed(2)}）` : (isMaterial ? "（包工包料：未填材料费，工费=工程金额）" : "（包工：未填扣项，工费=工程金额）"))
@@ -12349,17 +12456,15 @@ function readRepairPayBlock(prefix) {
   };
 }
 
-/* 分成池均分给若干人（尾差补最后一人，保证 Σ=pool）。 */
+/* 分成池均分给若干人（整数分最大余额法，保证 Σ=pool；尾差给小数余额最大者，最多相差 1 分）。 */
 function splitCommissionEvenly(pool, ids, nameOf) {
   const n = (ids || []).length;
   if (!n) return [];
-  const cents = Math.round((Number(pool) || 0) * 100);
-  const base = Math.floor(cents / n);
-  const tail = cents - base * n;
+  const cents = splitCentsByWeights(Math.round((Number(pool) || 0) * 100), ids.map(() => 1));
   return ids.map((id, i) => ({
     workerId: id,
     name: (nameOf ? nameOf(id) : "") || id,
-    amount: Math.round((base + (i === n - 1 ? tail : 0)) / 100 * 100) / 100,
+    amount: cents[i] / 100,
   }));
 }
 
@@ -12451,7 +12556,8 @@ function onCommissionModeChange(id, mode) {
 
 /* 完工弹窗内的包活分成面板（仅拖动分钱，无独立「保存分成」按钮，确认完工时一并持久化）。
    与 renderCommissionPanel 共用 .comm-bar / .comm-handle 结构，bar id 用 commBarComplete 避免与详情页冲突。
-   外协人员不进比例条：按固定金额先从分成池扣除，剩余由内部安装工人 avg/custom 分配。
+   外协人员不进比例条：其费用作为「成本扣项」从工程金额扣除（2026-10-20 起外协固定工钱已并入成本扣项），
+   不占分成池；工费÷2 的池全由内部安装工人 avg/custom 分配。
    图例已合并考勤工时（每人金额后跟 h），完工弹窗不再单列考勤区块。 */
 function renderCompleteCommission(p) {
   if (!p) return "";
@@ -12497,7 +12603,7 @@ function renderCompleteCommission(p) {
     ? commBarCalcFromAmounts(workers.map((w) => w.id), initialAmounts, remaining)
     : commBarCalc(workers.map((w) => w.id), initialRatios, remaining);
   const widths = barCalc.widths;
-  // 金额模式一律以「归一后」的金额为准（尾差补最后一人）：
+  // 金额模式一律以「归一后」的金额为准（整数分最大余额法，Σ 恒 = 剩余池）：
   // 保证 dataset / 段上显示 / 图例输入框 / 保存校验四处同源，
   // 否则 3 人均分 33.33×3=99.99 会因合计≠剩余池被保存校验拦下。
   const barAmounts = isAmountMode ? barCalc.amounts : initialAmounts;
@@ -12729,32 +12835,24 @@ function commissionParticipants(p, mode) {
 }
 
 /* 按 ids/ratios/pool 计算每人金额与分段宽度。
-   注意：pool 传「扣除外协固定金额后的剩余池」——比例条只展示内部工人对剩余池的分配，段宽合计恒为 100%。 */
+   注意：pool 传「扣除外协固定金额后的剩余池」——比例条只展示内部工人对剩余池的分配，段宽合计恒为 100%。
+   金额用整数分最大余额法切分（Σ 恒 = pool，权重大者不少分）；权重与段宽同源（ratios），
+   avg 模式段宽 33/33/34 时金额也同序——不会再把尾差全额压给最后一段。 */
 function commBarCalc(ids, ratios, pool) {
   const ratioSum = ids.reduce((s, _, i) => s + (ratios[i] || 0), 0);
-  const amountOf = (i) => {
-    if (ratioSum > 0) return Math.round(pool * ((ratios[i] || 0) / ratioSum) * 100) / 100;
-    return ids.length ? Math.round((pool / ids.length) * 100) / 100 : 0;
-  };
-  const amounts = ids.map((_, i) => amountOf(i));
   const widths = ids.map((_, i) => {
     if (pool <= 0) return 0;
     if (ratioSum > 0) return ((ratios[i] || 0) / ratioSum) * 100;
     return 100 / Math.max(1, ids.length);
   });
-  // 尾差补最后一项，保证金额合计 = 剩余池
-  if (ids.length) {
-    const li = ids.length - 1;
-    const others = amounts.reduce((s, a, i) => (i === li ? s : s + a), 0);
-    amounts[li] = Math.round((pool - others) * 100) / 100;
-  }
-  return { amounts, widths };
+  const cents = splitCentsByWeights(Math.round(pool * 100), ids.map((_, i) => (ratioSum > 0 ? (ratios[i] || 0) : 1)));
+  return { amounts: cents.map((c) => c / 100), widths };
 }
 
 /* 按 ids/amounts/remaining 计算分段宽度（金额模式）。
    locked：被「手动填写 / 拖动过」的索引数组，这些金额视为**固定值**；
-   其余未锁定的人自动均分剩余额度（尾差补最后一个未锁定的人）；
-   locked 为空（初始渲染）时按当前金额，仅把尾差补到最后一人，保证合计 = remaining。
+   其余未锁定的人按整数分最大余额法均分剩余额度（最多相差 1 分，尾差不再全压最后一人）；
+   locked 为空（初始渲染）时按当前金额占比重切剩余池（最大余额法）。
    段宽一律用归一后的金额算——顺序不可颠倒，否则段宽与段上显示的金额对不上。 */
 function commBarCalcFromAmounts(ids, amounts, remaining, locked) {
   const src = (amounts || []).map((a) => Number(a) || 0);
@@ -12762,24 +12860,24 @@ function commBarCalcFromAmounts(ids, amounts, remaining, locked) {
   if (!n) return { amounts: [], widths: [], locked: [] };
   const lockSet = new Set((locked || []).map(Number).filter((i) => i >= 0 && i < n));
   const outAmounts = src.slice();
+  const remCents = Math.round(remaining * 100);
   if (lockSet.size) {
     let lockSum = 0;
     lockSet.forEach((i) => { lockSum += outAmounts[i] || 0; });
     const free = [];
     for (let i = 0; i < n; i++) if (!lockSet.has(i)) free.push(i);
-    const room = Math.max(0, Math.round((remaining - lockSum) * 100) / 100);
+    const room = Math.max(0, remCents - Math.round(lockSum * 100));
     if (free.length) {
-      const base = Math.round((room / free.length) * 100) / 100;
-      free.forEach((i, k) => {
-        outAmounts[i] = (k === free.length - 1)
-          ? Math.round((room - base * (free.length - 1)) * 100) / 100
-          : base;
-      });
+      // 自由人均分剩余：最大余额法，Σ 恒 = room
+      const cents = splitCentsByWeights(room, free.map(() => 1));
+      free.forEach((i, k) => { outAmounts[i] = cents[k] / 100; });
     }
   } else {
-    const li = n - 1;
-    const others = outAmounts.reduce((s, a, i) => (i === li ? s : s + a), 0);
-    outAmounts[li] = Math.max(0, Math.round((remaining - others) * 100) / 100);
+    // 未锁定：按当前金额占比重切剩余池（最大余额法）。
+    // 替代「尾差补最后一人」——否则池被修正为分后（如 ¥0.50），
+    // 初始均分值 [0.17,0.17,0.17]（Σ=0.51）只会把最后一人压成 0.16 而不动前两人。
+    const cents = splitCentsByWeights(remCents, src);
+    outAmounts.forEach((_, i) => { outAmounts[i] = cents[i] / 100; });
   }
   const widths = ids.map((_, i) => remaining > 0 ? (outAmounts[i] / remaining) * 100 : 0);
   return { amounts: outAmounts, widths, locked: Array.from(lockSet) };
@@ -13094,8 +13192,10 @@ function renderConstruction() {
       return `<option value="${w.id}"${disabledAttr}>${esc(w.name)}${conflictTag}</option>`;
     }).join("");
   const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).filter(n => n.trim());
+  // 外协徽章的 ✕ 与内部人员徽章同样受 canAssign 门控：已验收/已审核（isSettled）或已完工后
+  // 不再允许增删派工人员（removeOutsourcedWorker 会连带改成本扣项与工费，必须一并锁定）
   const allChips = [...(assignedChips ? assignedChips : ""), ...outsourcedNames.map(n =>
-    `<span class="assign-chip outsourced"><span class="chip-icon">🤝</span>${esc(n.trim())}<button class="chip-x" onclick="removeOutsourcedWorker('${p.id}', '${escJsAttr(n.trim())}')" title="移除">✕</button></span>`
+    `<span class="assign-chip outsourced"><span class="chip-icon">🤝</span>${esc(n.trim())}${canAssign ? `<button class="chip-x" onclick="removeOutsourcedWorker('${p.id}', '${escJsAttr(n.trim())}')" title="移除">✕</button>` : ""}</span>`
   )].join("");
   const hasAny = (assigned.length > 0) || (outsourcedNames.length > 0);
 
@@ -13163,7 +13263,7 @@ function renderConstruction() {
             ${p.reworkCount > 0 ? `<span class="badge rework" style="cursor:pointer" title="查看返工记录" onclick="showReworkInfo('${esc(p.id)}')">🔄 返工 ${p.reworkCount} 次</span>` : ""}
           </div>
         </div>
-        ${reviewed ? `<p class="hint" style="margin:0;color:var(--warn)">⚠️ 该项目已审核，信息不可更改。</p>` : ""}
+        ${reviewed ? `<p class="hint" style="margin:0;color:var(--warn)">⚠️ 该项目已审核，信息不可更改（如需整改可发起维修或返工）。</p>` : (p.status === STATUS.ACCEPTED ? `<p class="hint" style="margin:0;color:var(--warn)">⚠️ 该项目已验收，信息不可更改（如需整改可发起维修或返工）。</p>` : "")}
         ${canEdit || reviewed ? "" : `<p class="hint" style="margin:0">当前角色为只读，施工工时与验收由施工人员/总经理填写。</p>`}
         <div class="proj-hero__meta">
           <span>门店</span><b>${esc(storeName(p.storeId))}</b>
@@ -13343,8 +13443,9 @@ function renderConstruction() {
     ${assignBlock}
 
     ${(() => {
-      // 费用管理 板块：工程金额=预约人可改（editContract，即包活金额权限）；
-      // 成本扣项（材料/现场成本/外协工钱）仅成本扣项权限（editCostDeduction）可改。
+      // 费用管理 板块：工程金额=管理员可改（editContract，即包活金额权限；默认 manager/store_manager 有、
+      // worker 无，并非预约人专属）；成本扣项（材料/现场成本/外协工钱）仅成本扣项权限
+      // （editCostDeduction）可改。已验收/已审核（isSettled）后整块锁定，只能走维修/返工整改。
       // 板块紧邻下方「包活分成」，金额链（工费/池）在分成面板统一展示，故本板块不再重复。
       const canAmt = canEditContract;
       const canCost = perm.editCostDeduction(p);
@@ -13353,10 +13454,10 @@ function renderConstruction() {
         <div class="detail-block cost-mgmt-block">
           <div class="assign-head" style="display:flex;align-items:center;justify-content:space-between;">
             <h3>💰 费用管理</h3>
-            ${!canAmt && !canCost ? `<span class="hint" style="margin:0">当前角色只读</span>` : ""}
+            ${isSettled(p) ? `<span class="hint" style="margin:0;color:var(--warn)">🔒 已${p.status === STATUS.REVIEWED ? "审核" : "验收"}，费用不可改</span>` : (!canAmt && !canCost ? `<span class="hint" style="margin:0">当前角色只读</span>` : "")}
           </div>
           <div class="cost-mgmt__row">
-            <label class="cost-mgmt__label">工程金额<span style="font-size:11px;color:#64748b;font-weight:400;">（预约人可改）</span></label>
+            <label class="cost-mgmt__label">工程金额<span style="font-size:11px;color:#64748b;font-weight:400;">（管理员可改${canAmt ? "" : " · 只读"}）</span></label>
             <div class="cost-mgmt__amount">
               <span class="cost-mgmt__yen">¥</span>
               <input class="input" type="number" min="0" step="0.01" id="cmProjectAmount" value="${amt.toFixed(2)}" ${canAmt ? "" : "disabled"} oninput="cmCalc()" />
@@ -13679,21 +13780,17 @@ function renderConstruction() {
   // 重绘完成后回填分成面板未保存草稿（外协固定工钱 / 金额分配），
   // 避免定时刷新与实时同步把用户正在输入的值冲掉
   restoreCommissionDraft("commissionPanelWrap", p.id);
-  // 费用管理 板块：渲染成本扣项编辑器，含草稿保护（防止重绘冲掉未保存编辑）+ 权限禁用
+  // 费用管理 板块：渲染成本扣项编辑器，含草稿保护（防止重绘冲掉未保存编辑）。
+  // 只读态由模板侧保证（renderCostDeductionEditor 第三参）：输入框禁用、删除/添加按钮不渲染，
+  // 不再依赖渲染后的 JS 兜底禁用——杜绝「提示只读但按钮仍可点」的不一致。
   try {
     const cmDraftActive = !!(window._cmDraft && window._cmDraft.pid === p.id);
     const cmItems = cmDraftActive ? window._cmDraft.items : (p.costDeductions || []);
     const cmAmt = cmDraftActive && window._cmDraft.amount != null ? window._cmDraft.amount : (p.projectAmount || 0);
     const cmAmtEl = document.getElementById("cmProjectAmount");
     if (cmAmtEl) cmAmtEl.value = (Number(cmAmt) || 0).toFixed(2);
-    renderCostDeductionEditor("cm", cmItems);
+    renderCostDeductionEditor("cm", cmItems, !perm.editCostDeduction(p));
     window.onCDChange_cm = cmOnChange;
-    // 无成本扣项权限（editCostDeduction）：禁用整块成本扣项编辑（含外协行金额），仅作只读展示
-    if (!perm.editCostDeduction(p)) {
-      document.querySelectorAll("#cmCostDeductions .cd-row input").forEach((el) => { el.disabled = true; });
-      document.querySelectorAll("#cmCostDeductions .cd-x").forEach((el) => { el.style.display = "none"; });
-      document.querySelectorAll("#cmCostDeductions .cd-add").forEach((el) => { el.style.display = "none"; });
-    }
     cmCalc();
   } catch (e) {
     console.warn("费用管理板块渲染失败:", e);
@@ -14118,8 +14215,8 @@ async function assignWorker(pid) {
         time: new Date().toISOString(),
         action: "assign",
         description: `分配安装人员：${worker ? worker.name : "未知"}`,
-        operator: currentProfile.name || currentUser?.email || "系统",
-        operatorRole: currentProfile.role
+        operator: currentProfile?.name || currentUser?.email || "系统",
+        operatorRole: currentProfile?.role
       });
     }
 
@@ -14218,10 +14315,10 @@ async function saveOutsourcedWorkers(pid, names) {
     }
 
     added.forEach(name => {
-      actionLogs.push({ time: nowStr, action: "outsource_assign", description: `添加外协：${name}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
+      actionLogs.push({ time: nowStr, action: "outsource_assign", description: `添加外协：${name}`, operator: currentProfile?.name || currentUser?.email || "系统", operatorRole: currentProfile?.role });
     });
     removed.forEach(name => {
-      actionLogs.push({ time: nowStr, action: "outsource_unassign", description: `移除外协：${name}${removedAutoTotal > 0 ? `，自动记录工时 ${removedAutoTotal} 小时` : ""}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
+      actionLogs.push({ time: nowStr, action: "outsource_unassign", description: `移除外协：${name}${removedAutoTotal > 0 ? `，自动记录工时 ${removedAutoTotal} 小时` : ""}`, operator: currentProfile?.name || currentUser?.email || "系统", operatorRole: currentProfile?.role });
     });
 
     // 外协联动成本扣项：新增的外协补一行 kind=outsourced（金额 0，待填），移除的外协删掉对应行
@@ -14278,7 +14375,7 @@ async function addOutsourcedWorker(pid, name) {
       workerChangeHistory.push({ time: nowStr, action: "assign", workerId: wid, workerName: name.trim(), isOutsourced: true });
     }
     const actionLogs = [...(p.actionLogs || [])];
-    actionLogs.push({ time: nowStr, action: "outsource_assign", description: `添加外协：${name.trim()}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
+    actionLogs.push({ time: nowStr, action: "outsource_assign", description: `添加外协：${name.trim()}`, operator: currentProfile?.name || currentUser?.email || "系统", operatorRole: currentProfile?.role });
     // 外协联动成本扣项：补一条 kind=outsourced 行（金额 0，待用户在编辑器填）
     const newCd = ensureOutsourcedCostLine(p.costDeductions, name.trim());
     const sum = deriveCostSummary(p, newCd);
@@ -14349,7 +14446,7 @@ async function removeOutsourcedWorker(pid, name) {
         didAuto = true;
       }
     }
-    actionLogs.push({ time: nowStr, action: "outsource_unassign", description: `移除外协：${name.trim()}${didAuto ? `，自动记录工时 ${autoHours} 小时` : ""}`, operator: currentProfile.name || currentUser?.email || "系统", operatorRole: currentProfile.role });
+    actionLogs.push({ time: nowStr, action: "outsource_unassign", description: `移除外协：${name.trim()}${didAuto ? `，自动记录工时 ${autoHours} 小时` : ""}`, operator: currentProfile?.name || currentUser?.email || "系统", operatorRole: currentProfile?.role });
     // 外协联动成本扣项：删掉对应的 kind=outsourced 行
     const newCd = removeOutsourcedCostLine(p.costDeductions, name.trim());
     const sum = deriveCostSummary(p, newCd);
@@ -14431,8 +14528,8 @@ async function unassignWorker(pid, wid) {
         time: nowStr,
         action: "unassign",
         description: logDesc,
-        operator: currentProfile.name || currentUser?.email || "系统",
-        operatorRole: currentProfile.role
+        operator: currentProfile?.name || currentUser?.email || "系统",
+        operatorRole: currentProfile?.role
       });
     }
     
@@ -14529,8 +14626,8 @@ async function settleCurrentWorkers(p, untilTime, reason) {
         time: nowStr,
         action: reason,
         description: `${label}：${item.name}，自动记录工时 ${autoHours} 小时`,
-        operator: currentProfile.name || currentUser?.email || "系统",
-        operatorRole: currentProfile.role
+        operator: currentProfile?.name || currentUser?.email || "系统",
+        operatorRole: currentProfile?.role
       });
     }
   }
@@ -14743,8 +14840,8 @@ async function updateProjectStatus(id, newStatus) {
       time: now,
       action: "start",
       description: "开始施工",
-      operator: currentProfile.name || currentUser?.email || "系统",
-      operatorRole: currentProfile.role
+      operator: currentProfile?.name || currentUser?.email || "系统",
+      operatorRole: currentProfile?.role
     });
     patch.actionLogs = actionLogs;
 
@@ -14805,8 +14902,8 @@ async function updateProjectStatus(id, newStatus) {
       time: now,
       action: "pause",
       description: "暂停施工（通过状态切换）",
-      operator: currentProfile.name || currentUser?.email || "系统",
-      operatorRole: currentProfile.role
+      operator: currentProfile?.name || currentUser?.email || "系统",
+      operatorRole: currentProfile?.role
     });
     patch.actionLogs = actionLogs;
     patch.workerChangeHistory = settledWch;
@@ -14835,8 +14932,8 @@ async function updateProjectStatus(id, newStatus) {
       time: now,
       action: "resume",
       description: "恢复施工（通过状态切换）",
-      operator: currentProfile.name || currentUser?.email || "系统",
-      operatorRole: currentProfile.role
+      operator: currentProfile?.name || currentUser?.email || "系统",
+      operatorRole: currentProfile?.role
     });
     patch.actionLogs = actionLogs;
 
@@ -14976,8 +15073,8 @@ async function pauseProject(id) {
       time: nowStr,
       action: "pause",
       description: `暂停施工${reason ? "，原因：" + reason : ""}`,
-      operator: currentProfile.name || currentUser?.email || "系统",
-      operatorRole: currentProfile.role
+      operator: currentProfile?.name || currentUser?.email || "系统",
+      operatorRole: currentProfile?.role
     });
     
     const patch = {
@@ -15030,8 +15127,8 @@ async function resumeProject(id) {
       time: now,
       action: "resume",
       description: "恢复施工",
-      operator: currentProfile.name || currentUser?.email || "系统",
-      operatorRole: currentProfile.role
+      operator: currentProfile?.name || currentUser?.email || "系统",
+      operatorRole: currentProfile?.role
     });
 
     /* 恢复即重新给在场人员开施工段：否则 buildWorkerPeriods 会因 startedAt 被重置而把
@@ -15289,8 +15386,8 @@ function delayProject(id) {
         time: new Date().toISOString(),
         action: "delay",
         description: `项目延期，新预约时间：${newDate} ${newTime}${newEndTime ? " ~ " + new Date(newEndTime).toISOString().slice(0,16).replace("T"," ") : ""}，原因：${reason}`,
-        operator: currentProfile.name || currentUser?.email || "系统",
-        operatorRole: currentProfile.role
+        operator: currentProfile?.name || currentUser?.email || "系统",
+        operatorRole: currentProfile?.role
       });
 
       /* 若已开工（施工中/已暂停），延期前先把当前在场工时落袋：否则延期→到点自动转正(BOOKED)
@@ -15422,8 +15519,8 @@ async function autoReviewAcceptedProjects() {
         time: reviewedAt,
         action: "review",
         description: `系统自动审核（验收满 ${AUTO_REVIEW_AFTER_ACCEPT_HOURS} 小时后）`,
-        operator: currentProfile.name || currentUser?.email || "系统",
-        operatorRole: currentProfile.role
+        operator: currentProfile?.name || currentUser?.email || "系统",
+        operatorRole: currentProfile?.role
       });
       try {
         await repo.patchProject(p.id, { status: STATUS.REVIEWED, reviewedAt, actionLogs });
@@ -15457,15 +15554,19 @@ async function reviewProject(id) {
     time: reviewedAt,
     action: "review",
     description: "审核通过",
-    operator: currentProfile.name || currentUser?.email || "系统",
-    operatorRole: currentProfile.role
+    operator: currentProfile?.name || currentUser?.email || "系统",
+    operatorRole: currentProfile?.role
   });
-  await repo.patchProject(id, { status: STATUS.REVIEWED, reviewedAt, actionLogs });
-  const p2 = getProject(id);
-  if (p2) { p2.status = STATUS.REVIEWED; p2.reviewedAt = reviewedAt; p2.actionLogs = actionLogs; }
-  renderAll();
-  toast("已审核");
-  logOperation("PROJECT_REVIEW", p.name || "项目", `ID: ${id}`);
+  const _saved = await repo.patchProject(id, { status: STATUS.REVIEWED, reviewedAt, actionLogs });
+  if (_saved !== false) {
+    const p2 = getProject(id);
+    if (p2) { p2.status = STATUS.REVIEWED; p2.reviewedAt = reviewedAt; p2.actionLogs = actionLogs; }
+    renderAll();
+    toast("已审核");
+    logOperation("PROJECT_REVIEW", p.name || "项目", `ID: ${id}`);
+  } else {
+    renderAll(); // 版本冲突：patchProject 已 toast + loadAll 补偿刷新，不假成功
+  }
   repo.loadAll().then(() => renderAll()).catch((e) => console.warn("审核后台同步失败：", e));
 }
 
@@ -15483,14 +15584,18 @@ async function unreviewProject(id) {
     time: new Date().toISOString(),
     action: "unreview",
     description: "取消审核，项目恢复为已完工",
-    operator: currentProfile.name || currentUser?.email || "系统",
-    operatorRole: currentProfile.role
+    operator: currentProfile?.name || currentUser?.email || "系统",
+    operatorRole: currentProfile?.role
   });
-  await repo.patchProject(id, { status: STATUS.DONE, actionLogs });
-  const p2 = getProject(id);
-  if (p2) { p2.status = STATUS.DONE; p2.actionLogs = actionLogs; }
-  renderAll();
-  toast("已取消审核");
+  const _saved = await repo.patchProject(id, { status: STATUS.DONE, actionLogs });
+  if (_saved !== false) {
+    const p2 = getProject(id);
+    if (p2) { p2.status = STATUS.DONE; p2.actionLogs = actionLogs; }
+    renderAll();
+    toast("已取消审核");
+  } else {
+    renderAll(); // 版本冲突：patchProject 已 toast + loadAll 补偿刷新，不假成功
+  }
   repo.loadAll().then(() => renderAll()).catch((e) => console.warn("反审核后台同步失败：", e));
 }
 
@@ -15743,7 +15848,7 @@ async function confirmRework(id) {
   const pay = readRepairPayBlock("rw");
   if (pay.payType === "paid" && pay.projectAmount <= 0) { toast("计费返工请填写工程金额"); return; }
   const reworkCount = (p.reworkCount || 0) + 1;
-  const operator = currentProfile.name || currentUser?.email || "系统";
+  const operator = currentProfile?.name || currentUser?.email || "系统";
   const mode = document.querySelector('input[name="rwMode"]:checked')?.value || "new";
   // —— 返工预约冲突检测：沿用原项目派工，检查新预约时段是否与工人其它安排冲突 ——
   const rwIds = (p.assignedWorkerIds || []);
@@ -15833,7 +15938,7 @@ async function confirmRework(id) {
       costDeductions: pay.costDeductions || [],
       laborFee: pay.laborFee,
       repairOrders: [],
-      actionLogs: [{ time: new Date().toISOString(), action: "rework_create", description: `基于「${p.name}」生成返工预约（第 ${reworkCount} 次返工）`, operator, operatorRole: currentProfile.role }],
+      actionLogs: [{ time: new Date().toISOString(), action: "rework_create", description: `基于「${p.name}」生成返工预约（第 ${reworkCount} 次返工）`, operator, operatorRole: currentProfile?.role }],
     };
     await repo.saveProject(newProject);
     await repo.patchProject(p.id, { reworkCount }); // 同步老单子返工次数，使其徽标/回指可见
@@ -17238,8 +17343,8 @@ function openCompleteProjectForm(id) {
           time: nowStr,
           action: "complete",
           description: `完成安装，登记总工时 ${totalHours.toFixed(1)} 工时`,
-          operator: currentProfile.name || currentUser?.email || "系统",
-          operatorRole: currentProfile.role
+          operator: currentProfile?.name || currentUser?.email || "系统",
+          operatorRole: currentProfile?.role
         });
         p.actionLogs = completionActionLogs;
 
@@ -17517,7 +17622,10 @@ async function saveAcceptance(id) {
       }
     });
     
-    const acceptedAt = document.getElementById("acAt").value || new Date().toISOString();
+    const acAtEl = document.getElementById("acAt");
+    // 验收时间不能晚于今天（防止误选未来日期导致完工/验收锚点错乱）；清空时按当前时间兜底
+    if (acAtEl.value && acAtEl.value > todayStr()) { toast("验收时间不能晚于今天"); return; }
+    const acceptedAt = acAtEl.value || new Date().toISOString();
     // 验收照片：暂存 → COS（acceptance/{projectId}/），失败不阻断验收保存；历史已上传照片保留
     let acPhotos = [];
     try {
@@ -17547,19 +17655,24 @@ async function saveAcceptance(id) {
       time: acceptedAt,
       action: "accept",
       description: `项目验收：${acceptance.quality}${acceptance.rating > 0 ? ` / ${acceptance.rating}星` : ""}${acceptance.acceptedBy ? `，验收人：${acceptance.acceptedBy}` : ""}`,
-      operator: currentProfile.name || currentUser?.email || "系统",
-      operatorRole: currentProfile.role
+      operator: currentProfile?.name || currentUser?.email || "系统",
+      operatorRole: currentProfile?.role
     });
 
-    await repo.patchProject(id, { acceptance, status: STATUS.ACCEPTED, finishedAt, actionLogs });
+    const _saved = await repo.patchProject(id, { acceptance, status: STATUS.ACCEPTED, finishedAt, actionLogs });
     const p2 = getProject(id);
-    if (p2) { p2.acceptance = acceptance; p2.status = STATUS.ACCEPTED; p2.finishedAt = finishedAt; p2.actionLogs = actionLogs; }
-    // 不合格 / 不通过 且勾选了「发起返工单」：验收保存后自动打开返工表单（复用既有返工流程，原项目状态不变）
-    // 注意须在 modal.close() 前读取勾选状态——close 后弹窗 DOM 已移除
-    const _needRework = acceptance.quality === "不合格"
+    if (_saved !== false && p2) { p2.acceptance = acceptance; p2.status = STATUS.ACCEPTED; p2.finishedAt = finishedAt; p2.actionLogs = actionLogs; }
+    // 不合格且勾选了「发起返工单」：验收保存后自动打开返工表单（复用既有返工流程，原项目状态不变）
+    // 注意须在 modal.close() 前读取勾选状态——close 后弹窗 DOM 已移除；云端冲突（_saved===false）时不触发
+    const _needRework = _saved !== false && acceptance.quality === "不合格"
       && document.getElementById("acRework")?.checked && perm.rework(getProject(id));
     modal.close();
     renderAll();
+    if (_saved === false) {
+      // 版本冲突：patchProject 已 toast「数据冲突」并 loadAll 补偿刷新，此处不假成功、不弹返工单
+      repo.loadAll().then(() => renderAll()).catch((e) => console.warn("验收冲突后刷新失败：", e));
+      return;
+    }
     toast("验收信息已保存");
     if (_needRework) setTimeout(() => reworkProject(id), 150);
     repo.loadAll().then(() => {
@@ -18038,6 +18151,27 @@ function renderStats() {
       <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedWorkers}人</div><div class="lbl">外协人员</div></div>
     `;
   summary.innerHTML = commCards;
+  // 跨月说明：归期按预约时间（isInPeriod），而提成按考勤摊到施工当天（commissionDaily）。
+  // 预约在本月、施工拆到相邻月的项目，其金额不会落在本月日历里 → 卡片合计会大于本月日历可见金额，
+  // 此处显式说明，避免误以为算错。仅当选了具体月份且确实存在跨月项目时显示。
+  const _statsMonthVal = document.getElementById("statsMonth").value;
+  if (_statsMonthVal) {
+    let crossCount = 0, crossAmt = 0;
+    allProjects.forEach((p) => {
+      if (!isCommissionCounted(p)) return;
+      const daily = commissionDaily(p);
+      let outAmt = 0;
+      Object.keys(daily).forEach((d) => {
+        const amt = Object.keys(daily[d]).reduce((s, wid) => s + daily[d][wid], 0);
+        if (monthKey(d) !== _statsMonthVal) outAmt += amt;
+      });
+      if (outAmt > 0.005) { crossCount++; crossAmt += outAmt; }
+    });
+    if (crossCount > 0) {
+      summary.insertAdjacentHTML("beforeend",
+        `<div class="stats-hint" style="margin-bottom:0;">💡 本期合计含 <b>${crossCount}</b> 个跨月项目（预约在本月、施工落到相邻月），其 <b>${yuan(Math.round(crossAmt * 100) / 100)}</b> 提成显示在相邻月份的日历中，因此本月日历金额合计会小于上方卡片合计。</div>`);
+    }
+  }
 
   const workerTable = rows.length === 0
     ? `<div class="empty">所选月份暂无施工记录。</div>`
@@ -18102,7 +18236,7 @@ function renderStats() {
         <div class="detail-block" style="padding:0;overflow:hidden;margin-bottom:16px">
           <table class="data">
             <thead>
-              <tr><th>施工人员</th><th>本月提成</th><th>施工天数</th><th>请假天数</th><th>轮休天数</th><th>参与项目数</th></tr>
+              <tr><th>施工人员</th><th>本月提成</th><th>施工天数</th><th>请假天数</th><th>轮休天数</th></tr>
             </thead>
             <tbody>
               <tr>
@@ -18111,7 +18245,6 @@ function renderStats() {
                 <td>${r.days}</td>
                 <td>${r.leaveDays > 0 ? `<span style="color:#ef4444;font-weight:600">${r.leaveDays}天</span>` : "0"}</td>
                 <td>${r.restDays > 0 ? `<span style="color:#10b981;font-weight:600">${r.restDays}天</span>` : "0"}</td>
-                <td>${r.projects}</td>
               </tr>
             </tbody>
           </table>
@@ -18141,7 +18274,7 @@ function renderStats() {
       <div class="detail-block" style="padding:0;overflow:hidden">
         <table class="data">
           <tbody>
-            <tr><td><b>合计</b></td><td><b style="color:#16a34a">${yuan(agg.totalAmount)}</b></td><td colspan="4"></td></tr>
+            <tr><td><b>合计</b></td><td><b style="color:#16a34a">${yuan(agg.totalAmount)}</b></td><td colspan="3"></td></tr>
           </tbody>
         </table>
       </div>`;
@@ -18182,6 +18315,7 @@ function renderStats() {
             <th class="col-store">店面</th>
             <th class="col-name">项目</th>
             <th class="col-status">状态</th>
+            <th class="col-hours" title="该项目全部考勤工时之和（人·小时）：3人各干1小时=3.0h；合计≈区间总人工投入，÷8≈人天">投入工时(人·小时)</th>
             <th class="col-notes">扣项说明</th>
             <th class="col-money">工程金额</th>
             <th class="col-money">工费</th>
@@ -18210,6 +18344,8 @@ function renderStats() {
             }
             const chips = alloc.items.map((it) => `<span class="worker-chip internal">${esc(it.workerName)} <b>¥${it.amount.toFixed(2)}</b></span>`).join("");
             const d = p.appointmentTime ? new Date(p.appointmentTime) : null;
+            // 投入工时（人·小时）= 该项目全部考勤工时之和；与详情页卡片时间线的挂钟「施工时长」同源不同口径（2026-10-22 改名消歧义）
+            const _hours = Math.round((p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0) * 10) / 10;
             return `
             <tr>
               <td class="col-date">${d ? fmtDate(d) : "—"}</td>
@@ -18217,6 +18353,7 @@ function renderStats() {
               <td class="col-store">${esc(storeName(p.storeId))}</td>
               <td class="col-name">${esc(p.name)}</td>
               <td class="col-status"><span class="badge ${p.status}">${p.status}</span></td>
+              <td class="col-hours">${_hours > 0 ? _hours.toFixed(1) + "h" : "—"}</td>
               <td class="col-notes">${_noteCell}</td>
               <td class="col-money">¥${(Number(p.projectAmount) || 0).toFixed(0)}</td>
               <td class="col-money">¥${getLaborFee(p).toFixed(0)}</td>
@@ -18225,7 +18362,7 @@ function renderStats() {
           }).join("")}
         </tbody>
         <tfoot>
-          <tr><td colspan="5">合计</td><td>—</td><td>${yuan(agg.totalProjectAmount)}</td><td>${yuan(agg.totalLaborFee)}</td><td style="color:#16a34a;font-weight:600">${yuan(agg.totalAmount)}</td></tr>
+          <tr><td colspan="5">合计</td><td title="区间总人工投入（人·小时），÷8≈人天">${(Math.round(commissionProjects.reduce((s, p) => s + (p.workLogs || []).reduce((a, l) => a + (Number(l.hours) || 0), 0), 0) * 10) / 10).toFixed(1)}h</td><td>—</td><td>${yuan(agg.totalProjectAmount)}</td><td>${yuan(agg.totalLaborFee)}</td><td style="color:#16a34a;font-weight:600">${yuan(agg.totalAmount)}</td></tr>
         </tfoot>
       </table>
     </div>`;
@@ -18307,9 +18444,9 @@ function renderStats() {
     if (lowAttendanceWorkers.length > 0) {
       smartAnalysis += `<div class="stats-analysis info">💡 <strong>出勤提示</strong>：${lowAttendanceWorkers.map(w => esc(w.name)).join("、")} 日均在场工时不足4小时（考勤参考）。</div>`;
     }
-    // 外协人员：仅在自定义比例/固定金额模式下参与分成，平均分配不参与
+    // 外协人员：费用计入成本扣项，不参与分成池分配
     if (totalOutsourcedWorkers > 0) {
-      smartAnalysis += `<div class="stats-analysis info">👷 <strong>外协人员</strong>：${totalOutsourcedWorkers} 名外协人员按固定金额先从分成池扣除，剩余池再分给安装人员（平均/自定义均适用）。</div>`;
+      smartAnalysis += `<div class="stats-analysis info">👷 <strong>外协人员</strong>：${totalOutsourcedWorkers} 名外协人员的费用计入成本扣项（工程金额内扣除），不占分成池；工费÷2 的分成池全部分配给安装人员。</div>`;
     }
   }
   
@@ -20870,7 +21007,7 @@ async function exportStats() {
   summarySheet.addRow(['统计周期', month, '统计类型', period === 'month' ? '月度' : period === 'quarter' ? '季度' : '年度']);
   summarySheet.getRow(sr).eachCell((cell, ci) => { cell.style = ci % 2 === 1 ? { ...labelStyle } : { ...valueStyle } });
   sr++;
-  summarySheet.addRow(['统计口径', '仅统计已完工 / 已验收 / 已审核项目（施工中、暂停、延期、预约中、已取消不计）', '', '']);
+  summarySheet.addRow(['统计口径', '仅统计已验收 / 已审核项目（已完工未验收、施工中、暂停、延期、预约中、已取消不计）', '', '']);
   summarySheet.getRow(sr).getCell(1).style = { ...labelStyle };
   summarySheet.getRow(sr).getCell(2).style = { ...valueStyle };
   summarySheet.mergeCells(`B${sr}:D${sr}`);
@@ -20917,11 +21054,11 @@ async function exportStats() {
   addKV(summarySheet, '提成之星', topEarnerText, false);
   addKV(summarySheet, '高负荷预警', highWorkloadWorkers.length > 0 ? highWorkloadWorkers.map(w => w.name).join("、") : '无', false);
   addKV(summarySheet, '出勤提示', lowAttendanceWorkers.length > 0 ? lowAttendanceWorkers.map(w => w.name).join("、") : '无', false);
-  addKV(summarySheet, '外协说明', totalOutsourcedWorkers > 0 ? `${totalOutsourcedWorkers} 名外协人员：按固定金额先从分成池扣除，剩余池再分给安装人员（平均/自定义均适用）` : '无', false);
+  addKV(summarySheet, '外协说明', totalOutsourcedWorkers > 0 ? `${totalOutsourcedWorkers} 名外协人员：费用计入成本扣项（工程金额内扣除），不占分成池；工费÷2 的分成池全部分配给安装人员` : '无', false);
 
   summarySheet.columns = [{ key: 'A', width: 24 }, { key: 'B', width: 22 }, { key: 'C', width: 18 }, { key: 'D', width: 18 }];
 
-  const workerData = [['施工人员', '类型', '本期提成(元)', '施工天数', '请假天数', '轮休天数', '参与项目数']];
+  const workerData = [['施工人员', '类型', '本期提成(元)', '施工天数', '请假天数', '轮休天数']];
   let workerSheetTotal = 0;
   rows.forEach((r) => {
     const amt = commOf(r.id);
@@ -20932,11 +21069,10 @@ async function exportStats() {
       amt,
       r.days,
       r.leaveDays || 0,
-      r.restDays || 0,
-      r.projects
+      r.restDays || 0
     ]);
   });
-  workerData.push(['合计', '', round2(workerSheetTotal), '', '', '', '']);
+  workerData.push(['合计', '', round2(workerSheetTotal), '', '', '']);
   const workerSheet = workbook.addWorksheet("人员提成");
   workerData.forEach((row, rowIndex) => {
     const excelRow = workerSheet.addRow(row);
@@ -20953,11 +21089,11 @@ async function exportStats() {
       }
     });
   });
-  applyAutoFilter(workerSheet, 1, 7);
+  applyAutoFilter(workerSheet, 1, 6);
   freezeTopRow(workerSheet);
   applyZebraStripes(workerSheet, 2, workerData.length - 2);
   applyTotalRow(workerSheet, workerData.length);
-  workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 16 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }, { key: 'G', width: 12 }];
+  workerSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 16 }, { key: 'D', width: 10 }, { key: 'E', width: 10 }, { key: 'F', width: 10 }];
 
   const dailyData = [['施工人员', '类型', '日期', '当日提成(元)', '项目', '当日状态']];
   let dailyTotal = 0;
@@ -21048,8 +21184,8 @@ async function exportStats() {
     restSheet.columns = [{ key: 'A', width: 12 }, { key: 'B', width: 8 }, { key: 'C', width: 14 }, { key: 'D', width: 8 }];
   }
 
-  const projectData = [['日期', '预约开工时间', '实际开工时间', '店面', '项目', '状态', '工程金额(元)', '工费(元)', '成本扣项(元)', '扣项说明', '工人提成(元)', '外协人数', '备注']];
-  let pjAmount = 0, pjLabor = 0, pjComm = 0, pjDeduct = 0;
+  const projectData = [['日期', '预约开工时间', '实际开工时间', '店面', '项目', '状态', '投入工时(人·小时)', '工程金额(元)', '工费(元)', '成本扣项(元)', '扣项说明', '工人提成(元)', '外协人数', '备注']];
+  let pjAmount = 0, pjLabor = 0, pjComm = 0, pjDeduct = 0, pjHours = 0;
   projRows.forEach((r) => {
     const p = (cache.projects || []).find((pp) => pp.id === r.id);
     const alloc = p ? resolveCommissionAlloc(p) : { items: [] };
@@ -21057,12 +21193,15 @@ async function exportStats() {
     const laborFee = p ? getLaborFee(p) : 0;
     const deduct = p ? (Number(p.materialFee) || 0) : 0;
     const deductNote = p ? (p.materialFeeNote || "") : "";
+    // 投入工时（人·小时）= 该项目全部考勤工时之和；与详情页挂钟「施工时长」同源不同口径（2026-10-22 改名消歧义）
+    const hours = p ? Math.round((p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0) * 10) / 10 : 0;
     const comm = alloc.items.reduce((s, it) => s + it.amount, 0);
     const commText = alloc.items.map((it) => `${it.workerName} ¥${it.amount.toFixed(2)}`).join('、');
     pjAmount = round2(pjAmount + amount);
     pjLabor = round2(pjLabor + laborFee);
     pjDeduct = round2(pjDeduct + deduct);
     pjComm = round2(pjComm + comm);
+    pjHours = round2(pjHours + hours);
     projectData.push([
       r.date ? fmtDate(r.date) : '',
       r.appointmentTime ? fmtTime(r.appointmentTime) : '',
@@ -21070,6 +21209,7 @@ async function exportStats() {
       r.store || '',
       r.name,
       r.status,
+      hours,
       amount,
       laborFee,
       deduct,
@@ -21079,7 +21219,7 @@ async function exportStats() {
       r.notes || ''
     ]);
   });
-  projectData.push(['', '', '', '', '', '合计', round2(pjAmount), round2(pjLabor), round2(pjDeduct), '', round2(pjComm), '', '']);
+  projectData.push(['', '', '', '', '', '合计', round2(pjHours), round2(pjAmount), round2(pjLabor), round2(pjDeduct), '', round2(pjComm), '', '']);
   const projectSheet = workbook.addWorksheet("项目提成明细");
   projectData.forEach((row, rowIndex) => {
     const excelRow = projectSheet.addRow(row);
@@ -21092,20 +21232,20 @@ async function exportStats() {
         excelCell.style = { ...totalStyle };
       } else if (colIndex === 5) {
         styleStatusCell(excelCell, cell);
-      } else if (colIndex === 6 || colIndex === 7 || colIndex === 8) {
+      } else if (colIndex === 7 || colIndex === 8 || colIndex === 9) {
         excelCell.style = { ...moneyStyle };
-      } else if (colIndex === 10 || colIndex === 11) {
+      } else if (colIndex === 11 || colIndex === 12) {
         excelCell.style = { ...centerDataStyle };
       } else {
         excelCell.style = typeof cell === 'number' ? { ...numStyle } : { ...dataStyle };
       }
     });
   });
-  applyAutoFilter(projectSheet, 1, 13);
+  applyAutoFilter(projectSheet, 1, 14);
   freezeTopRow(projectSheet);
   applyZebraStripes(projectSheet, 2, projectData.length - 2);
   applyTotalRow(projectSheet, projectData.length);
-  projectSheet.columns = [{ key: 'A', width: 10 }, { key: 'B', width: 12 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 28 }, { key: 'F', width: 10 }, { key: 'G', width: 14 }, { key: 'H', width: 12 }, { key: 'I', width: 14 }, { key: 'J', width: 20 }, { key: 'K', width: 32 }, { key: 'L', width: 10 }, { key: 'M', width: 16 }];
+  projectSheet.columns = [{ key: 'A', width: 10 }, { key: 'B', width: 12 }, { key: 'C', width: 12 }, { key: 'D', width: 12 }, { key: 'E', width: 28 }, { key: 'F', width: 10 }, { key: 'G', width: 12 }, { key: 'H', width: 14 }, { key: 'I', width: 12 }, { key: 'J', width: 14 }, { key: 'K', width: 20 }, { key: 'L', width: 32 }, { key: 'M', width: 10 }, { key: 'N', width: 16 }];
 
   // ===== 项目人员提成明细：按「项目 × 施工人员」逐行列示 =====
   // 列：日期/预约开工/店面/项目名称/状态/施工内容·注意事项/效果图/工程金额/工费金额/施工人员/分配比例/个人提成
@@ -21181,7 +21321,7 @@ async function exportStats() {
     await Promise.all(batch.map(async (p) => { effectThumbs[p.id] = await loadEffectThumb(p); }));
   }
 
-  detailSheet.addRow(['日期', '预约开工', '店面', '项目名称', '状态', '施工内容 / 注意事项', '效果图', '工程金额(元)', '工费金额(元)', '施工人员', '分配比例', '个人提成(元)']);
+  detailSheet.addRow(['日期', '预约开工', '店面', '项目名称', '状态', '施工内容 / 注意事项', '效果图', '工程金额(元)', '工费金额(元)', '施工人员', '分配比例', '个人提成(元)', '该项目投入工时(小时)']);
   applyHeaderRow(detailSheet, 1);
   let detailRowNum = 2;
   let detailCommTotal = 0;
@@ -21209,7 +21349,9 @@ async function exportStats() {
       getLaborFee(p),
     ];
     items.forEach((it, idx) => {
-      detailSheet.addRow([...base, it ? it.workerName : "—", it ? it.ratio + "%" : "", it ? round2(it.amount) : ""]);
+      // 该工人在本项目的考勤工时（人·小时），供财务核算「提成 ÷ 工时」时薪参考
+      const itHours = it ? Math.round((p.workLogs || []).filter((l) => l.workerId === it.workerId).reduce((s, l) => s + (Number(l.hours) || 0), 0) * 10) / 10 : "";
+      detailSheet.addRow([...base, it ? it.workerName : "—", it ? it.ratio + "%" : "", it ? round2(it.amount) : "", itHours === "" ? "—" : itHours]);
       const row = detailSheet.getRow(detailRowNum);
       if (eff.thumb && idx === 0) { // 同一项目多工人时只嵌一次图，避免重复占体积
         row.height = Math.ceil(eff.thumb.height * 0.75) + 8;
@@ -21223,7 +21365,7 @@ async function exportStats() {
       row.eachCell((cell, ci) => {
         if (ci === 5) styleStatusCell(cell, cell.value);
         else if (ci === 8 || ci === 9 || ci === 12) cell.style = { ...moneyStyle };
-        else if (ci === 11) cell.style = { ...centerDataStyle };
+        else if (ci === 11 || ci === 13) cell.style = { ...centerDataStyle };
         else cell.style = { ...dataStyle };
       });
       if (it) detailCommTotal = round2(detailCommTotal + it.amount);
@@ -21231,21 +21373,22 @@ async function exportStats() {
     });
   });
   if (detailRowNum > 2) {
-    detailSheet.addRow(['合计', '', '', '', '', '', '', '', '', '', '', round2(detailCommTotal)]);
+    detailSheet.addRow(['合计', '', '', '', '', '', '', '', '', '', '', round2(detailCommTotal), '']);
     applyTotalRow(detailSheet, detailRowNum);
     detailSheet.getRow(detailRowNum).getCell(12).style = { ...moneyTotalStyle };
     applyZebraStripes(detailSheet, 2, detailRowNum - 1);
-    applyAutoFilter(detailSheet, 1, 12);
+    applyAutoFilter(detailSheet, 1, 13);
   } else {
     detailSheet.addRow(['本期暂无项目数据']);
     detailSheet.getRow(2).getCell(1).style = { ...dataStyle };
-    detailSheet.mergeCells("A2:L2");
+    detailSheet.mergeCells("A2:M2");
   }
   freezeTopRow(detailSheet);
   detailSheet.columns = [
     { key: 'A', width: 11 }, { key: 'B', width: 11 }, { key: 'C', width: 12 }, { key: 'D', width: 26 },
     { key: 'E', width: 9 }, { key: 'F', width: 40 }, { key: 'G', width: 20 }, { key: 'H', width: 13 },
     { key: 'I', width: 13 }, { key: 'J', width: 11 }, { key: 'K', width: 10 }, { key: 'L', width: 14 },
+    { key: 'M', width: 14 },
   ];
 
   const usedNames = {};
@@ -21360,7 +21503,7 @@ async function exportStats() {
       myCommTotalRowNum = rowNum;
       rowNum++;
     } else {
-      sheet.addRow([r.isOutsourced ? '（外协人员：按固定金额先从分成池扣除，剩余池再分给安装人员）' : '（本期无包活提成项目）', '', '', '', '', '', '', '', '']);
+      sheet.addRow([r.isOutsourced ? '（外协人员：费用计入成本扣项，不占分成池）' : '（本期无包活提成项目）', '', '', '', '', '', '', '', '']);
       sheet.getRow(rowNum).getCell(1).style = { ...dataStyle };
       sheet.mergeCells(`A${rowNum}:I${rowNum}`);
       rowNum++;
@@ -22766,7 +22909,7 @@ function promptPassword(message, title = "管理密码验证") {
 
 /* 设置 / 修改管理密码 */
 async function setAdminPassword() {
-  if (!(sb && currentProfile.role === ROLE.MANAGER)) {
+  if (!(sb && currentProfile?.role === ROLE.MANAGER)) {
     toast("仅云端总经理可设置管理密码");
     return;
   }
@@ -22792,7 +22935,7 @@ async function setAdminPassword() {
 
 /* 高危操作门禁：返回 true 表示通过验证 */
 async function requireAdminPassword(actionName) {
-  if (!currentProfile || currentProfile.role !== ROLE.MANAGER) {
+  if (!currentProfile || currentProfile?.role !== ROLE.MANAGER) {
     toast("只有总经理可以执行此操作");
     return false;
   }
@@ -23290,10 +23433,11 @@ function downloadCSV(filename, data) {
 
 function exportProjects() {
   if (!perm.exportProjects() && !perm.exportAll()) { toast("权限不足"); hideExportMenu(); return; }
-  // 包活金额（当前工资真源：包活分成）；工时列仅作考勤参考
+  // 包活金额（当前工资真源：包活分成）；工时不计入工资，仅保留「实际工时(考勤)」一列作考勤参考
+  // （预计工时/外协工时列已移除：包活制下无计薪意义，考勤明细另有「考勤记录」全量导出）
   const headers = ["项目ID", "项目名称", "门店", "客户名称", "联系电话", "地址", "状态", "预约时间", "结束时间",
     "工程金额", "材料费", "成本扣项说明", "工费金额", "工人分成合计", "分成池(工费÷2)", "包活方式", "分成方式",
-    "预计工时", "外协工时", "实际工时(考勤)", "施工人数", "施工人员", "外协人员", "开工时间", "完工时间", "备注", "创建时间", "更新时间"];
+    "实际工时(考勤)", "施工人数", "施工人员", "外协人员", "开工时间", "完工时间", "备注", "创建时间", "更新时间"];
   const rows = cache.projects.map(p => [
     p.id,
     p.name || "",
@@ -23312,8 +23456,6 @@ function exportProjects() {
     getCommissionPool(p),
     p.contractType || "",
     p.commissionMode === "custom" ? "自定义比例" : p.commissionMode === "custom_amount" ? "按金额分配" : "平均分配",
-    p.estimatedHours || 0,
-    p.outsourcedHours || 0,
     p.actualHours || 0,
     p.workerCount || 1,
     (p.assignedWorkerIds || []).map(wid => getWorker(wid)?.name || wid).join(", ") || "",
@@ -25250,7 +25392,7 @@ async function approveLeave(id) {
     ...record,
     status: LEAVE_STATUS.APPROVED,
     reviewerId: currentUser?.id || null,
-    reviewerName: currentProfile.name || currentUser?.email || "系统",
+    reviewerName: currentProfile?.name || currentUser?.email || "系统",
     reviewedAt: new Date().toISOString(),
   }, id);
   repo.loadAll().then(() => renderLeaves()).catch((e) => console.warn("[sync] approveLeave 后台同步失败：", e));
@@ -25278,7 +25420,7 @@ async function rejectLeave(id) {
     status: LEAVE_STATUS.REJECTED,
     reviewNote: note,
     reviewerId: currentUser?.id || null,
-    reviewerName: currentProfile.name || currentUser?.email || "系统",
+    reviewerName: currentProfile?.name || currentUser?.email || "系统",
     reviewedAt: new Date().toISOString(),
   }, id);
   repo.loadAll().then(() => renderLeaves()).catch((e) => console.warn("[sync] rejectLeave 后台同步失败：", e));
@@ -27059,8 +27201,12 @@ async function saveTimelineTaskTime(projectId, newStart, newEnd) {
 function cancelTimelineDrag(projectId, originalLeft) {
   const taskEl = document.getElementById("timelineMain")?.querySelector(`.timeline-task[data-project-id="${projectId}"]`);
   if (!taskEl) return;
-  /* 还原位置 */
-  taskEl.style.left = originalLeft;
+  /* 还原位置：originalLeft 是数字，必须补 "px"——CSSOM 会静默丢弃无单位长度，
+     曾导致点「取消」后任务一直停留在拖动后的位置，要刷新页面才复原；
+     调用链异常拿不到有效值时，兜底读渲染时写入的 data-original-left。 */
+  let left = Number(originalLeft);
+  if (!Number.isFinite(left)) left = parseFloat(taskEl.dataset.originalLeft || "");
+  if (Number.isFinite(left)) taskEl.style.left = left + "px";
   /* 还原拖动过程中被改写的时间文字（仅当确实被拖动改写过 ⏰ 时才还原） */
   const timeSpan = taskEl.querySelector(".timeline-task-info span:first-child");
   if (timeSpan && timeSpan.textContent.startsWith("⏰") && lastDragOriginalTimeText) {
@@ -27358,8 +27504,8 @@ function hideBootLoader() {
 // 把当前 currentProfile 应用到下拉栏（姓名 / 角色徽章 / 登出按钮），幂等可重复调用
 function applyProfileToUI() {
   if (!currentProfile) return;
-  const displayName = currentProfile.name || (currentUser && currentUser.email) || "";
-  const roleLabel = ROLE_LABEL[currentProfile.role] || currentProfile.role || "未分配";
+  const displayName = currentProfile?.name || (currentUser && currentUser.email) || "";
+  const roleLabel = ROLE_LABEL[currentProfile?.role] || currentProfile?.role || "未分配";
   const nameEl = document.getElementById("dropdownName");
   const roleEl = document.getElementById("dropdownRoleBadge");
   if (nameEl) nameEl.textContent = displayName;
@@ -27435,7 +27581,7 @@ async function startCloudSession() {
     await ensureSignupName(currentUser.id);
 
     // 未分配角色：显示提示并停止后续加载
-    if (!currentProfile.role) {
+    if (!currentProfile?.role) {
       showNoAccess(currentUser.email);
       return;
     }
@@ -27544,7 +27690,7 @@ function goToLogin() {
  * 本地数据迁移到云端
  * ============================================================ */
 async function migrateLocalToCloud() {
-  if (currentProfile.role !== ROLE.MANAGER) {
+  if (currentProfile?.role !== ROLE.MANAGER) {
     toast("只有总经理可以执行此操作");
     return;
   }
@@ -27594,7 +27740,7 @@ async function migrateLocalToCloud() {
  * 导出云端数据到本地
  * ============================================================ */
 async function exportCloudToLocal() {
-  if (currentProfile.role !== ROLE.MANAGER) {
+  if (currentProfile?.role !== ROLE.MANAGER) {
     toast("只有总经理可以执行此操作");
     return;
   }
@@ -28346,7 +28492,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v43ca8513";
+  const APP_VERSION = "vffbae7f9";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
