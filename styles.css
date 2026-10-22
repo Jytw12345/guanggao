@@ -1804,75 +1804,78 @@ select.input {
 .input.wide { min-width: 100px; flex: 1; box-sizing: border-box; max-width: 100%; }
 
 /* ===== 跨天施工：多日分段编辑器 ===== */
+/* 跨天分段行（第2天起）：单行 grid，与第一天 .appt-time-row 观感一致（2026-10-22）。
+   原为两行 flex（日期行 + 时间行），跨天时比第一天高一倍、视觉不齐。
+   列：圆圈N | 日期(宽) | 开始 | → | 结束 | 删除。
+   minmax(0,…) 压掉 date/select 原生最小宽度，保证任意屏宽不换行。 */
 .seg-row {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  width: 100%;
-  margin-top: 6px;
-}
-.seg-date-line,
-.seg-time-line {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1.5fr) minmax(0, 1fr) auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
   width: 100%;
-  flex-wrap: nowrap;
+  margin-top: 8px;
 }
-.seg-label {
-  font-size: 12px;
-  color: #6366f1;
-  flex-shrink: 0;
-  min-width: 42px;
-}
-.seg-date-line .segDate {
-  flex: 1 1 auto;
-  max-width: none;
-}
-.seg-txt {
-  font-size: 11px;
-  color: #64748b;
-  flex-shrink: 0;
-}
-.seg-arrow {
-  font-size: 14px;
-  color: #94a3b8;
-  flex-shrink: 0;
-}
-.seg-time-line .segStart,
-.seg-time-line .segEnd {
-  flex: 0 0 auto;
-  width: 96px;
-  min-width: 82px;
+.seg-row > * { min-width: 0; }
+.seg-row .seg-badge { grid-column: 1; }
+.seg-row .segDate { grid-column: 2; }
+.seg-row .segStart { grid-column: 3; }
+.seg-row .seg-arrow { grid-column: 4; }
+.seg-row .segEnd { grid-column: 5; }
+.seg-row .seg-del { grid-column: 6; }
+/* 固定控件高度：grid 行高由内容决定，日期/时间控件被压窄后内部文本会溢出，
+   进而与相邻行视觉重叠（曾出现第2、3天叠在一起 + "08:00" 只露一半）。
+   统一 height + overflow 处理，保证每行独立、控件内容不外溢。 */
+.seg-row .input,
+.seg-row .btn.small {
   height: 40px;
-  padding-top: 6px;
-  padding-bottom: 6px;
-  padding-right: 24px;
-  text-overflow: clip;
+  min-height: 40px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.2;
 }
-.seg-time-line .seg-del {
-  padding: 2px 8px;
+.seg-row select.input { padding-right: 20px; }
+.seg-row input[type="date"].input { padding-right: 4px; }
+.seg-row .seg-del {
+  padding: 0 8px;
   font-size: 12px;
   color: #dc2626;
-  flex-shrink: 0;
-  margin-left: auto;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
-@media (max-width: 480px) {
+
+/* 天序圆圈：比「第N天」文字省约 30px，窄屏下把宽度让给日期/时间控件 */
+.seg-badge {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #eef2ff;
+  color: #4338ca;
+  border: 1px solid #c7d2fe;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+  user-select: none;
+}
+.seg-arrow {
+  font-size: 13px;
+  color: #94a3b8;
+  text-align: center;
+}
+/* 极窄屏（<340px）才允许换行：标签+日期一行、时间一行，避免控件被压到不可用 */
+@media (max-width: 339px) {
   .seg-row {
-    margin-top: 8px;
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto;
   }
-  .seg-time-line .seg-txt {
-    display: none;
-  }
-  .seg-time-line .segStart,
-  .seg-time-line .segEnd {
-    flex: 1 1 0;
-    width: auto;
-    max-width: none;
-    min-width: 78px;
-    padding-right: 20px;
-  }
+  .seg-row .segDate { grid-column: 2 / -1; }
 }
 
 .btn {
@@ -1970,15 +1973,14 @@ select.input {
    施工人员、请假等轻量卡片按内容自适应，不在此列。 */
 @media (min-width: 769px) {
   #projectList.card-grid {
-    align-items: stretch;       /* 同行卡片等高，不再各按自身内容高度 */
+    align-items: stretch;       /* 桌面端：同一行卡片等高（拉齐到该行最高卡片） */
   }
   #projectList.card-grid .card {
     display: flex;
     flex-direction: column;
-    min-height: 300px;          /* 仍保留最小高度下限，防止极短内容卡过矮 */
   }
   #projectList.card-grid .card-actions {
-    margin-top: auto;           /* 按钮沉底：吸收上方剩余空间 */
+    margin-top: auto;           /* 等高拉伸下，内容不足时按钮仍贴底 */
   }
 }
 
@@ -2141,6 +2143,12 @@ select.input {
   align-items: flex-start;
 }
 .card-title__chips > * { flex-shrink: 0; }
+/* 照片标记：中性淡蓝，与异常类警示胶囊区分 */
+.badge.photos {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
 .card-title__chips .badge,
 .card-title__long-chips .badge {
   font-size: 11px;
@@ -2438,8 +2446,9 @@ select.input {
   margin-bottom: 8px;
   line-height: 1.5;
 }
-.card-sub__link { color: var(--info); text-decoration: none; }
-.card-sub__link:hover { text-decoration: underline; }
+.card-sub__link { color: var(--info); text-decoration: underline dotted; text-underline-offset: 2px; }
+.card-sub__link::before { content: "📞 "; opacity: 0.7; }
+.card-sub__link:hover { text-decoration: underline solid; }
 .card-sub__addr { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .card-highlight {
@@ -2566,6 +2575,18 @@ select.input {
   font-weight: 700;
   flex-shrink: 0;
   margin-top: 7px;
+}
+/* 施工内容块里的照片标记：中性淡蓝小图标，提示该项目有照片（点整块进施工管理查看） */
+.card-content--clickable .cc-photo {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 2px 5px;
+  margin-top: 4px;
 }
 
 /* 施工内容/注意事项只读展示块（施工管理页、进度跟踪展开详情等） */
@@ -2887,6 +2908,19 @@ select.input {
 }
 .card-repair-content__icon { flex-shrink: 0; }
 .card-repair-content__text { flex: 1; min-width: 0; }
+/* 维修单内容行里的照片标记：右侧中性淡蓝小图标（复用普通卡 .cc-photo 视觉） */
+.card-repair-content .cc-photo {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 2px 5px;
+  margin-left: auto;
+  align-self: center;
+}
 /* 维修单时间高亮：琥珀色版本，与普通卡片 card-highlight 对齐 */
 .card-highlight.card-highlight--repair {
   background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
@@ -3757,6 +3791,88 @@ textarea.input { resize: vertical; min-height: 50px; }
 @media (max-width: 480px) {
   .contract-grid { grid-template-columns: 1fr; gap: 8px; }
   .contract-grid .input { width: 100%; min-width: 0; }
+}
+
+/* 包活「工程金额」：标签与输入框同一行（2026-10-22，仅此一处用）。
+   .form-row label 默认 display:block 会让标签独占一行、这里改为 flex 同行：
+   标签固定不压缩（不换行），输入框吃掉剩余宽度。
+   刻意只给工程金额用——客户名称/联系电话/预约时间等仍保持标签独占一行（用户 2026-10-22 反馈
+   「压缩太过」，这些字段的标签独立成行更好认，不要扩大适用范围）。 */
+.contract-amount-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.contract-amount-row > label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.contract-amount-row > div {
+  flex: 1;
+  min-width: 0;
+}
+/* 输入框必须显式吃掉剩余宽度：.input 默认 width:100%，
+   但在 flex 兄弟节点（¥ 符号 span）存在时 100% 会溢出回缩，导致输入框被挤窄。
+   注意需与下方 @media 里的 `.contract-grid .input{width:100%}` 竞争，
+   故选择器加 .contract-grid 前缀提高权重（否则窄屏会被那条覆盖回窄）。 */
+.contract-grid .contract-amount-row > div > .input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+/* 预约时间「日期 + 开始 → 结束」严格一行（2026-10-22）。
+   原先用 flex + flex-wrap：三个控件的 flex 基准宽度合计超过窄屏容器 → 各自换行（用户反馈「又变成三行」）。
+   改用 Grid 定列，minmax(0,1fr) 压掉 input[type=date] / select 的浏览器原生最小宽度，
+   保证任何屏宽下都是一行。日期列给 1.6 权重（年月日期文字需要更多空间），两个时间列等分。 */
+.appt-time-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1.6fr) minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.appt-time-row > * { min-width: 0; }
+/* 显式定列：「第1天」标签与「次日」提示默认 display:none，
+   若不定列，隐藏后后面的元素会左移占错格（结束时间跑到箭头条）。 */
+.appt-time-row > .seg-badge { grid-column: 1; }
+.appt-time-row__date { grid-column: 2; }
+#pTime { grid-column: 3; }
+.appt-time-row__arrow { grid-column: 4; }
+#pEnd { grid-column: 5; }
+.appt-time-row__nextday { grid-column: 6; }
+/* 高度与 .seg-row 的跨天段统一，保证第一天与第2天起的行高/字号完全一致 */
+.appt-time-row .input {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  min-height: 40px;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.2;
+}
+.appt-time-row select.input { padding-right: 20px; }
+.appt-time-row input[type="date"].input { padding-right: 4px; }
+.appt-time-row__arrow {
+  font-size: 13px;
+  color: #94a3b8;
+  text-align: center;
+}
+.appt-time-row__nextday {
+  font-size: 11px;
+  color: #0891b2;
+  white-space: nowrap;
+}
+/* 极窄屏（<340px，如 iPhone SE 竖屏缩放）才允许换行，此时两列一行仍优于三行堆叠 */
+@media (max-width: 339px) {
+  .appt-time-row { grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto; }
+  .appt-time-row__date { grid-column: 1 / -1; }
+  .appt-time-row > .seg-label { grid-column: 1; }
+  #pTime { grid-column: 1; }
 }
 
 /* 完工弹窗：包活金额推导链（原 2×2 四格 info-grid，占四行高度）。

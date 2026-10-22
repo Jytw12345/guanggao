@@ -554,6 +554,15 @@ const perm = {
   ),
   editCommission: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COMMISSION)
     && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
+  /* 维修单收费用权限（perm.editContract 的变体，2026-10-22）。
+     与 editContract 的唯一区别：**不叠加 `!isReviewed(p)`**。
+     原因：维修单只存在于「原项目已完工/已验收/已审核」之后（保修期外上门），
+     若沿用 editContract 的一审封存判定，维修单收费按钮在维修单唯一可能存在的场景里
+     永远不显示 —— 即"已审核项目的维修单无法加收额外费用"。
+     封存的语义锁的是**原项目的钱**；维修单是封存之后新产生的独立收费项，金额与分成
+     单独计算并叠加，不影响原项目，故不受该封存约束。权限点与门店兜底口径完全沿用。 */
+  editRepairPay: (p) => can(CAP.PROJECT_EDIT_CONTRACT)
+    && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   // 成本扣项（材料/现场成本/外协工钱）独立权限点：与「工人分成」(editCommission) 分开控制。
   // 默认 manager/store_manager = true、worker = false；门店兜底同口径。
   editCostDeduction: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COST_DEDUCTION)
@@ -1670,20 +1679,18 @@ function onDateChange() {
 function segRowHtml(labelNo, date, start, end, disabled) {
   const uid = "s" + Math.random().toString(36).slice(2, 9);
   const dis = disabled ? "disabled" : "";
+  // 2026-10-22：改为单行 grid（日期 + 开始 → 结束 + 删除），与第一天的 .appt-time-row 观感一致。
+  // 原为两行 flex（日期行 / 时间行），跨天时第2天以下比第一天高一倍，视觉不齐。
+  // 天序标签改圆圈数字（第N天 → 圆圈N）：省出约 30px 宽度给日期/时间控件，
+  // 窄屏下日期与时间不再被压到截断（曾出现 "2026/10/"、"08:00" 只露一半）。
   return `
     <div class="seg-row" data-uid="${uid}">
-      <div class="seg-date-line">
-        <span class="seg-label">第${labelNo}天</span>
-        <input class="input segDate" type="date" value="${date || ""}" onchange="onStartTimeChange()" ${dis} />
-      </div>
-      <div class="seg-time-line">
-        <span class="seg-txt">开始</span>
-        <select class="input segStart" onchange="onStartTimeChange()" ${dis}>${generateTimeOptions(start)}</select>
-        <span class="seg-arrow">→</span>
-        <span class="seg-txt">结束</span>
-        <select class="input segEnd" onchange="onStartTimeChange()" ${dis}>${generateTimeOptions(end)}</select>
-        <button type="button" class="btn small seg-del" onclick="removeSegDay('${uid}')" ${dis}>✕</button>
-      </div>
+      <span class="seg-badge" title="第${labelNo}天">${labelNo}</span>
+      <input class="input segDate" type="date" value="${date || ""}" onchange="onStartTimeChange()" ${dis} />
+      <select class="input segStart" onchange="onStartTimeChange()" ${dis}>${generateTimeOptions(start)}</select>
+      <span class="seg-arrow">→</span>
+      <select class="input segEnd" onchange="onStartTimeChange()" ${dis}>${generateTimeOptions(end)}</select>
+      <button type="button" class="btn small seg-del" onclick="removeSegDay('${uid}')" ${dis} title="删除第${labelNo}天">✕</button>
     </div>`;
 }
 
@@ -2161,6 +2168,7 @@ function buildCardActualTimeline(p) {
       }, 0);
       const netHours = Math.max(0, wallHours - pauseHours);
       durationText = fmtDurationFromHours(netHours);
+      if (netHours > 0 && durationText === "0分钟") durationText = "不足1分钟";
       if (pauseHours > 0) {
         durationText += `（暂停 ${fmtDurationFromHours(pauseHours)}）`;
       }
@@ -7837,7 +7845,47 @@ function setPTimeRange(type) {
   }
 
   if (endDateEl) endDateEl.value = date;
+  // 跨天分段同步（2026-10-22）：快捷时长原本只改第一天的 pTime/pEnd，
+  // 加了「第二天」以后点快捷键对新增段完全无效（用户反馈）。
+  // 现在对每一段（含 segExtraList 里的第2天起）套用同一规则，
+  // twohour 以该段自己的开始时间为基准 +2 小时。
+  applySegTimeRows(type, setSelect);
   updateSpanHint();
+}
+
+/* 把快捷时长套用到所有跨天分段（第2天起）的 segStart/segEnd。
+   seg-row 内没有 id，故用容器 #segExtraList + class 选择器收集。
+   复用 setSelect（会 dispatch change），从而与第一天走完全相同的校验/联动路径；
+   分段数最多个位数，逐段重算 updateSpanHint 的开销可忽略。 */
+function applySegTimeRows(type, setSelect) {
+  const list = document.getElementById("segExtraList");
+  if (!list) return 0;
+  const rows = list.querySelectorAll(".seg-row");
+  rows.forEach((row) => {
+    const startEl = row.querySelector(".segStart");
+    const endEl = row.querySelector(".segEnd");
+    if (!startEl || !endEl) return;
+    if (type === "morning") {
+      setSelect(startEl, "08:00");
+      setSelect(endEl, "12:00");
+    } else if (type === "afternoon") {
+      setSelect(startEl, "13:00");
+      setSelect(endEl, "18:00");
+    } else if (type === "full") {
+      setSelect(startEl, "08:00");
+      setSelect(endEl, "18:00");
+    } else if (type === "twohour") {
+      const cur = startEl.value;
+      if (cur) {
+        const [h, m] = cur.split(":").map(Number);
+        setSelect(endEl, `${String((h + 2) % 24).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+      } else {
+        setSelect(startEl, "08:00");
+        setSelect(endEl, "10:00");
+      }
+    }
+  });
+  return rows.length;
 }
 
 function updatePTimeOptions() {
@@ -8192,6 +8240,32 @@ function normalizePhotos(p) {
   if (!Array.isArray(ph.completion)) ph.completion = [];
   if (p) p.projectPhotos = ph;
   return ph;
+}
+
+// 卡片原因条截断：超过 n 字显示「…」，完整内容放 title 供 hover 查看
+function truncReason(s, n = 20) {
+  if (!s) return "";
+  if (s.length <= n) return s;
+  return s.slice(0, n) + "…";
+}
+
+// 项目照片总数（卡片📷标记用）：施工4组 + 维修单问题/修复照 + 验收照，只统计有 key 的有效项
+function projectPhotoCount(p) {
+  if (!p) return 0;
+  let n = 0;
+  const ph = p.projectPhotos || p.project_photos;
+  if (ph && typeof ph === "object") {
+    ["plan", "material", "site", "completion"].forEach((k) => {
+      if (Array.isArray(ph[k])) n += ph[k].filter((x) => x && x.key).length;
+    });
+  }
+  (p.repairOrders || []).forEach((ro) => {
+    if (!ro) return;
+    if (Array.isArray(ro.issuePhotos)) n += ro.issuePhotos.filter((x) => x && x.key).length;
+    if (Array.isArray(ro.fixedPhotos)) n += ro.fixedPhotos.filter((x) => x && x.key).length;
+  });
+  if (p.acceptance && Array.isArray(p.acceptance.photos)) n += p.acceptance.photos.filter((x) => x && x.key).length;
+  return n;
 }
 
 // 私有桶：按 key 缓存签名下载 URL（避免每张图重复请求），并缓存 host 供离线 fallback
@@ -9585,6 +9659,9 @@ function virtualRepairCardHtml(p) {
   const pad = (n) => String(n).padStart(2, "0");
   const dateStr = aptDate ? `${aptDate.getFullYear()}-${pad(aptDate.getMonth() + 1)}-${pad(aptDate.getDate())}` : "—";
   const timeStr = aptDate ? `${pad(aptDate.getHours())}:${pad(aptDate.getMinutes())}` : "—";
+  const _now = new Date();
+  const isRepairOverdue = !!(aptDate && aptDate < _now);
+  const repairOverdueDays = isRepairOverdue ? Math.max(1, Math.ceil((_now - aptDate) / 86400000)) : 0;
   const _a = Number(p.projectAmount) || 0;
   const _t = p.contractType || "包工";
   const _m = Number(p.materialFee) || 0;
@@ -9598,11 +9675,12 @@ function virtualRepairCardHtml(p) {
           ${_pool > 0 ? `<span class="card-contract__pool"><i>分成池</i><b>¥${_pool.toFixed(0)}</b></span>` : ""}
         </div>` : "";
   return `
-      <div class="card card-repair" data-status="待维修" data-id="${esc(p.id)}" data-repair-of="${esc(p._repairOf)}">
+      <div class="card card-repair${isRepairOverdue ? " card-overdue" : ""}" data-status="待维修" data-id="${esc(p.id)}" data-repair-of="${esc(p._repairOf)}">
         <div class="card-status-bar"></div>
         <div class="card-title card-title--with-status">
           <div class="card-title__right">
             <div class="card-title__chips">
+              ${isRepairOverdue ? `<span class="badge overdue">🔴 超期${repairOverdueDays}天</span>` : ""}
               <span class="badge repair card-title__status">🔧 待维修</span>
             </div>
           </div>
@@ -9613,10 +9691,16 @@ function virtualRepairCardHtml(p) {
           <span class="card-meta__sep">·</span>
           <span class="card-meta__item">${esc(p.customer || "—")}</span>
         </div>
+        ${p.phone || p.address ? `
+        <div class="card-sub">
+          ${p.phone ? `<a href="javascript:void(0)" data-tel="${esc(p.phone)}" class="card-sub__link" onclick="callPhone(event)">${esc(p.phone)}</a>` : ""}
+          ${p.address ? `<span class="card-sub__addr">${esc(p.address)}</span>` : ""}
+        </div>` : ""}
         ${ro.items ? `
         <div class="card-repair-content">
           <span class="card-repair-content__icon">🔧</span>
           <span class="card-repair-content__text">${esc(ro.items)}</span>
+          ${projectPhotoCount(p) > 0 ? `<span class="cc-photo" title="该维修单已有照片，进施工管理查看">📷</span>` : ""}
         </div>` : ""}
         <div class="card-highlight card-highlight--repair">
           <span class="card-highlight__icon">🕐</span>
@@ -9633,6 +9717,9 @@ function virtualRepairCardHtml(p) {
         ${contractHtml}
         <div class="card-actions">
           <button class="btn small" onclick="event.stopPropagation();gotoConstruction('${esc(p._repairOf)}')">查看原单</button>
+          ${perm.createRepair() ? `<button class="btn small" onclick="event.stopPropagation();openRepairReschedule('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">${svgCal(13)} 改期</button>` : ""}
+          ${perm.createRepair() ? `<button class="btn small" onclick="event.stopPropagation();openRepairAssign('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">👷 改派</button>` : ""}
+          ${(() => { const rp = getProject(p._repairOf); return (rp && perm.editRepairPay(rp)) ? `<button class="btn small" onclick="event.stopPropagation();openRepairPayEdit('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">💰 收费</button>` : ""; })()}
           <button class="btn small primary" onclick="event.stopPropagation();completeRepair('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">完成维修</button>
         </div>
       </div>`;
@@ -9685,8 +9772,8 @@ function renderProjects() {
     if (virtualRepairCards.length) {
       items = items.concat(virtualRepairCards);
       items.sort((a, b) => {
-        const wa = a.isVirtualRepair ? 1 : attentionLevel(a);
-        const wb = b.isVirtualRepair ? 1 : attentionLevel(b);
+        const vw = (p) => p.isVirtualRepair ? (new Date(p.appointmentTime) < new Date() ? 2 : 1) : attentionLevel(p);
+        const wa = vw(a), wb = vw(b);
         if (wa !== wb) return wb - wa;
         return new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0);
       });
@@ -9879,8 +9966,8 @@ function renderProjects() {
         </div>
 
         <!-- 暂停/延期/取消原因（次数与原因合并一行） -->
-        ${p.pauseReason ? (() => { const tooLong = pausedTooLongTimeHtml(p); return `<div class="card-reason paused"><span class="card-reason__count">⏸ 暂停${pauseCount}次</span><span class="card-reason__sep">·</span><span>暂停原因：${esc(p.pauseReason)}</span>${p.pausedAt ? `<span class="card-reason__sep">·</span><small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${tooLong ? `<span class="card-reason__sep">·</span>${tooLong}` : ""}</div>`; })() : ""}
-        ${p.delayReason ? `<div class="card-reason delayed"><span class="card-reason__count">🕒 延期${delayCount}次</span><span class="card-reason__sep">·</span><span>延期原因：${esc(p.delayReason)}</span></div>` : ""}
+        ${p.pauseReason ? (() => { const tooLong = pausedTooLongTimeHtml(p); const long = p.pauseReason.length > 20; return `<div class="card-reason paused"><span class="card-reason__count">⏸ 暂停${pauseCount}次</span><span class="card-reason__sep">·</span><span title="${long ? esc(p.pauseReason) : ""}">暂停原因：${esc(truncReason(p.pauseReason))}</span>${p.pausedAt ? `<span class="card-reason__sep">·</span><small class="card-reason__time">暂停于 ${esc(fmtDateTime(p.pausedAt))}</small>` : ""}${tooLong ? `<span class="card-reason__sep">·</span>${tooLong}` : ""}</div>`; })() : ""}
+        ${p.delayReason ? (() => { const long = p.delayReason.length > 20; return `<div class="card-reason delayed"><span class="card-reason__count">🕒 延期${delayCount}次</span><span class="card-reason__sep">·</span><span title="${long ? esc(p.delayReason) : ""}">延期原因：${esc(truncReason(p.delayReason))}</span></div>`; })() : ""}
         ${p.status === STATUS.CANCELLED && p.cancelReason ? `<div class="card-reason cancelled">✕ 取消原因：${esc(p.cancelReason)}</div>` : ""}
 
         <!-- 摘要行：门店 / 客户 -->
@@ -9917,7 +10004,6 @@ function renderProjects() {
             : `<span class="card-contract__unfilled">未填金额</span>`}
           ${_a > 0 && _m > 0 ? `<span class="card-contract__mat"><i>${_t === "包工包料" ? "材料" : "扣项"}</i><b>−¥${_m.toFixed(0)}</b>${_mn ? `<em class="card-contract__mat-note">${esc(_mn)}</em>` : ""}</span>` : ""}
           ${_pool > 0 ? `<span class="card-contract__pool"><i>分成池</i><b>¥${_pool.toFixed(0)}</b></span>` : ""}
-          ${canEditContract ? `<span class="card-contract__edit">✏️ 改金额</span>` : ""}
         </div>`;
         })()}
 
@@ -9971,6 +10057,7 @@ function renderProjects() {
           <div class="cc-chips">
             ${hasWC ? p.workContent.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("") : ""}
             ${notePreview ? `<span class="cc-note">💬 ${esc(notePreview)}</span>` : ""}
+            ${projectPhotoCount(p) > 0 ? `<span class="cc-photo" title="该项目已有照片，进施工管理查看">📷</span>` : ""}
           </div>
           <span class="cc-arrow">›</span>
         </div>`;
@@ -9982,7 +10069,7 @@ function renderProjects() {
           </div>
         ` : ""}
 
-        <!-- 进度条（包活制：按状态，不按工时） -->
+        ${(() => { const pg = cardStatusProgress(p); if (pg <= 0) return ""; return `
         <div class="card-progress">
           <div class="card-progress__bar-wrap">
             <div class="card-progress__bar${p.status === STATUS.WORKING ? ' is-active' : ''}" style="width:${Math.min(100, cardStatusProgress(p))}%;background:${(() => {
@@ -9994,8 +10081,8 @@ function renderProjects() {
               return '#3b82f6';
             })()};"></div>
           </div>
-          <span class="card-progress__pct">${Math.round(cardStatusProgress(p))}%</span>
-        </div>
+          <span class="card-progress__pct">${Math.round(pg)}%</span>
+        </div>`; })()}
 
         <!-- 时间节点：仅在有值时显示。卡片底部只保留关键时间点单行摘要（开工/本次施工/完工），逐段与历史明细见「施工记录」弹窗 -->
         ${(p.startedAt || p.finishedAt) ? `
@@ -10210,11 +10297,14 @@ function projectForm(p = {}, opts = {}) {
         <label class="radio-inline"><input type="radio" name="contractType" value="包工包料" ${p.contractType === "包工包料" ? "checked" : ""} onchange="onContractTypeChange()" ${contractDisabled ? "disabled" : ""}> 包工包料</label>
       </div>
       <div class="form-grid contract-grid">
-        <div class="form-row" style="margin:0;">
+        <!-- 2026-10-22：标签与输入框合并为一行（原来标签独占一行，窄屏浪费高度）。
+             桌面端包活方式与金额同排更紧凑；窄屏（≤480px）contract-grid 变单列，
+             金额标签仍与输入框同行（标签固定宽度，剩余空间给输入框）。 -->
+        <div class="form-row contract-amount-row" style="margin:0;">
           <label><span style="color:#16a34a;">💵</span> 工程金额 *</label>
           <div style="display:flex;align-items:center;gap:6px;min-width:0;">
             <span style="color:#64748b;flex-shrink:0;">¥</span>
-            <input class="input" type="number" min="0" step="0.01" id="pProjectAmount" value="${esc(p.projectAmount != null ? p.projectAmount : "")}" placeholder="客户应付总额" oninput="updateContractCalc()" ${contractDisabled ? "disabled" : ""} />
+            <input class="input" type="number" min="0" step="0.01" id="pProjectAmount" value="${esc(p.projectAmount != null ? p.projectAmount : "")}" placeholder="应付总金额" oninput="updateContractCalc()" ${contractDisabled ? "disabled" : ""} />
           </div>
         </div>
         <div class="form-row" id="pMaterialFeeRow" style="grid-column:1/-1;margin:0;${hideCostAtBooking ? "display:none;" : ""}">
@@ -10222,30 +10312,31 @@ function projectForm(p = {}, opts = {}) {
           <div id="pfCostDeductions"></div>
         </div>
       </div>
-      <div id="pContractCalc" style="margin-top:8px;font-size:13px;color:#166534;line-height:1.7;">
-        <span>工费：<b id="pLaborFeeTxt">—</b></span> · <span>工人分成池（工费÷2）：<b id="pPoolTxt">—</b></span>
-        <span id="pContractNote" style="color:#64748b;font-size:12px;margin-left:6px;"></span>
-      </div>
+      <!-- 工费/工人分成池提示：2026-10-22 起在预约表单整行隐藏。
+           原因：预约阶段成本扣项通常还没填全（外协费用是派单时才由
+           ensureOutsourcedCostLine 联动生成），此时算出的工费与分成池是「虚值」，
+           与完工/审核后的最终值不一致，容易误导。
+           准确值请看「✏️改金额」弹窗（money-chain 面板）与项目详情页费用管理。 -->
+      <div id="pContractCalc" style="display:none;"></div>
     </div>
     <div class="form-row">
       <label><span style="color:var(--warn)">${svgCal(14)}</span> 预约时间 *</label>
-      <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
-        <div style="display:flex;align-items:center;gap:6px;width:100%;">
-          ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-label" id="segFirstDayLabel">第1天</span>' : '<span class="seg-label" id="segFirstDayLabel" style="display:none;">第1天</span>'}
-          <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" style="flex:1;" ${apptDisabled ? "disabled" : ""} />
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;width:100%;">
-          <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
-          <select class="input" id="pTime" onchange="onStartTimeChange()" style="flex:1;max-width:90px;" ${apptDisabled ? "disabled" : ""}>
-            ${generateTimeOptions(p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '08:00')}
-          </select>
-          <span style="font-size:14px;color:#94a3b8;flex-shrink:0;">→</span>
-          <span style="font-size:11px;color:#64748b;flex-shrink:0;">结束</span>
-          <select class="input" id="pEnd" onchange="onStartTimeChange()" style="flex:1;max-width:90px;" ${apptDisabled ? "disabled" : ""}>
-            ${generateTimeOptions(p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '10:00')}
-          </select>
-          <span id="pEndNextDayHint" style="display:none;font-size:11px;color:#0891b2;flex-shrink:0;margin-left:4px;">(次日)</span>
-        </div>
+      <!-- 2026-10-22：日期 + 开始 → 结束合并为**严格一行**。
+           原先用 flex + flex-wrap，窄屏下 flex 基准宽度合计超过容器 → 三个控件各占一行（用户反馈）。
+           改用 CSS Grid 定列：日期列可拉伸、两个时间列等分、箭头列自适应，
+           配合 minmax(0,1fr) 压掉 date/select 的浏览器原生最小宽度，保证不换行。
+           跨天场景（第1天 标签 / 次日 提示）作为定宽列插在两侧，同样不挤占可用宽度。 -->
+      <div class="appt-time-row">
+        ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-badge" id="segFirstDayLabel" title="第1天">1</span>' : '<span class="seg-badge" id="segFirstDayLabel" style="display:none;" title="第1天">1</span>'}
+        <input class="input appt-time-row__date" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" ${apptDisabled ? "disabled" : ""} />
+        <select class="input appt-time-row__time" id="pTime" onchange="onStartTimeChange()" title="开始时间" ${apptDisabled ? "disabled" : ""}>
+          ${generateTimeOptions(p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '08:00')}
+        </select>
+        <span class="appt-time-row__arrow">→</span>
+        <select class="input appt-time-row__time" id="pEnd" onchange="onStartTimeChange()" title="结束时间" ${apptDisabled ? "disabled" : ""}>
+          ${generateTimeOptions(p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '10:00')}
+        </select>
+        <span id="pEndNextDayHint" class="appt-time-row__nextday" style="display:none;">次日</span>
       </div>
     </div>
     <div id="segExtraList">
@@ -10310,7 +10401,11 @@ function onContractTypeChange() {
   updateContractCalc();
 }
 
-/* 实时计算工费与工人分成池（工费÷2），写入表单提示 */
+/* 实时计算工费与工人分成池（工费÷2），写入表单提示。
+   2026-10-22 起预约表单已整行隐藏该提示（#pContractCalc display:none），
+   下列三个元素不再渲染 → 本函数首行守卫会直接 return，属预期行为。
+   保留函数名与调用点（oninput / window.onCDChange_pf），避免改动表单契约。
+   准确的工费与分成池请看「✏️改金额」弹窗与项目详情页费用管理。 */
 function updateContractCalc() {
   const amtEl = document.getElementById("pProjectAmount");
   const laborTxt = document.getElementById("pLaborFeeTxt");
@@ -11242,7 +11337,7 @@ function quickEditProjectTimeForm(p = {}) {
     <div class="form-row">
       <label><span style="color:var(--warn)">${svgCal(14)}</span> 施工日期</label>
       <div style="display:flex;align-items:center;gap:6px;width:100%;">
-        ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-label" id="segFirstDayLabel">第1天</span>' : '<span class="seg-label" id="segFirstDayLabel" style="display:none;">第1天</span>'}
+        ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-badge" id="segFirstDayLabel" title="第1天">1</span>' : '<span class="seg-badge" id="segFirstDayLabel" style="display:none;" title="第1天">1</span>'}
         <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" min="${todayStr()}" onchange="onDateChange()" style="flex:1;" />
       </div>
     </div>
@@ -12156,6 +12251,201 @@ async function submitRepairReschedule(projectId, repairId) {
   repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("维修改期后台同步失败：", e));
 }
 
+/* 改派维修人员：建单后重新指定维修单的施工人员（写 ro.assignedWorkerIds）。
+   场景：建维修单时勾选的人临时调不开/换人，需要在完工前换人。
+   权限：与「改期维修」一致走 perm.createRepair()。
+   冲突检测：复用改期的 checkWorkerAvailability（请假/日程/其他项目时段重叠）。 */
+function openRepairAssign(projectId, repairId) {
+  if (!perm.createRepair()) { toast("无权限改派维修人员"); return; }
+  const p = getProject(projectId);
+  if (!p || !p.repairOrders) { toast("维修单不存在"); return; }
+  const ro = p.repairOrders.find(r => r.id === repairId);
+  if (!ro) { toast("维修单不存在"); return; }
+  if (ro.status !== "待维修") { toast("该维修单已完成，无法改派人员"); return; }
+  const cur = Array.isArray(ro.assignedWorkerIds) ? ro.assignedWorkerIds.slice() : [];
+  // 可选人员：全部内部工人（维修单可独立于原项目派人），排除已删除的
+  const workers = (cache.workers || []).filter(w => w && w.id);
+  if (!workers.length) { toast("暂无施工人员"); return; }
+  // 兜底：已派但不在工人表里的历史人员也要列出来（否则保存时被静默清空，需用户显式取消勾选）
+  const missing = cur.filter(wid => !workers.some(w => w.id === wid));
+  // 用 data-wid 承载原始 id（不塞进 id 属性：CSV 导入的历史 id 可能含特殊字符，破坏 HTML 结构）
+  const rows = workers.map(w => `
+    <div class="form-row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <input type="checkbox" class="ra-cb" data-wid="${esc(w.id)}" ${cur.includes(w.id) ? "checked" : ""} style="width:18px;height:18px;flex:0 0 auto;">
+      <span style="flex:1;min-width:0;">${esc(w.name)}</span>
+      ${cur.includes(w.id) ? '<span style="font-size:11px;color:#16a34a;flex:0 0 auto;">当前</span>' : ""}
+    </div>`).join("") + missing.map(wid => `
+    <div class="form-row" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <input type="checkbox" class="ra-cb" data-wid="${esc(wid)}" checked style="width:18px;height:18px;flex:0 0 auto;">
+      <span style="flex:1;min-width:0;color:#6b7280;">${esc((getWorker(wid) || {}).name || wid)}（已不在人员名单）</span>
+      <span style="font-size:11px;color:#16a34a;flex:0 0 auto;">当前</span>
+    </div>`).join("");
+  const form = `
+    <div class="repair-form">
+      <div class="form-row"><label>维修单</label><div style="font-weight:600;color:#f59e0b;">${esc(ro.items || "—")}</div></div>
+      <div class="form-row"><label>预约维修时间</label><div>${ro.appointmentTime ? fmtDateTime(ro.appointmentTime) : "—"}</div></div>
+      <div class="form-row">
+        <label>指定维修人员（可多选）</label>
+        <div id="repairAssignBody" style="max-height:46vh;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px;">
+          ${rows}
+        </div>
+        <small class="hint" style="display:block;margin-top:4px;">不勾选任何人 = 完成维修时再指定参与人（工钱按实际参与人分配）。</small>
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="modal.close()">取消</button>
+        <button class="btn primary" onclick="submitRepairAssign('${projectId}','${repairId}')">保存改派</button>
+      </div>
+    </div>`;
+  modal.open("改派维修人员", form, { titleHtml: "👷 改派维修人员" });
+}
+
+async function submitRepairAssign(projectId, repairId) {
+  if (!perm.createRepair()) { toast("无权限改派维修人员"); return; }
+  const p = getProject(projectId);
+  if (!p || !p.repairOrders) { toast("维修单不存在"); return; }
+  const idx = p.repairOrders.findIndex(r => r.id === repairId);
+  if (idx < 0) { toast("维修单不存在"); return; }
+  const cur = p.repairOrders[idx];
+  if (cur.status !== "待维修") { toast("该维修单已完成，无法改派人员"); return; }
+  const next = [];
+  document.querySelectorAll("#repairAssignBody .ra-cb").forEach(cb => {
+    if (cb.checked && cb.dataset.wid) next.push(cb.dataset.wid);
+  });
+  // 冲突检测：按维修单的预约时段判断所选人员是否已有安排
+  if (next.length && cur.appointmentTime) {
+    const d = new Date(cur.appointmentTime);
+    const date = dateKey(d);
+    const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const rEnd = new Date(cur.appointmentTime);
+    rEnd.setMinutes(rEnd.getMinutes() + ((cur.estimatedHours > 0 ? cur.estimatedHours : 2) * 60));
+    const rEndHM = `${String(rEnd.getHours()).padStart(2, "0")}:${String(rEnd.getMinutes()).padStart(2, "0")}`;
+    const busy = next.map(wid => {
+      const c = checkWorkerAvailability(wid, date, time, rEndHM);
+      return (c.leave || c.schedule || c.project) ? { wid, name: (getWorker(wid) || {}).name || wid, c } : null;
+    }).filter(Boolean);
+    if (busy.length) {
+      if (!(await confirmDialog(`以下人员在维修时段已有安排冲突：<br>${describeWorkerConflicts(busy)}<br><br>仍要改派吗？`, "维修人员冲突"))) return;
+    }
+  }
+  const ro = { ...cur, assignedWorkerIds: next };
+  const repairOrders = p.repairOrders.slice();
+  repairOrders[idx] = ro;
+  const saved = await repo.patchProject(projectId, { repairOrders });
+  if (saved === false) { toast("⚠️ 保存失败，请刷新后重试"); return; }  // 版本冲突已由 patchProject 内部提示并 loadAll
+  const p2 = getProject(projectId);
+  if (p2) p2.repairOrders = repairOrders;
+  modal.close();
+  gotoConstruction(projectId);
+  toast(next.length ? `已改派 ${next.length} 名维修人员` : "已清空维修人员（完成时再指定）");
+  repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("维修改派后台同步失败：", e));
+}
+
+/* 改维修单收费（免费 ⇄ 付费）：维修单发起时收费方式选错、或事后才发现要收费
+   （如人为损坏、人为原因需收费），需要能改 payType / 包活方式 / 工程金额 / 成本扣项。
+   权限：收费属「包活金额」范畴 → 走 perm.editContract(p)（与项目费用管理同一把锁）。
+   已完成的维修单也允许改：此时 commissionAlloc（已均分给工人的钱）会按新池重算，
+   改前用确认框提示差额，避免提成统计与实际已发金额静默不一致。
+   刻意不做的：不改已分配的人员名单（那是「改派」的事）。 */
+function openRepairPayEdit(projectId, repairId) {
+  const p = getProject(projectId);
+  if (!p) { toast("项目不存在"); return; }
+  if (!perm.editRepairPay(p)) { toast("无权限修改维修单收费（需「包活金额」权限）"); return; }
+  const ro = (p.repairOrders || []).find(r => r.id === repairId);
+  if (!ro) { toast("维修单不存在"); return; }
+  const legacyPaid = ro.payType == null && ro.payable === true;
+  const form = `
+    <div class="repair-form">
+      <div class="form-row"><label>维修单</label><div style="font-weight:600;color:#f59e0b;">${esc(ro.items || "—")}</div></div>
+      <div class="form-row"><label>预约维修时间</label><div>${ro.appointmentTime ? fmtDateTime(ro.appointmentTime) : "—"}</div></div>
+      <div class="form-row"><label>维修人员</label><div>${esc((ro.assignedWorkerIds || []).map(wid => (getWorker(wid) || {}).name || wid).join("、") || "—")}</div></div>
+      <div class="form-row" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12px;color:#1e40af;line-height:1.6;">
+        ℹ️ 这里改的是<strong>本维修单自己的收费</strong>（保修期内额外收费项目），<strong>不改动原项目的费用与分成</strong>。原项目金额 ¥${(Number(p.projectAmount) || 0).toFixed(2)} 保持不变。
+      </div>
+      ${repairPayBlockHtml("rx", {
+        payType: (ro.payType === "paid" || legacyPaid) ? "paid" : "free",
+        contractType: ro.contractType || "包工",
+        projectAmount: ro.projectAmount || "",
+        title: "本维修单收费",
+        freeLabel: "免费维修",
+        paidLabel: "额外收费",
+        freeHint: "免费维修：¥0，工时仅作考勤记录，工人无包活分成",
+      })}
+      <div class="form-actions">
+        <button class="btn" onclick="modal.close()">取消</button>
+        <button class="btn primary" onclick="submitRepairPayEdit('${projectId}','${repairId}')">保存收费</button>
+      </div>
+    </div>`;
+  modal.open("修改维修单收费", form, { titleHtml: "💰 修改维修单收费" });
+  // 扣项编辑器 + 联动：prefix=rx（维修发起用 rp、快速编辑用 rw，此处独立避免 id 冲突）
+  setTimeout(() => {
+    renderCostDeductionEditor("rx", getCostDeductions(ro));
+    window.onCDChange_rx = () => updateRepairContractCalc("rx");
+  }, 0);
+}
+
+async function submitRepairPayEdit(projectId, repairId) {
+  const p = getProject(projectId);
+  if (!p) { toast("项目不存在"); return; }
+  if (!perm.editRepairPay(p)) { toast("无权限修改维修单收费"); return; }
+  const idx = (p.repairOrders || []).findIndex(r => r.id === repairId);
+  if (idx < 0) { toast("维修单不存在"); return; }
+  const cur = p.repairOrders[idx];
+  const pay = readRepairPayBlock("rx");
+  if (pay.payType === "paid" && pay.projectAmount <= 0) { toast("收费维修请填写工程金额"); return; }
+
+  // 免费 ⇄ 付费 是最容易出误会的一档：原本免费保修的单突然开始跟客户收钱，先说清楚
+  const legacyPaid = cur.payType == null && cur.payable === true;
+  const wasPaid = (cur.payType === "paid" || legacyPaid);
+  if (wasPaid !== (pay.payType === "paid")) {
+    const to = pay.payType === "paid"
+      ? `额外收费 ¥${pay.projectAmount.toFixed(2)}（其中工人分成池 ¥${pay.pool.toFixed(2)}）`
+      : "免费维修（工人无分成）";
+    const ok = await confirmDialog(
+      `确定要把<strong>本维修单</strong>从「${wasPaid ? "收费" : "免费"}」改为「${to}」吗？<br><br>` +
+      `这是保修期外的<strong>额外收费项目</strong>，只加在本维修单上；<br>原项目费用 ¥${(Number(p.projectAmount) || 0).toFixed(2)} 与已分配的分成<strong>不受影响</strong>。`,
+      "确认改收费");
+    if (!ok) return;
+  }
+  // 已完成单：commissionAlloc 是完工时按旧池均分落库的，改池必须重算，否则提成统计与实发不一致
+  let commissionAlloc = cur.commissionAlloc;
+  const isDone = cur.status === "已完成";
+  if (isDone) {
+    const ids = (cur.commissionAlloc || []).map(a => a.workerId).filter(Boolean);
+    commissionAlloc = (pay.payType === "paid" && pay.pool > 0 && ids.length)
+      ? splitCommissionEvenly(pay.pool, ids, (id) => (getWorker(id) || {}).name || id)
+      : [];
+    const before = (cur.commissionAlloc || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    const after = commissionAlloc.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+    if (Math.abs(before - after) > 0.005) {
+      if (!(await confirmDialog(`该维修单<b>已完成</b>，工钱分成已按旧金额落库：<br>原分成合计 ¥${before.toFixed(2)} → 新分成合计 ¥${after.toFixed(2)}<br><br>确认按新金额重算参与维修人员的分成吗？（提成统计会同步变化）`, "重算已完成单分成"))) return;
+    }
+  }
+
+  const ro = {
+    ...cur,
+    payType: pay.payType,
+    contractType: pay.payType === "paid" ? pay.contractType : "包工",
+    projectAmount: pay.payType === "paid" ? pay.projectAmount : 0,
+    materialFee: pay.materialFee,
+    materialFeeNote: pay.materialFeeNote || "",
+    costDeductions: pay.costDeductions || [],
+    laborFee: pay.laborFee,
+    commissionPool: pay.pool,
+    payable: pay.payType === "paid", // 兼容旧字段
+    commissionAlloc,
+  };
+  const repairOrders = p.repairOrders.slice();
+  repairOrders[idx] = ro;
+  const saved = await repo.patchProject(projectId, { repairOrders });
+  if (saved === false) { toast("⚠️ 保存失败，请刷新后重试"); return; }  // 版本冲突已由 patchProject 内部提示并 loadAll
+  const p2 = getProject(projectId);
+  if (p2) p2.repairOrders = repairOrders;
+  modal.close();
+  gotoConstruction(projectId);
+  toast(pay.payType === "paid" ? `本维修单已加收 ¥${pay.projectAmount.toFixed(2)}（原项目费用不变）` : "本维修单已改回免费维修");
+  repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("维修改收费后台同步失败：", e));
+}
+
 /* 删除维修单 */
 async function deleteRepairOrder(projectId, repairId) {
   if (!perm.createRepair()) { toast("无权限删除维修单"); return; }
@@ -12625,10 +12915,14 @@ function repairPayBlockHtml(prefix, state) {
             <div id="${prefix}CostDeductions"></div>
           </div>
         </div>
-        <div id="${prefix}PayCalc" style="margin-top:8px;font-size:13px;color:#166534;line-height:1.7;">
-          <span>工费：<b id="${prefix}LaborFeeTxt">—</b></span> · <span>工人分成池（工费÷2）：<b id="${prefix}PoolTxt">—</b></span>
-          <span id="${prefix}PayNote" style="color:#64748b;font-size:12px;margin-left:6px;"></span>
-        </div>
+        <!-- 工费/工人分成池提示：2026-10-22 起与预约表单口径统一，整行隐藏。
+             维修/返工发起时成本扣项通常还没填全（外协费用是派单时才由
+             ensureOutsourcedCostLine 联动生成），此时算出的工费与分成池是「虚值」，
+             与完工/审核后的最终值不一致，容易误导。
+             准确值请看项目详情页「费用管理」与「✏️改金额」弹窗。
+             注意：readRepairPayBlock() 独立按「工程金额 − 成本扣项」计算并落库，
+             不依赖本提示元素，隐藏不影响保存值。 -->
+        <div id="${prefix}PayCalc" style="display:none;"></div>
       </div>
       <div id="${prefix}FreeHint" style="${paid ? "display:none;" : ""}font-size:12px;color:#64748b;">${esc(freeHint)}</div>
     </div>`;
@@ -12729,8 +13023,8 @@ function repairPaySummaryHtml(ro) {
   const labor = Number(ro.laborFee) || 0;
   const pool = Number(ro.commissionPool) || 0;
   const alloc = Array.isArray(ro.commissionAlloc) ? ro.commissionAlloc : [];
-  return `<div class="info-item"><div class="k">收费方式</div><div class="v" style="color:#16a34a;font-weight:600;">💵 付费维修 · ${esc(ro.contractType || "包工")}</div></div>
-    <div class="info-item"><div class="k">工程金额</div><div class="v">¥${amt.toFixed(2)}</div></div>
+  return `<div class="info-item"><div class="k">本单收费</div><div class="v" style="color:#16a34a;font-weight:600;">💵 额外收费 · ${esc(ro.contractType || "包工")}</div></div>
+    <div class="info-item"><div class="k">本单金额</div><div class="v">¥${amt.toFixed(2)}</div></div>
     <div class="info-item"><div class="k">工费</div><div class="v">¥${labor.toFixed(2)}</div></div>
     <div class="info-item"><div class="k">工人分成池</div><div class="v">¥${pool.toFixed(2)}${alloc.length ? `（${alloc.length} 人均分）` : ""}</div></div>${ro.materialFeeNote ? `<div class="info-item"><div class="k">扣项说明</div><div class="v">${esc(ro.materialFeeNote)}</div></div>` : ""}`;
 }
@@ -13653,6 +13947,7 @@ function renderConstruction() {
     ${(p.repairOrders && p.repairOrders.length) ? `
     <div class="detail-block" style="border-left:4px solid #f59e0b">
       <h3>🔧 维修单（共 ${(p.repairOrders || []).length} 单）</h3>
+      <div class="hint" style="margin:-4px 0 10px;">维修单为独立的额外收费项目：各维修单的金额与分成<strong>单独计算并叠加</strong>，与上方原项目的费用、已分配分成互不影响。</div>
       ${(p.repairOrders || []).map((ro) => `
         <div class="repair-order-item" style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px;">
           ${(() => {
@@ -13680,7 +13975,13 @@ function renderConstruction() {
           <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
             ${perm.completeRepair() ? `<button class="btn small success" onclick="completeRepair('${p.id}','${ro.id}')">✅ 完成</button>` : ""}
             ${perm.createRepair() ? `<button class="btn small" onclick="openRepairReschedule('${p.id}','${ro.id}')">${svgCal(13)} 改期</button>` : ""}
+            ${perm.createRepair() ? `<button class="btn small" onclick="openRepairAssign('${p.id}','${ro.id}')">👷 改派</button>` : ""}
+            ${perm.editRepairPay(p) ? `<button class="btn small" onclick="openRepairPayEdit('${p.id}','${ro.id}')">💰 收费</button>` : ""}
             ${perm.createRepair() ? `<button class="btn small danger" onclick="deleteRepairOrder('${p.id}','${ro.id}')">🗑 删除</button>` : ""}
+          </div>` : ""}
+          ${ro.status !== "待维修" && perm.editRepairPay(p) ? `
+          <div class="card-actions" style="margin-top:8px;">
+            <button class="btn small" onclick="openRepairPayEdit('${p.id}','${ro.id}')">💰 收费</button>
           </div>` : ""}
         </div>
       `).join("")}
@@ -28740,7 +29041,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2de9848c";
+  const APP_VERSION = "vc933f7c7";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
