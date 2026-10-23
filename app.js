@@ -1264,12 +1264,18 @@ function generateTimeOptions(selectedValue = "08:00", minTime = null) {
   /* 选中值若不在 10 分钟刻度中（如历史数据 09:35），补一项以免被重置为 00:00 */
   if (selectedValue && !all.includes(selectedValue)) all.push(selectedValue);
   all.sort();
+  /* 2026-10-23：显示文字去掉小时前导零（08:00 → 8:00，10:00 不变）。
+     窄屏（360~390px）预约时间一行要塞 圆圈+日期+开始+箭头+结束(+删除)，
+     每个时间控件省约 7px，两处就是 14px —— 这是把「08:00」从被截成「0…」救回来的关键一刀。
+     **value 仍是 "HH:MM"**：onStartTimeChange/readAllSegments 存库、比对、快捷时长赋值
+     全部照旧，只有眼睛看到的文字变短，不影响任何存储与逻辑。 */
+  const timeLabel = (t) => t.replace(/^0(?=\d)/, "");
   for (const time of all) {
     /* 有最小时间限制时，更早的选项禁用 */
     if (minTime && time < minTime) {
-      options.push(`<option value="${time}" disabled style="color:#ccc;">${time}</option>`);
+      options.push(`<option value="${time}" disabled style="color:#ccc;">${timeLabel(time)}</option>`);
     } else {
-      options.push(`<option value="${time}"${time === selectedValue ? " selected" : ""}>${time}</option>`);
+      options.push(`<option value="${time}"${time === selectedValue ? " selected" : ""}>${timeLabel(time)}</option>`);
     }
   }
   return options.join("");
@@ -1676,21 +1682,20 @@ function onDateChange() {
 
 /* ===== 跨天施工：多日分段编辑器 ===== */
 /* 渲染一行额外分段（第 idx 天，idx 从 2 开始）。用随机 uid 作 DOM 标识，避免增删后 id 冲突。 */
-function segRowHtml(labelNo, date, start, end, disabled) {
+function segRowHtml(date, start, end, disabled) {
   const uid = "s" + Math.random().toString(36).slice(2, 9);
   const dis = disabled ? "disabled" : "";
   // 2026-10-22：改为单行 grid（日期 + 开始 → 结束 + 删除），与第一天的 .appt-time-row 观感一致。
   // 原为两行 flex（日期行 / 时间行），跨天时第2天以下比第一天高一倍，视觉不齐。
-  // 天序标签改圆圈数字（第N天 → 圆圈N）：省出约 30px 宽度给日期/时间控件，
-  // 窄屏下日期与时间不再被压到截断（曾出现 "2026/10/"、"08:00" 只露一半）。
+  // 2026-10-23：去掉天序圆圈（用户反馈"日期前边的序号可以去掉了"）——
+  // 圆圈虽只 22px，但窄屏弹窗出现滚动条后内容区再窄 ~15px，时间又被截断；
+  // 删掉后 grid 由 6 列变 5 列，省下的 26px 正好抵掉滚动条占用。
   return `
     <div class="seg-row" data-uid="${uid}">
-      <span class="seg-badge" title="第${labelNo}天">${labelNo}</span>
       <input class="input segDate" type="date" value="${date || ""}" onchange="onStartTimeChange()" ${dis} />
       <select class="input segStart" onchange="onStartTimeChange()" ${dis}>${generateTimeOptions(start)}</select>
       <span class="seg-arrow">→</span>
       <select class="input segEnd" onchange="onStartTimeChange()" ${dis}>${generateTimeOptions(end)}</select>
-      <button type="button" class="btn small seg-del" onclick="removeSegDay('${uid}')" ${dis} title="删除第${labelNo}天">✕</button>
     </div>`;
 }
 
@@ -1699,7 +1704,6 @@ function addSegDay() {
   const list = document.getElementById("segExtraList");
   if (!list) return;
   const existing = list.querySelectorAll(".seg-row").length;
-  const labelNo = existing + 2; // 第1天是主预约(pDate/pTime/pEnd)，额外段从第2天起
   const firstDate = document.getElementById("pDate") ? document.getElementById("pDate").value : "";
   let nextDate = firstDate;
   if (firstDate) {
@@ -1707,27 +1711,29 @@ function addSegDay() {
     d.setDate(d.getDate() + existing + 1);
     nextDate = d.toISOString().slice(0, 10);
   }
-  list.insertAdjacentHTML("beforeend", segRowHtml(labelNo, nextDate, "08:00", "18:00", false));
-  updateSegFirstDayLabel();
+  list.insertAdjacentHTML("beforeend", segRowHtml(nextDate, "08:00", "18:00", false));
   updateSpanHint();
+  refreshDayButtons();
+  refreshSegTargetMark(); // 天数变了：重算目标天高亮（cur 可能已超出新总天数）
 }
 
-/* 删除某分段（按 uid 定位 DOM 行） */
-function removeSegDay(uid) {
-  const row = document.querySelector(`.seg-row[data-uid="${uid}"]`);
-  if (row) row.remove();
-  updateSegFirstDayLabel();
-  updateSpanHint();
-}
-
-/* 跨天：主预约「开始日期」旁的「第1天」标签随额外分段有无自动显隐
-   ——新建表单点击「添加一天」后，第1天也应标注，避免只有「第2天」而无「第1天」。 */
-function updateSegFirstDayLabel() {
-  const lbl = document.getElementById("segFirstDayLabel");
-  if (!lbl) return;
+/* 删除最后一段（仅用于「减一天」：去掉最近添加的一天；第一天主预约不可删） */
+function removeLastSegDay() {
   const list = document.getElementById("segExtraList");
-  const hasExtra = !!list && list.querySelectorAll(".seg-row").length >= 1;
-  lbl.style.display = hasExtra ? "" : "none";
+  if (!list) return;
+  const rows = list.querySelectorAll(".seg-row");
+  if (rows.length === 0) return; // 至少保留第一天
+  rows[rows.length - 1].remove();
+  updateSpanHint();
+  refreshDayButtons();
+  refreshSegTargetMark(); // 天数变了：重算目标天高亮
+}
+
+/* 同步「减一天」按钮可用状态：无额外天时禁用（不能删第一天） */
+function refreshDayButtons() {
+  const list = document.getElementById("segExtraList");
+  const has = !!(list && list.querySelectorAll(".seg-row").length > 0);
+  document.querySelectorAll(".seg-minus-btn").forEach((b) => { b.disabled = !has; });
 }
 
 /* 收集所有分段：第1天取 pDate/pTime/pEnd，其余取 segExtraList 各行 */
@@ -1750,16 +1756,20 @@ function readAllSegments() {
 }
 
 /* 重写 updateSpanHint：按所有分段求和显示总施工时长（支持跨天多段）。
-   预约只填施工时间段：不再有「预计总工时 / 施工人数」输入，总工时由保存时按 时段时长 × 已分配人数 自动派生。 */
+   预约只填施工时间段：不再有「预计总工时 / 施工人数」输入，总工时由保存时按 时段时长 × 已分配人数 自动派生。
+   2026-10-23：跨天时额外在「预约时间」标题后写一个「共N天」（只加天数，小时看时长卡）；
+   单天不写。projectForm 与 quickEditProjectTimeForm 共用同一组 id（两个弹窗不会同时打开）。 */
 function updateSpanHint() {
   const durationCard = document.getElementById("pDurationCard");
   const durationValue = document.getElementById("pDurationValue");
+  const daysHint = document.getElementById("pApptDaysHint");
   if (!durationCard || !durationValue) return;
 
   const segs = (typeof readAllSegments === "function") ? readAllSegments() : [];
   if (!segs.length) {
     durationCard.style.opacity = "0.5";
     durationValue.textContent = "--";
+    if (daysHint) daysHint.textContent = "";
     return;
   }
 
@@ -1790,23 +1800,28 @@ function updateSpanHint() {
   if (bad) {
     durationCard.style.opacity = "1";
     durationValue.innerHTML = `<span style="color:var(--danger);font-size:14px;">每段结束时间需晚于开始时间</span>`;
+    if (daysHint) daysHint.textContent = "";
     return;
   }
-
   durationCard.style.opacity = "1";
   const daysN = days.size;
   const isCrossDay = daysN > 1;
   const h = Math.floor(totalMins / 60);
   const m = totalMins % 60;
   let durText;
+  // 2026-10-23：卡片标签已改为「总施工时长」，此处不再加"共"（重复）；
+  // 值独占一行（不再是与说明并排的双栏），实测 320px 宽也不会换行，"分钟"保持全称更规范。
   if (isCrossDay) {
-    durText = `${daysN}天 共${h}小时${m ? m + "分钟" : ""}`;
+    durText = `${daysN}天 ${h}小时${m ? m + "分钟" : ""}`;
   } else if (h > 0) {
     durText = `${h}小时${m ? m + "分钟" : ""}`;
   } else {
     durText = `${m}分钟`;
   }
-  durationValue.innerHTML = `<span style="color:#1e293b;">${durText}</span>`;
+  durationValue.textContent = durText;
+  /* 跨天时在标题后补「共N天」：安排几天一眼可见，不用去读时长卡 */
+  if (daysHint) daysHint.textContent = isCrossDay ? `共${daysN}天` : "";
+  refreshDayButtons();
 }
 
 function sumHours(project) {
@@ -7813,8 +7828,11 @@ function setPTimeRange(type) {
   const endDateEl = document.getElementById("pEndDate");
   const crossDayEl = document.getElementById("pCrossDay");
 
-  if (crossDayEl) crossDayEl.checked = false;
-  if (endDateEl) endDateEl.style.display = "none";
+  // 2026-10-23 修复：目标天窗口。0=各天；1=只改第一天；k≥2=只改第k天（第一天不动）。
+  // 原本下面无论 target 多少都无条件重写第一天 pTime/pEnd，导致「2天」模式仍改了第一天，
+  // 在 2 天项目里看起来「还是更改所有天」。这里先算好 changeDay1，仅 0/1 时动第一天。
+  const target = window._segTargetDay || 0;
+  const changeDay1 = (target === 0 || target === 1);
 
   function setSelect(el, val) {
     if (!el || el.disabled) return;
@@ -7822,46 +7840,140 @@ function setPTimeRange(type) {
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  if (type === "morning") {
-    setSelect(timeSel, "08:00");
-    setSelect(endSel, "12:00");
-  } else if (type === "afternoon") {
-    setSelect(timeSel, "13:00");
-    setSelect(endSel, "18:00");
-  } else if (type === "full") {
-    setSelect(timeSel, "08:00");
-    setSelect(endSel, "18:00");
-  } else if (type === "twohour") {
-    const currentTime = timeSel ? timeSel.value : "";
-    if (currentTime) {
-      const [h, m] = currentTime.split(":").map(Number);
-      const endH = String((h + 2) % 24).padStart(2, "0");
-      const endM = String(m).padStart(2, "0");
-      setSelect(endSel, `${endH}:${endM}`);
-    } else {
-      setSelect(timeSel, "08:00");
-      setSelect(endSel, "10:00");
-    }
-  }
+  // 仅「各天 / 只改第一天」时动第一天；k≥2 时第一天保持原值，由下方 applySegTimeRows 只套第k段。
+  if (changeDay1) {
+    if (crossDayEl) crossDayEl.checked = false;
+    if (endDateEl) endDateEl.style.display = "none";
 
-  if (endDateEl) endDateEl.value = date;
+    if (type === "morning") {
+      setSelect(timeSel, "08:00");
+      setSelect(endSel, "12:00");
+    } else if (type === "afternoon") {
+      setSelect(timeSel, "13:00");
+      setSelect(endSel, "18:00");
+    } else if (type === "full") {
+      setSelect(timeSel, "08:00");
+      setSelect(endSel, "18:00");
+    } else if (type === "twohour") {
+      const currentTime = timeSel ? timeSel.value : "";
+      if (currentTime) {
+        const [h, m] = currentTime.split(":").map(Number);
+        const endH = String((h + 2) % 24).padStart(2, "0");
+        const endM = String(m).padStart(2, "0");
+        setSelect(endSel, `${endH}:${endM}`);
+      } else {
+        setSelect(timeSel, "08:00");
+        setSelect(endSel, "10:00");
+      }
+    }
+
+    if (endDateEl) endDateEl.value = date;
+  }
   // 跨天分段同步（2026-10-22）：快捷时长原本只改第一天的 pTime/pEnd，
   // 加了「第二天」以后点快捷键对新增段完全无效（用户反馈）。
-  // 现在对每一段（含 segExtraList 里的第2天起）套用同一规则，
+  // 默认对每一段（含 segExtraList 里的第2天起）套用同一规则，
   // twohour 以该段自己的开始时间为基准 +2 小时。
-  applySegTimeRows(type, setSelect);
+  // 2026-10-23：改为「目标天」循环切换（用户反馈原「同步各天」开关按钮大、会换行）——
+  // window._segTargetDay：0=所有天一起改；1=只改第一天；k≥2=只改第k天。
+  // 点按钮在 各天→第1天→第2天→…→第N天→各天 之间循环，按钮文字显示当前目标。
+  // 目标天：0=所有天（上面第一天已改 + 下面所有段）；1=只改第一天（上面已改，下面跳过所有段）；
+  // k≥2=只改第k天（第一天不动，下面只套用到第k段）。
+  // onlyIdx：0=全部段；-1=跳过所有段（只改了第一天）；k=只改第k段
+  applySegTimeRows(type, setSelect, target >= 2 ? target : (target === 1 ? -1 : 0));
   updateSpanHint();
 }
 
-/* 把快捷时长套用到所有跨天分段（第2天起）的 segStart/segEnd。
+/* 切换快捷键的应用范围：各天（默认） ⇄ 仅第N天。
+   只影响 setPTimeRange 是否调用 applySegTimeRows，不改任何存储逻辑。
+   2026-10-23：循环目标天（各天→第1天→第2天→…→第N天→各天），
+   并把「当前快捷键作用在哪一天」直接用颜色标在那一行上（用户反馈：
+   光看按钮文字分不清是"第3天"还是"共3天"，toast 又会消失）。
+   按钮文字用「🔁 第3天」带"第"字，与标题里的「共3天」（总天数）不撞车。 */
+function toggleSegTargetDay() {
+  const totalDays = 1 + (document.querySelectorAll("#segExtraList .seg-row").length);
+  const cur = ((window._segTargetDay || 0) + 1) % (totalDays + 1); // 0=各天, 1..N=第N天
+  window._segTargetDay = cur;
+  refreshSegTargetMark();
+  toast(cur === 0 ? "快捷键将同时应用于所有天" : `快捷键只改第${cur}天，其他天不动`);
+}
+
+/* 把「快捷键当前作用在哪一天」用颜色标出来（2026-10-23）。
+   标记对象是**每一天的日期框**（第1天=#pDate，第2天起=#segExtraList 里各行的 .segDate）——
+   两种弹窗（新建/编辑预约、快速改时间）结构不同，但日期框的角色一致，标记方式统一。
+   切换目标天时高亮在行间"轮换"：目标天日期框靛蓝高亮、整行淡靛蓝底；其余天整行压灰。 */
+function markSegTargetDay(cur) {
+  const curDay = cur || 0;
+  // 收集所有天的日期框：第1天 = #pDate，第2天起 = seg-row 里的 .segDate
+  const dayInputs = [];
+  const pDate = document.getElementById("pDate");
+  if (pDate) dayInputs.push(pDate);
+  const list = document.getElementById("segExtraList");
+  if (list) {
+    list.querySelectorAll(".seg-row .segDate").forEach((d) => dayInputs.push(d));
+  }
+  dayInputs.forEach((inp, i) => {
+    const dayNo = i + 1;
+    const isTarget = curDay === 0 || curDay === dayNo;
+    // 日期框：指定某天 → 该天靛蓝高亮；「各天」模式 → 不染色
+    // （靛蓝是唯一"只改这一天"的信号，不搞第二套绿/靛蓝语义）
+    inp.classList.toggle("seg-day-on", curDay !== 0 && isTarget);
+    // 整行统一处理：目标行淡靛蓝底 + 控件描边；非目标行整体压灰
+    // 第1天在两种弹窗里结构不同：
+    //   新建/编辑预约 → 日期与时间同在 .appt-time-row 里（一个容器）
+    //   快速改时间   → 日期(.appt-day1-row) 与时间(.appt-day1-time) 分属两个容器，两个都要标
+    const rows = [];
+    const row = inp.closest(".seg-row, .appt-time-row, .appt-day1-row");
+    if (row) rows.push(row);
+    if (dayNo === 1) {
+      const tRow = document.querySelector(".appt-day1-time");
+      if (tRow) rows.push(tRow);
+    }
+    rows.forEach((r) => {
+      r.classList.toggle("seg-day-row-on", curDay !== 0 && isTarget);
+      r.classList.toggle("seg-day-dim", curDay !== 0 && !isTarget);
+    });
+  });
+  // 同步提示条文案
+  const hint = document.getElementById("pSegTargetHint");
+  if (hint) {
+    const totalDays = dayInputs.length;
+    hint.textContent = curDay === 0
+      ? `同时改所有天（${totalDays}天）`
+      : `只改第${curDay}天，其余不变`;
+    hint.classList.toggle("is-all", curDay === 0);
+  }
+}
+
+/* 重新计算并刷新目标天高亮（天增删后调用：cur 可能超出新的总天数） */
+function refreshSegTargetMark() {
+  const totalDays = 1 + (document.querySelectorAll("#segExtraList .seg-row").length);
+  let cur = window._segTargetDay || 0;
+  if (cur > totalDays) cur = 0; // 天被删光后回落到"各天"
+  window._segTargetDay = cur;
+  document.querySelectorAll(".seg-sync-btn").forEach((btn) => {
+    btn.textContent = cur === 0 ? "🔁 各天" : `🔁 第${cur}天`;
+    btn.classList.toggle("is-off", cur !== 0);
+    btn.title = cur === 0
+      ? "快捷键同时改所有天（点击切换为只改某一天）"
+      : `快捷键只改第${cur}天（点击在 各天→第1天→第2天→… 之间循环切换）`;
+  });
+  markSegTargetDay(cur);
+}
+
+/* 把快捷时长套用到跨天分段（第2天起）的 segStart/segEnd。
    seg-row 内没有 id，故用容器 #segExtraList + class 选择器收集。
-   复用 setSelect（会 dispatch change），从而与第一天走完全相同的校验/联动路径；
-   分段数最多个位数，逐段重算 updateSpanHint 的开销可忽略。 */
-function applySegTimeRows(type, setSelect) {
+   onlyIdx：0=全部段（默认）；-1=跳过所有段（只改第一天）；k=只套用到第k天。
+   twohour 以该段自己的开始时间为基准 +2 小时。
+   复用 setSelect（会 dispatch change），从而与第一天走完全相同的校验/联动路径。 */
+function applySegTimeRows(type, setSelect, onlyIdx = 0) {
   const list = document.getElementById("segExtraList");
   if (!list) return 0;
   const rows = list.querySelectorAll(".seg-row");
-  rows.forEach((row) => {
+  let applied = 0;
+  rows.forEach((row, i) => {
+    const segNo = i + 2; // 第1天是主预约，额外段从第2天起
+    if (onlyIdx === -1 || (onlyIdx > 0 && segNo !== onlyIdx)) return;
+    applied++;
     const startEl = row.querySelector(".segStart");
     const endEl = row.querySelector(".segEnd");
     if (!startEl || !endEl) return;
@@ -7885,7 +7997,7 @@ function applySegTimeRows(type, setSelect) {
       }
     }
   });
-  return rows.length;
+  return applied;
 }
 
 function updatePTimeOptions() {
@@ -10230,6 +10342,8 @@ const WORK_CONTENT_OPTIONS = [
 function projectForm(p = {}, opts = {}) {
   // isNew=true 时处于「新建预约」流程：预约人只填工程金额，成本扣项不展示（费用是施工管理阶段填写）
   const hideCostAtBooking = !!opts.isNew;
+  // 快捷键应用范围：每次打开表单都重置为「各天」，避免上次的选中天残留在下一个表单
+  window._segTargetDay = 0; // 快捷键目标天：0=所有天一起改；打开表单时重置
   const storeLocked = (isStoreManager() && myStore() != null && myStore() !== "") || isWorker();
   // 已开工 / 终态项目：预约时间与工时控件禁用，不可再编辑（改期须走「延期」流程）
   const locked = !!p.id && isAppointmentLocked(p);
@@ -10300,11 +10414,12 @@ function projectForm(p = {}, opts = {}) {
         <!-- 2026-10-22：标签与输入框合并为一行（原来标签独占一行，窄屏浪费高度）。
              桌面端包活方式与金额同排更紧凑；窄屏（≤480px）contract-grid 变单列，
              金额标签仍与输入框同行（标签固定宽度，剩余空间给输入框）。 -->
-        <div class="form-row contract-amount-row" style="margin:0;">
+        <div class="form-row contract-amount-row" style="margin:0;grid-column:1/-1;">
           <label><span style="color:#16a34a;">💵</span> 工程金额 *</label>
-          <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+          <!-- 内联兜底：flex/width 直接写在标签上，外部 CSS 链即使因任何原因没生效，输入框也能撑满（不再依赖 .contract-grid .contract-amount-row>div>.input 那条选择器）。 -->
+          <div style="display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;width:100%;">
             <span style="color:#64748b;flex-shrink:0;">¥</span>
-            <input class="input" type="number" min="0" step="0.01" id="pProjectAmount" value="${esc(p.projectAmount != null ? p.projectAmount : "")}" placeholder="应付总金额" oninput="updateContractCalc()" ${contractDisabled ? "disabled" : ""} />
+            <input class="input" type="number" min="0" step="0.01" id="pProjectAmount" value="${esc(p.projectAmount != null ? p.projectAmount : "")}" placeholder="应付总金额" oninput="updateContractCalc()" ${contractDisabled ? "disabled" : ""} style="flex:1 1 0;min-width:0;width:100%;" />
           </div>
         </div>
         <div class="form-row" id="pMaterialFeeRow" style="grid-column:1/-1;margin:0;${hideCostAtBooking ? "display:none;" : ""}">
@@ -10320,33 +10435,45 @@ function projectForm(p = {}, opts = {}) {
       <div id="pContractCalc" style="display:none;"></div>
     </div>
     <div class="form-row">
-      <label><span style="color:var(--warn)">${svgCal(14)}</span> 预约时间 *</label>
+      <!-- 2026-10-23：跨天时在标题后补一个「共N天」（只加天数，小时统计仍看下方施工时长卡）。
+           单天不显示（"共1天"无意义）；id 与快速编辑弹窗共用，两个表单不会同时打开。 -->
+      <!-- 2026-10-23：预约时间标题后直接挂「加一天 / 减一天」，去掉下方「添加一天」按钮与每行删除叉号。
+           删天只能从末尾减（主预约第一天不可删），故用 removeLastSegDay；减一天按钮无额外天时禁用。 -->
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:4px;">
+        <span style="display:inline-flex;align-items:center;gap:2px;"><span style="color:var(--warn)">${svgCal(14)}</span> 预约时间 *</span>
+        <span id="pApptDaysHint" class="appt-days-hint"></span>
+        <button type="button" class="btn small" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ 加一天</button>
+        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;padding:3px 10px;font-size:12px;">➖ 减一天</button>
+      </div>
       <!-- 2026-10-22：日期 + 开始 → 结束合并为**严格一行**。
            原先用 flex + flex-wrap，窄屏下 flex 基准宽度合计超过容器 → 三个控件各占一行（用户反馈）。
            改用 CSS Grid 定列：日期列可拉伸、两个时间列等分、箭头列自适应，
            配合 minmax(0,1fr) 压掉 date/select 的浏览器原生最小宽度，保证不换行。
-           跨天场景（第1天 标签 / 次日 提示）作为定宽列插在两侧，同样不挤占可用宽度。 -->
+           跨天场景（次日 提示）作为定宽列插在末尾；天序圆圈已于 2026-10-23 去掉。 -->
       <div class="appt-time-row">
-        ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-badge" id="segFirstDayLabel" title="第1天">1</span>' : '<span class="seg-badge" id="segFirstDayLabel" style="display:none;" title="第1天">1</span>'}
         <input class="input appt-time-row__date" type="date" id="pDate" value="${dateKey(startDate)}" onchange="onDateChange()" ${apptDisabled ? "disabled" : ""} />
         <select class="input appt-time-row__time" id="pTime" onchange="onStartTimeChange()" title="开始时间" ${apptDisabled ? "disabled" : ""}>
           ${generateTimeOptions(p.appointmentTime ? `${String(new Date(p.appointmentTime).getHours()).padStart(2, '0')}:${String(new Date(p.appointmentTime).getMinutes()).padStart(2, '0')}` : '08:00')}
         </select>
         <span class="appt-time-row__arrow">→</span>
-        <select class="input appt-time-row__time" id="pEnd" onchange="onStartTimeChange()" title="结束时间" ${apptDisabled ? "disabled" : ""}>
-          ${generateTimeOptions(p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '10:00')}
-        </select>
-        <span id="pEndNextDayHint" class="appt-time-row__nextday" style="display:none;">次日</span>
+        <div class="appt-time-end-wrap">
+          <select class="input appt-time-row__time" id="pEnd" onchange="onStartTimeChange()" title="结束时间" ${apptDisabled ? "disabled" : ""}>
+            ${generateTimeOptions(p.endTime ? `${String(new Date(p.endTime).getHours()).padStart(2, '0')}:${String(new Date(p.endTime).getMinutes()).padStart(2, '0')}` : '10:00')}
+          </select>
+          <span id="pEndNextDayHint" class="appt-time-row__nextday" style="display:none;">次日</span>
+        </div>
       </div>
     </div>
     <div id="segExtraList">
       ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1
-        ? p.workSegments.slice(1).map((s, i) => segRowHtml(i + 2, s.date, s.start, s.end, apptDisabled)).join("")
+        ? p.workSegments.slice(1).map((s) => segRowHtml(s.date, s.start, s.end, apptDisabled)).join("")
         : ""}
     </div>
-    <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;flex-wrap:wrap;">
-      <button type="button" class="btn small" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ 添加一天（跨天施工）</button>
-      <span style="font-size:11px;color:#64748b;">每天各填一段施工时间，中间留休息/睡觉，时间线按天显示</span>
+    <div style="display:flex;align-items:center;gap:6px;margin:4px 0 8px;flex-wrap:wrap;">
+      <button type="button" class="btn small seg-sync-btn" onclick="toggleSegTargetDay()" ${apptDisabled ? "disabled" : ""} title="快捷键作用范围：点击在 各天→第1天→第2天→… 之间循环切换">🔁 各天</button>
+      <span id="pSegTargetHint" class="seg-target-hint is-all">同时改所有天</span>
+      <span style="font-size:11px;color:#94a3b8;">·</span>
+      <span style="font-size:11px;color:#64748b;">跨天施工：每天各填一段</span>
     </div>
     <div class="form-row">
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
@@ -10357,15 +10484,15 @@ function projectForm(p = {}, opts = {}) {
       </div>
     </div>
     ${apptDisabled ? '<div style="font-size:12px;color:#dc2626;margin:2px 0 6px;">' + (locked ? '🔒 ' + esc(lockMsg) : '⛔ 您没有「修改预约时间」权限，无法修改预约时间') + '</div>' : ""}
-    <div id="pDurationCard" style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="display:flex;align-items:center;gap:12px;">
-        <span style="font-size:24px;">⏳</span>
-        <div>
-          <div style="font-size:12px;color:#64748b;">施工时长</div>
-          <div id="pDurationValue" style="font-size:20px;font-weight:700;color:#1e293b;">--</div>
+    <div id="pDurationCard" class="dur-card">
+      <div class="dur-card__top">
+        <span class="dur-card__icon">⏳</span>
+        <div style="min-width:0;">
+          <div class="dur-card__label">总施工时长</div>
+          <div id="pDurationValue" class="dur-card__value">--</div>
         </div>
       </div>
-      <div style="font-size:12px;color:#64748b;text-align:right;">总工时与人数<br/>保存时自动计算</div>
+      <div class="dur-card__hint">各天施工时段时长之和，与人数无关</div>
     </div>
     <div class="form-row">
       <label><span style="color:#0ea5e9;">🛠️</span> 施工内容</label>
@@ -11287,12 +11414,12 @@ function switchAssignType(btn) {
 
 function newProject() {
   modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED }, { isNew: true }));
-  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); }, 100);
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); refreshSegTargetMark(); }, 100);
 }
 function editProject(id) {
   const _ep = getProject(id);
   modal.open("编辑项目", projectForm(_ep));
-  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", (_ep && _ep.costDeductions) || []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); }, 100);
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", (_ep && _ep.costDeductions) || []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); refreshSegTargetMark(); }, 100);
 }
 
 /* 快速修改项目预约时间（总工时/人数保存时自动派生） */
@@ -11312,6 +11439,8 @@ function quickEditProjectTimeForm(p = {}) {
   const locked = isAppointmentLocked(p);
   const lockMsg = locked ? appointmentLockReason(p) : "";
   const apptDisabled = locked || !perm.editAppointment(p);
+  // 与 projectForm 一致：每次打开都重置快捷键应用范围为「各天」
+  window._segTargetDay = 0; // 快捷键目标天：0=所有天一起改；打开表单时重置
   const apptDate = p.appointmentTime ? new Date(p.appointmentTime) : null;
   const now = new Date();
   // 过期项目进入快速修改时，日期默认调到今天，避免日期框显示昨天但又受 min=today 限制保存不了
@@ -11335,15 +11464,19 @@ function quickEditProjectTimeForm(p = {}) {
   const sameDay = dateKey(startDate) === dateKey(endDate);
   return `
     <div class="form-row">
-      <label><span style="color:var(--warn)">${svgCal(14)}</span> 施工日期</label>
-      <div style="display:flex;align-items:center;gap:6px;width:100%;">
-        ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1 ? '<span class="seg-badge" id="segFirstDayLabel" title="第1天">1</span>' : '<span class="seg-badge" id="segFirstDayLabel" style="display:none;" title="第1天">1</span>'}
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:4px;">
+        <span style="display:inline-flex;align-items:center;gap:2px;"><span style="color:var(--warn)">${svgCal(14)}</span> 施工日期</span>
+        <span id="pApptDaysHint" class="appt-days-hint" title="跨天施工的总天数"></span>
+        <button type="button" class="btn small" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ 加一天</button>
+        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;padding:3px 10px;font-size:12px;">➖ 减一天</button>
+      </div>
+      <div class="appt-day1-row" style="display:flex;align-items:center;gap:6px;width:100%;">
         <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" min="${todayStr()}" onchange="onDateChange()" style="flex:1;" />
       </div>
     </div>
     <div class="form-row">
       <label>施工时间段</label>
-      <div style="display:flex;align-items:center;gap:6px;width:100%;">
+      <div class="appt-day1-time" style="display:flex;align-items:center;gap:6px;width:100%;">
         <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
         <select class="input" id="pTime" onchange="onStartTimeChange()" style="flex:1;max-width:110px;">
           ${generateTimeOptions(startTimeStr)}
@@ -11358,12 +11491,14 @@ function quickEditProjectTimeForm(p = {}) {
     </div>
     <div id="segExtraList">
       ${p.workSegments && Array.isArray(p.workSegments) && p.workSegments.length > 1
-        ? p.workSegments.slice(1).map((s, i) => segRowHtml(i + 2, s.date, s.start, s.end, apptDisabled)).join("")
+        ? p.workSegments.slice(1).map((s) => segRowHtml(s.date, s.start, s.end, apptDisabled)).join("")
         : ""}
     </div>
-    <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;flex-wrap:wrap;">
-      <button type="button" class="btn small" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ 添加一天（跨天施工）</button>
-      <span style="font-size:11px;color:#64748b;">每天各填一段施工时间，中间留休息/睡觉，时间线按天显示</span>
+    <div style="display:flex;align-items:center;gap:6px;margin:4px 0 8px;flex-wrap:wrap;">
+      <button type="button" class="btn small seg-sync-btn" onclick="toggleSegTargetDay()" ${apptDisabled ? "disabled" : ""} title="快捷键作用范围：点击在 各天→第1天→第2天→… 之间循环切换">🔁 各天</button>
+      <span id="pSegTargetHint" class="seg-target-hint is-all">同时改所有天</span>
+      <span style="font-size:11px;color:#94a3b8;">·</span>
+      <span style="font-size:11px;color:#64748b;">跨天施工：每天各填一段</span>
     </div>
     <div class="form-row">
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
@@ -11374,15 +11509,15 @@ function quickEditProjectTimeForm(p = {}) {
       </div>
     </div>
     ${apptDisabled ? '<div style="font-size:12px;color:#dc2626;margin:2px 0 6px;">' + (locked ? '🔒 ' + esc(lockMsg) : '⛔ 您没有「修改预约时间」权限，无法修改预约时间') + '</div>' : ""}
-    <div id="pDurationCard" style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="display:flex;align-items:center;gap:12px;">
-        <span style="font-size:24px;">⏳</span>
-        <div>
-          <div style="font-size:12px;color:#64748b;">施工时长</div>
-          <div id="pDurationValue" style="font-size:20px;font-weight:700;color:#1e293b;">--</div>
+    <div id="pDurationCard" class="dur-card">
+      <div class="dur-card__top">
+        <span class="dur-card__icon">⏳</span>
+        <div style="min-width:0;">
+          <div class="dur-card__label">总施工时长</div>
+          <div id="pDurationValue" class="dur-card__value">--</div>
         </div>
       </div>
-      <div style="font-size:12px;color:#64748b;text-align:right;">总工时与人数<br/>保存时自动计算</div>
+      <div class="dur-card__hint">各天施工时段时长之和，与人数无关</div>
     </div>
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
@@ -11402,7 +11537,7 @@ function quickEditProjectTime(id) {
     return;
   }
   modal.open("快速修改施工安排", quickEditProjectTimeForm(p));
-  setTimeout(() => { updateSpanHint(); refreshProjectQuickTimeMin(); }, 100);
+  setTimeout(() => { updateSpanHint(); refreshProjectQuickTimeMin(); refreshSegTargetMark(); }, 100);
 }
 
 async function saveQuickEditProjectTime(id) {
@@ -11797,7 +11932,7 @@ async function saveProject(id) {
   // 关闭弹窗并立即用本地缓存重绘：新值（含工程金额 / 工费 / 分成池）当下即显示
   modal.close();
   renderAll();
-  toast(`已保存，预计总工时已按施工时段自动计算为 ${estimatedHours} 小时`);
+  toast(`已保存，预计总工时 ${estimatedHours} 人·小时（时长 × 已分配人数）`);
   // 弹窗已关闭（按钮随之销毁），释放锁
   window._savingProject = false;
 
@@ -11926,7 +12061,7 @@ function openRepairOrderForm(projectId) {
           </div>
         </div>
       </div>
-      ${repairPayBlockHtml("rp", { title: "维修收费", freeLabel: "免费维修", paidLabel: "付费维修", freeHint: "免费维修：不计客户费用，工时仅作考勤记录，工人无包活分成" })}
+      ${repairPayBlockHtml("rp", { title: "维修收费", freeLabel: "免费维修", paidLabel: "付费维修", freeHint: "免费：不计客户费用，工时仅记考勤，无包活分成" })}
       <div class="form-row">
         <label>维修人员</label>
         ${workerRows}
@@ -12368,7 +12503,7 @@ function openRepairPayEdit(projectId, repairId) {
         title: "本维修单收费",
         freeLabel: "免费维修",
         paidLabel: "额外收费",
-        freeHint: "免费维修：¥0，工时仅作考勤记录，工人无包活分成",
+        freeHint: "免费：¥0，工时仅记考勤，无包活分成",
       })}
       <div class="form-actions">
         <button class="btn" onclick="modal.close()">取消</button>
@@ -12444,6 +12579,116 @@ async function submitRepairPayEdit(projectId, repairId) {
   gotoConstruction(projectId);
   toast(pay.payType === "paid" ? `本维修单已加收 ¥${pay.projectAmount.toFixed(2)}（原项目费用不变）` : "本维修单已改回免费维修");
   repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("维修改收费后台同步失败：", e));
+}
+
+/* 调整维修单工钱分成（付费维修单专用，2026-10-23）。
+   背景：完工那一刻 commissionAlloc 会按分成池**自动均分**落库（splitCommissionEvenly）。
+   之后想改不均分（老师傅多分/学徒少分）或完工后重新调整，此前没有任何入口 ——
+   详情页「包活分成」面板只显示原项目的分成，维修单的只在卡片里以纯文本展示。
+   本弹窗补上手动调整能力：
+     · 人员 = ro.assignedWorkerIds（与完工时同一批人；换人走「👷 改派」）
+     · 每人默认值 = 当前 alloc 里的金额，没有则均分值
+     · 合计必须与分成池**分毫不差**（整数分比对），差额实时红字提示
+   权限与「💰 收费」一致走 perm.editRepairPay（收费即动钱，同一把锁）。
+   仅对已完成（status !== 待维修）且付费、池 > 0 的维修单开放：
+   待维修单在完工时会被自动均分覆盖，提前设没有意义。 */
+function openRepairCommission(projectId, repairId) {
+  const p = getProject(projectId);
+  if (!p) { toast("项目不存在"); return; }
+  if (!perm.editRepairPay(p)) { toast("无权限调整维修工钱分成（需「包活金额」权限）"); return; }
+  const ro = (p.repairOrders || []).find(r => r.id === repairId);
+  if (!ro) { toast("维修单不存在"); return; }
+  const isPaid = ro.payType === "paid" || (ro.payType == null && ro.payable === true);
+  const pool = Number(ro.commissionPool) || 0;
+  if (!isPaid || pool <= 0) { toast("该维修单为免费或金额为 0，没有工钱可分配"); return; }
+  if (ro.status === "待维修") { toast("待维修单会在完工时自动均分，完工后才能手动调整"); return; }
+  const ids = (ro.assignedWorkerIds || []).filter(Boolean);
+  if (!ids.length) { toast("该维修单没有指定维修人员，无法分配"); return; }
+  const alloc = Array.isArray(ro.commissionAlloc) ? ro.commissionAlloc : [];
+  const even = Math.round(pool / ids.length * 100) / 100;
+  const rows = ids.map((wid) => {
+    const w = getWorker(wid) || {};
+    const hit = alloc.find((a) => a.workerId === wid);
+    const val = hit ? (Number(hit.amount) || 0) : even;
+    return `
+      <div class="form-row rc-row" style="margin:0 0 8px;">
+        <label style="margin-bottom:4px;">👷 ${esc(w.name || wid)}</label>
+        <div style="display:flex;align-items:center;gap:6px;min-width:0;">
+          <span style="color:#64748b;flex-shrink:0;">¥</span>
+          <input class="input rc-input" type="number" min="0" step="0.01" value="${val}" data-wid="${esc(wid)}" oninput="updateRepairCommissionSum()" />
+        </div>
+      </div>`;
+  }).join("");
+  const form = `
+    <div class="repair-form">
+      <div class="form-row" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:12px;color:#166534;line-height:1.7;">
+        本单金额 <strong>¥${(Number(ro.projectAmount) || 0).toFixed(2)}</strong> · 工费 <strong>¥${(Number(ro.laborFee) || 0).toFixed(2)}</strong> · 分成池（工费÷2）<strong>¥${pool.toFixed(2)}</strong><br/>
+        完工时系统按池<strong>自动均分</strong>，此处可改为不均分；合计必须与分成池一致。
+      </div>
+      ${rows}
+      <input type="hidden" id="rcPool" value="${pool}" />
+      <div id="rcSumBar" style="font-size:12px;color:#64748b;margin:4px 0 10px;"></div>
+      <div class="form-actions">
+        <button class="btn" onclick="modal.close()">取消</button>
+        <button class="btn primary" onclick="submitRepairCommission('${projectId}','${repairId}')">保存分成</button>
+      </div>
+    </div>`;
+  modal.open("调整维修工钱分成", form, { titleHtml: "💵 调整维修工钱分成" });
+  updateRepairCommissionSum();
+}
+
+/* 实时显示合计 vs 分成池（差额用红字，分毫不差才允许保存的感觉） */
+function updateRepairCommissionSum() {
+  const bar = document.getElementById("rcSumBar");
+  if (!bar) return;
+  const inputs = [...document.querySelectorAll(".rc-input")];
+  const sum = inputs.reduce((s, el) => s + Math.round((Number(el.value) || 0) * 100), 0) / 100;
+  const poolEl = document.getElementById("rcPool");
+  const pool = poolEl ? (Number(poolEl.value) || 0) : 0;
+  const diff = Math.round((sum - pool) * 100) / 100;
+  const ok = Math.abs(diff) < 0.005;
+  bar.innerHTML = `合计 <strong style="color:${ok ? "#16a34a" : "#dc2626"}">¥${sum.toFixed(2)}</strong>`
+    + (ok ? " ✓ 与分成池一致" : ` · 分成池 ¥${pool.toFixed(2)}，<span style="color:#dc2626">差额 ¥${diff > 0 ? "+" : ""}${diff.toFixed(2)}</span>（须补齐或减少）`);
+  const btn = document.querySelector('.form-actions .btn.primary');
+  if (btn) btn.disabled = !ok;
+}
+
+async function submitRepairCommission(projectId, repairId) {
+  const p = getProject(projectId);
+  if (!p || !p.repairOrders) { toast("维修单不存在"); return; }
+  const idx = p.repairOrders.findIndex(r => r.id === repairId);
+  if (idx < 0) { toast("维修单不存在"); return; }
+  const ro = p.repairOrders[idx];
+  if (!perm.editRepairPay(p)) { toast("无权限调整维修工钱分成（需「包活金额」权限）"); return; }
+  const poolCents = Math.round((Number(ro.commissionPool) || 0) * 100);
+  if (poolCents <= 0) { toast("该维修单没有分成池"); return; }
+  const inputs = [...document.querySelectorAll(".rc-input")];
+  const alloc = inputs.map((el) => ({
+    workerId: el.dataset.wid,
+    name: (getWorker(el.dataset.wid) || {}).name || el.dataset.wid,
+    amount: Math.round((Number(el.value) || 0) * 100) / 100,
+  }));
+  const sumCents = alloc.reduce((s, a) => s + Math.round(a.amount * 100), 0);
+  if (sumCents !== poolCents) {
+    toast(`合计 ¥${(sumCents / 100).toFixed(2)} 与分成池 ¥${(poolCents / 100).toFixed(2)} 不一致，请调整`);
+    return;
+  }
+  const lockKey = `repairCommission:${projectId}:${repairId}`;
+  if (!lockAction(lockKey)) { toast("操作处理中，请勿重复点击"); return; }
+  try {
+    const repairOrders = p.repairOrders.slice();
+    repairOrders[idx] = { ...repairOrders[idx], commissionAlloc: alloc };
+    const saved = await repo.patchProject(projectId, { repairOrders });
+    if (saved === false) { toast("⚠️ 保存失败，请刷新后重试"); return; }
+    const p2 = getProject(projectId);
+    if (p2) p2.repairOrders = repairOrders;
+    modal.close();
+    gotoConstruction(projectId);
+    toast(`工钱分成已更新（${alloc.length} 人，合计 ¥${(sumCents / 100).toFixed(2)}）`);
+    repo.loadAll().then(() => gotoConstruction(projectId)).catch((e) => console.warn("维修分工钱后台同步失败：", e));
+  } finally {
+    unlockAction(lockKey);
+  }
 }
 
 /* 删除维修单 */
@@ -12888,16 +13133,22 @@ function repairPayBlockHtml(prefix, state) {
   const title = st.title || "收费方式";
   const freeLabel = st.freeLabel || "免费";
   const paidLabel = st.paidLabel || "计费";
-  const freeHint = st.freeHint || "不计客户费用，工时仅作考勤记录，工人无包活分成";
+  const freeHint = st.freeHint || "免费：¥0，工时仅记考勤，无包活分成";
   return `
     <div class="form-row" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;margin-bottom:4px;">
-      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;${paid ? "margin-bottom:8px;" : ""}">
-        <label style="font-weight:500;margin:0;display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">💰</span> ${esc(title)}</label>
-        <label class="radio-inline"><input type="radio" name="${prefix}PayType" value="free" ${!paid ? "checked" : ""} onchange="onRepairPayTypeChange('${prefix}')" /> 🆓 ${esc(freeLabel)}</label>
-        <label class="radio-inline"><input type="radio" name="${prefix}PayType" value="paid" ${paid ? "checked" : ""} onchange="onRepairPayTypeChange('${prefix}')" /> 💵 ${esc(paidLabel)}</label>
+      <!-- 2026-10-23：标题与单选拆成两行（用户截图反馈"别自动换行"）。
+           原来标题 + 两个单选挤在同一行 flex-wrap 里，窄屏（弹窗内容仅 ~290px）
+           合计 ~300px 放不下 → 「额外收费」被换到第二行、单选文字折行。
+           标题独立成行后，单选行自身只有 ~160px，任何屏宽都单行完整。 -->
+      <div style="font-weight:500;display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+        <span style="color:#16a34a;">💰</span> ${esc(title)}
+      </div>
+      <div class="repair-pay-radios">
+        <label class="radio-inline"><input type="radio" name="${prefix}PayType" value="free" ${!paid ? "checked" : ""} onchange="onRepairPayTypeChange('${prefix}')" /> ${esc(freeLabel)}</label>
+        <label class="radio-inline"><input type="radio" name="${prefix}PayType" value="paid" ${paid ? "checked" : ""} onchange="onRepairPayTypeChange('${prefix}')" /> ${esc(paidLabel)}</label>
       </div>
       <div id="${prefix}PayDetail" style="${paid ? "" : "display:none;"}">
-        <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:8px;">
+        <div class="repair-contract-radios" style="margin-bottom:8px;">
           <label style="font-weight:500;margin:0;display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">📋</span> 包活方式</label>
           <label class="radio-inline"><input type="radio" name="${prefix}ContractType" value="包工" ${ct === "包工" ? "checked" : ""} onchange="onRepairContractTypeChange('${prefix}')" /> 仅出人工费</label>
           <label class="radio-inline"><input type="radio" name="${prefix}ContractType" value="包工包料" ${ct === "包工包料" ? "checked" : ""} onchange="onRepairContractTypeChange('${prefix}')" /> 包工包料</label>
@@ -12924,7 +13175,10 @@ function repairPayBlockHtml(prefix, state) {
              不依赖本提示元素，隐藏不影响保存值。 -->
         <div id="${prefix}PayCalc" style="display:none;"></div>
       </div>
-      <div id="${prefix}FreeHint" style="${paid ? "display:none;" : ""}font-size:12px;color:#64748b;">${esc(freeHint)}</div>
+      <!-- 免费提示：2026-10-23 加 white-space:nowrap。
+           原来窄屏下这句 22 字文案会折成两行，把下方「保存收费」按钮挤得更远；
+           精简文案 + nowrap 后恒为一行。 -->
+      <div id="${prefix}FreeHint" style="${paid ? "display:none;" : ""}font-size:12px;color:#64748b;white-space:nowrap;">${esc(freeHint)}</div>
     </div>`;
 }
 
@@ -13982,6 +14236,7 @@ function renderConstruction() {
           ${ro.status !== "待维修" && perm.editRepairPay(p) ? `
           <div class="card-actions" style="margin-top:8px;">
             <button class="btn small" onclick="openRepairPayEdit('${p.id}','${ro.id}')">💰 收费</button>
+            ${(() => { const _isPaid = ro.payType === "paid" || (ro.payType == null && ro.payable === true); return (_isPaid && (Number(ro.commissionPool) || 0) > 0 && (ro.assignedWorkerIds || []).length) ? `<button class="btn small" onclick="openRepairCommission('${p.id}','${ro.id}')">💵 分工钱</button>` : ""; })()}
           </div>` : ""}
         </div>
       `).join("")}
@@ -16245,12 +16500,15 @@ function reworkProjectForm(id) {
         <button class="btn small" onclick="rwSetTimeRange('full')" style="background:#dcfce7;color:#16a34a;border-color:#86efac;border-radius:4px;padding:3px 8px;font-size:12px;">${svgCal(13)} 全天</button>
       </div>
     </div>
-    <div id="rwDurationCard" style="background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">
-      <div style="display:flex;align-items:center;gap:12px;">
-        <span style="font-size:24px;">⏳</span>
-        <div><div style="font-size:12px;color:#64748b;">施工时长</div><div id="rwDurationValue" style="font-size:20px;font-weight:700;color:#1e293b;">--</div></div>
+    <div id="rwDurationCard" class="dur-card">
+      <div class="dur-card__top">
+        <span class="dur-card__icon">⏳</span>
+        <div style="min-width:0;">
+          <div class="dur-card__label">总施工时长</div>
+          <div id="rwDurationValue" class="dur-card__value">--</div>
+        </div>
       </div>
-      <div style="font-size:12px;color:#64748b;text-align:right;">总工时与人数<br/>保存时自动计算</div>
+      <div class="dur-card__hint">各天施工时段时长之和，与人数无关</div>
     </div>
     <div class="form-row">
       <label><span style="color:#0ea5e9;">🔧</span> 返工内容 *</label>
@@ -16260,7 +16518,7 @@ function reworkProjectForm(id) {
       <label><span style="color:#6b7280;">💬</span> 注意事项</label>
       <textarea class="input" id="rwNote" placeholder="施工注意事项、特殊要求等" style="min-height:50px;">${esc(p.note || "")}</textarea>
     </div>
-    ${repairPayBlockHtml("rw", { payType: "free", title: "返工收费", freeLabel: "免费返工", paidLabel: "计费返工", freeHint: "免费返工：¥0，工时仅作考勤记录，工人无包活分成（默认，多数返工为免费整改）" })}
+    ${repairPayBlockHtml("rw", { payType: "free", title: "返工收费", freeLabel: "免费返工", paidLabel: "计费返工", freeHint: "免费：¥0，工时仅记考勤，无包活分成（默认，多数返工为免费整改）" })}
     ${assignedNames.length ? `<div style="font-size:12px;color:#64748b;margin:2px 0 8px;">👷 派工人员沿用原项目：${esc(assignedNames.join("、"))}（可在详情页调整）</div>` : ""}
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
@@ -16366,8 +16624,9 @@ function rwUpdateHint() {
   durationCard.style.opacity = "1";
   const mins = Math.round((e - s) / 60000);
   const h = Math.floor(mins / 60), m = mins % 60;
+  // 2026-10-23：与预约卡的时长卡统一口径（纯 textContent，颜色由 .dur-card__value 提供）
   const durationText = (h > 0 && m > 0) ? `${h}小时${m}分钟` : (h > 0 ? `${h}小时` : `${m}分钟`);
-  durationValue.innerHTML = `<span style="color:#1e293b;">${durationText}</span>`;
+  durationValue.textContent = durationText;
 }
 
 async function confirmRework(id) {
@@ -29041,7 +29300,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc933f7c7";
+  const APP_VERSION = "v2f349458";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

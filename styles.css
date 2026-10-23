@@ -1805,24 +1805,51 @@ select.input {
 
 /* ===== 跨天施工：多日分段编辑器 ===== */
 /* 跨天分段行（第2天起）：单行 grid，与第一天 .appt-time-row 观感一致（2026-10-22）。
-   原为两行 flex（日期行 + 时间行），跨天时比第一天高一倍、视觉不齐。
-   列：圆圈N | 日期(宽) | 开始 | → | 结束 | 删除。
+   原为两行 flex（日期行 / 时间行），跨天时比第一天高一倍，视觉不齐。
+   2026-10-23 定稿为 4 列：日期(1.2fr) | 开始(1fr) | → | 结束(1.2fr)。
+   演进过程（保留备查）：
+     · 去掉天序圆圈（用户要求"日期前边的序号可以去掉了"），grid 由 6 列变 5 列；
+     · 第5列（删键/次日提示位）曾改固定 28px 以对齐右端；
+     · 删键 ✕ 下线（改由标题「减一天」按钮删末尾天）后该列恒空 → 每行右侧凭空
+       多出 28px 空隙，且挤压结束时间列致 "12:00" 被截断成 "12:…"；
+     · 故删掉第 5 列回到 4 列，日期权重 1.6fr→1.2fr 把宽度补给时间列。
    minmax(0,…) 压掉 date/select 原生最小宽度，保证任意屏宽不换行。 */
 .seg-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1.5fr) minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto minmax(0, 1.2fr);
   align-items: center;
   gap: 6px;
   width: 100%;
   margin-top: 8px;
 }
 .seg-row > * { min-width: 0; }
-.seg-row .seg-badge { grid-column: 1; }
-.seg-row .segDate { grid-column: 2; }
-.seg-row .segStart { grid-column: 3; }
-.seg-row .seg-arrow { grid-column: 4; }
-.seg-row .segEnd { grid-column: 5; }
-.seg-row .seg-del { grid-column: 6; }
+.seg-row .segDate { grid-column: 1; }
+.seg-row .segStart { grid-column: 2; }
+.seg-row .seg-arrow { grid-column: 3; }
+.seg-row .segEnd { grid-column: 4; }
+
+/* 移动端日期控件瘦身（2026-10-23，iPhone 12/XR 实测截断）
+   现象：桌面端日期时间一行显示完整，手机端第2/3天日期被截成 "2026/10/2"、
+   时间被截成 "0…"/"1…"。根因不是空间根本不够，而是跨天行比第一天多一个 ✕ 按钮（+32px）
+   —— 第一天那行（小圆圈1 + 日期 + 开始 → 结束，无删除键）在同一屏宽下是完整的。
+   对策（保持一行，不去年份）：
+     ① 移动端隐藏 date 的日历小图标（占 ~22px）—— iOS/Android 上点输入框任意位置
+        都会弹原生选择器，该图标在触摸端无实际操作价值；桌面端保留（鼠标必须靠它）。
+     ② 删除按钮由 26px 收窄到 24px、字号 12px。 */
+@media (max-width: 768px) {
+  .seg-row .segDate::-webkit-calendar-picker-indicator,
+  .appt-time-row__date::-webkit-calendar-picker-indicator {
+    display: none;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .seg-row .seg-del {
+    padding: 0 5px;
+    min-width: 24px;
+    font-size: 12px;
+  }
+  .seg-row, .appt-time-row { gap: 4px; }
+}
 /* 固定控件高度：grid 行高由内容决定，日期/时间控件被压窄后内部文本会溢出，
    进而与相邻行视觉重叠（曾出现第2、3天叠在一起 + "08:00" 只露一半）。
    统一 height + overflow 处理，保证每行独立、控件内容不外溢。 */
@@ -1836,6 +1863,19 @@ select.input {
   font-size: 13px;
   line-height: 1.2;
 }
+/* 移动端 select 的原生下拉箭头比桌面窄，padding-right:20px 预留过多，
+   在窄屏会把「08:00」挤到只剩「0…」（用户截图）。收窄到 14px 即可。
+   注：本块必须放在下方桌面规则之后，否则会被同权重的桌面声明覆盖。 */
+@media (max-width: 768px) {
+  .seg-row select.input,
+  .appt-time-row select.input { padding-right: 14px; }
+  /* 日期列权重：1.9fr 是按「内容宽 319px」算的，实测 390px 视口下弹窗内容只有 290px
+     （mask 16px + modal 90% + body 16px），日期分到 108px 而时间仅 57px → 时间被截成 "0…"。
+     降到 1.6fr 把时间补到 ~72px；mask 加宽后（见 6028 附近）总量到 ~338px 更宽裕。
+     日期 10 字符 vs 时间 5 字符，1.6 仍是日期占优，不会把日期压回去。 */
+  .seg-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto minmax(0, 1.2fr); }
+  .appt-time-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto minmax(0, 1.2fr); }
+}
 .seg-row select.input { padding-right: 20px; }
 .seg-row input[type="date"].input { padding-right: 4px; }
 .seg-row .seg-del {
@@ -1848,34 +1888,18 @@ select.input {
   justify-content: center;
 }
 
-/* 天序圆圈：比「第N天」文字省约 30px，窄屏下把宽度让给日期/时间控件 */
-.seg-badge {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #eef2ff;
-  color: #4338ca;
-  border: 1px solid #c7d2fe;
-  font-size: 12px;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  line-height: 1;
-  user-select: none;
-}
 .seg-arrow {
   font-size: 13px;
   color: #94a3b8;
   text-align: center;
 }
-/* 极窄屏（<340px）才允许换行：标签+日期一行、时间一行，避免控件被压到不可用 */
+/* 极窄屏（<340px）才允许换行：日期独占一行、时间一行，避免控件被压到不可用。
+   2026-10-23：圆圈去掉后日期为第 1 列，改为 grid-column: 1 / -1 占满整行。 */
 @media (max-width: 339px) {
   .seg-row {
-    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
   }
-  .seg-row .segDate { grid-column: 2 / -1; }
+  .seg-row .segDate { grid-column: 1 / -1; }
 }
 
 .btn {
@@ -3793,6 +3817,138 @@ textarea.input { resize: vertical; min-height: 50px; }
   .contract-grid .input { width: 100%; min-width: 0; }
 }
 
+/* 「预约时间」标题后的跨天提示（2026-10-23）：仅跨天时显示「共N天」，
+   普通灰色小字跟在标题后，不加底纹（时长卡保留完整统计，这里只补天数）。
+   单天 / 无有效时段 / 时段非法时由 JS 清空。 */
+.appt-days-hint {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 窄屏弹窗加宽（2026-10-23，用户截图反馈"预约日期时间显示不全/金额出界"）。
+   .modal-mask padding 16px + .modal width 90% 在 390px 视口下：
+   390 - 32(mask) = 358 容器 → modal 322px → body 内容仅 290px。
+   290px 放「①日期 → 开始 → 结束」六件套必然截断（日期 ~92px + 2×时间 ~58px + 圆圈 22 + 箭头 13 + 间距 25 = 268px，几无余量）。
+   窄屏把 mask 收到 8px、modal 改为 calc(100% - 4px) → 内容宽 ~338px，余量充足。
+   仅影响窄屏间距，不改任何逻辑；桌面端（>768px）完全不受影响。 */
+@media (max-width: 768px) {
+  .modal-mask { padding: 8px; }
+  .modal { width: calc(100% - 4px); }
+}
+
+/* ===== 施工时长汇总卡（2026-10-23 重排）=====
+   旧版：⏳ + "施工时长" + 大数字，与右侧「总工时与人数/保存时自动计算」左右分列。
+   三个问题：
+     ① 右侧说明被挤成 2~3 行并被裁切（"总工时与人 数/保存时自动 计算"）；
+     ② 大数字 "3天 共22小时20分钟" 在窄屏把"钟"挤到第二行（孤字）；
+     ③ 文案误导 —— 人数并非本卡片"自动计算"出来的，而是取「已分配施工人员」
+        （新建项目未分配时按 1 人计），与 help.html §4 的口径本就一致。
+   新版：数字独占一行（不再换行、不裁切），口径说明整行放到下方（可自然换行）。 */
+.dur-card {
+  background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.dur-card__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.dur-card__icon {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+.dur-card__label {
+  font-size: 12px;
+  color: #64748b;
+}
+.dur-card__value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1e293b;
+  line-height: 1.3;
+}
+.dur-card__hint {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e2e8f0;
+  font-size: 11.5px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+/* 快捷时长「作用范围」切换按钮（2026-10-23）。
+   按钮文字用「🔁 各天 / 🔁 第3天」——带"第"字，与标题里的「共N天」（总天数）不撞车。
+   选中某一天时按钮转为实心靛蓝（不再是"灰掉+删除线"，因为"只改第3天"是一个有效状态而非关闭）。
+   尺寸与同排「上午/下午/全天」快捷按钮对齐（3px 10px / 12px），窄屏不换行。 */
+.seg-sync-btn {
+  background: #ede9fe !important;
+  color: #7c3aed !important;
+  border-color: #ddd6fe !important;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.seg-sync-btn.is-off {
+  background: #4f46e5 !important;
+  color: #fff !important;
+  border-color: #4338ca !important;
+}
+
+/* ===== 快捷键目标天高亮（2026-10-23）=====
+   用户反馈：光看按钮上的"3天"分不清是"第3天"还是"共3天"，toast 又会消失。
+   对策：把"当前快捷键作用在哪一天"直接用颜色标在那一行上 —— 点击切换时高亮在行间"轮换"：
+     · .seg-day-row-on → 目标天：整行淡靛蓝底 + 行内控件描浅靛蓝边
+     · .seg-day-on     → 目标天日期框：靛蓝边框 + 淡靛蓝底 + 加粗 + 外发光（醒目）
+     · .seg-day-dim    → 其余天：整行压灰（opacity .45），一眼看出只有一天会变
+   「各天」模式不染色 —— 靛蓝是唯一"只改这一天"的信号，不搞第二套绿/靛蓝语义。
+   第1天的日期框 = #pDate（两种弹窗共用），第2天起 = #segExtraList 里各行的 .segDate。 */
+.seg-day-on {
+  border-color: #4f46e5 !important;
+  background: #eef2ff !important;
+  color: #312e81 !important;
+  font-weight: 600;
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.16);
+}
+.seg-day-dim {
+  opacity: .45;
+}
+/* 目标天所在的整行也加一层淡靛蓝底（透过行内间隙可见），强化"这一天" */
+.seg-day-row-on {
+  background: #f5f3ff !important;
+  border-radius: 8px;
+}
+/* 目标行里的所有控件描同色边，让这一行读起来是"一整条被选中的天" */
+.seg-day-row-on .input {
+  border-color: #a5b4fc !important;
+}
+.seg-day-row-on .seg-day-on {
+  border-color: #4f46e5 !important;
+  background: #eef2ff !important;
+  font-weight: 600;
+}
+/* 提示条：说明快捷键当前作用范围 */
+.seg-target-hint {
+  font-size: 11px;
+  color: #4f46e5;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.seg-target-hint.is-all {
+  color: #16a34a;
+  font-weight: 500;
+}
+
 /* 包活「工程金额」：标签与输入框同一行（2026-10-22，仅此一处用）。
    .form-row label 默认 display:block 会让标签独占一行、这里改为 flex 同行：
    标签固定不压缩（不换行），输入框吃掉剩余宽度。
@@ -3820,9 +3976,10 @@ textarea.input { resize: vertical; min-height: 50px; }
    注意需与下方 @media 里的 `.contract-grid .input{width:100%}` 竞争，
    故选择器加 .contract-grid 前缀提高权重（否则窄屏会被那条覆盖回窄）。 */
 .contract-grid .contract-amount-row > div > .input {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
-  width: auto;
+  width: 100%;
+  max-width: 100%;
 }
 
 /* 预约时间「日期 + 开始 → 结束」严格一行（2026-10-22）。
@@ -3831,20 +3988,20 @@ textarea.input { resize: vertical; min-height: 50px; }
    保证任何屏宽下都是一行。日期列给 1.6 权重（年月日期文字需要更多空间），两个时间列等分。 */
 .appt-time-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1.6fr) minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  /* 2026-10-23（修订）：同 .seg-row，删除恒空的 28px 第5列，改为 4 列；
+     日期 1.2fr、开始 1fr、箭头 auto、结束 1.2fr。结束列更宽，"12:00" 不再截断；
+     每行右侧不再凭空多出 28px 空隙。 */
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto minmax(0, 1.2fr);
   align-items: center;
   gap: 6px;
   width: 100%;
 }
 .appt-time-row > * { min-width: 0; }
-/* 显式定列：「第1天」标签与「次日」提示默认 display:none，
-   若不定列，隐藏后后面的元素会左移占错格（结束时间跑到箭头条）。 */
-.appt-time-row > .seg-badge { grid-column: 1; }
-.appt-time-row__date { grid-column: 2; }
-#pTime { grid-column: 3; }
-.appt-time-row__arrow { grid-column: 4; }
-#pEnd { grid-column: 5; }
-.appt-time-row__nextday { grid-column: 6; }
+/* 显式定列：日期/开始/箭头定列防隐藏元素错位；结束列由 .appt-time-end-wrap 包裹
+   占第 4 列（含「次日」提示，提示隐藏时也不占独立轨道，不破坏对齐）。 */
+.appt-time-row__date { grid-column: 1; }
+#pTime { grid-column: 2; }
+.appt-time-row__arrow { grid-column: 3; }
 /* 高度与 .seg-row 的跨天段统一，保证第一天与第2天起的行高/字号完全一致 */
 .appt-time-row .input {
   width: 100%;
@@ -3855,6 +4012,16 @@ textarea.input { resize: vertical; min-height: 50px; }
   font-size: 13px;
   line-height: 1.2;
 }
+/* 结束时间 + 「次日」提示 同格包裹：select 吃满剩余宽度，提示不挤占独立列 */
+.appt-time-end-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+}
+.appt-time-end-wrap .input { flex: 1 1 0; min-width: 0; width: 100%; }
+.appt-time-end-wrap .appt-time-row__nextday { flex-shrink: 0; }
 .appt-time-row select.input { padding-right: 20px; }
 .appt-time-row input[type="date"].input { padding-right: 4px; }
 .appt-time-row__arrow {
@@ -3867,11 +4034,11 @@ textarea.input { resize: vertical; min-height: 50px; }
   color: #0891b2;
   white-space: nowrap;
 }
-/* 极窄屏（<340px，如 iPhone SE 竖屏缩放）才允许换行，此时两列一行仍优于三行堆叠 */
+/* 极窄屏（<340px，如 iPhone SE 竖屏缩放）才允许换行，此时两列一行仍优于三行堆叠。
+   2026-10-23：圆圈去掉后无需再给 seg-label 定列，日期本就占满整行。 */
 @media (max-width: 339px) {
-  .appt-time-row { grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr) auto; }
+  .appt-time-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; }
   .appt-time-row__date { grid-column: 1 / -1; }
-  .appt-time-row > .seg-label { grid-column: 1; }
   #pTime { grid-column: 1; }
 }
 
@@ -6354,6 +6521,33 @@ body.modal-open {
   font-size: 13px;
   cursor: pointer;
   margin: 0;
+}
+/* 维修/返工/改收费弹窗的收费方式单选行（2026-10-23，用户截图反馈"别自动换行"）。
+   原来整行靠 flex-wrap:wrap 兜底：窄屏（弹窗内容 ~290px）下标题 + 两个单选
+   合计 ~300px 放不下 → 「额外收费」被挤到第二行、单选文字折行。
+   现在标题独立成行（见 repairPayBlockHtml），单选行本身只有 ~160px，
+   配 nowrap + flex-shrink:0 保证任何屏宽都单行完整显示。
+   emoji 也去掉了——截图里 💵 在部分机型渲染成 📰（字体缺字形），纯文字更稳。 */
+.repair-pay-radios {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: nowrap;
+}
+.repair-pay-radios .radio-inline {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* 包活方式行（仅出人工费/包工包料）：同样不换行，标题与选项间距收紧 */
+.repair-contract-radios {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+.repair-contract-radios .radio-inline {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .commission-panel .info-grid {
   margin-bottom: 10px;
