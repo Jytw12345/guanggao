@@ -1795,7 +1795,14 @@ function updateSpanHint() {
     days.add(s.date);
   }
   const endHint = document.getElementById("pEndNextDayHint");
-  if (endHint) endHint.style.display = mainOvernight ? "inline" : "none";
+  if (endHint) {
+    endHint.style.display = mainOvernight ? "inline" : "none";
+    // 2026-10-25：「次日」改为**绝对定位角标**（见 styles.css .appt-time-row__nextday），
+    // 完全不占布局宽度 —— 窄屏下横向已无空间容纳独立文字块（见 styles.css 预算注释）。
+    // 同步给包裹层打状态类，给跨天的结束框加淡青底色 + 青色边框（零宽度成本的状态标识）。
+    const endWrap = endHint.closest(".appt-time-end-wrap");
+    if (endWrap) endWrap.classList.toggle("has-nextday", !!mainOvernight);
+  }
 
   if (bad) {
     durationCard.style.opacity = "1";
@@ -8353,6 +8360,7 @@ function onCosImgError(img, name, key) {
       t.title = msg;
     } else if (msg.includes("网络") || msg.includes("fetch") || msg.includes("Failed to send")) {
       t.textContent = "网络错误 · 点此重试";
+      t.title = `诊断：网络${navigator.onLine ? "在线" : "离线"}｜${msg.slice(0, 100)}`;
     } else {
       t.textContent = "加载失败 · 点此重试";
       t.title = msg ? msg.slice(0, 120) : "图片预览失败，可点击看大图";
@@ -9560,7 +9568,12 @@ async function cosLightboxTryRecover(img, key, name) {
         tip.textContent = `代理加载失败[${code || "?"}] ${txt || ""}`.trim();
       } else if (msg.includes("网络") || msg.includes("fetch") || msg.includes("Failed")) {
         // 调试期：显示真实错误（通道超时/Failed to fetch 具体形态），避免泛化文案掩盖根因
-        tip.textContent = `网络错误，无法连接到代理（${msg.slice(0, 150)}）`;
+        // 2026-10-25：附诊断信息（网络在线状态 + 直链是否拿到 + 直链 host），
+        // 用户一张截图即可区分：设备离线 / cos-sign 没签成（invoke 被拦）/ COS 域名不可达。
+        const srcUrl = String(img.getAttribute("src") || "");
+        const diag = `诊断：网络${navigator.onLine ? "在线" : "离线"}｜直链${srcUrl ? "已签 " + srcUrl.slice(0, 48) : "未获取（cos-sign 调用失败）"}`;
+        tip.textContent = `网络错误，无法连接到代理（${msg.slice(0, 120)}）`;
+        tip.title = diag;
       } else if (msg.includes("heic2any") || msg.includes("转码库")) {
         tip.textContent = "HEIC 转码库未加载，请下载原图查看";
       } else if (msg.includes("转码") || msg.includes("HEIC")) {
@@ -9618,6 +9631,22 @@ function openCosLightbox(url, key, name) {
   // 绑定图片交互（滚轮/拖拽/双击）
   const img = el.querySelector("img");
   if (img) cosLightboxInitInteractions(img);
+  // 2026-10-25：img 挂起保护——WebView/PakePlus 下直连 COS 可能既不 onerror 也不 onload
+  // （TCP 连上不返回），8s 没结果主动走代理恢复链；onerror 路径不变，recoverTried 防重复。
+  if (img && key) {
+    const lbTimer = setTimeout(() => {
+      if (img.dataset.recoverTried === "1") return;
+      if (img.complete && img.naturalWidth > 0) return; // 已加载成功
+      const tip = el.querySelector(".cos-lightbox__tip");
+      if (tip) {
+        tip.className = "cos-lightbox__tip cos-lightbox__tip--err";
+        tip.textContent = "加载超时，尝试通过代理加载…";
+      }
+      cosLightboxTryRecover(img, key, name);
+    }, 8000);
+    img.addEventListener("load", () => clearTimeout(lbTimer), { once: true });
+    img.addEventListener("error", () => clearTimeout(lbTimer), { once: true });
+  }
   cosLightboxUpdateZoomLabel();
   document.addEventListener("keydown", onKey);
   // 无 URL 时（PakePlus 直连 COS 失败），立即走代理异步加载
@@ -10499,8 +10528,8 @@ function projectForm(p = {}, opts = {}) {
       <div class="seg-title-row">
         <span style="display:inline-flex;align-items:center;gap:2px;"><span style="color:var(--warn)">${svgCal(14)}</span> 预约时间 *</span>
         <span id="pApptDaysHint" class="appt-days-hint"></span>
-        <button type="button" class="btn small seg-plus-btn" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ <span class="tx-full">加一天</span><span class="tx-mini">加天</span></button>
-        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;padding:3px 10px;font-size:12px;">➖ <span class="tx-full">减一天</span><span class="tx-mini">减天</span></button>
+        <button type="button" class="btn small seg-plus-btn" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;font-size:12px;">➕ <span class="tx-full">加一天</span><span class="tx-mini">加天</span></button>
+        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;font-size:12px;">➖ <span class="tx-full">减一天</span><span class="tx-mini">减天</span></button>
       </div>
       <!-- 2026-10-22：日期 + 开始 → 结束合并为**严格一行**。
            原先用 flex + flex-wrap，窄屏下 flex 基准宽度合计超过容器 → 三个控件各占一行（用户反馈）。
@@ -10549,7 +10578,6 @@ function projectForm(p = {}, opts = {}) {
           <div id="pDurationValue" class="dur-card__value">--</div>
         </div>
       </div>
-      <div class="dur-card__hint">各天施工时段时长之和，与人数无关</div>
     </div>
     <div class="form-row">
       <label><span style="color:#0ea5e9;">🛠️</span> 施工内容</label>
@@ -11524,8 +11552,8 @@ function quickEditProjectTimeForm(p = {}) {
       <div class="seg-title-row">
         <span style="display:inline-flex;align-items:center;gap:2px;"><span style="color:var(--warn)">${svgCal(14)}</span> 施工日期</span>
         <span id="pApptDaysHint" class="appt-days-hint" title="跨天施工的总天数"></span>
-        <button type="button" class="btn small seg-plus-btn" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ <span class="tx-full">加一天</span><span class="tx-mini">加天</span></button>
-        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;padding:3px 10px;font-size:12px;">➖ <span class="tx-full">减一天</span><span class="tx-mini">减天</span></button>
+        <button type="button" class="btn small seg-plus-btn" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;font-size:12px;">➕ <span class="tx-full">加一天</span><span class="tx-mini">加天</span></button>
+        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;font-size:12px;">➖ <span class="tx-full">减一天</span><span class="tx-mini">减天</span></button>
       </div>
       <div class="appt-day1-row" style="display:flex;align-items:center;gap:6px;width:100%;">
         <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" min="${todayStr()}" onchange="onDateChange()" style="flex:1;" />
@@ -11574,7 +11602,6 @@ function quickEditProjectTimeForm(p = {}) {
           <div id="pDurationValue" class="dur-card__value">--</div>
         </div>
       </div>
-      <div class="dur-card__hint">各天施工时段时长之和，与人数无关</div>
     </div>
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
@@ -16619,7 +16646,6 @@ function reworkProjectForm(id) {
           <div id="rwDurationValue" class="dur-card__value">--</div>
         </div>
       </div>
-      <div class="dur-card__hint">各天施工时段时长之和，与人数无关</div>
     </div>
     <div class="form-row">
       <label><span style="color:#0ea5e9;">🔧</span> 返工内容 *</label>
@@ -29411,7 +29437,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v7d8e6aff";
+  const APP_VERSION = "v46129a5a";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

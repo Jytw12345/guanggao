@@ -1816,7 +1816,10 @@ select.input {
    minmax(0,…) 压掉 date/select 原生最小宽度，保证任意屏宽不换行。 */
 .seg-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto minmax(0, 1.2fr);
+  /* 2026-10-25（三修）：日期列改**定宽 142px**，不再随屏幕比例放大。
+     探针实测桌面 date input（**含日历图标**）min-content = 134px（加粗高亮行 139px），
+     142px 留足余量；日期定宽后开始/结束两列严格等宽均分剩余空间。 */
+  grid-template-columns: 142px minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -1843,6 +1846,15 @@ select.input {
     -webkit-appearance: none;
     appearance: none;
   }
+  /* 2026-10-25：原生日历图标隐藏后，补一个装饰性日历小标（右上角，pointer-events 不影响点击，
+     点日期框任意处仍可弹原生选择器），明确「这里能选日期」。仅作视觉提示，不占布局宽度。 */
+  .seg-row .segDate,
+  .appt-time-row__date {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Crect x='1.5' y='3' width='11' height='9.5' rx='1.5' fill='none' stroke='%2394a3b8' stroke-width='1'/%3E%3Cline x1='1.5' y1='5.5' x2='12.5' y2='5.5' stroke='%2394a3b8' stroke-width='1'/%3E%3Cline x1='4.5' y1='3' x2='4.5' y2='1.5' stroke='%2394a3b8' stroke-width='1'/%3E%3Cline x1='9.5' y1='3' x2='9.5' y2='1.5' stroke='%2394a3b8' stroke-width='1'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 3px top 3px;
+    background-size: 13px 13px;
+  }
   .seg-row .seg-del {
     padding: 0 5px;
     min-width: 24px;
@@ -1863,27 +1875,8 @@ select.input {
   font-size: 13px;
   line-height: 1.2;
 }
-/* 移动端 select 的原生下拉箭头比桌面窄，padding-right:20px 预留过多，
-   在窄屏会把「08:00」挤到只剩「0…」（用户截图）。收窄到 14px 即可。
-   注：本块必须放在下方桌面规则之后，否则会被同权重的桌面声明覆盖。
-   2026-10-25（再修）：360px 弹窗内容超高出现**滚动条**后再窄 ~15px，
-   原 1.2/1/1.2 分下来日期列内容区仅 ~93px，而日期文字（headless 实测 ~102px、
-   加粗目标行更宽）零余量 → 用户截图第1、3天被裁成 "2026/10/2"。
-   对策：日期列权重 1.2→1.7（结束列 1.2→1：时间去前导零后仅 4 字符，
-   不再需要宽列），日期 input 左右 padding 8→4、letter-spacing -0.4 压文字。 */
-@media (max-width: 768px) {
-  .seg-row select.input,
-  .appt-time-row select.input { padding-right: 14px; }
-  .seg-row { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) auto minmax(0, 1fr); }
-  .appt-time-row { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) auto minmax(0, 1fr); }
-  /* 日期文字瘦身：padding 8→4（省 8px）+ letter-spacing 负值（10 字符省 ~4px）。
-     letter-spacing 是继承属性，Chrome 的 date input 内部字段同样生效。 */
-  .seg-row input[type="date"].input,
-  .appt-time-row input[type="date"].input {
-    padding: 6px 4px;
-    letter-spacing: -0.4px;
-  }
-}
+/* 移动端 select 的原生下拉箭头比桌面窄（窄屏覆盖规则见本文件 4086 行之后的
+   「≤768px 预约时间行覆盖」块——必须集中在桌面规则之后，否则被同权重桌面声明覆盖）。 */
 .seg-row select.input { padding-right: 20px; }
 .seg-row input[type="date"].input { padding-right: 4px; }
 .seg-row .seg-del {
@@ -1900,14 +1893,6 @@ select.input {
   font-size: 13px;
   color: #94a3b8;
   text-align: center;
-}
-/* 极窄屏（<340px）才允许换行：日期独占一行、时间一行，避免控件被压到不可用。
-   2026-10-23：圆圈去掉后日期为第 1 列，改为 grid-column: 1 / -1 占满整行。 */
-@media (max-width: 339px) {
-  .seg-row {
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
-  }
-  .seg-row .segDate { grid-column: 1 / -1; }
 }
 
 .btn {
@@ -3852,15 +3837,22 @@ textarea.input { resize: vertical; min-height: 50px; }
   gap: 6px;
   margin-bottom: 4px;
 }
+/* 按钮 padding 收编到 class（原 inline 3px 10px 无法被窄屏覆盖） */
+.seg-plus-btn,
+.seg-minus-btn { padding: 3px 10px; }
 .seg-plus-btn .tx-mini,
 .seg-minus-btn .tx-mini { display: none; }
 @media (max-width: 768px) {
-  .seg-title-row { gap: 4px; }
-  .seg-plus-btn .tx-full,
-  .seg-minus-btn .tx-full { display: none; }
+  .seg-title-row { gap: 3px; }
+  .seg-plus-btn,
+  .seg-minus-btn { padding: 3px 8px; }
+  /* 2026-10-25：定宽日期列落地后标题行右侧已留余量，恢复完整文案「加一天/减一天」，
+     不再用「加天/减天」简写（简写是为旧比例布局腾空间，现已无必要）。 */
   .seg-plus-btn .tx-mini,
-  .seg-minus-btn .tx-mini { display: inline; }
-  .seg-title-row .appt-days-hint { margin-left: 2px; }
+  .seg-minus-btn .tx-mini { display: none; }
+  .seg-plus-btn .tx-full,
+  .seg-minus-btn .tx-full { display: inline; }
+  .seg-title-row .appt-days-hint { margin-left: 2px; font-size: 11px; }
 }
 
 /* 快速改时间弹窗「开始/结束」select：桌面 max-width 110px，
@@ -3871,16 +3863,8 @@ textarea.input { resize: vertical; min-height: 50px; }
   .appt-d1-time-sel { max-width: 92px; }
 }
 
-/* 窄屏弹窗加宽（2026-10-23，用户截图反馈"预约日期时间显示不全/金额出界"）。
-   .modal-mask padding 16px + .modal width 90% 在 390px 视口下：
-   390 - 32(mask) = 358 容器 → modal 322px → body 内容仅 290px。
-   290px 放「①日期 → 开始 → 结束」六件套必然截断（日期 ~92px + 2×时间 ~58px + 圆圈 22 + 箭头 13 + 间距 25 = 268px，几无余量）。
-   窄屏把 mask 收到 8px、modal 改为 calc(100% - 4px) → 内容宽 ~338px，余量充足。
-   仅影响窄屏间距，不改任何逻辑；桌面端（>768px）完全不受影响。 */
-@media (max-width: 768px) {
-  .modal-mask { padding: 8px; }
-  .modal { width: calc(100% - 4px); }
-}
+/* 窄屏弹窗加宽的规则已移至桌面 .modal / .modal-mask 定义之后（本文件 6305 附近）——
+   媒体查询不加权重，放这里会被桌面 width:90% / padding:16px 静默覆盖（2026-10-25 修正）。 */
 
 /* ===== 施工时长汇总卡（2026-10-23 重排）=====
    旧版：⏳ + "施工时长" + 大数字，与右侧「总工时与人数/保存时自动计算」左右分列。
@@ -4030,8 +4014,12 @@ textarea.input { resize: vertical; min-height: 50px; }
   display: grid;
   /* 2026-10-23（修订）：同 .seg-row，删除恒空的 28px 第5列，改为 4 列；
      日期 1.2fr、开始 1fr、箭头 auto、结束 1.2fr。结束列更宽，"12:00" 不再截断；
-     每行右侧不再凭空多出 28px 空隙。 */
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto minmax(0, 1.2fr);
+     每行右侧不再凭空多出 28px 空隙。
+     2026-10-25（三修）：日期列改**定宽 142px**，不再随屏幕比例放大。
+       探针实测桌面 date input（**含日历图标**）min-content = 134px、加粗高亮行 139px，
+       142px 留足余量；日期定宽后开始/结束两列严格等宽均分剩余空间
+       （桌面各 ~100px），"开始/结束"两个时间框不再一边宽一边窄。 */
+  grid-template-columns: 142px minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -4059,9 +4047,40 @@ textarea.input { resize: vertical; min-height: 50px; }
   gap: 4px;
   min-width: 0;
   width: 100%;
+  position: relative;   /* 「次日」浮标定位基准 */
 }
 .appt-time-end-wrap .input { flex: 1 1 0; min-width: 0; width: 100%; }
-.appt-time-end-wrap .appt-time-row__nextday { flex-shrink: 0; }
+/* 「次日」提示改为**绝对定位角标**，完全零布局占用。
+   2026-10-25（三修）：
+     ① 原先是 flex 兄弟节点（flex-shrink:0），显示时挤掉结束 select 26px
+        —— 360px 窄屏下结束 select 只剩 37px，文字必然截断；
+     ② 改成绝对定位浮在 select 左侧内缘后，仍会**盖住时间文字**
+        （360px 档 select 仅 74.5px，扣掉 28px padding 放不下「浮标+文字+箭头」）；
+     ③ 复核宽度预算：360px 档可用 278px = 日期 104 + 箭头 13 + gap 12 + 两 select 各 74.5，
+        而日期加粗下限 94px + select 下限 71px×2 = 261px 已占满，**横向再无空间**，
+        任何「次日」文字块都不可能独占一列而不裁切时间。
+   现方案：浮标贴 select **右上角内缘**（原生下拉箭头垂直居中于右侧、
+   时间文字左对齐 → 右上角是框内唯一空区），字号收到 9px 且不碰箭头；
+   同时给跨天的结束框加淡青底色 + 青色边框做状态标识（零宽度成本）。 */
+.appt-time-row__nextday {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  z-index: 2;
+  font-size: 9px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: #cffafe;
+  color: #0e7490;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* 跨天状态标识：结束时间框淡青底 + 青色边框（不占任何布局宽度） */
+.appt-time-end-wrap.has-nextday .input {
+  border-color: #67e8f9;
+  background: #ecfeff;
+}
 .appt-time-row select.input { padding-right: 20px; }
 .appt-time-row input[type="date"].input { padding-right: 4px; }
 .appt-time-row__arrow {
@@ -4069,15 +4088,77 @@ textarea.input { resize: vertical; min-height: 50px; }
   color: #94a3b8;
   text-align: center;
 }
-.appt-time-row__nextday {
-  font-size: 11px;
-  color: #0891b2;
-  white-space: nowrap;
+
+/* ===== 窄屏（≤768px）「预约时间」日期行覆盖（2026-10-25）=====
+   **位置铁律**：本块必须放在所有桌面声明（.seg-row grid 见 1817、.appt-time-row grid 见 4032、
+   select padding-right 见 1890/4068、.input padding 见 1856/4049）**之后**——
+   媒体查询不加权重，同权重声明后者胜出；放前面会被桌面值静默覆盖（本次修复前
+   窄屏列宽与 select padding 实际全部失效，用户截图日期被裁即此因）。
+
+   根因（2026-10-25，360px Galaxy S8+ 实测 + headless 探针复测）：
+   弹窗内容超高出现**滚动条**后可用宽仅 ~293px（mask 8 + modal calc(100%-4px) + body 16×2
+   - 滚动条 15）。旧版 1.2/1/1.2 分下来日期列仅 ~95px，而 Chrome 的 date input 有 ~113px
+   内置最小宽度（width:100% + min-width:0 均压不动；实测 grid 轨道 94.6px 而 input 渲染 113px）
+   → input 溢出轨道 18px，右端被相邻 select 的白底盖住 → 日期尾巴消失（"2026/10/2"）。
+   精确预算（293px 可用）：date input 最小渲染宽 = 内部字段 113 + padding 8 + border 4 = 125px
+   （width:100% + min-width:0 均压不动——实测 grid 轨道 94.6px 而 input 仍渲染 113px），
+   select 需求 ~55px（文字 30 + padding 16 + 箭头 10），箭头 13、gap 12。
+   旧版 1.2/1/1.2 日期列仅 95px → input 溢出 30px、右端被相邻 select 白底盖住
+   → 日期尾巴消失（"2026/10/2"，即用户截图病灶）。对策：
+    ① 列宽 2/1/1 —— 日期列 ~134px ≥ 125px 不再溢出，时间列各 ~67px ≥ 55px；
+    ② date input letter-spacing -1px（10 字符省 ~10px）+ padding 8→4，
+      加粗目标行也放得下；select letter-spacing -0.3px + padding 收紧同步保险。
+
+   2026-10-25（三修，用户反馈"预约日期太宽，开始/结束时间怎么分配更好"）：
+   探针（iframe 固定视口 + 真实 styles.css）实测三档真机视口：
+     真机 360px → 可用 278px；390px → 308px；430px → 348px
+     date input min-content 下限（隐藏日历图标）：常规 89px、**加粗目标行 100px**
+     select min-content 下限：13px 字号 51px、14px 字号 53px
+   旧版 2/1/1 的分配是「日期 126.5px / 时间 63.3px」（360px 档）：
+   日期文字只需 89px（加粗 100px），**富余 37px 白白浪费**；两个时间框各 63px
+   却只够塞下 select 的最小宽（51px），显得局促 —— 这正是用户"日期太宽"的观感来源。
+   改为**日期定宽 104px + 开始/结束均分剩余**（不再用 fr 比例，日期宽度与屏幕无关）：
+     360px 档：日期 126.5→104（-22），时间 63.3→74.5（各 +11，两框严格等宽）
+     390px 档：日期 141.5→104（-37），时间 70.8→89.5（各 +19）
+     430px 档：日期 161.5→104（-57），时间 80.8→109.5（各 +29）
+   依据（截图实测 + 新建元素量 min-content，非估算）：
+     · date input 无日历图标 + 13px + ls-1px：字重400 需 89px、**字重600 需 100px**
+       （高亮目标行是加粗的，取 104px 留 4px 余量）；
+     · select 14px：64px 起文字与下拉箭头都完整，56px 虽显示文字但箭头被压掉；
+       实测 min-content 71px（含 padding+箭头）。
+   104 + 13(箭头) + 12(gap 4×3) = 129px 固定开销，360px 档剩 149px → 时间各 74.5px ≥ 71 ✓
+   再把窄屏时间字号 13px→14px：手机上"8:00 / 18:00"更醒目更好点。 */
+@media (max-width: 768px) {
+  .seg-row,
+  .appt-time-row { grid-template-columns: 104px minmax(0, 1fr) auto minmax(0, 1fr); }
+  /* gap 也必须在这里（桌面规则之后）声明：1851 行旧窄屏块的 gap:4px 被桌面
+     .appt-time-row gap:6px（4014）静默覆盖——探针实测第一行 gap=6px 比跨天行
+     少 6px 给内容，正是用户截图「第一行时间被裁、其余行完整」的直接原因。 */
+  .seg-row,
+  .appt-time-row { gap: 4px; }
+  .seg-row select.input,
+  .appt-time-row select.input {
+    padding: 6px 5px;
+    padding-right: 9px;
+    letter-spacing: -0.3px;
+    font-size: 14px;   /* 窄屏时间加大，手机上更好读更好点 */
+  }
+  .seg-row input[type="date"].input,
+  .appt-time-row input[type="date"].input {
+    padding: 6px 4px;
+    letter-spacing: -1px;
+  }
 }
-/* 极窄屏（<340px，如 iPhone SE 竖屏缩放）才允许换行，此时两列一行仍优于三行堆叠。
-   2026-10-23：圆圈去掉后无需再给 seg-label 定列，日期本就占满整行。 */
+
+/* 极窄屏（<340px，如 iPhone SE 竖屏缩放）才允许换行：日期独占一行、时间一行，
+   避免控件被压到不可用。2026-10-23：圆圈去掉后日期为第 1 列，改为占满整行。
+   2026-10-25：seg-row / appt-time-row 两个 339 块合并挪到本位置——必须放在 768 块
+   **之后**：≤339px 屏会同时匹配两个查询，同权重后者胜出；原来分居文件两处时
+   768 块的列宽会把 339 的"日期独占行"静默覆盖掉。 */
 @media (max-width: 339px) {
+  .seg-row,
   .appt-time-row { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; }
+  .seg-row .segDate,
   .appt-time-row__date { grid-column: 1 / -1; }
   #pTime { grid-column: 1; }
 }
@@ -6280,6 +6361,16 @@ body.modal-open {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
   display: flex;
   flex-direction: column;
+}
+/* 窄屏弹窗加宽（2026-10-23 意图，2026-10-25 修正位置后才真正生效）。
+   **位置铁律**：必须放在桌面 .modal / .modal-mask（上方 6271/6286）之后——媒体查询
+   不加权重，同权重后者胜出；原规则放在 3852 处，被桌面 width:90% / padding:16px
+   静默覆盖（10-23 起两天实际未生效：360px 手机弹窗一直是 90% 宽 + 16px mask，
+   可用内容宽仅 ~248px，正是预约日期行时间被裁成 "8:…" 的根因之一）。
+   360px 视口：mask 8px + modal calc(100%-4px) → 弹窗 340px → body 内容 ~293px。 */
+@media (max-width: 768px) {
+  .modal-mask { padding: 8px; }
+  .modal { width: calc(100% - 4px); }
 }
 /* 批量轮休弹窗：日期 chip 较宽，电脑端稍微加宽以显示 5 个日期 */
 @media (min-width: 769px) {
