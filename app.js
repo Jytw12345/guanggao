@@ -8548,7 +8548,7 @@ async function _cosSignInvokeOnce(body, timeoutMs, maxRetries) {
       if (isCosSignAuthError(error)) {
         console.warn("[cos-sign] 签名返回登录态错误，刷新会话后重试：", String(error.message || error).slice(0, 160));
         try {
-          const { error: refreshErr } = await sb.auth.refreshSession();
+          const { error: refreshErr } = await _withAuthTimeout(sb.auth.refreshSession(), 4000, "refreshSession");
           if (refreshErr) console.warn("[cos-sign] refreshSession 失败：", refreshErr.message || refreshErr);
         } catch (refreshEx) { console.warn("[cos-sign] refreshSession 异常：", refreshEx); }
         try {
@@ -8636,7 +8636,12 @@ async function cosGetViewUrls(keys, signOpts = {}) {
   if (need.length && MODE === "cloud" && sb) {
     await ensureFreshSessionForSign();
     try {
-      const data = await cosSignGetOnce(need, signOpts);
+      // 代理环境（packplus/WebView2）下签名只用于「XHR 直链兜底」，不能让它拖住出图：
+      // cos-sign 默认 4 次重试最长可拖到十几秒，期间缩略图只能干等。这里自动降为 1 次 4s。
+      const opts = (isCosProxyOnlyEnv() || __cosDirectUnreachable) && !signOpts.timeoutMs
+        ? { timeoutMs: 4000, retries: 0 }
+        : signOpts;
+      const data = await cosSignGetOnce(need, opts);
       (data.items || []).forEach((it) => {
         if (it.key && it.url) {
           _cosViewCache[it.key] = it.url;
@@ -29603,7 +29608,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v31481d12";
+  const APP_VERSION = "v2e9dc4ab";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
