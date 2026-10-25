@@ -8295,6 +8295,9 @@ function onCosImgError(img, name, key) {
       signed = m[k] || "";
     }
     if (signed && !proxyOnly) {
+      // 同步更新 dataset：恢复链后续的 XHR 直链探测必须用「刚签的新 URL」，
+      // 否则会拿已失效的旧签名去探测，把「签名过期」误判成「网络不通」。
+      img.dataset.cosSigned = signed;
       img.src = signed;
       img.classList.remove("cos-img--err");
       if (parent) {
@@ -8469,17 +8472,25 @@ function isCosProxyOnlyEnv() {
   return /pakeplus|packplus|;\s*wv\)|webview/i.test(ua);
 }
 
-// 会话级学习标志：某张图直连失败、代理能出图后，短时间内后续图片直接走代理，
-// 避免每张图都先白等一次直连超时。
-// 2026-10-25（安卓 PWA 实测「一直在走代理、不直连」）：此前这里是永久布尔值，
-// 一次偶发失败（弱网抖动/签名稍旧）就把整个会话锁死成代理模式，桌面端也永远学不回来。
-// 现改为 2 分钟后自动恢复直连尝试。
+// 会话级直连策略（2026-10-25 三次调整）：
+// 某张图直连失败、代理能出图后，短时间内后续图片直接走代理，避免每张图都先白等一次探测。
+// ① 探测超时 3.5s（原 12s）——手机到 myqcloud.com 不通时，代价必须小；
+// ② 指数退避 2min → 5min → 10min，而不是固定 2 分钟（固定值会让整屏图每分钟集体白等一轮）；
+// ③ 同一会话连续失败 ≥2 次即整个会话跳过直连（手机上基本可判定此网络不通），
+//    只在刷新/重开页面时重置——对应「刚才还比较快」的期望：稳定优先，不要反复探测。
 let __cosDirectBlockedUntil = 0;
+let __cosDirectFailCount = 0;
+const COS_DIRECT_BACKOFF_SEC = [120, 300, 600, 900];
 function cosDirectBlocked() {
-  return Date.now() < __cosDirectBlockedUntil;
+  return __cosDirectFailCount >= 2 || Date.now() < __cosDirectBlockedUntil;
 }
 function markCosDirectUnreachable() {
-  __cosDirectBlockedUntil = Date.now() + 120 * 1000;
+  const idx = Math.min(Math.max(__cosDirectFailCount - 1, 0), COS_DIRECT_BACKOFF_SEC.length - 1);
+  __cosDirectBlockedUntil = Date.now() + COS_DIRECT_BACKOFF_SEC[idx] * 1000;
+}
+function markCosDirectOk() {
+  __cosDirectFailCount = 0;
+  __cosDirectBlockedUntil = 0;
 }
 
 // 统一给缩略图/img 赋值查看 URL：
@@ -9099,11 +9110,15 @@ async function getCosImageBlob(key, signedUrl, timeoutMs = 45000) {
 async function fetchCosImageBlobOnce(key, signedUrl, timeoutMs) {
   const directUrl = signedUrl || _cosViewCache[key] || "";
   const proxyOnly = isCosProxyOnlyEnv() || cosDirectBlocked();
-  // ① 直链 XHR：<img> 被拦 ≠ XHR 被拦，且比代理少一跳；限时 12s
+  // ① 直链 XHR：<img> 被拦 ≠ XHR 被拦，且比代理少一跳；探测限时 3.5s
+  // （手机到 myqcloud.com 不通时，串行探测不能把队列占住十几秒）。
   if (directUrl && !proxyOnly) {
     try {
-      return await xhrGetBlob(directUrl, null, 12000);
+      const b = await xhrGetBlob(directUrl, null, 3500);
+      markCosDirectOk();
+      return b;
     } catch (e) {
+      __cosDirectFailCount++;
       const msg = String(e && e.message ? e.message : e);
       console.warn("[cos-img] 直链 XHR 失败，转代理：", msg.slice(0, 120));
     }
@@ -29705,7 +29720,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v14ad4980";
+  const APP_VERSION = "v3f8f0067";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
