@@ -9256,18 +9256,29 @@ async function getCosProxyBlob(key, timeoutMs = 35000) {
   } catch (e) {
     const msg = String(e && e.message ? e.message : e);
     if (isAuthError(msg)) {
-      // 401 时尝试主动刷新一次 session，再重试
+      // 401 时主动刷新一次 session，再重试（refresh 必须带超时：WebView 下会挂死不返回）
+      let refreshed = false;
       try {
-        const { error: refreshErr } = await sb.auth.refreshSession();
-        if (refreshErr) console.warn("refreshSession 失败：", refreshErr);
+        const r = await _withAuthTimeout(sb.auth.refreshSession(), 5000, "refreshSession");
+        refreshed = !!(r && !r.error && r.data && r.data.session);
+        if (!refreshed) console.warn("refreshSession 未换到新会话：", r && r.error);
       } catch (refreshEx) {
         console.warn("refreshSession 异常：", refreshEx);
+      }
+      // 不论成败都清掉 token 缓存，避免继续拿旧 token 打请求
+      _proxyTokenCache = { token: "", exp: 0 };
+      if (!refreshed) {
+        // refresh token 已失效：自动重登是不可能的，直接引导去登录页
+        // （packplus 实测：手动重新登录后图片立刻恢复，说明就是会话半死）
+        promptReloginOnce("登录状态已失效，请重新登录");
+        throw new Error("登录状态已失效，请重新登录 [401]");
       }
       try {
         return await tryOnce();
       } catch (e2) {
         const msg2 = String(e2 && e2.message ? e2.message : e2);
         if (isAuthError(msg2)) {
+          promptReloginOnce("登录状态已失效，请重新登录");
           // 把 Edge Function 返回的完整 body 也带出来，便于诊断
           throw new Error("登录态失效，请重新登录后再试 [401] | " + msg2);
         }
@@ -28648,6 +28659,31 @@ async function startCloudSession() {
       }
       return;
     }
+    // 启动自愈（2026-10-25，packplus 实测「手动重新登录后图片立刻正常」）：
+    // WebView 从后台恢复/长时间挂起后，supabase 的自动刷新定时器常常没跑，
+    // 会留下「数据能读、但 functions.invoke 401、图片全挂」的半死会话。
+    // access token 已过期时先主动刷新一次，成功即全链路换新 token；
+    // 只有明确 refresh token 失效才引导重新登录，避免每次都要用户手动重登。
+    try {
+      const expMs = data.session.expires_at ? data.session.expires_at * 1000 : 0;
+      if (navigator.onLine !== false && expMs && expMs <= Date.now()) {
+        const rr = await _withAuthTimeout(sb.auth.refreshSession(), 4000, "启动刷新会话");
+        if (rr && rr.error) {
+          const rm = String(rr.error.message || rr.error);
+          console.warn("[auth] 启动刷新会话失败：", rm);
+          if (/invalid refresh token|refresh token not found|refresh_token/i.test(rm)) {
+            promptReloginOnce("登录状态已过期，请重新登录");
+            return;
+          }
+        } else if (rr && rr.data && rr.data.session) {
+          data.session = rr.data.session;
+          _proxyTokenCache = { token: "", exp: 0 };
+          console.log("[auth] 启动时已刷新会话，过期时间：", data.session.expires_at ? new Date(data.session.expires_at * 1000).toLocaleString() : "未知");
+        }
+      }
+    } catch (e) {
+      console.warn("[auth] 启动刷新会话异常（继续用现有会话）：", e);
+    }
     currentUser = data.session.user;
     document.getElementById("authScreen").classList.add("hidden");
 
@@ -28788,6 +28824,24 @@ function showNoAccess(email) {
 
 /* 会话意外失效（过期/被踢）时回到登录页：仅切 UI，不清空本地缓存数据，
    重新登录后 startCloudSession 会用缓存秒开并后台拉新。 */
+// 登录态彻底失效时的统一引导（30s 内只提示/跳转一次，避免 10 张缩略图同时 401 弹 10 次）。
+// 自动重登不可行（refresh token 已失效只能重新输密码），能自动就自动，不能就明确告诉用户。
+let __lastReloginPromptAt = 0;
+function promptReloginOnce(msg) {
+  const now = Date.now();
+  if (now - __lastReloginPromptAt < 30000) return;
+  __lastReloginPromptAt = now;
+  try { toast(msg || "登录状态已失效，请重新登录"); } catch (_) {}
+  try {
+    const authScreen = document.getElementById("authScreen");
+    if (authScreen && authScreen.classList.contains("hidden")) {
+      isLoggingOut = true;
+      goToLogin();
+      isLoggingOut = false;
+    }
+  } catch (_) {}
+}
+
 function goToLogin() {
   currentUser = null;
   currentProfile = null;
@@ -29608,7 +29662,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2e9dc4ab";
+  const APP_VERSION = "v1feb142b";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
