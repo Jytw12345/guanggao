@@ -8264,6 +8264,10 @@ function onCosImgError(img, name, key) {
   async function tryRecover() {
     if (MODE !== "cloud" || !k) throw new Error("非云端模式或缺少 key");
 
+    // proxy-only：直连 COS 在此环境必然失败（被打包 WebView 的代理拦截），
+    // 直接走后端 cos-proxy 取图，连「重签后再次直连」那次徒劳尝试都跳过。
+    const proxyOnly = isCosProxyOnlyEnv() || __cosDirectUnreachable;
+
     // 步骤 0：代理 blob 缓存命中——这张图之前已通过代理取回过，直接复用，秒显示
     const cachedBlob = cosBlobCacheGet(k);
     if (cachedBlob) {
@@ -8277,11 +8281,12 @@ function onCosImgError(img, name, key) {
     }
 
     // 步骤 1：重新换取签名 URL（轻量，不下载图片）——仅当原 URL 可能已陈旧（签发超 90s）才有意义；
-    // 刚签过就失败的 URL 重签必然同样失败（PakePlus 直连 COS 常失败），跳过重签直接走代理，省 2s+ 等待
+    // 刚签过就失败的 URL 重签必然同样失败（PakePlus 直连 COS 常失败），跳过重签直接走代理，省 2s+ 等待。
+    // proxy-only 环境绝不设置直连 URL（设了也必失败且会再次 onerror）。
     const signedAt = _cosViewSignedAt[k] || 0;
     const justSigned = Date.now() - signedAt < 90 * 1000;
     let signed = "";
-    if (!justSigned) {
+    if (!proxyOnly && !justSigned) {
       delete _cosViewCache[k];
       // 恢复链里的重签用短超时+少重试：它只是「URL 可能过期」的旁路检查，真正出图靠代理
       // （代理在服务端自己签名，不依赖 cos-sign）。cos-sign 若陷入重试风暴，全量重试
@@ -8289,7 +8294,7 @@ function onCosImgError(img, name, key) {
       const m = await cosGetViewUrls([k], { timeoutMs: 6000, retries: 1 });
       signed = m[k] || "";
     }
-    if (signed) {
+    if (signed && !proxyOnly) {
       img.src = signed;
       img.classList.remove("cos-img--err");
       if (parent) {
@@ -8299,7 +8304,7 @@ function onCosImgError(img, name, key) {
       return;
     }
 
-    // 步骤 2：签名也拿不到，再走代理下载 blob。
+    // 步骤 2：签名也拿不到（或 proxy-only 直接到此），走代理下载 blob。
     // 2026-10-25：限时 18s→25s——代理内部已重构为「默认区域双传输并行(12s) → 东京兜底(6s)」，
     // 总预算 18s，25s 给登录态刷新重试留余量；服务端实测 3.7s（热），正常情况仍是几秒出图。
     if (img.dataset.proxyTried === "1") throw new Error("代理已尝试");
@@ -8315,21 +8320,25 @@ function onCosImgError(img, name, key) {
       clearTimeout(slowTip);
     }
     if (!blob) throw new Error("代理返回空数据");
-    const url = URL.createObjectURL(blob);
+    // 代理成功出图 → 确认本环境直连不可达，后续同会话图片直接走代理（不再试直连）。
+    if (!isCosProxyOnlyEnv()) __cosDirectUnreachable = true;
+    // 先 HEIC→JPG 再入缓存：若把原始 HEIC 的 blob URL 存进 _cosBlobCache，
+    // 下次缓存命中会把无法解码的 HEIC 直接赋给 img.src（不经过转码），缩略图永久坏掉。
+    let url = URL.createObjectURL(blob);
+    if (typeof heic2any === "function" && await isHeicBlob(blob)) {
+      try {
+        const jpg = await convertHeicToJpeg(blob);
+        url = URL.createObjectURL(jpg);
+      } catch (e) {
+        console.warn("缩略图 HEIC 转码失败：", e);
+      }
+    }
     cosBlobCachePut(k, url);
     img.src = url;
     img.classList.remove("cos-img--err");
     if (parent) {
       const t = parent.querySelector(".cos-thumb__errtxt");
       if (t) t.remove();
-    }
-    if (typeof heic2any === "function" && await isHeicBlob(blob)) {
-      try {
-        const jpg = await convertHeicToJpeg(blob);
-        img.src = URL.createObjectURL(jpg);
-      } catch (e) {
-        console.warn("缩略图 HEIC 转码失败：", e);
-      }
     }
   }
 
@@ -8443,6 +8452,37 @@ function cosBlobCachePut(key, blobUrl) {
 function cosBlobCacheGet(key) {
   const e = key && _cosBlobCache[key];
   return e ? e.url : "";
+}
+
+// ===== packplus / PakePlus / 通用 Android WebView 等打包环境：直连 COS 不可达 =====
+// 这类环境的 WebView 会把对 COS 域名的请求路由到其内置代理而访问不了（用户实测：
+// 「安卓浏览器装的 PWA 能看，packplus 打包的看不了，查看图片时使用代理，访问不了」），
+// 但 App 自身后端 Supabase（含 cos-proxy Edge Function）可达。因此此类环境一律走
+// 后端 cos-proxy 取图，跳过徒劳的直连 COS 尝试，避免「预览加载中…」长时间挂起。
+// 注意区分：安卓 Chrome「添加到主屏幕」装的 PWA 走 TWA/Chrome，UA 不含 "wv"，直连正常；
+// packplus 等打包器用原生 WebView 封装，UA 带 "wv" 或打包器标识，直连被代理拦截。
+function isCosProxyOnlyEnv() {
+  const ua = (navigator.userAgent || "").toLowerCase();
+  // 安卓 Chrome「添加到主屏幕」装的 PWA（含 TWA）UA 不含 "wv"，直连 COS 正常，不应命中；
+  // packplus/PakePlus 等打包器用原生 WebView 封装，UA 带 "wv" 或打包器标识，直连被其代理拦截。
+  return /pakeplus|packplus|;\s*wv\)|webview/i.test(ua);
+}
+
+// 会话级学习标志：某张图直连失败后确认「代理能出图、直连不行」，后续图片直接走代理，
+// 不再试直连（正常值环境里 onCosImgError 只在出错时触发，设此标志安全）。
+let __cosDirectUnreachable = false;
+
+// 统一给缩略图/img 赋值查看 URL：
+//   - proxy-only 环境或已确认直连不可达 → 直接走代理取图（onCosImgError 会跳过直连重签）；
+//   - 否则先试直连签名 URL，失败再回退代理（浏览器 PWA 的正常快速路径，不受影响）。
+function applyCosThumb(img, key, name, signed) {
+  const proxyOnly = isCosProxyOnlyEnv() || __cosDirectUnreachable;
+  if (signed && !proxyOnly) {
+    img.src = signed;
+    img.onerror = () => onCosImgError(img, name, key);
+  } else {
+    onCosImgError(img, name, key);
+  }
 }
 
 // ===== cos-sign 调用统一封装：并发限流 + 429 退避重试 + 登录态失效刷新重试 =====
@@ -9507,6 +9547,20 @@ async function cosLightboxLoadKey(key) {
   // 代理 blob 缓存命中（同一张图的缩略图刚加载过）：直接用 blob URL 打开，秒显示
   const cachedBlob = cosBlobCacheGet(key);
   if (cachedBlob) return cachedBlob;
+  // proxy-only 环境（packplus 等打包 WebView）：直连 COS 必然失败，直接走后端 cos-proxy
+  // 取 blob，不再返回会被其内置代理拦截的直连签名 URL（否则还要先失败再回退，慢且闪）。
+  if (isCosProxyOnlyEnv() || __cosDirectUnreachable) {
+    try {
+      const blob = await getCosProxyBlob(key, 25000);
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        cosBlobCachePut(key, url);
+        return url;
+      }
+    } catch (e) {
+      console.warn("灯箱代理取图失败：", e);
+    }
+  }
   // 短超时+少重试：灯箱出图主要靠代理（服务端自签），cos-sign 风暴不该把代理挡在门外（2026-10-25）
   const m = await cosGetViewUrls([key], { timeoutMs: 8000, retries: 1 });
   if (m[key]) return m[key];
@@ -9695,14 +9749,7 @@ async function fillPhotoImages(p) {
   const imgs = document.querySelectorAll('#cosPhotosWrap img[data-cos-key]');
   imgs.forEach((img) => {
     const k = img.getAttribute("data-cos-key");
-    const signed = viewMap[k] || "";
-    if (signed) {
-      img.src = signed;
-      img.onerror = () => onCosImgError(img, img.alt, k);
-    } else {
-      // 没有拿到签名 URL：交给恢复流程，它会先尝试重签，再限时代理兜底
-      onCosImgError(img, img.alt, k);
-    }
+    applyCosThumb(img, k, img.alt, viewMap[k] || "");
   });
 }
 
@@ -11138,13 +11185,7 @@ async function fillProjectContentPhotos(p, rootSelector = ".proj-content-detail"
   const viewMap = await cosGetViewUrls(keys);
   document.querySelectorAll(`${rootSelector} img[data-cos-key]`).forEach((img) => {
     const k = img.getAttribute("data-cos-key");
-    const signed = viewMap[k] || "";
-    if (signed) {
-      img.src = signed;
-      img.onerror = () => onCosImgError(img, img.alt, k);
-    } else {
-      onCosImgError(img, img.alt, k);
-    }
+    applyCosThumb(img, k, img.alt, viewMap[k] || "");
   });
 }
 
@@ -11449,9 +11490,7 @@ async function fillRepairPhotos() {
   const viewMap = await cosGetViewUrls(keys);
   imgs.forEach((img) => {
     const k = img.getAttribute("data-cos-key");
-    const signed = viewMap[k] || "";
-    if (signed) { img.src = signed; img.onerror = () => onCosImgError(img, img.alt, k); }
-    else onCosImgError(img, img.alt, k);
+    applyCosThumb(img, k, img.alt, viewMap[k] || "");
   });
 }
 
@@ -11465,9 +11504,7 @@ async function fillAcceptancePhotos() {
   const viewMap = await cosGetViewUrls(keys);
   imgs.forEach((img) => {
     const k = img.getAttribute("data-cos-key");
-    const signed = viewMap[k] || "";
-    if (signed) { img.src = signed; img.onerror = () => onCosImgError(img, img.alt, k); }
-    else onCosImgError(img, img.alt, k);
+    applyCosThumb(img, k, img.alt, viewMap[k] || "");
   });
 }
 
@@ -29437,7 +29474,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v46129a5a";
+  const APP_VERSION = "v19e01182";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -31572,8 +31609,7 @@ async function fillMeasurementPhotos(m) {
     const img = document.querySelector(`#mPhotoArea img[data-m-photo="${i}"]`);
     if (!img) return;
     const signed = viewMap[it.key] || "";
-    if (signed) { img.src = signed; img.onerror = () => onCosImgError(img, img.alt, it.key); }
-    else onCosImgError(img, img.alt, it.key);
+    applyCosThumb(img, it.key, img.alt, signed);
     img.onclick = () => openCosLightboxByKey(it.key, it.name, (m.photos || []).filter((p) => !p.uploading).map((p) => p.key), i);
   });
 }
