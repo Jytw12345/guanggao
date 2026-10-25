@@ -8315,7 +8315,8 @@ function onCosImgError(img, name, key) {
     }, 10000);
     let blob;
     try {
-      blob = await getCosProxyBlob(k, 25000);
+      // 代理三通道 + 签名直链 XHR 并行竞速（packplus 下 <img> 直连被拦但 XHR 可能可用）
+      blob = await getCosImageBlob(k, img.dataset.cosSigned || "", 35000);
     } finally {
       clearTimeout(slowTip);
     }
@@ -8477,6 +8478,9 @@ let __cosDirectUnreachable = false;
 //   - 否则先试直连签名 URL，失败再回退代理（浏览器 PWA 的正常快速路径，不受影响）。
 function applyCosThumb(img, key, name, signed) {
   const proxyOnly = isCosProxyOnlyEnv() || __cosDirectUnreachable;
+  // 记下签名直链：<img> 直连失败时，恢复链还能用 XHR 再试一次同一条 URL
+  // （packplus/WebView2 对 <img> 子资源和 XHR 的放行策略不同，上传 PUT 走 XHR 是通的）。
+  if (img && signed) img.dataset.cosSigned = signed;
   if (signed && !proxyOnly) {
     img.src = signed;
     img.onerror = () => onCosImgError(img, name, key);
@@ -8593,10 +8597,12 @@ async function cosGetSignedUrls(items, action = "put") {
 async function ensureFreshSessionForSign() {
   if (MODE !== "cloud" || !sb) return;
   try {
-    const { data } = await sb.auth.getSession();
+    // getSession/refreshSession 必须设硬超时：packplus/WebView2 下多路并发可能卡在 auth 锁上，
+    // 一旦挂死，fillPhotoImages 会一直停在这里，连代理兜底都进不去（表现为缩略图永远「预览加载中…」）。
+    const { data } = await _withAuthTimeout(sb.auth.getSession(), 3000, "getSession");
     const exp = data && data.session && data.session.expires_at;
     if (exp && exp * 1000 - Date.now() < 5 * 60 * 1000) {
-      const { error } = await sb.auth.refreshSession();
+      const { error } = await _withAuthTimeout(sb.auth.refreshSession(), 4000, "refreshSession");
       if (error) console.warn("[cos-sign] 会话即将过期，主动刷新失败：", error.message || error);
     }
   } catch (e) {
@@ -9005,7 +9011,64 @@ function isBlobLike(v) {
 // 签名 URL 直连 COS 1s 正常。结论：**默认区域优先，东京只作末位兜底**。
 const COS_PROXY_REGION = "ap-northeast-1";
 
-async function getCosProxyBlob(key, timeoutMs = 25000) {
+// XHR 取二进制（responseType=blob）。此环境（packplus/PakePlus/WebView2）里上传用的
+// putFileToCos 就是 XMLHttpRequest，实测可用；而 fetch/invoke 可能挂死不返回。
+// 因此代理下载补一条 XHR 通道，与 fetch/invoke 并行竞速，互不依赖。
+function xhrGetBlob(url, headers, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url, true);
+    xhr.responseType = "blob";
+    xhr.timeout = timeoutMs;
+    Object.keys(headers || {}).forEach((k) => {
+      try { xhr.setRequestHeader(k, headers[k]); } catch (_) {}
+    });
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const b = xhr.response;
+        if (b && b.size > 0) resolve(b);
+        else reject(new Error("代理返回空数据"));
+      } else {
+        reject(new Error(`代理加载失败 [${xhr.status}] ${xhr.statusText || ""}`.trim()));
+      }
+    };
+    xhr.onerror = () => reject(new Error("网络错误（XHR 无法连接）"));
+    xhr.ontimeout = () => reject(new Error(`通道超时(XHR ${timeoutMs}ms)`));
+    xhr.onabort = () => reject(new Error("XHR 已中止"));
+    try { xhr.send(); } catch (e) { reject(e); }
+  });
+}
+
+// 多通道取首个成功结果；全部失败时优先抛登录态错误（提示用户重新登录才有意义）
+function firstBlob(promises) {
+  return new Promise((resolve, reject) => {
+    const errs = [];
+    let pending = promises.length;
+    if (!pending) { reject(new Error("无可用取图通道")); return; }
+    const authRe = /401|403|未登录|登录态|令牌|token|jwt|auth/i;
+    promises.forEach((p) => p.then(
+      (v) => resolve(v),
+      (e) => {
+        errs.push(e);
+        if (--pending > 0) return;
+        const authErr = errs.find((x) => authRe.test(String(x && x.message ? x.message : x)));
+        reject(authErr || errs[0] || new Error("全部取图通道失败"));
+      },
+    ));
+  });
+}
+
+// 取一张图的字节：代理多通道 + （有签名直链时）XHR 直连并行竞速。
+// 2026-10-25：packplus 下 <img> 直连 COS 被拦、fetch/invoke 又可能挂死，
+// 而 XHR 通道可用，故不能只赌代理一条路。
+async function getCosImageBlob(key, signedUrl, timeoutMs = 35000) {
+  const directUrl = signedUrl || _cosViewCache[key] || "";
+  const tasks = [getCosProxyBlob(key, timeoutMs)];
+  if (directUrl) tasks.push(xhrGetBlob(directUrl, null, 15000));
+  return await firstBlob(tasks);
+}
+
+async function getCosProxyBlob(key, timeoutMs = 35000) {
   if (MODE !== "cloud") throw new Error("代理不可用（非云端模式）");
   if (!sb) throw new Error("代理不可用（Supabase 未初始化）");
   if (!key) throw new Error("缺少图片 key");
@@ -9104,6 +9167,18 @@ async function getCosProxyBlob(key, timeoutMs = 25000) {
     return blob;
   }
 
+  // XHR 通道：与 fetch 是两套完全不同的底层实现（此环境上传 PUT 走 XHR 是通的），
+  // 当 invoke/fetch 挂死时它往往还能出图。
+  async function viaXhr() {
+    const token = await _getSupabaseAccessToken();
+    if (!token) throw new Error("未获取到登录令牌，请重新登录");
+    const url = `${window.APP_CONFIG.SUPABASE_URL}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}`;
+    return await xhrGetBlob(url, {
+      Authorization: "Bearer " + token,
+      apikey: window.APP_CONFIG.SUPABASE_ANON_KEY || "",
+    }, 18000);
+  }
+
   // 单通道超时包装：避免某一区域挂死（新加坡→COS 实测 40s+ 无响应）拖垮整体
   function withTimeout(promise, ms, label) {
     return new Promise((resolve, reject) => {
@@ -9115,46 +9190,53 @@ async function getCosProxyBlob(key, timeoutMs = 25000) {
     });
   }
 
-  // 通道策略（2026-10-25 重构——PakePlus 用户实测图片仍整张加载不出之后）。
-  // 旧策略：invoke(默认)→fetch(默认)→fetch(东京) 串行、每通道 5s。两个问题：
-  //   ① 5s 对「服务端实测 3.7s（热）」余量太小，网络稍抖/函数冷启动即误杀；
-  //   ② invoke 与原生 fetch 故障模式不同（前者在 PakePlus WebView2 下疑似不自动带
-  //      token、supabase-js 内部解析异常也只有原生 fetch 能绕过），串行时坏掉的那个
-  //      先耗掉整个超时预算。
-  // 新策略：
-  //   ① 默认区域「双传输并行」：invoke 与 fetch 同时打，谁先成功用谁——互补且省时；
-  //   ② 单通道超时 5s→12s：给足慢响应机会；
-  //   ③ 东京仍只作末位兜底（直连实测 15s 挂死），仅在默认区域双传输都失败后试，配 6s。
-  // 任一侧出现登录态错误（401 类）立即整体失败——换传输/换区域都无意义，
-  // 交给外层 refreshSession 后重试。
+  // 通道策略（2026-10-25 二次重构——packplus 用户实测缩略图整片「加载超时」之后）。
+  // 此前两处硬伤：
+  //   ① 任一通道抛登录态错误（如 invoke 因拿不到 token 返回 401）会【立刻 reject 整个竞速】，
+  //      把仍在途、可能成功的 fetch/XHR 通道一起掐死；
+  //   ② 只有 invoke + fetch 两条路，若该 WebView 下两者都挂死（不返回也不报错），必然超时。
+  // 现策略：
+  //   ① 三通道并行：invoke + fetch + XHR（XHR 与前两者底层实现不同，上传 PUT 已验证可用）；
+  //   ② 登录态错误不再单独判死，必须等所有通道都失败才整体失败，且优先抛出 401 类错误；
+  //   ③ 单通道预算 12s→20s：服务端 COS fetch 最坏 2×8s=16s，12s 会误杀慢响应；
+  //   ④ 东京仍只作末位兜底（直连实测 15s 挂死），配 8s。
   function raceDefaultRegion() {
     return new Promise((resolve, reject) => {
       let settled = false;
       const fails = [];
+      const total = 3;
       const ok = (v) => { if (!settled) { settled = true; resolve(v); } };
       const fail = (e) => {
         fails.push(e);
+        if (settled) return;
         const msg = String(e && e.message ? e.message : e);
-        if (isAuthError(msg)) { if (!settled) { settled = true; reject(e); } return; }
-        if (fails.length >= 2 && !settled) { settled = true; reject(fails[0] || new Error("默认区域双传输均失败")); }
+        if (fails.length >= total) {
+          const authErr = fails.find((x) => isAuthError(String(x && x.message ? x.message : x)));
+          settled = true;
+          reject(authErr || fails[0] || new Error("默认区域三通道均失败"));
+        } else if (isAuthError(msg)) {
+          // 仅记录日志：其它通道可能仍能成功（例如 invoke 没带 token 而 XHR/fetch 带了）
+          console.warn("[cos-proxy] 某通道登录态报错，等待其它通道：", msg.slice(0, 120));
+        }
       };
       viaInvoke(false).then(ok, fail);
       viaManualFetch(false).then(ok, fail);
+      viaXhr().then(ok, fail);
     });
   }
 
   async function tryOnce() {
     let lastErr = null;
     try {
-      return await withTimeout(raceDefaultRegion(), 12000, "默认区域双传输");
+      return await withTimeout(raceDefaultRegion(), 20000, "默认区域三通道");
     } catch (e) {
       const msg = String(e && e.message ? e.message : e);
-      if (isAuthError(msg)) throw e; // 登录态错误：换区域也没用，直接走外层刷新重试
+      if (isAuthError(msg)) throw e; // 三通道都失败且为登录态错误：换区域也没用，走外层刷新重试
       lastErr = e;
-      console.warn("[cos-proxy] 默认区域双传输失败：", msg.slice(0, 140));
+      console.warn("[cos-proxy] 默认区域三通道失败：", msg.slice(0, 140));
     }
     try {
-      return await withTimeout(viaManualFetch(true), 6000, "fetch(东京)");
+      return await withTimeout(viaManualFetch(true), 8000, "fetch(东京)");
     } catch (e) {
       const msg = String(e && e.message ? e.message : e);
       if (isAuthError(msg)) throw e;
@@ -9193,17 +9275,42 @@ async function getCosProxyBlob(key, timeoutMs = 25000) {
 
 // 多路尝试获取当前 supabase access_token：
 // getSession() → 解析 localStorage 中 supabase 默认缓存 → refreshSession() 兜底。
+// 2026-10-25（packplus 图片超时）：WebView 下多张缩略图并发时 getSession 可能卡在 auth 锁上
+// （既不 resolve 也不 reject），把整条代理链一起拖到超时。故：① token 缓存 45s 复用；
+// ② getSession/refreshSession 都包 3s 硬超时；③ 超时后直接同步读 localStorage。
+let _proxyTokenCache = { token: "", exp: 0 };
+function _jwtExpMs(token) {
+  try {
+    const p = String(token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = JSON.parse(atob(p + "=".repeat((4 - (p.length % 4)) % 4)));
+    return (json.exp || 0) * 1000;
+  } catch (_) {
+    return 0;
+  }
+}
+function _cacheProxyToken(t) {
+  if (t) _proxyTokenCache = { token: t, exp: _jwtExpMs(t) };
+  return t;
+}
+function _withAuthTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} 超时`)), ms)),
+  ]);
+}
 async function _getSupabaseAccessToken() {
+  if (_proxyTokenCache.token && _proxyTokenCache.exp - Date.now() > 60 * 1000) return _proxyTokenCache.token;
   if (!sb) return null;
   try {
-    const { data } = await sb.auth.getSession();
-    if (data && data.session && data.session.access_token) return data.session.access_token;
+    const r = await _withAuthTimeout(sb.auth.getSession(), 3000, "getSession");
+    const t = r && r.data && r.data.session && r.data.session.access_token;
+    if (t) return _cacheProxyToken(t);
   } catch (_) {}
   try {
     const raw = localStorage.getItem("sb-" + window.APP_CONFIG.SUPABASE_URL.split("//")[1].split(".")[0] + "-auth-token");
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && parsed.access_token) return parsed.access_token;
+      if (parsed && parsed.access_token) return _cacheProxyToken(parsed.access_token);
     }
   } catch (_) {}
   // 通用兜底：扫描 localStorage 中所有 sb-*-auth-token 键
@@ -9212,13 +9319,14 @@ async function _getSupabaseAccessToken() {
       const k = localStorage.key(i);
       if (k && /^sb-.*-auth-token$/.test(k)) {
         const parsed = JSON.parse(localStorage.getItem(k) || "null");
-        if (parsed && parsed.access_token) return parsed.access_token;
+        if (parsed && parsed.access_token) return _cacheProxyToken(parsed.access_token);
       }
     }
   } catch (_) {}
   try {
-    const { data, error } = await sb.auth.refreshSession();
-    if (!error && data && data.session && data.session.access_token) return data.session.access_token;
+    const r = await _withAuthTimeout(sb.auth.refreshSession(), 4000, "refreshSession");
+    const t = r && !r.error && r.data && r.data.session && r.data.session.access_token;
+    if (t) return _cacheProxyToken(t);
   } catch (_) {}
   return null;
 }
@@ -9233,6 +9341,10 @@ async function fetchCosObjectBlob(key) {
   const map = await cosGetViewUrls([key]);
   const url = map[key] || "";
   if (!url) return null;
+  // 先 XHR 直连（packplus 下 <img>/fetch 可能被拦，但 XHR 通道可用），再退回 fetch
+  try {
+    return await xhrGetBlob(url, null, 20000);
+  } catch (_) {}
   try {
     const r = await fetch(url);
     if (r.ok) return await r.blob();
@@ -9551,7 +9663,8 @@ async function cosLightboxLoadKey(key) {
   // 取 blob，不再返回会被其内置代理拦截的直连签名 URL（否则还要先失败再回退，慢且闪）。
   if (isCosProxyOnlyEnv() || __cosDirectUnreachable) {
     try {
-      const blob = await getCosProxyBlob(key, 25000);
+      // 代理三通道 + 签名直链 XHR 并行，谁先出图用谁
+      const blob = await getCosImageBlob(key, _cosViewCache[key] || "", 35000);
       if (blob) {
         const url = URL.createObjectURL(blob);
         cosBlobCachePut(key, url);
@@ -9586,7 +9699,10 @@ async function cosLightboxTryRecover(img, key, name) {
       blob = await fetch(cachedBlob).then((r) => r.blob()).catch(() => null);
     }
     if (!blob) {
-      blob = await getCosProxyBlob(key, 25000);
+      // 有签名直链时，同时用 XHR 直连再试一次（<img> 被拦 ≠ XHR 被拦）
+      const cur = String(img.getAttribute("src") || "");
+      const signed = /^https?:/i.test(cur) ? cur : (_cosViewCache[key] || "");
+      blob = await getCosImageBlob(key, signed, 35000);
       if (!blob) throw new Error("无法获取原图");
     }
     if (await isHeicBlob(blob)) {
@@ -9716,8 +9832,14 @@ async function cosLightboxGo(delta) {
   const n = _cosLbList.length;
   _cosLbIdx = (_cosLbIdx + delta + n) % n;
   const key = _cosLbList[_cosLbIdx];
+  const nm = findPhotoName(key);
+  if (isCosProxyOnlyEnv() || __cosDirectUnreachable) {
+    const cached = cosBlobCacheGet(key);
+    openCosLightbox(cached || "", key, nm);
+    return;
+  }
   const url = await cosLightboxLoadKey(key);
-  openCosLightbox(url, key, findPhotoName(key));
+  openCosLightbox(url, key, nm);
 }
 function closeCosLightbox() {
   const el = document.getElementById("cosLightbox");
@@ -9764,8 +9886,15 @@ async function openCosLightboxByKey(key, name, list, idx) {
     _cosLbList = null;
     _cosLbIdx = 0;
   }
-  const url = await cosLightboxLoadKey(key);
   const nm = name || findPhotoName(key);
+  // 代理环境下不再「先等加载完再弹窗」：先开占位灯箱，让恢复链内部异步加载，
+  // 避免代理慢时点开大图最长要干等几十秒（用户会以为卡死）。
+  if (isCosProxyOnlyEnv() || __cosDirectUnreachable) {
+    const cached = cosBlobCacheGet(key);
+    openCosLightbox(cached || "", key, nm);
+    return;
+  }
+  const url = await cosLightboxLoadKey(key);
   openCosLightbox(url, key, nm);
 }
 
@@ -29474,7 +29603,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v19e01182";
+  const APP_VERSION = "v31481d12";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
