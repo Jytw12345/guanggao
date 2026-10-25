@@ -3,8 +3,8 @@
 // - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
 //   用户点「立即更新」或下次打开即生效。
 // 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
-const CACHE = "ad-install-v2f349458";
-const VERSION = "v2f349458";
+const CACHE = "ad-install-v7d8e6aff";
+const VERSION = "v7d8e6aff";
 const COS_CACHE = "ad-install-cos-" + VERSION; // 腾讯云 COS 图片运行时缓存，支持现场离线看图
 
 const ASSETS = [
@@ -151,7 +151,18 @@ async function handleCosImage(req) {
     } catch (_) { /* 读取异常继续回源 */ }
   }
   try {
-    const res = await fetch(req); // 仍用带签名的原始 URL 回源
+    // 回源地超时（2026-10-25）：PakePlus/WebView2 下直连 COS 常挂死——不报错也不返回，
+    // 无超时的 fetch 会把 <img> 和整条客户端恢复链（onCosImgError → 重签 → 代理出图）
+    // 一起拖住几十秒，表现为「预览加载中…」卡住。10s 拿不到就判失败返回 504，
+    // img 走 onerror 迅速转入代理；正常浏览器直连 COS ~1s，缓存命中更是零网络，均不受影响。
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 10000);
+    let res;
+    try {
+      res = await fetch(req, { signal: ctrl.signal }); // 仍用带签名的原始 URL 回源
+    } finally {
+      clearTimeout(to);
+    }
     if (cache) { try { cache.put(normReq, res.clone()); } catch (_) { /* 写入失败不影响本次 */ } }
     return res;
   } catch (_) {

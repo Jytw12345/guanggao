@@ -1865,16 +1865,24 @@ select.input {
 }
 /* 移动端 select 的原生下拉箭头比桌面窄，padding-right:20px 预留过多，
    在窄屏会把「08:00」挤到只剩「0…」（用户截图）。收窄到 14px 即可。
-   注：本块必须放在下方桌面规则之后，否则会被同权重的桌面声明覆盖。 */
+   注：本块必须放在下方桌面规则之后，否则会被同权重的桌面声明覆盖。
+   2026-10-25（再修）：360px 弹窗内容超高出现**滚动条**后再窄 ~15px，
+   原 1.2/1/1.2 分下来日期列内容区仅 ~93px，而日期文字（headless 实测 ~102px、
+   加粗目标行更宽）零余量 → 用户截图第1、3天被裁成 "2026/10/2"。
+   对策：日期列权重 1.2→1.7（结束列 1.2→1：时间去前导零后仅 4 字符，
+   不再需要宽列），日期 input 左右 padding 8→4、letter-spacing -0.4 压文字。 */
 @media (max-width: 768px) {
   .seg-row select.input,
   .appt-time-row select.input { padding-right: 14px; }
-  /* 日期列权重：1.9fr 是按「内容宽 319px」算的，实测 390px 视口下弹窗内容只有 290px
-     （mask 16px + modal 90% + body 16px），日期分到 108px 而时间仅 57px → 时间被截成 "0…"。
-     降到 1.6fr 把时间补到 ~72px；mask 加宽后（见 6028 附近）总量到 ~338px 更宽裕。
-     日期 10 字符 vs 时间 5 字符，1.6 仍是日期占优，不会把日期压回去。 */
-  .seg-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto minmax(0, 1.2fr); }
-  .appt-time-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto minmax(0, 1.2fr); }
+  .seg-row { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) auto minmax(0, 1fr); }
+  .appt-time-row { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) auto minmax(0, 1fr); }
+  /* 日期文字瘦身：padding 8→4（省 8px）+ letter-spacing 负值（10 字符省 ~4px）。
+     letter-spacing 是继承属性，Chrome 的 date input 内部字段同样生效。 */
+  .seg-row input[type="date"].input,
+  .appt-time-row input[type="date"].input {
+    padding: 6px 4px;
+    letter-spacing: -0.4px;
+  }
 }
 .seg-row select.input { padding-right: 20px; }
 .seg-row input[type="date"].input { padding-right: 4px; }
@@ -3831,6 +3839,38 @@ textarea.input { resize: vertical; min-height: 50px; }
   white-space: nowrap;
 }
 
+/* 「预约时间 / 施工日期」标题行：标题 + 共N天 + 加/减一天按钮同一 flex 行。
+   2026-10-25：360px 弹窗出滚动条后可用宽仅 ~290px，原标题+共N天+两个按钮
+   合计 ~308px →「减一天」被挤到第二行（用户截图）。对策：
+    ① 按钮双文案：桌面「加一天/减一天」，窄屏（≤768px）自动换「加天/减天」，
+       每按钮省 ~12px；② 窄屏 gap 6→4、共N天 margin 6→2，再省 ~10px。
+   合计 ~270px，290px 内一行放下。 */
+.seg-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.seg-plus-btn .tx-mini,
+.seg-minus-btn .tx-mini { display: none; }
+@media (max-width: 768px) {
+  .seg-title-row { gap: 4px; }
+  .seg-plus-btn .tx-full,
+  .seg-minus-btn .tx-full { display: none; }
+  .seg-plus-btn .tx-mini,
+  .seg-minus-btn .tx-mini { display: inline; }
+  .seg-title-row .appt-days-hint { margin-left: 2px; }
+}
+
+/* 快速改时间弹窗「开始/结束」select：桌面 max-width 110px，
+   窄屏（≤768px）收到 92px——整行（开始 22 + select + 箭头 13 + 结束 22 + select + gap 24）
+   在 ~290px 可用宽下不被 flex 压缩变形。 */
+.appt-d1-time-sel { flex: 1; max-width: 110px; }
+@media (max-width: 768px) {
+  .appt-d1-time-sel { max-width: 92px; }
+}
+
 /* 窄屏弹窗加宽（2026-10-23，用户截图反馈"预约日期时间显示不全/金额出界"）。
    .modal-mask padding 16px + .modal width 90% 在 390px 视口下：
    390 - 32(mask) = 358 容器 → modal 322px → body 内容仅 290px。
@@ -4096,6 +4136,60 @@ textarea.input { resize: vertical; min-height: 50px; }
   color: #64748b;
   line-height: 1.4;
 }
+
+/* 维修单「本单收费」独立块（2026-10-25）。
+   维修单几乎都发起在原项目已审核之后：原项目「费用管理 / 包活分成」此时整块 🔒 锁定，
+   维修单自己的收费（保修期外额外收费）若只散落在 info-grid 小字里，用户会误以为
+   "也都被拦截了"。故给每条维修单一个独立收费块：免费单给引导（去哪设金额），
+   付费单给金额链 + 成本扣项明细 + 工人分成。绿色系与 money-chain / 收费区块一致，
+   块内直接复用 .money-chain，不另造轮子。 */
+.repair-fee {
+  margin-top: 10px;
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.repair-fee__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: #15803d;
+}
+.repair-fee__tag {
+  font-size: 11px;
+  font-weight: 400;
+  color: #16a34a;
+  background: #dcfce7;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.repair-fee__free {
+  font-size: 13px;
+  color: #1e293b;
+  line-height: 1.5;
+}
+.repair-fee__hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.6;
+}
+.repair-fee__row {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.6;
+}
+.repair-fee__row b { color: #1e293b; }
+.repair-fee .money-chain { margin-bottom: 6px; }
 
 /* 完工弹窗：项目名称 + 门店 —— 只读摘要（原为两个禁用 input，各占 label+边框两行） */
 .complete-subject {

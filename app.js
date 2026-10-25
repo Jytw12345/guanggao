@@ -8246,7 +8246,11 @@ function onCosImgError(img, name, key) {
   tip.title = name || "图片加载失败";
   tip.dataset.cosState = "pending";
   tip.textContent = "预览加载中…";
-  if (parent) parent.appendChild(tip);
+  if (parent) {
+    const oldTip = parent.querySelector(".cos-thumb__errtxt"); // 重试进入时先清掉旧提示，避免两条叠加
+    if (oldTip) oldTip.remove();
+    parent.appendChild(tip);
+  }
 
   // 步骤 1：先重新换取签名 URL（轻量，不下载图片）。很多情况是 legacy/fallback URL 失效或缓存 URL 超 1h 过期，但签名 URL 可用。
   // cosGetViewUrls 内部已含「会话保鲜预检 + 401 刷新会话重试一次」（2026-10-22），大部分过期场景在这里静默自愈。
@@ -8272,7 +8276,10 @@ function onCosImgError(img, name, key) {
     let signed = "";
     if (!justSigned) {
       delete _cosViewCache[k];
-      const m = await cosGetViewUrls([k]);
+      // 恢复链里的重签用短超时+少重试：它只是「URL 可能过期」的旁路检查，真正出图靠代理
+      // （代理在服务端自己签名，不依赖 cos-sign）。cos-sign 若陷入重试风暴，全量重试
+      // 能拖 50s+，把代理活活挡在门外——2026-10-25 PakePlus 实测「预览加载中」挂住的主因之一。
+      const m = await cosGetViewUrls([k], { timeoutMs: 6000, retries: 1 });
       signed = m[k] || "";
     }
     if (signed) {
@@ -8285,10 +8292,21 @@ function onCosImgError(img, name, key) {
       return;
     }
 
-    // 步骤 2：签名也拿不到，再走代理下载 blob（缩略图限时 10s——冷启动+预检可能吃掉 5s+；大图/灯箱自己调 15s）
+    // 步骤 2：签名也拿不到，再走代理下载 blob。
+    // 2026-10-25：限时 18s→25s——代理内部已重构为「默认区域双传输并行(12s) → 东京兜底(6s)」，
+    // 总预算 18s，25s 给登录态刷新重试留余量；服务端实测 3.7s（热），正常情况仍是几秒出图。
     if (img.dataset.proxyTried === "1") throw new Error("代理已尝试");
     img.dataset.proxyTried = "1";
-    const blob = await getCosProxyBlob(k, 18000);
+    // 超过 10s 还没回来就换句文案，让用户知道还在加载（不是卡死）
+    const slowTip = setTimeout(() => {
+      if (tip.dataset.cosState === "pending") tip.textContent = "网络较慢，仍在加载…";
+    }, 10000);
+    let blob;
+    try {
+      blob = await getCosProxyBlob(k, 25000);
+    } finally {
+      clearTimeout(slowTip);
+    }
     if (!blob) throw new Error("代理返回空数据");
     const url = URL.createObjectURL(blob);
     cosBlobCachePut(k, url);
@@ -8322,22 +8340,32 @@ function onCosImgError(img, name, key) {
     }
     t.dataset.cosState = "done";
     t.title = msg || "点击查看大图";
-    // 最终失败时提示「点击查看大图」，因为灯箱大图走独立签名 URL，通常仍能显示
+    // 最终失败时提示可重试/看大图：灯箱大图走独立签名 URL，通常仍能显示
     if (msg.includes("超时") || msg.includes("timeout")) {
-      t.textContent = "加载超时，点击查看大图";
+      t.textContent = "加载超时 · 点此重试";
     } else if (msg.includes("401") || msg.includes("未获取到登录令牌")) {
       let detail = msg.includes("401") ? msg : `[401] ${msg}`;
       if (e && e.name && !msg.includes(e.name)) detail = `[${e.name}] ${msg}`;
-      t.textContent = "登录失效，点击查看大图";
+      t.textContent = "登录失效 · 点此重试";
       t.title = (detail || "登录失效").slice(0, 120);
     } else if (msg.includes("403")) {
       t.textContent = "无权限，点击查看大图";
       t.title = msg;
     } else if (msg.includes("网络") || msg.includes("fetch") || msg.includes("Failed to send")) {
-      t.textContent = "网络错误，点击查看大图";
+      t.textContent = "网络错误 · 点此重试";
     } else {
-      t.textContent = "点击查看大图";
+      t.textContent = "加载失败 · 点此重试";
       t.title = msg ? msg.slice(0, 120) : "图片预览失败，可点击看大图";
+    }
+    // 2026-10-25：失败提示可点击重试（重置代理已试标记后重走恢复链）。
+    // 403 无权限重试无意义，保留「点击查看大图」语义；stopPropagation 防止冒泡到 .cos-thumb 打开灯箱。
+    if (!msg.includes("403")) {
+      t.style.cursor = "pointer";
+      t.onclick = (ev) => {
+        ev.stopPropagation();
+        img.dataset.proxyTried = "";
+        onCosImgError(img, name, k);
+      };
     }
   });
 }
@@ -8544,7 +8572,7 @@ function isCosSignAuthError(err) {
 //   ③ invoke 返回登录态错误时，强制 refreshSession 后重试一次（与 getCosProxyBlob 同范式）；
 //   ④ 失败不再完全静默：console.warn 留痕（key 数+原因），便于反馈时定位是网络/登录态/函数哪层；
 //   ⑤ 重签失败时保留旧缓存URL不删——离线/瞬时失败时 fillPhotoImages 等仍可拿到（可能过期）的 URL 走恢复链。
-async function cosGetViewUrls(keys) {
+async function cosGetViewUrls(keys, signOpts = {}) {
   const result = {};
   if (!keys || !keys.length) return result;
   const now = Date.now();
@@ -8554,7 +8582,7 @@ async function cosGetViewUrls(keys) {
   if (need.length && MODE === "cloud" && sb) {
     await ensureFreshSessionForSign();
     try {
-      const data = await cosSignGetOnce(need);
+      const data = await cosSignGetOnce(need, signOpts);
       (data.items || []).forEach((it) => {
         if (it.key && it.url) {
           _cosViewCache[it.key] = it.url;
@@ -8575,11 +8603,14 @@ async function cosGetViewUrls(keys) {
   return result;
 }
 
-// cos-sign(action=get) 单次调用：统一走 cosSignInvoke（限并发 + 429 退避重试 + 登录态失效刷新重试）
-async function cosSignGetOnce(keys) {
+// cos-sign(action=get) 单次调用：统一走 cosSignInvoke（限并发 + 429 退避重试 + 登录态失效刷新重试）。
+// opts 可覆盖超时/重试次数——恢复链（缩略图 onerror / 灯箱）用短超时+少重试，
+// 避免 cos-sign 重试风暴把「不依赖 cos-sign 的代理出图」挡在门外（2026-10-25）。
+async function cosSignGetOnce(keys, opts = {}) {
+  const { timeoutMs = 8000, retries = 4 } = opts;
   const { data, error } = await cosSignInvoke(
     { action: "get", items: keys.map((k) => ({ key: k })) },
-    { timeoutMs: 8000, retries: 4 }
+    { timeoutMs, retries }
   );
   if (error) throw error;
   if (!data || !Array.isArray(data.items)) throw new Error("签名返回异常");
@@ -8926,7 +8957,7 @@ function isBlobLike(v) {
 // 签名 URL 直连 COS 1s 正常。结论：**默认区域优先，东京只作末位兜底**。
 const COS_PROXY_REGION = "ap-northeast-1";
 
-async function getCosProxyBlob(key, timeoutMs = 20000) {
+async function getCosProxyBlob(key, timeoutMs = 25000) {
   if (MODE !== "cloud") throw new Error("代理不可用（非云端模式）");
   if (!sb) throw new Error("代理不可用（Supabase 未初始化）");
   if (!key) throw new Error("缺少图片 key");
@@ -9036,26 +9067,51 @@ async function getCosProxyBlob(key, timeoutMs = 20000) {
     });
   }
 
-  // 三级通道回退：① invoke 默认区域 → ② 手动 fetch 默认区域 → ③ 手动 fetch 东京。
-  // 实测（2026-10-22，绕过系统代理直连）：默认区域 4.4s 正常，东京强制 15s 挂死——
-  // 故默认区域优先，东京仅作末位兜底。任一通道超 5s 即放弃转下一通道；
-  // 登录态错误直接抛出（换通道也没用）。
-  async function tryOnce() {
-    const steps = [
-      () => withTimeout(viaInvoke(false), 5000, "invoke(默认)"),
-      () => withTimeout(viaManualFetch(false), 5000, "fetch(默认)"),
-      () => withTimeout(viaManualFetch(true), 5000, "fetch(东京)"),
-    ];
-    let lastErr = null;
-    for (const step of steps) {
-      try {
-        return await step();
-      } catch (e) {
+  // 通道策略（2026-10-25 重构——PakePlus 用户实测图片仍整张加载不出之后）。
+  // 旧策略：invoke(默认)→fetch(默认)→fetch(东京) 串行、每通道 5s。两个问题：
+  //   ① 5s 对「服务端实测 3.7s（热）」余量太小，网络稍抖/函数冷启动即误杀；
+  //   ② invoke 与原生 fetch 故障模式不同（前者在 PakePlus WebView2 下疑似不自动带
+  //      token、supabase-js 内部解析异常也只有原生 fetch 能绕过），串行时坏掉的那个
+  //      先耗掉整个超时预算。
+  // 新策略：
+  //   ① 默认区域「双传输并行」：invoke 与 fetch 同时打，谁先成功用谁——互补且省时；
+  //   ② 单通道超时 5s→12s：给足慢响应机会；
+  //   ③ 东京仍只作末位兜底（直连实测 15s 挂死），仅在默认区域双传输都失败后试，配 6s。
+  // 任一侧出现登录态错误（401 类）立即整体失败——换传输/换区域都无意义，
+  // 交给外层 refreshSession 后重试。
+  function raceDefaultRegion() {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const fails = [];
+      const ok = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const fail = (e) => {
+        fails.push(e);
         const msg = String(e && e.message ? e.message : e);
-        if (isAuthError(msg)) throw e;
-        lastErr = e;
-        console.warn("[cos-proxy] 通道失败，尝试下一通道：", msg.slice(0, 140));
-      }
+        if (isAuthError(msg)) { if (!settled) { settled = true; reject(e); } return; }
+        if (fails.length >= 2 && !settled) { settled = true; reject(fails[0] || new Error("默认区域双传输均失败")); }
+      };
+      viaInvoke(false).then(ok, fail);
+      viaManualFetch(false).then(ok, fail);
+    });
+  }
+
+  async function tryOnce() {
+    let lastErr = null;
+    try {
+      return await withTimeout(raceDefaultRegion(), 12000, "默认区域双传输");
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e);
+      if (isAuthError(msg)) throw e; // 登录态错误：换区域也没用，直接走外层刷新重试
+      lastErr = e;
+      console.warn("[cos-proxy] 默认区域双传输失败：", msg.slice(0, 140));
+    }
+    try {
+      return await withTimeout(viaManualFetch(true), 6000, "fetch(东京)");
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e);
+      if (isAuthError(msg)) throw e;
+      lastErr = e;
+      console.warn("[cos-proxy] 东京兜底失败：", msg.slice(0, 140));
     }
     throw lastErr || new Error("代理全部通道失败");
   }
@@ -9443,7 +9499,8 @@ async function cosLightboxLoadKey(key) {
   // 代理 blob 缓存命中（同一张图的缩略图刚加载过）：直接用 blob URL 打开，秒显示
   const cachedBlob = cosBlobCacheGet(key);
   if (cachedBlob) return cachedBlob;
-  const m = await cosGetViewUrls([key]);
+  // 短超时+少重试：灯箱出图主要靠代理（服务端自签），cos-sign 风暴不该把代理挡在门外（2026-10-25）
+  const m = await cosGetViewUrls([key], { timeoutMs: 8000, retries: 1 });
   if (m[key]) return m[key];
   return _cosViewHost ? `https://${_cosViewHost}/${key}` : "";
 }
@@ -9467,7 +9524,7 @@ async function cosLightboxTryRecover(img, key, name) {
       blob = await fetch(cachedBlob).then((r) => r.blob()).catch(() => null);
     }
     if (!blob) {
-      blob = await getCosProxyBlob(key);
+      blob = await getCosProxyBlob(key, 25000);
       if (!blob) throw new Error("无法获取原图");
     }
     if (await isHeicBlob(blob)) {
@@ -10439,11 +10496,11 @@ function projectForm(p = {}, opts = {}) {
            单天不显示（"共1天"无意义）；id 与快速编辑弹窗共用，两个表单不会同时打开。 -->
       <!-- 2026-10-23：预约时间标题后直接挂「加一天 / 减一天」，去掉下方「添加一天」按钮与每行删除叉号。
            删天只能从末尾减（主预约第一天不可删），故用 removeLastSegDay；减一天按钮无额外天时禁用。 -->
-      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:4px;">
+      <div class="seg-title-row">
         <span style="display:inline-flex;align-items:center;gap:2px;"><span style="color:var(--warn)">${svgCal(14)}</span> 预约时间 *</span>
         <span id="pApptDaysHint" class="appt-days-hint"></span>
-        <button type="button" class="btn small" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ 加一天</button>
-        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;padding:3px 10px;font-size:12px;">➖ 减一天</button>
+        <button type="button" class="btn small seg-plus-btn" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ <span class="tx-full">加一天</span><span class="tx-mini">加天</span></button>
+        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;padding:3px 10px;font-size:12px;">➖ <span class="tx-full">减一天</span><span class="tx-mini">减天</span></button>
       </div>
       <!-- 2026-10-22：日期 + 开始 → 结束合并为**严格一行**。
            原先用 flex + flex-wrap，窄屏下 flex 基准宽度合计超过容器 → 三个控件各占一行（用户反馈）。
@@ -11464,11 +11521,11 @@ function quickEditProjectTimeForm(p = {}) {
   const sameDay = dateKey(startDate) === dateKey(endDate);
   return `
     <div class="form-row">
-      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:4px;">
+      <div class="seg-title-row">
         <span style="display:inline-flex;align-items:center;gap:2px;"><span style="color:var(--warn)">${svgCal(14)}</span> 施工日期</span>
         <span id="pApptDaysHint" class="appt-days-hint" title="跨天施工的总天数"></span>
-        <button type="button" class="btn small" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ 加一天</button>
-        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;padding:3px 10px;font-size:12px;">➖ 减一天</button>
+        <button type="button" class="btn small seg-plus-btn" onclick="addSegDay()" ${apptDisabled ? "disabled" : ""} style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;border-radius:4px;padding:3px 10px;font-size:12px;">➕ <span class="tx-full">加一天</span><span class="tx-mini">加天</span></button>
+        <button type="button" class="btn small seg-minus-btn" onclick="removeLastSegDay()" ${apptDisabled || !(p.workSegments && p.workSegments.length > 1) ? "disabled" : ""} style="background:#fef2f2;color:#dc2626;border-color:#fecaca;border-radius:4px;padding:3px 10px;font-size:12px;">➖ <span class="tx-full">减一天</span><span class="tx-mini">减天</span></button>
       </div>
       <div class="appt-day1-row" style="display:flex;align-items:center;gap:6px;width:100%;">
         <input class="input" type="date" id="pDate" value="${dateKey(startDate)}" min="${todayStr()}" onchange="onDateChange()" style="flex:1;" />
@@ -11478,12 +11535,12 @@ function quickEditProjectTimeForm(p = {}) {
       <label>施工时间段</label>
       <div class="appt-day1-time" style="display:flex;align-items:center;gap:6px;width:100%;">
         <span style="font-size:11px;color:#64748b;flex-shrink:0;">开始</span>
-        <select class="input" id="pTime" onchange="onStartTimeChange()" style="flex:1;max-width:110px;">
+        <select class="input appt-d1-time-sel" id="pTime" onchange="onStartTimeChange()">
           ${generateTimeOptions(startTimeStr)}
         </select>
         <span style="font-size:14px;color:#94a3b8;flex-shrink:0;">→</span>
         <span style="font-size:11px;color:#64748b;flex-shrink:0;">结束</span>
-        <select class="input" id="pEnd" onchange="onStartTimeChange()" style="flex:1;max-width:110px;">
+        <select class="input appt-d1-time-sel" id="pEnd" onchange="onStartTimeChange()">
           ${generateTimeOptions(defaultEndTimeStr)}
         </select>
         <span id="pEndNextDayHint" style="display:none;font-size:11px;color:#0891b2;flex-shrink:0;margin-left:4px;">(次日)</span>
@@ -13283,6 +13340,61 @@ function repairPaySummaryHtml(ro) {
     <div class="info-item"><div class="k">工人分成池</div><div class="v">¥${pool.toFixed(2)}${alloc.length ? `（${alloc.length} 人均分）` : ""}</div></div>${ro.materialFeeNote ? `<div class="info-item"><div class="k">扣项说明</div><div class="v">${esc(ro.materialFeeNote)}</div></div>` : ""}`;
 }
 
+/* 维修单「本单收费」独立展示块（2026-10-25）。
+   背景：维修单几乎都发起在原项目**已审核（REVIEWED）**之后——原项目的「费用管理」
+   「包活分成」此时整块 🔒 锁定，而维修单的收费/金额/成本扣项/分成是**额外收费**，
+   独立存放在 ro 上（perm.editRepairPay 只认「包活金额」能力，不受 isReviewed 门控；
+   patchProject 也无审核锁），照常可查可改。此前这些信息只散落在 info-grid 小字里
+   （免费单甚至只有一行「免费维修」），屏幕上显眼的却是原项目两个 🔒 锁定块，
+   用户看不懂本单自己的钱在哪、误以为"都被拦截了"。
+   本块把本单收费收敛到一处：免费单给引导（去哪设金额），付费单给
+   「工程金额 → 工费 → 分成池」链条 + 成本扣项明细 + 工人分成，并明示与原项目互不影响。 */
+function repairFeeBlockHtml(ro) {
+  if (!ro) return "";
+  const legacyPaid = ro.payType == null && ro.payable === true;
+  const isPaid = ro.payType === "paid" || legacyPaid;
+  // 标签随收费方式走：免费单不能挂「额外收费」字样（与「免费维修」自相矛盾）；
+  // 历史付费单（payType==null && payable===true）无金额记录，单说「付费维修」
+  const tagText = !isPaid ? "免费维修" : (legacyPaid ? "付费维修" : "额外收费");
+  const head = `<div class="repair-fee__head"><span>💰 本单收费</span><span class="repair-fee__tag">${tagText} · 独立于原项目</span></div>`;
+  if (!isPaid) {
+    return `<div class="repair-fee">${head}
+      <div class="repair-fee__free">🆓 免费维修 — 不计客户费用，工时仅记考勤，工人无分成</div>
+      <div class="repair-fee__hint">ℹ️ 保修期外的费用在本单收取：点下方「💰 收费」设置金额与成本扣项。原项目已审核锁定的费用与分成<strong>不受影响</strong>。</div>
+    </div>`;
+  }
+  if (legacyPaid) {
+    return `<div class="repair-fee">${head}
+      <div class="repair-fee__free">💵 付费维修（历史单·无金额记录）— 点下方「💰 收费」可补填本单金额与成本扣项</div>
+    </div>`;
+  }
+  const amt = Number(ro.projectAmount) || 0;
+  const cd = getCostDeductions(ro);
+  const cdSum = Math.round(cd.reduce((s, d) => s + (Number(d.amount) || 0), 0) * 100) / 100;
+  const labor = Number(ro.laborFee) || Math.max(0, amt - cdSum);
+  const pool = Number(ro.commissionPool) || Math.round(labor / 2 * 100) / 100;
+  const alloc = Array.isArray(ro.commissionAlloc) ? ro.commissionAlloc : [];
+  const cdHtml = cd.length
+    ? cd.map((d) => `${esc(d.name || "成本扣项")} ¥${(Number(d.amount) || 0).toFixed(2)}${d.kind === "outsourced" ? "（外协）" : ""}`).join(" · ")
+    : "无";
+  const allocHtml = alloc.length
+    ? alloc.map((a) => `${esc(a.name || a.workerId || "")} ¥${(Number(a.amount) || 0).toFixed(2)}`).join(" · ")
+    : "完工时按分成池自动均分";
+  return `<div class="repair-fee">${head}
+    <div class="money-chain">
+      <span class="money-chain__tag">${esc(ro.contractType || "包工")}</span>
+      <span class="money-chain__step"><i>工程金额</i><b>¥${amt.toFixed(2)}</b></span>
+      <span class="money-chain__arrow">→</span>
+      <span class="money-chain__step"><i>工费</i><b>¥${labor.toFixed(2)}</b></span>
+      <span class="money-chain__arrow">→</span>
+      <span class="money-chain__step is-pool"><i>工人分成池</i><b>¥${pool.toFixed(2)}</b></span>
+    </div>
+    <div class="repair-fee__row"><b>成本扣项</b>（材料/现场/外协）：${cdHtml}</div>
+    <div class="repair-fee__row"><b>工人分成</b>：${allocHtml}</div>
+    <div class="money-chain__note">工费 = 本单金额 − 成本扣项；分成池 = 工费 ÷ 2。本单收费<strong>单独叠加</strong>计入提成统计，原项目的工程金额与已分配分成<strong>不变</strong>。</div>
+  </div>`;
+}
+
 /* ---------------------------------------------------------
    分成面板「未保存草稿」保留（2026-10-18）
    背景：施工中项目每 60s 会 renderProjects()+renderConstruction() 整页重绘，
@@ -14213,16 +14325,15 @@ function renderConstruction() {
             <div class="info-item"><div class="k">预约维修时间</div><div class="v">${ro.appointmentTime ? fmtDateTime(ro.appointmentTime) : "—"}</div></div>
             <div class="info-item"><div class="k">维修状态</div><div class="v">${ro.status || "待维修"}</div></div>
             <div class="info-item"><div class="k">紧急程度</div><div class="v" style="${ro.urgency === '加急' ? 'color:#dc2626;font-weight:600;' : ''}">${esc(ro.urgency || "普通")}</div></div>
-            ${repairPaySummaryHtml(ro)}
             <div class="info-item"><div class="k">维修人员</div><div class="v">${esc(repairWorkerNames)}</div></div>
             ${ro.originalRepairTime ? `<div class="info-item"><div class="k">原预约维修</div><div class="v">${fmtDateTime(ro.originalRepairTime)}</div></div>` : ""}
             ${ro.notes ? `<div class="info-item" style="grid-column:1/-1;"><div class="k">备注 / 注意事项</div><div class="v" style="white-space:pre-wrap;">${esc(ro.notes)}</div></div>` : ""}
           </div>`;
           })()}
+          ${repairFeeBlockHtml(ro)}
           ${ro.workLogs && ro.workLogs.length ? `
           <div class="info-grid" style="margin-top:10px">
             <div class="info-item"><div class="k">维修工时（考勤参考）</div><div class="v">${(ro.actualHours || ro.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0)).toFixed(1)} 小时</div></div>
-            ${Array.isArray(ro.commissionAlloc) && ro.commissionAlloc.length ? `<div class="info-item" style="grid-column:1/-1;"><div class="k">工钱分成</div><div class="v">${ro.commissionAlloc.map((a) => `${esc(a.name || a.workerId)} ¥${(Number(a.amount) || 0).toFixed(2)}`).join(" · ")}</div></div>` : ""}
           </div>` : ""}
           ${repairPhotosHtml(ro)}
           ${(ro.status === "待维修") ? `
@@ -29300,7 +29411,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2f349458";
+  const APP_VERSION = "v7d8e6aff";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
