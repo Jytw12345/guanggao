@@ -15427,6 +15427,10 @@ table.data.project-hours-diff thead th {
 .cos-thumb--readonly { cursor: zoom-in; }
 .cos-thumb--readonly:hover { border-color: #0ea5e9; }
 .cos-img--err { opacity: .2; background: #fee2e2; }
+/* 打包环境（packplus）里直链先失败、代理几秒后补图：失败瞬间浏览器会渲染「破图图标 + alt 文件名」，
+   非常刺眼。缩略图恢复期间彻底隐藏 img（占位底 + 「预览加载中…」文字仍在），
+   取到 blob 时 onCosImgError 会移除 .cos-img--err，自动恢复显示。 */
+.cos-thumb img.cos-img--err { opacity: 0; }
 .cos-thumb__errtxt {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
