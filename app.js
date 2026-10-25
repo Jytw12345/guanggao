@@ -8266,7 +8266,7 @@ function onCosImgError(img, name, key) {
 
     // proxy-only：直连 COS 在此环境必然失败（被打包 WebView 的代理拦截），
     // 直接走后端 cos-proxy 取图，连「重签后再次直连」那次徒劳尝试都跳过。
-    const proxyOnly = isCosProxyOnlyEnv() || __cosDirectUnreachable;
+    const proxyOnly = isCosProxyOnlyEnv() || cosDirectBlocked();
 
     // 步骤 0：代理 blob 缓存命中——这张图之前已通过代理取回过，直接复用，秒显示
     const cachedBlob = cosBlobCacheGet(k);
@@ -8321,8 +8321,8 @@ function onCosImgError(img, name, key) {
       clearTimeout(slowTip);
     }
     if (!blob) throw new Error("代理返回空数据");
-    // 代理成功出图 → 确认本环境直连不可达，后续同会话图片直接走代理（不再试直连）。
-    if (!isCosProxyOnlyEnv()) __cosDirectUnreachable = true;
+    // 代理成功出图 → 本环境直连暂时不可达，2 分钟内后续图片直接走代理（到期自动重试直连）。
+    if (!isCosProxyOnlyEnv()) markCosDirectUnreachable();
     // 先 HEIC→JPG 再入缓存：若把原始 HEIC 的 blob URL 存进 _cosBlobCache，
     // 下次缓存命中会把无法解码的 HEIC 直接赋给 img.src（不经过转码），缩略图永久坏掉。
     let url = URL.createObjectURL(blob);
@@ -8469,15 +8469,24 @@ function isCosProxyOnlyEnv() {
   return /pakeplus|packplus|;\s*wv\)|webview/i.test(ua);
 }
 
-// 会话级学习标志：某张图直连失败后确认「代理能出图、直连不行」，后续图片直接走代理，
-// 不再试直连（正常值环境里 onCosImgError 只在出错时触发，设此标志安全）。
-let __cosDirectUnreachable = false;
+// 会话级学习标志：某张图直连失败、代理能出图后，短时间内后续图片直接走代理，
+// 避免每张图都先白等一次直连超时。
+// 2026-10-25（安卓 PWA 实测「一直在走代理、不直连」）：此前这里是永久布尔值，
+// 一次偶发失败（弱网抖动/签名稍旧）就把整个会话锁死成代理模式，桌面端也永远学不回来。
+// 现改为 2 分钟后自动恢复直连尝试。
+let __cosDirectBlockedUntil = 0;
+function cosDirectBlocked() {
+  return Date.now() < __cosDirectBlockedUntil;
+}
+function markCosDirectUnreachable() {
+  __cosDirectBlockedUntil = Date.now() + 120 * 1000;
+}
 
 // 统一给缩略图/img 赋值查看 URL：
 //   - proxy-only 环境或已确认直连不可达 → 直接走代理取图（onCosImgError 会跳过直连重签）；
 //   - 否则先试直连签名 URL，失败再回退代理（浏览器 PWA 的正常快速路径，不受影响）。
 function applyCosThumb(img, key, name, signed) {
-  const proxyOnly = isCosProxyOnlyEnv() || __cosDirectUnreachable;
+  const proxyOnly = isCosProxyOnlyEnv() || cosDirectBlocked();
   // 记下签名直链：<img> 直连失败时，恢复链还能用 XHR 再试一次同一条 URL
   // （packplus/WebView2 对 <img> 子资源和 XHR 的放行策略不同，上传 PUT 走 XHR 是通的）。
   if (img && signed) img.dataset.cosSigned = signed;
@@ -8638,7 +8647,7 @@ async function cosGetViewUrls(keys, signOpts = {}) {
     try {
       // 代理环境（packplus/WebView2）下签名只用于「XHR 直链兜底」，不能让它拖住出图：
       // cos-sign 默认 4 次重试最长可拖到十几秒，期间缩略图只能干等。这里自动降为 1 次 4s。
-      const opts = (isCosProxyOnlyEnv() || __cosDirectUnreachable) && !signOpts.timeoutMs
+      const opts = (isCosProxyOnlyEnv() || cosDirectBlocked()) && !signOpts.timeoutMs
         ? { timeoutMs: 4000, retries: 0 }
         : signOpts;
       const data = await cosSignGetOnce(need, opts);
@@ -9089,7 +9098,7 @@ async function getCosImageBlob(key, signedUrl, timeoutMs = 45000) {
 
 async function fetchCosImageBlobOnce(key, signedUrl, timeoutMs) {
   const directUrl = signedUrl || _cosViewCache[key] || "";
-  const proxyOnly = isCosProxyOnlyEnv() || __cosDirectUnreachable;
+  const proxyOnly = isCosProxyOnlyEnv() || cosDirectBlocked();
   // ① 直链 XHR：<img> 被拦 ≠ XHR 被拦，且比代理少一跳；限时 12s
   if (directUrl && !proxyOnly) {
     try {
@@ -9711,7 +9720,7 @@ async function cosLightboxLoadKey(key) {
   if (cachedBlob) return cachedBlob;
   // proxy-only 环境（packplus 等打包 WebView）：直连 COS 必然失败，直接走后端 cos-proxy
   // 取 blob，不再返回会被其内置代理拦截的直连签名 URL（否则还要先失败再回退，慢且闪）。
-  if (isCosProxyOnlyEnv() || __cosDirectUnreachable) {
+  if (isCosProxyOnlyEnv() || cosDirectBlocked()) {
     try {
       // 直链 XHR 优先，失败再经 cos-proxy 代理
       const blob = await getCosImageBlob(key, _cosViewCache[key] || "", 45000);
@@ -9883,7 +9892,7 @@ async function cosLightboxGo(delta) {
   _cosLbIdx = (_cosLbIdx + delta + n) % n;
   const key = _cosLbList[_cosLbIdx];
   const nm = findPhotoName(key);
-  if (isCosProxyOnlyEnv() || __cosDirectUnreachable) {
+  if (isCosProxyOnlyEnv() || cosDirectBlocked()) {
     const cached = cosBlobCacheGet(key);
     openCosLightbox(cached || "", key, nm);
     return;
@@ -9939,7 +9948,7 @@ async function openCosLightboxByKey(key, name, list, idx) {
   const nm = name || findPhotoName(key);
   // 代理环境下不再「先等加载完再弹窗」：先开占位灯箱，让恢复链内部异步加载，
   // 避免代理慢时点开大图最长要干等几十秒（用户会以为卡死）。
-  if (isCosProxyOnlyEnv() || __cosDirectUnreachable) {
+  if (isCosProxyOnlyEnv() || cosDirectBlocked()) {
     const cached = cosBlobCacheGet(key);
     openCosLightbox(cached || "", key, nm);
     return;
@@ -29696,7 +29705,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vb4ceb9a4";
+  const APP_VERSION = "v14ad4980";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
