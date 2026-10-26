@@ -15398,13 +15398,6 @@ table.data.project-hours-diff thead th {
   background: rgba(15, 23, 42, 0.6); color: #fff; font-size: 12px; cursor: pointer;
 }
 .cos-thumb__del:hover { background: #dc2626; }
-.cos-thumb__dl {
-  position: absolute; top: 4px; right: 28px;
-  width: 20px; height: 20px; line-height: 18px; text-align: center;
-  border: none; border-radius: 50%;
-  background: rgba(15, 23, 42, 0.6); color: #fff; font-size: 12px; cursor: pointer;
-}
-.cos-thumb__dl:hover { background: #0ea5e9; }
 .cos-thumb__prog {
   position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: #e2e8f0;
 }

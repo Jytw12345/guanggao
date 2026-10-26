@@ -8904,13 +8904,10 @@ function renderProjectPhotosHtml(p) {
           ? `<div class="cos-thumb__ph">⏳ 处理中</div>`
           : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">`;
         const err = it.error ? `<div class="cos-thumb__err">失败</div>` : "";
-        const dnBtn = canDownload
-          ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
-          : "";
         const del = canDelete
           ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeCosPhoto('${esc(p.id)}','${realKind}','${esc(it.key)}')">✕</button>`
           : "";
-        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">${img}${prog}${err}${dnBtn}${del}</div>`;
+        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">${img}${prog}${err}${del}</div>`;
       })
       .join("");
     const addBtn = canUpload
@@ -11425,12 +11422,8 @@ function renderProjectContentPhotos(p, photos, allowDownload = true) {
     const blockKeys = arr.filter((it) => it.key).map((it) => it.key);
     const items = arr.map((it, i) => {
       const sid = cosSafeId(it.key);
-      const dnBtn = canDownload
-        ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`
-        : "";
       return `<div class="cos-thumb cos-thumb--readonly" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">
         <img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">
-        ${dnBtn}
       </div>`;
     }).join("");
     return `<div class="cos-section cos-section--readonly">
@@ -11495,10 +11488,7 @@ function renderFormPhotos() {
       const del = canDelete
         ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeFormPhoto('${realKey}','${esc(it.key || it.url || it.name)}')">✕</button>`
         : "";
-      const dn = perms.canDownload
-        ? `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key || "")}','${esc(it.url || "")}','${esc(it.name || "")}')">⬇</button>`
-        : "";
-      return `<div class="cos-thumb" id="cos-item-${sid}">${img}${dn}${del}</div>`;
+      return `<div class="cos-thumb" id="cos-item-${sid}">${img}${del}</div>`;
     }).join("");
     const addBtn = canUpload
       ? dualPhotoInputHTML(`cosFormFile_${kind}`, `formStagePhotos(this,'${kind}')`)
@@ -11750,9 +11740,8 @@ function repairPhotosHtml(ro) {
     if (!items || !items.length) return "";
     const thumbs = items.map((it) => {
       const sid = cosSafeId(it.key);
-      const dn = `<button type="button" class="cos-thumb__dl" title="下载" onclick="event.stopPropagation();downloadCosPhoto('${esc(it.key)}','','${esc(it.name || "")}')">⬇</button>`;
       return `<div class="cos-thumb" id="ro-ph-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}')">` +
-        `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">${dn}</div>`;
+        `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')"></div>`;
     }).join("");
     return `<div class="detail-block cos-section" style="border-left-color:#f59e0b">
       <h3>${title} <span class="cos-count">${items.length}</span></h3>
@@ -29817,7 +29806,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v0d19886a";
+  const APP_VERSION = "v0a735476";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
