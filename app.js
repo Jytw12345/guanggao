@@ -8568,8 +8568,10 @@ async function _cosSignInvokeOnce(body, timeoutMs, maxRetries) {
       if (isCosSignAuthError(error)) {
         console.warn("[cos-sign] 签名返回登录态错误，刷新会话后重试：", String(error.message || error).slice(0, 160));
         try {
-          const { error: refreshErr } = await _withAuthTimeout(sb.auth.refreshSession(), 4000, "refreshSession");
-          if (refreshErr) console.warn("[cos-sign] refreshSession 失败：", refreshErr.message || refreshErr);
+          // 单飞刷新：并发签名/取图同时 401 时不能各自 refresh（refresh token 一次一换，
+          // 并发会触发 "Already Used" 把会话判死）
+          const sess = await _refreshSessionShared(4000, "cos-sign 刷新");
+          if (!sess) console.warn("[cos-sign] 刷新会话未成功");
         } catch (refreshEx) { console.warn("[cos-sign] refreshSession 异常：", refreshEx); }
         try {
           const p2 = sb.functions.invoke("cos-sign", { body });
@@ -8622,8 +8624,8 @@ async function ensureFreshSessionForSign() {
     const { data } = await _withAuthTimeout(sb.auth.getSession(), 3000, "getSession");
     const exp = data && data.session && data.session.expires_at;
     if (exp && exp * 1000 - Date.now() < 5 * 60 * 1000) {
-      const { error } = await _withAuthTimeout(sb.auth.refreshSession(), 4000, "refreshSession");
-      if (error) console.warn("[cos-sign] 会话即将过期，主动刷新失败：", error.message || error);
+      const sess = await _refreshSessionShared(5000, "签名前刷新");
+      if (!sess) console.warn("[cos-sign] 会话即将过期，主动刷新未成功");
     }
   } catch (e) {
     console.warn("[cos-sign] 检查会话状态失败：", e);
@@ -9142,13 +9144,16 @@ async function getCosProxyBlob(key, timeoutMs = 40000) {
   // 只能根据响应 Content-Type 自动解析；cos-proxy 已统一返回 application/octet-stream，
   // 因此 data 会被自动解析为 Blob。
   async function viaInvoke(forceRegion) {
-    // PakePlus 电脑版 WebView2 中，sb.functions.invoke 似乎不会自动带有效 token，
-    // 因此显式从 sb.auth.getSession() 取 token 并放到 headers 里；sb.functions.invoke 会合并 headers。
+    // 取 token 统一走 _getSupabaseAccessToken：它会校验有效期并在将过期时单飞刷新。
+    // 此前直接 sb.auth.getSession() 会拿到「已过期但未刷新」的 token，导致整屏图片一起 401。
     let token = null;
-    try {
-      const { data: sessionData } = await sb.auth.getSession();
-      token = sessionData && sessionData.session && sessionData.session.access_token;
-    } catch (_) {}
+    try { token = await _getSupabaseAccessToken(); } catch (_) {}
+    if (!token) {
+      try {
+        const { data: sessionData } = await sb.auth.getSession();
+        token = sessionData && sessionData.session && sessionData.session.access_token;
+      } catch (_) {}
+    }
     const headers = {};
     if (token) {
       headers["Authorization"] = "Bearer " + token;
@@ -9314,23 +9319,21 @@ async function getCosProxyBlob(key, timeoutMs = 40000) {
   } catch (e) {
     const msg = String(e && e.message ? e.message : e);
     if (isAuthError(msg)) {
-      // 401 时主动刷新一次 session，再重试（refresh 必须带超时：WebView 下会挂死不返回）
-      let refreshed = false;
-      try {
-        const r = await _withAuthTimeout(sb.auth.refreshSession(), 5000, "refreshSession");
-        refreshed = !!(r && !r.error && r.data && r.data.session);
-        if (!refreshed) console.warn("refreshSession 未换到新会话：", r && r.error);
-      } catch (refreshEx) {
-        console.warn("refreshSession 异常：", refreshEx);
-      }
-      // 不论成败都清掉 token 缓存，避免继续拿旧 token 打请求
+      // 401：单飞刷新一次会话再重试。
+      // 必须单飞——整屏图片同时 401 时若各自 refresh，refresh token 被第一个请求轮换后
+      // 其余全部 "Already Used"，会话直接判死，用户只能退出重新登录（2026-10-26 实测症状）。
       _proxyTokenCache = { token: "", exp: 0 };
-      if (!refreshed) {
-        // refresh token 已失效：自动重登是不可能的，直接引导去登录页
-        // （packplus 实测：手动重新登录后图片立刻恢复，说明就是会话半死）
-        promptReloginOnce("登录状态已失效，请重新登录");
-        throw new Error("登录状态已失效，请重新登录 [401]");
+      const sess = await _refreshSessionShared(5000, "401 刷新");
+      if (!sess) {
+        // 只有「refresh token 真的失效」才强制去登录页；弱网/刷新超时只提示可重试，
+        // 避免网络抖动一下就把用户踢下线（重新登录本身也是用户最烦的操作）。
+        if (/invalid refresh token|refresh token not found|already used|refresh_token/i.test(_lastRefreshErrMsg)) {
+          promptReloginOnce("登录状态已失效，请重新登录");
+          throw new Error("登录状态已失效，请重新登录 [401]");
+        }
+        throw new Error(`会话刷新失败（${_lastRefreshErrMsg || "弱网/超时"}），点此重试`);
       }
+      _proxyTokenCache = { token: sess.access_token || "", exp: _jwtExpMs(sess.access_token) };
       try {
         return await tryOnce();
       } catch (e2) {
@@ -9372,19 +9375,69 @@ function _withAuthTimeout(promise, ms, label) {
     new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} 超时`)), ms)),
   ]);
 }
+
+// 单飞刷新（2026-10-26「必须退出重登才能看图」的根因）：
+// supabase 的 refresh token 是「一次一换」的。多张图同时 401 → 各自 refreshSession()
+// → 第一个刷新成功并轮换了 refresh token，其余拿着旧的去刷 → "Already Used" 直接把会话判死，
+// 之后无论怎么重试都 401，只能退出重新登录。这里保证同一时刻只有一个刷新在跑，其余共用结果。
+let _refreshSharedInflight = null;
+let _lastRefreshErrMsg = ""; // 最近一次刷新失败的原因（用于区分「refresh token 真失效」和「弱网超时」）
+function _refreshSessionShared(ms, label) {
+  if (_refreshSharedInflight) return _refreshSharedInflight;
+  const p = (async () => {
+    try {
+      const r = await _withAuthTimeout(sb.auth.refreshSession(), ms || 5000, label || "refreshSession");
+      if (r && r.error) {
+        _lastRefreshErrMsg = String(r.error.message || r.error);
+        console.warn("[auth] 刷新会话失败：", _lastRefreshErrMsg.slice(0, 160));
+        return null;
+      }
+      _lastRefreshErrMsg = "";
+      return (r && r.data && r.data.session) || null;
+    } catch (e) {
+      _lastRefreshErrMsg = String(e && e.message ? e.message : e);
+      console.warn("[auth] 刷新会话异常：", _lastRefreshErrMsg.slice(0, 160));
+      return null;
+    }
+  })();
+  _refreshSharedInflight = p;
+  p.then(
+    () => { if (_refreshSharedInflight === p) _refreshSharedInflight = null; },
+    () => { if (_refreshSharedInflight === p) _refreshSharedInflight = null; },
+  );
+  return p;
+}
 async function _getSupabaseAccessToken() {
-  if (_proxyTokenCache.token && _proxyTokenCache.exp - Date.now() > 60 * 1000) return _proxyTokenCache.token;
+  const now = Date.now();
+  const margin = 60 * 1000; // 剩余有效期不足 60s 即视为不可用，先刷新再发请求
+  if (_proxyTokenCache.token && _proxyTokenCache.exp - now > margin) return _proxyTokenCache.token;
   if (!sb) return null;
+  let token = "";
   try {
     const r = await _withAuthTimeout(sb.auth.getSession(), 3000, "getSession");
-    const t = r && r.data && r.data.session && r.data.session.access_token;
-    if (t) return _cacheProxyToken(t);
+    token = (r && r.data && r.data.session && r.data.session.access_token) || "";
   } catch (_) {}
+  if (!token) token = _tokenFromLocalStorage();
+  // 关键：拿到 token 必须校验有效期。此前无论过期与否都直接返回，
+  // 于是整屏缩略图带着过期 token 一起撞 401、一起触发刷新（进而轮换竞争），
+  // 表现就是「图片全挂，退出重登才恢复」。
+  if (token && _jwtExpMs(token) - now > margin) return _cacheProxyToken(token);
+  // 已过期/将过期：主动刷新（单飞），不要等 401
+  const s = await _refreshSessionShared(5000, "token 刷新");
+  const t2 = s && s.access_token;
+  if (t2 && _jwtExpMs(t2) - Date.now() > 0) return _cacheProxyToken(t2);
+  // 刷新没成功（弱网/超时）但旧 token 还没彻底过期：先用着，至少还能出图
+  if (token && _jwtExpMs(token) - Date.now() > 0) return _cacheProxyToken(token);
+  return null;
+}
+
+/** 从 localStorage 里捞 supabase 会话的 access_token（同步、无锁，WebView 下最可靠） */
+function _tokenFromLocalStorage() {
   try {
     const raw = localStorage.getItem("sb-" + window.APP_CONFIG.SUPABASE_URL.split("//")[1].split(".")[0] + "-auth-token");
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && parsed.access_token) return _cacheProxyToken(parsed.access_token);
+      if (parsed && parsed.access_token) return parsed.access_token;
     }
   } catch (_) {}
   // 通用兜底：扫描 localStorage 中所有 sb-*-auth-token 键
@@ -9393,16 +9446,11 @@ async function _getSupabaseAccessToken() {
       const k = localStorage.key(i);
       if (k && /^sb-.*-auth-token$/.test(k)) {
         const parsed = JSON.parse(localStorage.getItem(k) || "null");
-        if (parsed && parsed.access_token) return _cacheProxyToken(parsed.access_token);
+        if (parsed && parsed.access_token) return parsed.access_token;
       }
     }
   } catch (_) {}
-  try {
-    const r = await _withAuthTimeout(sb.auth.refreshSession(), 4000, "refreshSession");
-    const t = r && !r.error && r.data && r.data.session && r.data.session.access_token;
-    if (t) return _cacheProxyToken(t);
-  } catch (_) {}
-  return null;
+  return "";
 }
 
 // 取单张照片字节：优先走代理；若代理失败，回退直连签名 URL（仅适合已配 CORS 的环境）
@@ -28724,19 +28772,19 @@ async function startCloudSession() {
     // 只有明确 refresh token 失效才引导重新登录，避免每次都要用户手动重登。
     try {
       const expMs = data.session.expires_at ? data.session.expires_at * 1000 : 0;
-      if (navigator.onLine !== false && expMs && expMs <= Date.now()) {
-        const rr = await _withAuthTimeout(sb.auth.refreshSession(), 4000, "启动刷新会话");
-        if (rr && rr.error) {
-          const rm = String(rr.error.message || rr.error);
-          console.warn("[auth] 启动刷新会话失败：", rm);
-          if (/invalid refresh token|refresh token not found|refresh_token/i.test(rm)) {
-            promptReloginOnce("登录状态已过期，请重新登录");
-            return;
-          }
-        } else if (rr && rr.data && rr.data.session) {
-          data.session = rr.data.session;
+      // 余量改为 5 分钟：不等到彻底过期才刷新，规避「启动后几分钟内图片全挂」
+      if (navigator.onLine !== false && expMs && expMs - Date.now() < 5 * 60 * 1000) {
+        const sess = await _refreshSessionShared(5000, "启动刷新会话");
+        if (sess) {
+          data.session = sess;
           _proxyTokenCache = { token: "", exp: 0 };
           console.log("[auth] 启动时已刷新会话，过期时间：", data.session.expires_at ? new Date(data.session.expires_at * 1000).toLocaleString() : "未知");
+        } else if (/invalid refresh token|refresh token not found|already used|refresh_token/i.test(_lastRefreshErrMsg)) {
+          console.warn("[auth] 启动刷新会话失败：", _lastRefreshErrMsg);
+          promptReloginOnce("登录状态已过期，请重新登录");
+          return;
+        } else if (_lastRefreshErrMsg) {
+          console.warn("[auth] 启动刷新未成功（继续用现有会话）：", _lastRefreshErrMsg);
         }
       }
     } catch (e) {
@@ -29720,7 +29768,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v1dd42b55";
+  const APP_VERSION = "vc5eca755";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
