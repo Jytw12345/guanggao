@@ -8510,9 +8510,28 @@ function markCosDirectOk() {
 let _cosProxyImgDirectFail = 0;
 let _cosProxyImgDirectDisabled = false;
 
-function cosProxyImgUrl(key, token) {
+function cosProxyImgUrl(key, token, thumb) {
   const base = String(window.APP_CONFIG.SUPABASE_URL || "").replace(/\/+$/, "");
-  return `${base}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}&raw=1&token=${encodeURIComponent(token)}`;
+  const t = thumb ? `&thumb=${thumb}` : "";
+  return `${base}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}&raw=1${t}&token=${encodeURIComponent(token)}`;
+}
+
+// 预热函数实例（见 startCloudSession 调用处）。用一个必然 404 的 key，只为把实例唤醒。
+let _cosProxyWarmed = false;
+async function warmCosProxy() {
+  if (_cosProxyWarmed) return;
+  _cosProxyWarmed = true;
+  try {
+    const token = await _getSupabaseAccessToken();
+    if (!token) { _cosProxyWarmed = false; return; }
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    const to = ctrl ? setTimeout(() => ctrl.abort(), 5000) : null;
+    try {
+      await fetch(cosProxyImgUrl("gg/projects/_warmup_.jpg", token), ctrl ? { signal: ctrl.signal, cache: "no-store" } : { cache: "no-store" });
+    } finally {
+      if (to) clearTimeout(to);
+    }
+  } catch (_) { /* 预热失败不影响任何功能 */ }
 }
 
 async function cosProxyImgDirect(img, key, name) {
@@ -8531,7 +8550,9 @@ async function cosProxyImgDirect(img, key, name) {
     }
     onCosImgError(img, name, key);
   };
-  img.src = cosProxyImgUrl(key, token);
+  // thumb=400：让服务端用 COS 数据万象现生成 400px 缩略图（单张 ~30-60KB），
+  // 列表不再传回 2–5MB 原图；点开大图仍走原图（灯箱是另一条路径）。
+  img.src = cosProxyImgUrl(key, token, 400);
 }
 
 // 缩略图填充专用：打包环境/已判定直连不可用时根本不会用签名直链，
@@ -8751,12 +8772,53 @@ async function cosSignGetOnce(keys, opts = {}) {
   return data;
 }
 
+// 上传前压缩：手机原图常见 2–5MB，是「看图慢/上传慢」的最大来源。
+// 只处理 JPEG（PNG 截图/物料图不动，避免文字糊掉），长边超过 1600px 才缩小，质量 0.82。
+// 失败或压完反而更大时回退原图，绝不因为压缩导致上传失败。
+async function compressImageForUpload(file, { maxEdge = 1600, quality = 0.82, skipUnder = 600 * 1024 } = {}) {
+  try {
+    if (!file || !/^image\/jpe?g$/i.test(file.type || "")) return file;
+    if (file.size <= skipUnder) return file;
+    const url = URL.createObjectURL(file);
+    try {
+      const im = await new Promise((res, rej) => {
+        const el = new Image();
+        el.onload = () => res(el);
+        el.onerror = () => rej(new Error("decode failed"));
+        el.src = url;
+      });
+      const w0 = im.naturalWidth || im.width, h0 = im.naturalHeight || im.height;
+      if (!w0 || !h0) return file;
+      const scale = Math.min(1, maxEdge / Math.max(w0, h0));
+      if (scale >= 1 && file.size <= skipUnder * 2) return file;
+      const w = Math.max(1, Math.round(w0 * scale));
+      const h = Math.max(1, Math.round(h0 * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return file;
+      ctx.drawImage(im, 0, 0, w, h);
+      const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+      if (!blob || blob.size >= file.size) return file;
+      const base = (file.name || "photo").replace(/\.[^.]+$/, "");
+      return new File([blob], base + ".jpg", { type: "image/jpeg", lastModified: Date.now() });
+    } finally {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    }
+  } catch (e) {
+    console.warn("[upload] 压缩失败，按原图上传：", e && e.message ? e.message : e);
+    return file;
+  }
+}
+
 // XHR PUT 上传（带进度），COS 预签名 URL 无需额外签名头
-function putFileToCos(putUrl, file, onProgress) {
+async function putFileToCos(putUrl, file, onProgress) {
+  // 统一在唯一的上传出口做压缩：4 条上传路径（项目照片/表单照片/验收/量尺）全部受益。
+  const body = await compressImageForUpload(file);
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", putUrl, true);
-    xhr.setRequestHeader("Content-Type", file.type || "image/jpeg");
+    xhr.setRequestHeader("Content-Type", body.type || "image/jpeg");
     if (onProgress) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
@@ -8768,7 +8830,7 @@ function putFileToCos(putUrl, file, onProgress) {
         : reject(new Error("HTTP " + xhr.status));
     };
     xhr.onerror = () => reject(new Error("网络错误"));
-    xhr.send(file);
+    xhr.send(body);
   });
 }
 
@@ -9126,7 +9188,9 @@ function xhrGetBlob(url, headers, timeoutMs = 15000) {
 let _cosImgActive = 0;
 const _cosImgQueue = [];
 const _cosImgInflight = new Map();
-const COS_IMG_CONCURRENCY = 3;
+// 缩略图下载并发：打包环境由浏览器原生加载（+SW 缓存），5 路足以填满 HTTP/1.1 的 6 连接上限，
+// 再多只会排队；浏览器直连场景仍受 COS 侧限速影响，5 路同样够用。
+const COS_IMG_CONCURRENCY = 5;
 
 function _cosImgRun(fn) {
   return new Promise((resolve, reject) => {
@@ -28839,6 +28903,9 @@ async function startCloudSession() {
     document.getElementById("userMenu").classList.remove("hidden");
     setSyncStatus("online", "● 连接中…");
     showSyncing(); // 移动端：登录后开始首次同步，顶部显示「同步中…」（只此一次）
+    // 预热 cos-proxy：Edge Function 闲置几分钟后首个请求要付冷启动（0.3–1.5s），
+    // 登录成功后立刻空跑一次，把冷启动成本从「用户第一次看图」挪到「应用启动时」。
+    setTimeout(() => { try { warmCosProxy(); } catch (_) {} }, 0);
 
     // 并行：拉取权威角色档案 + 从本地缓存秒开（数据 + 上次缓存的角色），重叠 I/O 缩短首屏等待
     const profilesP = sb.from("profiles").select("*").eq("id", currentUser.id).maybeSingle();
@@ -29827,7 +29894,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v7db3f4d3";
+  const APP_VERSION = "v99fb806d";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

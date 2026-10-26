@@ -3,8 +3,8 @@
 // - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
 //   用户点「立即更新」或下次打开即生效。
 // 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
-const CACHE = "ad-install-v7db3f4d3";
-const VERSION = "v7db3f4d3";
+const CACHE = "ad-install-v99fb806d";
+const VERSION = "v99fb806d";
 const COS_CACHE = "ad-install-cos-" + VERSION; // 腾讯云 COS 图片运行时缓存，支持现场离线看图
 
 const ASSETS = [
@@ -103,7 +103,7 @@ self.addEventListener("fetch", (e) => {
   }
   // 打包环境 <img> 直连 Supabase 代理（?key=&raw=1&token=）：
   // 按 key 归一化缓存（把 token 从缓存键去掉），同一张图再次查看秒开、可离线。
-  if (req.method === "GET" && /\/functions\/v1\/cos-proxy$/.test(url.pathname) && url.searchParams.get("key")) {
+  if (/\/functions\/v1\/cos-proxy$/.test(url.pathname) && url.searchParams.get("key")) {
     e.respondWith(handleProxyImage(req));
     return;
   }
@@ -115,7 +115,10 @@ async function handleProxyImage(req) {
   const u = new URL(req.url);
   const key = u.searchParams.get("key") || "";
   if (!key) return fetch(req);
-  const normUrl = `${u.origin}${u.pathname}?key=${encodeURIComponent(key)}&raw=1`;
+  // 缓存键：剔除 token，保留 key 与 thumb——缩略图（thumb=400）与原图必须分开缓存，
+  // 否则先看缩略图会把小图当原图命中，点开大图仍是糊的。
+  const thumb = u.searchParams.get("thumb") || "";
+  const normUrl = `${u.origin}${u.pathname}?key=${encodeURIComponent(key)}&raw=1${thumb ? `&thumb=${encodeURIComponent(thumb)}` : ""}`;
   const cacheKey = new Request(normUrl);
   let cache = null;
   try { cache = await caches.open(COS_CACHE); } catch (_) { cache = null; }
