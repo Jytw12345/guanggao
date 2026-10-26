@@ -3,8 +3,8 @@
 // - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
 //   用户点「立即更新」或下次打开即生效。
 // 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
-const CACHE = "ad-install-v0a735476";
-const VERSION = "v0a735476";
+const CACHE = "ad-install-v7db3f4d3";
+const VERSION = "v7db3f4d3";
 const COS_CACHE = "ad-install-cos-" + VERSION; // 腾讯云 COS 图片运行时缓存，支持现场离线看图
 
 const ASSETS = [
@@ -44,7 +44,13 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     Promise.all([
-      caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))),
+      // 只清理「旧版本」的两类缓存；必须保留当前版本的 CACHE 与 COS_CACHE。
+      // 早前这里写成 `k !== CACHE`，而 COS_CACHE = "ad-install-cos-" + VERSION 与 CACHE 名字不同，
+      // 导致每次 SW 更新激活时把刚缓存好的现场图片全部删掉（离线看图失效）。
+      caches.keys().then((keys) => {
+        const keep = new Set([CACHE, COS_CACHE]);
+        return Promise.all(keys.filter((k) => k.startsWith("ad-install") && !keep.has(k)).map((k) => caches.delete(k)));
+      }),
       self.clients.claim()
     ])
   );

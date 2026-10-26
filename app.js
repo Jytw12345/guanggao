@@ -8450,7 +8450,11 @@ function cosBlobCachePut(key, blobUrl) {
   const keys = Object.keys(_cosBlobCache);
   if (keys.length >= _COS_BLOB_CACHE_MAX && !_cosBlobCache[key]) {
     keys.sort((a, b) => (_cosBlobCache[a].at || 0) - (_cosBlobCache[b].at || 0));
+    const victim = _cosBlobCache[keys[0]];
     delete _cosBlobCache[keys[0]];
+    // 淘汰时必须释放 Blob URL，否则每淘汰一张就永久泄漏一份图片内存（长会话里越积越多）。
+    // 已解码并显示中的 <img> 不受影响，撤销只让该 URL 不能再被重新加载。
+    try { if (victim && victim.url) URL.revokeObjectURL(victim.url); } catch (_) {}
   }
   _cosBlobCache[key] = { url: blobUrl, at: Date.now() };
 }
@@ -8476,16 +8480,21 @@ function isCosProxyOnlyEnv() {
 // 会话级直连策略（2026-10-25 三次调整）：
 // 某张图直连失败、代理能出图后，短时间内后续图片直接走代理，避免每张图都先白等一次探测。
 // ① 探测超时 3.5s（原 12s）——手机到 myqcloud.com 不通时，代价必须小；
-// ② 指数退避 2min → 5min → 10min，而不是固定 2 分钟（固定值会让整屏图每分钟集体白等一轮）；
+// ② 退避 2min → 5min，而不是固定 2 分钟（固定值会让整屏图每分钟集体白等一轮）；
 // ③ 同一会话连续失败 ≥2 次即整个会话跳过直连（手机上基本可判定此网络不通），
 //    只在刷新/重开页面时重置——对应「刚才还比较快」的期望：稳定优先，不要反复探测。
 let __cosDirectBlockedUntil = 0;
 let __cosDirectFailCount = 0;
-const COS_DIRECT_BACKOFF_SEC = [120, 300, 600, 900];
+// 只有前两次失败需要冷却；第 2 次之后由 cosDirectBlocked() 的 failCount>=2 直接封锁整个会话，
+// 所以这里不再保留 600/900 这两档（它们永远走不到，属于死配置）。
+const COS_DIRECT_BACKOFF_SEC = [120, 300];
 function cosDirectBlocked() {
   return __cosDirectFailCount >= 2 || Date.now() < __cosDirectBlockedUntil;
 }
 function markCosDirectUnreachable() {
+  // 已在冷却期内就不再续期：否则「代理每成功出一张图」都会把冷却往后推，
+  // 长时间浏览时直连永远试不到，即使网络随后恢复也无法自动回到直连。
+  if (Date.now() < __cosDirectBlockedUntil) return;
   const idx = Math.min(Math.max(__cosDirectFailCount - 1, 0), COS_DIRECT_BACKOFF_SEC.length - 1);
   __cosDirectBlockedUntil = Date.now() + COS_DIRECT_BACKOFF_SEC[idx] * 1000;
 }
@@ -8511,6 +8520,9 @@ async function cosProxyImgDirect(img, key, name) {
   try { token = await _getSupabaseAccessToken(); } catch (_) {}
   if (!token || !img) { onCosImgError(img, name, key); return; }
   img.dataset.proxyDirect = "1";
+  // 成功一次即清零：否则两次偶发失败（如 token 恰好过期）就会把此路径整会话停用，
+  // 之后每张图都退回 JS 取 blob，白白慢一截。
+  img.onload = () => { _cosProxyImgDirectFail = 0; };
   img.onerror = () => {
     img.dataset.proxyDirect = "";
     if (++_cosProxyImgDirectFail >= 2) {
@@ -8520,6 +8532,15 @@ async function cosProxyImgDirect(img, key, name) {
     onCosImgError(img, name, key);
   };
   img.src = cosProxyImgUrl(key, token);
+}
+
+// 缩略图填充专用：打包环境/已判定直连不可用时根本不会用签名直链，
+// 此时跳过 cos-sign 调用——否则每批图片都要先等一次 Edge Function（最长 4s）才开始加载，
+// 白白把首图时间往后推，也增加一次函数并发压力。
+async function _cosViewMapFor(keys) {
+  if (!keys || !keys.length) return {};
+  if (isCosProxyOnlyEnv() || cosDirectBlocked()) return {};
+  return await cosGetViewUrls(keys);
 }
 
 // 统一给缩略图/img 赋值查看 URL：
@@ -10019,7 +10040,7 @@ async function fillPhotoImages(p) {
   ["plan", "material", "site", "completion"].forEach((k) => {
     (photos[k] || []).forEach((it) => it.key && keys.push(it.key));
   });
-  const viewMap = await cosGetViewUrls(keys);
+  const viewMap = await _cosViewMapFor(keys);
   const imgs = document.querySelectorAll('#cosPhotosWrap img[data-cos-key]');
   imgs.forEach((img) => {
     const k = img.getAttribute("data-cos-key");
@@ -11459,7 +11480,7 @@ async function fillProjectContentPhotos(p, rootSelector = ".proj-content-detail"
     (photos[k] || []).forEach((it) => it.key && keys.push(it.key));
   });
   if (!keys.length) return;
-  const viewMap = await cosGetViewUrls(keys);
+  const viewMap = await _cosViewMapFor(keys);
   document.querySelectorAll(`${rootSelector} img[data-cos-key]`).forEach((img) => {
     const k = img.getAttribute("data-cos-key");
     applyCosThumb(img, k, img.alt, viewMap[k] || "");
@@ -11540,7 +11561,7 @@ async function fillFormPhotos() {
     (fp[k] || []).forEach((it) => { if (it.key && !it._staged) keys.push(it.key); });
   });
   if (!keys.length) return;
-  const viewMap = await cosGetViewUrls(keys);
+  const viewMap = await _cosViewMapFor(keys);
   document.querySelectorAll('#pPhotosWrap img[data-cos-key]').forEach((img) => {
     const k = img.getAttribute("data-cos-key");
     const legacy = img.getAttribute("data-legacy-url") || "";
@@ -11760,7 +11781,7 @@ async function fillRepairPhotos() {
   const keys = [];
   imgs.forEach((img) => { const k = img.getAttribute("data-cos-key"); if (k) keys.push(k); });
   if (!keys.length) return;
-  const viewMap = await cosGetViewUrls(keys);
+  const viewMap = await _cosViewMapFor(keys);
   imgs.forEach((img) => {
     const k = img.getAttribute("data-cos-key");
     applyCosThumb(img, k, img.alt, viewMap[k] || "");
@@ -11774,7 +11795,7 @@ async function fillAcceptancePhotos() {
   const keys = [];
   imgs.forEach((img) => { const k = img.getAttribute("data-cos-key"); if (k) keys.push(k); });
   if (!keys.length) return;
-  const viewMap = await cosGetViewUrls(keys);
+  const viewMap = await _cosViewMapFor(keys);
   imgs.forEach((img) => {
     const k = img.getAttribute("data-cos-key");
     applyCosThumb(img, k, img.alt, viewMap[k] || "");
@@ -29806,7 +29827,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v0a735476";
+  const APP_VERSION = "v7db3f4d3";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -31935,7 +31956,7 @@ function renderMeasurementPhotoArea() {
 async function fillMeasurementPhotos(m) {
   const keys = (m.photos || []).filter((it) => !it.uploading && it.key).map((it) => it.key);
   if (!keys.length) return;
-  const viewMap = await cosGetViewUrls(keys);
+  const viewMap = await _cosViewMapFor(keys);
   (m.photos || []).forEach((it, i) => {
     if (it.uploading) return;
     const img = document.querySelector(`#mPhotoArea img[data-m-photo="${i}"]`);
