@@ -3,8 +3,8 @@
 // - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
 //   用户点「立即更新」或下次打开即生效。
 // 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
-const CACHE = "ad-install-v1d9960fc";
-const VERSION = "v1d9960fc";
+const CACHE = "ad-install-v8c3ebc97";
+const VERSION = "v8c3ebc97";
 const COS_CACHE = "ad-install-cos-" + VERSION; // 腾讯云 COS 图片运行时缓存，支持现场离线看图
 
 const ASSETS = [
@@ -95,8 +95,54 @@ self.addEventListener("fetch", (e) => {
     e.respondWith(handleCosImage(req));
     return;
   }
+  // 打包环境 <img> 直连 Supabase 代理（?key=&raw=1&token=）：
+  // 按 key 归一化缓存（把 token 从缓存键去掉），同一张图再次查看秒开、可离线。
+  if (req.method === "GET" && /\/functions\/v1\/cos-proxy$/.test(url.pathname) && url.searchParams.get("key")) {
+    e.respondWith(handleProxyImage(req));
+    return;
+  }
   // 其它跨域 GET（如 Supabase）不拦截
 });
+
+// 代理图片：缓存优先。用 CORS 模式重新取一次，才能判断 ok/内容类型（不会把 401 缓存进去）。
+async function handleProxyImage(req) {
+  const u = new URL(req.url);
+  const key = u.searchParams.get("key") || "";
+  if (!key) return fetch(req);
+  const normUrl = `${u.origin}${u.pathname}?key=${encodeURIComponent(key)}&raw=1`;
+  const cacheKey = new Request(normUrl);
+  let cache = null;
+  try { cache = await caches.open(COS_CACHE); } catch (_) { cache = null; }
+  if (cache) {
+    try {
+      const hit = await cache.match(cacheKey);
+      if (hit) return hit;
+    } catch (_) {}
+  }
+  try {
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    const to = ctrl ? setTimeout(() => ctrl.abort(), 20000) : null;
+    let res;
+    try {
+      res = await fetch(req.url, ctrl ? { mode: "cors", signal: ctrl.signal } : { mode: "cors" });
+    } finally {
+      if (to) clearTimeout(to);
+    }
+    if (res && res.ok) {
+      if (cache) { try { cache.put(cacheKey, res.clone()); } catch (_) {} }
+      return res;
+    }
+    return res;
+  } catch (_) {
+    if (cache) {
+      try {
+        const hit = await cache.match(cacheKey);
+        if (hit) return hit;
+      } catch (_) {}
+    }
+    return new Response("", { status: 504, statusText: "offline" });
+  }
+}
 
 async function handleFetch(req) {
   const isNav = req.mode === "navigate";

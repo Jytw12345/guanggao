@@ -8494,8 +8494,37 @@ function markCosDirectOk() {
   __cosDirectBlockedUntil = 0;
 }
 
+// 打包环境缩略图：让 <img> 直接请求 cos-proxy（token 放 query），由浏览器原生加载。
+// 好处：省掉「JS 取 blob → createObjectURL」这一跳，浏览器可渐进渲染，SW 也能缓存；
+// 代价：函数需支持 token query（已随 cos-proxy 一起改）。函数未更新/令牌过期时
+//  img onerror 会回落到原有 JS 恢复链，连续失败 2 次即本会话停用该路径。
+let _cosProxyImgDirectFail = 0;
+let _cosProxyImgDirectDisabled = false;
+
+function cosProxyImgUrl(key, token) {
+  const base = String(window.APP_CONFIG.SUPABASE_URL || "").replace(/\/+$/, "");
+  return `${base}/functions/v1/cos-proxy?key=${encodeURIComponent(key)}&raw=1&token=${encodeURIComponent(token)}`;
+}
+
+async function cosProxyImgDirect(img, key, name) {
+  let token = null;
+  try { token = await _getSupabaseAccessToken(); } catch (_) {}
+  if (!token || !img) { onCosImgError(img, name, key); return; }
+  img.dataset.proxyDirect = "1";
+  img.onerror = () => {
+    img.dataset.proxyDirect = "";
+    if (++_cosProxyImgDirectFail >= 2) {
+      _cosProxyImgDirectDisabled = true;
+      console.warn("[cos-img] 代理直连不可用，本次会话改走 JS 取图");
+    }
+    onCosImgError(img, name, key);
+  };
+  img.src = cosProxyImgUrl(key, token);
+}
+
 // 统一给缩略图/img 赋值查看 URL：
 //   - proxy-only 环境或已确认直连不可达 → 直接走代理取图（onCosImgError 会跳过直连重签）；
+//     打包环境优先用 <img> 直连 cos-proxy（原生加载，快且可被 SW 缓存）；
 //   - 否则先试直连签名 URL，失败再回退代理（浏览器 PWA 的正常快速路径，不受影响）。
 function applyCosThumb(img, key, name, signed) {
   const proxyOnly = isCosProxyOnlyEnv() || cosDirectBlocked();
@@ -8505,6 +8534,8 @@ function applyCosThumb(img, key, name, signed) {
   if (signed && !proxyOnly) {
     img.src = signed;
     img.onerror = () => onCosImgError(img, name, key);
+  } else if (key && !_cosProxyImgDirectDisabled && !/\.(heic|heif)$/i.test(key)) {
+    cosProxyImgDirect(img, key, name);
   } else {
     onCosImgError(img, name, key);
   }
@@ -29770,7 +29801,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v1d9960fc";
+  const APP_VERSION = "v8c3ebc97";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
