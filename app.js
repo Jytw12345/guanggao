@@ -8324,8 +8324,9 @@ function onCosImgError(img, name, key) {
       clearTimeout(slowTip);
     }
     if (!blob) throw new Error("代理返回空数据");
-    // 代理成功出图 → 本环境直连暂时不可达，2 分钟内后续图片直接走代理（到期自动重试直连）。
-    if (!isCosProxyOnlyEnv()) markCosDirectUnreachable();
+    // 代理成功出图 → 本次直链探测确实失败过 → 冷却期内后续图片直接走代理
+    // （按真实失败次数退避；没探测过就不标记，避免错误地封锁直连）
+    if (__cosDirectFailCount > 0) markCosDirectUnreachable();
     // 先 HEIC→JPG 再入缓存：若把原始 HEIC 的 blob URL 存进 _cosBlobCache，
     // 下次缓存命中会把无法解码的 HEIC 直接赋给 img.src（不经过转码），缩略图永久坏掉。
     let url = URL.createObjectURL(blob);
@@ -9111,10 +9112,11 @@ async function getCosImageBlob(key, signedUrl, timeoutMs = 45000) {
 
 async function fetchCosImageBlobOnce(key, signedUrl, timeoutMs) {
   const directUrl = signedUrl || _cosViewCache[key] || "";
-  const proxyOnly = isCosProxyOnlyEnv() || cosDirectBlocked();
-  // ① 直链 XHR：<img> 被拦 ≠ XHR 被拦，且比代理少一跳；探测限时 3.5s
-  // （手机到 myqcloud.com 不通时，串行探测不能把队列占住十几秒）。
-  if (directUrl && !proxyOnly) {
+  // ① 直链 XHR：<img> 被拦 ≠ XHR 被拦，且比代理少一跳；探测限时 3.5s。
+  // 2026-10-26：打包环境也放开探测（此前 UA 判定 proxy-only 就直接跳过，导致即便
+  // COS 已配好 CORS 也永远用不上直连）。不成立时最多探测 2 次（3.5s×2）即整会话跳过，
+  // 代价很小；成立时每张图省掉一整跳代理。
+  if (directUrl && !cosDirectBlocked()) {
     try {
       const b = await xhrGetBlob(directUrl, null, 3500);
       markCosDirectOk();
@@ -29768,7 +29770,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc5eca755";
+  const APP_VERSION = "v1d9960fc";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
