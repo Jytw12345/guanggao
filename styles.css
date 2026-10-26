@@ -15381,7 +15381,10 @@ table.data.project-hours-diff thead th {
   align-items: center;
   justify-content: center;
 }
-.cos-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cos-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; }
+/* 加载成功前一律不显示：避免 src 赋值后、图片到达前渲染出「破图图标 + alt 文件名」。
+   .cos-img--ok 由 document 捕获阶段的 load 事件统一添加（load 不冒泡，只能捕获）。 */
+.cos-thumb img.cos-img--ok { opacity: 1; }
 .cos-thumb__ph { color: var(--muted); font-size: 13px; padding: 6px; text-align: center; }
 .cos-thumb.is-error { border-color: #fca5a5; }
 .cos-thumb__err {

@@ -29800,8 +29800,24 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     setTimeout(close, 6000);
   }
 
+  // 缩略图「先闪破图图标」的兜底：CSS 已把 .cos-thumb img 默认设为 opacity:0，
+  // 这里在 document 捕获阶段统一监听 load/error（load/error 不冒泡，只能捕获），
+  // 加载成功才加 .cos-img--ok 显示，覆盖所有内联 onerror 与 JS 直接赋值 src 的路径。
+  document.addEventListener("load", (e) => {
+    const el = e.target;
+    if (!el || el.tagName !== "IMG" || !el.closest || !el.closest(".cos-thumb")) return;
+    el.classList.remove("cos-img--err");
+    el.classList.add("cos-img--ok");
+  }, true);
+  document.addEventListener("error", (e) => {
+    const el = e.target;
+    if (!el || el.tagName !== "IMG" || !el.closest || !el.closest(".cos-thumb")) return;
+    el.classList.remove("cos-img--ok");
+    el.classList.add("cos-img--err");
+  }, true);
+
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v8c3ebc97";
+  const APP_VERSION = "v0d19886a";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
