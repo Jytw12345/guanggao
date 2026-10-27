@@ -452,18 +452,37 @@ let rolePerms = JSON.parse(JSON.stringify(DEFAULT_ROLE_PERMS));
    云端从 user_permissions 表载入。用于「分人个性权限」。 */
 let userPerms = {};
 
+/* 当前用户用于查个性权限的 profile id。
+   profiles.id 与 auth uid 同源；currentProfile 尚未拿到时兜底 currentUser.id，
+   避免登录/快照竞态期间 currentProfile.id 缺失导致「个性权限整体失效、只剩角色默认」。 */
+function currentPermId() {
+  return (currentProfile && currentProfile.id) || (currentUser && currentUser.id) || "";
+}
+
+/* 查当前用户的个性权限覆盖项：{ has: 是否被管理员单独设置, value: 设置值 } */
+function userOverride(cap) {
+  const id = currentPermId();
+  const ov = id ? userPerms[id] : null;
+  if (ov && Object.prototype.hasOwnProperty.call(ov, cap)) return { has: true, value: !!ov[cap] };
+  return { has: false, value: false };
+}
+
 /* 当前用户是否拥有某项权限 */
 function can(cap) {
   if (isManager()) return true;
   const role = myRole();
   if (!role) return false;
   // 用户级个性权限优先于角色默认
-  const id = currentProfile && currentProfile.id;
-  const override = id && userPerms[id];
-  if (override && Object.prototype.hasOwnProperty.call(override, cap)) {
-    return !!override[cap];
-  }
+  const o = userOverride(cap);
+  if (o.has) return o.value;
   return !!(rolePerms[role] && rolePerms[role][cap]);
+}
+
+/* 管理员是否对该用户「显式单独授予」了该权限点（个性权限为开）。
+   显式授予视为全局授权，不再被门店兜底二次否决——否则管理员勾了也无效。 */
+function explicitGrant(cap) {
+  const o = userOverride(cap);
+  return o.has && o.value;
 }
 
 const perm = {
@@ -549,11 +568,11 @@ const perm = {
   // 预约人路径无需门店兜底（自己的单必然同店）；验收后仅管理员可改，审核后一律锁定。
   editContract: (p) => !isReviewed(p) && (
     (can(CAP.PROJECT_EDIT_CONTRACT)
-      && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())))
+      && (explicitGrant(CAP.PROJECT_EDIT_CONTRACT) || can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())))
     || (isProjectBooker(p) && p.status !== STATUS.ACCEPTED && p.status !== STATUS.CANCELLED)
   ),
   editCommission: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COMMISSION)
-    && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
+    && (explicitGrant(CAP.PROJECT_EDIT_COMMISSION) || can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   /* 维修单收费用权限（perm.editContract 的变体，2026-10-22）。
      与 editContract 的唯一区别：**不叠加 `!isReviewed(p)`**。
      原因：维修单只存在于「原项目已完工/已验收/已审核」之后（保修期外上门），
@@ -562,11 +581,11 @@ const perm = {
      封存的语义锁的是**原项目的钱**；维修单是封存之后新产生的独立收费项，金额与分成
      单独计算并叠加，不影响原项目，故不受该封存约束。权限点与门店兜底口径完全沿用。 */
   editRepairPay: (p) => can(CAP.PROJECT_EDIT_CONTRACT)
-    && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
+    && (explicitGrant(CAP.PROJECT_EDIT_CONTRACT) || can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   // 成本扣项（材料/现场成本/外协工钱）独立权限点：与「工人分成」(editCommission) 分开控制。
   // 默认 manager/store_manager = true、worker = false；门店兜底同口径。
   editCostDeduction: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COST_DEDUCTION)
-    && (can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
+    && (explicitGrant(CAP.PROJECT_EDIT_COST_DEDUCTION) || can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   // 注：「修改完工工时」权限点（project_edit_worklog_own/all）已随手动工时功能取消而移除。
   // 工时由系统在完工时自动生成（仅考勤参考、不计工资），唯一的工时纠错入口是「删除考勤工时记录」
   // （worklog_delete），故 deleteWorkLog 只认该权限，不再叠加「修改工时」判定。
@@ -4678,6 +4697,8 @@ async function applyIncrementalUpdate(tableName) {
         rolePerms[r.role] = { ...(DEFAULT_ROLE_PERMS[r.role] || {}), ...(r.perms || {}) };
       });
       applyPermissions();
+      // 权限变化后重绘当前已打开的项目详情，否则在线期间被授权仍显示旧只读态
+      if (document.getElementById("constructionDetail")) renderConstruction();
       break;
     }
     case "user_permissions": {
@@ -4687,6 +4708,7 @@ async function applyIncrementalUpdate(tableName) {
         if (r.profile_id) userPerms[r.profile_id] = r.perms || {};
       });
       applyPermissions();
+      if (document.getElementById("constructionDetail")) renderConstruction();
       break;
     }
     case "leave_records": {
@@ -14786,12 +14808,16 @@ function renderConstruction() {
       // 板块紧邻下方「包活分成」，金额链（工费/池）在分成面板统一展示，故本板块不再重复。
       const canAmt = canEditContract;
       const canCost = perm.editCostDeduction(p);
+      // 只读原因可区分：有权限点却被「门店范围」挡下（跨店/历史项目无门店），
+      // 与完全没有权限点（角色/个性权限都未授予）是两种不同处置。
+      const blockedByStore = !canAmt && !canCost
+        && (can(CAP.PROJECT_EDIT_CONTRACT) || can(CAP.PROJECT_EDIT_COST_DEDUCTION));
       const amt = Number(p.projectAmount) || 0;
       return `
         <div class="detail-block cost-mgmt-block">
           <div class="assign-head" style="display:flex;align-items:center;justify-content:space-between;">
             <h3>💰 费用管理</h3>
-            ${isReviewed(p) ? `<span class="hint" style="margin:0;color:var(--warn)">🔒 已审核，费用不可改</span>` : (!canAmt && !canCost ? `<span class="hint" style="margin:0">当前角色只读</span>` : "")}
+            ${isReviewed(p) ? `<span class="hint" style="margin:0;color:var(--warn)">🔒 已审核，费用不可改</span>` : (!canAmt && !canCost ? `<span class="hint" style="margin:0">${blockedByStore ? "仅该项目所属门店的账号可改" : "当前角色只读"}</span>` : "")}
           </div>
           <div class="cost-mgmt__row">
             <label class="cost-mgmt__label">工程金额<span style="font-size:11px;color:#64748b;font-weight:400;">（预约人/管理员可改${canAmt ? "" : " · 只读"}）</span></label>
@@ -29894,7 +29920,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v99fb806d";
+  const APP_VERSION = "vf5bf89ff";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
