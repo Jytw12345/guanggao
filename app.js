@@ -1944,6 +1944,23 @@ function fmtHoursNum(n) {
   return Number(v.toFixed(1));
 }
 
+/* 开工偏差时长的人性化文案（只出时值，正负/早晚由调用方拼接）：
+   <60 分钟 → 「45分」；≤24 小时 → 「6.5小时」（整点不带小数）；
+   超过 24 小时 → 「6天1小时」（天取整，余数折整小时，满 24 小时进一天，整无余只出「N天」）。
+   此前一律显示原始分钟数（如「晚8679分」），超过 1 小时就不可读了（2026-10-27 用户反馈）。 */
+function fmtDevLen(min) {
+  const abs = Math.abs(Number(min) || 0);
+  if (abs < 60) return `${Math.round(abs)}分`;
+  if (abs <= 1440) {
+    const h = Math.round((abs / 60) * 10) / 10;
+    return `${Number.isInteger(h) ? h : h.toFixed(1)}小时`;
+  }
+  let days = Math.floor(abs / 1440);
+  let hours = Math.round((abs - days * 1440) / 60);
+  if (hours >= 24) { days += 1; hours = 0; }
+  return hours > 0 ? `${days}天${hours}小时` : `${days}天`;
+}
+
 /* 计算项目实际人工工时（人·小时）。
    统一以 workLogs 为已结算真源：每次暂停/延期/完工都会按「每人实际在场时段」结算并写入 workLog，
    因此 workLogs 之和即正确的人·小时，不受中途增减人员影响。
@@ -9018,10 +9035,11 @@ function renderProjectPhotosHtml(p) {
     const addBtn = canUpload
       ? dualPhotoInputHTML(`cosFile_${kind}_${esc(p.id)}`, `handleCosFiles(this,'${esc(p.id)}','${kind}')`)
       : "";
-    return `<div class="detail-block cos-section">
+    const html = `<div class="detail-block cos-section">
       <h3>${title} <span class="cos-count">${items.length}</span></h3>
       <div class="cos-grid">${thumbs}${addBtn}</div>
     </div>`;
+    return { title, items, addBtn, canUpload, html };
   };
   const hasAny =
     photos.plan.length + photos.material.length + photos.site.length + photos.completion.length > 0;
@@ -9035,12 +9053,32 @@ function renderProjectPhotosHtml(p) {
         <button type="button" class="cos-download-all" onclick="downloadAllProjectPhotos('${esc(p.id)}', this)" title="打包下载选中的照片">打包 ZIP</button>
       </div>`
     : "";
-  return (
-    head +
-    block("现场图", "site") +
-    block("施工图及物料", "__pm") +
-    block("完成效果图", "completion")
-  );
+  // 空相册分组（0 张）合并为一行紧凑展示，不再各占一张大卡（2026-10-27 用户反馈）；
+  // 有图的分组保持原样。空行插在第一个空分组原本的位置，保持「现场 → 施工 → 完成」顺序。
+  const groups = [
+    block("现场图", "site"),
+    block("施工图及物料", "__pm"),
+    block("完成效果图", "completion"),
+  ];
+  const empties = groups.filter((g) => g.items.length === 0);
+  const emptyRow = empties.length
+    ? `<div class="detail-block cos-section cos-empty-row">${empties
+        .map(
+          (g) =>
+            `<div class="cos-empty-group"><span class="cos-empty-label">${g.title} <span class="cos-count">0</span></span>${g.canUpload ? g.addBtn : ""}</div>`
+        )
+        .join("")}</div>`
+    : "";
+  let emptyPlaced = false;
+  const segments = groups.map((g) => {
+    if (g.items.length > 0) return g.html;
+    if (!emptyPlaced) {
+      emptyPlaced = true;
+      return emptyRow;
+    }
+    return "";
+  });
+  return head + segments.join("");
 }
 
 // 选择文件后触发上传（支持多选、逐张进度）
@@ -13602,7 +13640,7 @@ function renderCommissionPanel(p) {
     const it = alloc.items.find((x) => x.workerId === w.id);
     const amt = it ? it.amount : 0;
     const amountInput = (isAmountMode && canEditCommission)
-      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBar', this)" style="width:96px;margin-left:auto;text-align:right;" />`
+      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBar', this)" style="width:80px;margin-left:auto;text-align:right;" />`
       : "";
     const amtDisp = isAmountMode
       ? `<span class="comm-legend-amt comm-legend-pct" id="commLegAmt_${w.id}">${commPctStr(barAmounts[i], remaining)}</span>`
@@ -14012,7 +14050,7 @@ function renderCompleteCommission(p) {
     const amt = it ? it.amount : 0;
     const hrs = attMap[w.id];
     const amountInput = (isAmountMode && canEditCommission)
-      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBarComplete', this)" style="width:96px;margin-left:auto;text-align:right;" />`
+      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBarComplete', this)" style="width:80px;margin-left:auto;text-align:right;" />`
       : "";
     const amtDisp = isAmountMode
       ? `<span class="comm-legend-amt comm-legend-pct" id="commLegAmtC_${w.id}">${commPctStr(barAmounts[i], remaining)}</span>`
@@ -15127,7 +15165,7 @@ function renderConstruction() {
     <div class="detail-block">
       <h3 style="justify-content:space-between">✅ 验收信息${canEdit ? `<button class="btn small" style="flex-shrink:0" onclick="openAcceptance('${p.id}')">✏️ 修改</button>` : ""}</h3>
       ${ac ? `
-        <div class="info-grid">
+        <div class="info-grid tight">
           <div class="info-item"><div class="k">验收人</div><div class="v">${esc(ac.acceptedBy)}</div></div>
           <div class="info-item"><div class="k">验收时间</div><div class="v">${fmtDate(ac.acceptedAt)}</div></div>
           <div class="info-item"><div class="k">验收类型</div><div class="v">${esc(ac.type || "—")}</div></div>
@@ -17446,10 +17484,92 @@ if (!window.__statDetailOutsideHandler) {
   window.__statDetailOutsideHandler = true;
   document.addEventListener('click', (e) => {
     const t = e.target;
-    if (t && t.closest && t.closest('.sched-stat-card.clickable, .sched-stat-detail')) return;
+    // .stat-card--link：提成统计概览的 6 张可点卡片，与施工概览卡片同待遇
+    if (t && t.closest && t.closest('.sched-stat-card.clickable, .sched-stat-detail, .stat-card--link')) return;
     document.querySelectorAll('.sched-stat-detail').forEach(d => { d.style.display = 'none'; });
-    document.querySelectorAll('.sched-stat-card.clickable').forEach(c => c.classList.remove('active'));
+    document.querySelectorAll('.sched-stat-card.clickable, .stat-card--link').forEach(c => c.classList.remove('active'));
   });
+}
+
+/* 提成统计概览卡片：点击展开计入明细清单（与施工概览卡片同交互）。
+   counted → 已验收/已审核项目（工程金额/工费/提成合计逐单列出）；
+   pending → 已完工未验收项目。数据由 renderStats 写入 window.__statsCardDetail。 */
+function toggleStatsCardDetail(key, cardEl) {
+  const panel = document.getElementById("statsDetailPanel");
+  if (!panel || !cardEl) return;
+  const data = window.__statsCardDetail;
+  const wasActive = cardEl.classList.contains("active");
+  document.querySelectorAll("#statsSummary .stat-card--link").forEach((c) => c.classList.remove("active"));
+  if (wasActive || !data) {
+    panel.style.display = "none";
+    panel.innerHTML = "";
+    return;
+  }
+  cardEl.classList.add("active");
+  // 关键：面板在 index.html 里初始 display:none，必须显式放开才会显示
+  // （此前只在收起路径写了 none，展开路径漏写 block，导致「卡片高亮但明细不出现」）
+  panel.style.display = "block";
+  const yuan2 = (n) => `¥${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const commSumOf = (p) => (resolveCommissionAlloc(p).items || []).reduce((s, it) => s + (Number(it.amount) || 0), 0);
+
+  if (key === "counted") {
+    const list = data.countedList || [];
+    let sumAmt = 0, sumDeduct = 0, sumLabor = 0, sumComm = 0;
+    const rowsHtml = list.map((p) => {
+      const amt = Number(p.projectAmount) || 0;
+      const deduct = Number(p.materialFee) || 0;
+      const labor = getLaborFee(p);
+      const comm = commSumOf(p);
+      sumAmt += amt; sumDeduct += deduct; sumLabor += labor; sumComm += comm;
+      return `<tr onclick="openProjectFromCard('${p.id}')">
+        <td class="sd-name">${esc(p.name || "未命名")}</td>
+        <td>${fmtDateTime(p.appointmentTime)}</td>
+        <td>${esc(p.status || "")}</td>
+        <td class="num">${yuan2(amt)}</td>
+        <td class="num" style="color:#ef4444">${yuan2(deduct)}</td>
+        <td class="num">${yuan2(labor)}</td>
+        <td class="num" style="color:#16a34a;font-weight:600">${yuan2(comm)}</td>
+      </tr>`;
+    }).join("");
+    const diffs = [];
+    if (Math.abs(data.repairDiffAmt || 0) > 0.005) diffs.push(`工程金额 ${yuan2(data.repairDiffAmt)}`);
+    if (Math.abs(data.repairDiffLabor || 0) > 0.005) diffs.push(`工费 ${yuan2(data.repairDiffLabor)}`);
+    if (Math.abs(data.repairDiffComm || 0) > 0.005) diffs.push(`提成 ${yuan2(data.repairDiffComm)}`);
+    const note = diffs.length
+      ? `<div class="sd-note">注：卡片合计另含付费维修单（${diffs.join("、")}），不计入本表。</div>`
+      : "";
+    panel.innerHTML = `
+      <div class="sd-title">✅ 计入明细（已验收 / 已审核）— 共 ${list.length} 单，点击行可打开项目详情</div>
+      <table class="data">
+        <thead><tr><th>项目</th><th>预约开工</th><th>状态</th><th class="num">工程金额</th><th class="num">成本扣项</th><th class="num">工费</th><th class="num">提成合计</th></tr></thead>
+        <tbody>${rowsHtml || `<tr><td colspan="7" class="empty">本期无可计入项目</td></tr>`}</tbody>
+        ${list.length ? `<tfoot><tr>
+          <td colspan="3">合计（${list.length} 单）</td>
+          <td class="num">${yuan2(sumAmt)}</td>
+          <td class="num" style="color:#ef4444">${yuan2(sumDeduct)}</td>
+          <td class="num">${yuan2(sumLabor)}</td>
+          <td class="num" style="color:#16a34a">${yuan2(sumComm)}</td>
+        </tr></tfoot>` : ""}
+      </table>
+      ${note}`;
+    return;
+  }
+
+  // pending：已完工未验收
+  const list = data.pendingList || [];
+  const rowsHtml = list.map((p) => `
+    <tr onclick="openProjectFromCard('${p.id}')">
+      <td class="sd-name">${esc(p.name || "未命名")}</td>
+      <td>${fmtDateTime(p.appointmentTime)}</td>
+      <td>${p.finishedAt ? fmtDateTime(p.finishedAt) : "—"}</td>
+      <td class="num">${yuan2(p.projectAmount)}</td>
+    </tr>`).join("");
+  panel.innerHTML = `
+    <div class="sd-title">⏳ 未验收明细（已完工待验收）— 共 ${list.length} 单 · 合计 ${yuan2(data.pendingAmount)}，验收后自动计入提成</div>
+    <table class="data">
+      <thead><tr><th>项目</th><th>预约开工</th><th>完工时间</th><th class="num">工程金额</th></tr></thead>
+      <tbody>${rowsHtml || `<tr><td colspan="4" class="empty">本期没有已完工待验收的项目</td></tr>`}</tbody>
+    </table>`;
 }
 
 
@@ -19546,12 +19666,41 @@ function renderStats() {
   const internalRows = rows.filter(r => !r.isOutsourced);
   
   const summary = document.getElementById("statsSummary");
+  // 单数口径：已验收单数 = 计入提成的主项目数（已验收 + 已审核，与提成统计同口径）；
+  // 未验收 = 已完工待验收（DONE）——验收后即计入提成，这里给出待验收的单数/金额，
+  // 便于月底对照「还有多少单没收尾、还压着多少金额没进提成」。已取消/施工中等不算未验收。
+  const countedCount = allProjects.filter((p) => isCommissionCounted(p)).length;
+  const pendingAccept = allProjects.filter((p) => p.status === STATUS.DONE);
+  const pendingCount = pendingAccept.length;
+  const pendingAmount = pendingAccept.reduce((s, p) => s + (Number(p.projectAmount) || 0), 0);
+  // 概览卡片（用户口径精简）：
+  // - 「参与施工人数」「外协人员」卡无决策价值，移除（人数在人员提成表/工时报表可见）；
+  // - 「工人分成池(工费÷2)」与提成合计恒等（池全部分配完），改为展示「工费」——
+  //   资金链：工程金额 − 成本扣项 = 工费；工费÷2 = 分成池 = 提成合计，工费是缺失的中间环。
+  // 全部卡片可点击展开计入明细（toggleStatsCardDetail）。
+  const countedList = allProjects.filter((p) => isCommissionCounted(p))
+    .slice().sort((a, b) => String(b.appointmentTime || "").localeCompare(String(a.appointmentTime || "")));
+  const pendingSortedList = pendingAccept.slice().sort((a, b) => String(b.appointmentTime || "").localeCompare(String(a.appointmentTime || "")));
+  const listedCommSum = countedList.reduce((s, p) => s + (resolveCommissionAlloc(p).items || []).reduce((x, it) => x + (Number(it.amount) || 0), 0), 0);
+  const listedAmtSum = countedList.reduce((s, p) => s + (Number(p.projectAmount) || 0), 0);
+  const listedLaborSum = countedList.reduce((s, p) => s + getLaborFee(p), 0);
+  // 卡片合计 − 明细表合计：差额来自付费维修单（不属于具体项目），展开明细时单独备注，避免「数字对不上」
+  window.__statsCardDetail = {
+    countedList,
+    pendingList: pendingSortedList,
+    pendingAmount,
+    repairDiffAmt: Math.round((agg.totalProjectAmount - listedAmtSum) * 100) / 100,
+    repairDiffLabor: Math.round((agg.totalLaborFee - listedLaborSum) * 100) / 100,
+    repairDiffComm: Math.round((agg.totalAmount - listedCommSum) * 100) / 100,
+  };
   const commCards = `
-      <div class="stat-card"><div class="num">${agg.workerCount}</div><div class="lbl">参与施工人数</div></div>
-      <div class="stat-card"><div class="num" style="color:#16a34a">${yuan(agg.totalAmount)}</div><div class="lbl">本期提成合计</div></div>
-      <div class="stat-card"><div class="num">${yuan(agg.totalProjectAmount)}</div><div class="lbl">本期工程金额</div></div>
-      <div class="stat-card"><div class="num">${yuan(agg.totalPool)}</div><div class="lbl">工人分成池(工费÷2)</div></div>
-      <div class="stat-card"><div class="num" style="color:#8b5cf6">${totalOutsourcedWorkers}人</div><div class="lbl">外协人员</div></div>
+      <div class="stat-card stat-card--link" title="点击查看计入明细" onclick="toggleStatsCardDetail('counted', this)"><div class="num">${yuan(agg.totalProjectAmount)}</div><div class="lbl">本期工程金额</div></div>
+      <div class="stat-card stat-card--link" title="点击查看计入明细" onclick="toggleStatsCardDetail('counted', this)"><div class="num" style="color:#ef4444">${yuan(agg.totalMaterialFee)}</div><div class="lbl">本期成本扣项</div></div>
+      <div class="stat-card stat-card--link" title="点击查看计入明细" onclick="toggleStatsCardDetail('counted', this)"><div class="num">${yuan(agg.totalLaborFee)}</div><div class="lbl">本期工费(金额−扣项)</div></div>
+      <div class="stat-card stat-card--link" title="点击查看计入明细" onclick="toggleStatsCardDetail('counted', this)"><div class="num" style="color:#16a34a">${yuan(agg.totalAmount)}</div><div class="lbl">本期提成合计(工费÷2)</div></div>
+      <div class="stat-card stat-card--link" title="点击查看计入明细" onclick="toggleStatsCardDetail('counted', this)"><div class="num">${countedCount}</div><div class="lbl">已验收单数</div></div>
+      <div class="stat-card stat-card--link" title="点击查看未验收明细" onclick="toggleStatsCardDetail('pending', this)"><div class="num" style="color:#f59e0b">${pendingCount}</div><div class="lbl">未验收单数</div></div>
+      <div class="stat-card stat-card--link" title="点击查看未验收明细" onclick="toggleStatsCardDetail('pending', this)"><div class="num" style="color:#f59e0b">${yuan(pendingAmount)}</div><div class="lbl">未验收金额</div></div>
     `;
   summary.innerHTML = commCards;
   // 跨月说明：归期按预约时间（isInPeriod），而提成按考勤摊到施工当天（commissionDaily）。
@@ -19576,9 +19725,13 @@ function renderStats() {
     }
   }
 
-  const workerTable = rows.length === 0
+  // 人员提成只展示有提成意义的人员：外协人员费用走成本扣项、包活提成恒为 0，
+  // 全 0 的行 + 全 0 日历没有信息量（其考勤/工时在施工管理/工时报表查看）；
+  // 仅当外协人员确有分成（如付费维修勾选了外协）时保留。
+  const commRows = rows.filter((r) => !r.isOutsourced || commOf(r.id) > 0.005);
+  const workerTable = commRows.length === 0
     ? `<div class="empty">所选月份暂无施工记录。</div>`
-    : rows.map((r) => {
+    : commRows.map((r) => {
         const monthVal = document.getElementById("statsMonth").value;
         let calGrid = "";
         if (monthVal) {
@@ -19796,7 +19949,7 @@ function renderStats() {
       <td>${esc(p.name)}</td>
       <td>${fmtDateTime(p.appointmentTime)}</td>
       <td>${fmtDateTime(p.startedAt)}</td>
-      <td style="color:${late ? '#ef4444' : '#f59e0b'};font-weight:600">${late ? '晚' : '早'}${Math.abs(dev)}分</td>
+      <td style="color:${late ? '#ef4444' : '#f59e0b'};font-weight:600">${late ? '晚' : '早'}${fmtDevLen(dev)}</td>
     </tr>`;
   };
   const shownRows = lateRowsAll.slice(0, 20);
@@ -19806,7 +19959,7 @@ function renderStats() {
     <h3 class="stats-subhead">🚦 调度履约概览</h3>
     <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px">
       <div class="stat-card"><div class="num" style="color:${rateColor(onTimeRate)}">${onTimeRate}%</div><div class="lbl">开工准点率(${onTimeCount}/${startedProjects.length})</div></div>
-      <div class="stat-card"><div class="num" style="color:${Math.abs(avgDevMin) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${avgDevMin > 0 ? '+' : ''}${avgDevMin}分</div><div class="lbl">平均开工偏差</div></div>
+      <div class="stat-card"><div class="num" style="color:${Math.abs(avgDevMin) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${avgDevMin > 0 ? '+' : (avgDevMin < 0 ? '−' : '')}${fmtDevLen(avgDevMin)}</div><div class="lbl">平均开工偏差</div></div>
       <div class="stat-card"><div class="num" style="color:${rateColor(completionRate)}">${completionRate}%</div><div class="lbl">完工率(${doneCount}/${totalCount})</div></div>
       <div class="stat-card"><div class="num" style="color:${delayRate > 0 ? '#ef4444' : '#64748b'}">${delayRate}%</div><div class="lbl">延期率(${delayedCount})</div></div>
     </div>
@@ -19850,6 +20003,10 @@ function renderStats() {
     // 外协人员：费用计入成本扣项，不参与分成池分配
     if (totalOutsourcedWorkers > 0) {
       smartAnalysis += `<div class="stats-analysis info">👷 <strong>外协人员</strong>：${totalOutsourcedWorkers} 名外协人员的费用计入成本扣项（工程金额内扣除），不占分成池；工费÷2 的分成池全部分配给安装人员。</div>`;
+    }
+    // 待验收提醒：已完工未验收的项目不计提成，验收后自动计入
+    if (pendingCount > 0) {
+      smartAnalysis += `<div class="stats-analysis warning">📋 <strong>待验收</strong>：本期还有 ${pendingCount} 单已完工未验收，合计 ${yuan(pendingAmount)}，验收完成后将自动计入提成统计。</div>`;
     }
   }
   
@@ -22286,6 +22443,16 @@ async function exportStats() {
   const agg = aggregateCommission(commissionProjects);
   const commOf = (wid) => Math.round((agg.byWorker[wid] || 0) * 100) / 100;
   const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  // 单数统计（与页面概览同口径）：已验收单数 = 计入提成的主项目数；未验收 = 已完工待验收
+  const statsPeriodProjects = (cache.projects || []).filter((p) => {
+    if (!isInPeriod(p.appointmentTime)) return false;
+    if (storeFilter && p.storeId !== storeFilter) return false;
+    return true;
+  });
+  const statsCountedCount = statsPeriodProjects.filter((p) => isCommissionCounted(p)).length;
+  const statsPendingAccept = statsPeriodProjects.filter((p) => p.status === STATUS.DONE);
+  const statsPendingCount = statsPendingAccept.length;
+  const statsPendingAmount = round2(statsPendingAccept.reduce((s, p) => s + (Number(p.projectAmount) || 0), 0));
 
   // 本月标准工时（考勤参考）：每月固定休息4天（每周休1天）× 每日满负荷 10 小时
   const _ms = monthRaw ? monthRaw.split("-").map(Number) : [];
@@ -22337,6 +22504,7 @@ async function exportStats() {
   const dataStyle = { font: { color: { argb: 'FF374151' } }, alignment: { vertical: 'middle', wrapText: true }, border: borderThin };
   const centerDataStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'center', vertical: 'middle', wrapText: true }, border: borderThin };
   const numStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '0.0' };
+  const countStyle = { ...numStyle, numFmt: '0' }; // 计数用整数格式，避免导出「9.0」「27.0」这类假小数
   const leaveStyle = { font: { color: { argb: 'FFDC2626' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF2F2' } }, alignment: { vertical: 'middle', wrapText: true }, border: borderThin };
   const highlightStyle = { font: { bold: true, color: { argb: 'FF92400E' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } }, alignment: { horizontal: 'center', vertical: 'middle' }, border: borderThin, numFmt: '0.0' };
   const moneyStyle = { font: { color: { argb: 'FF374151' } }, alignment: { horizontal: 'right', vertical: 'middle' }, border: borderThin, numFmt: '¥#,##0.00' };
@@ -22435,12 +22603,15 @@ async function exportStats() {
   }
 
   addSectionTitle(summarySheet, '人员统计');
-  addKV(summarySheet, '施工人员总数', rows.length, true);
-  addKV(summarySheet, '内部人员', totalWorkers, true);
-  addKV(summarySheet, '外协人员', totalOutsourcedWorkers, true);
-  addKV(summarySheet, '参与分成人数', agg.participantCount != null ? agg.participantCount : agg.workerCount, true);
+  addKV(summarySheet, '施工人员总数', rows.length, true, { ...countStyle });
+  addKV(summarySheet, '内部人员', totalWorkers, true, { ...countStyle });
+  addKV(summarySheet, '外协人员', totalOutsourcedWorkers, true, { ...countStyle });
+  addKV(summarySheet, '参与分成人数', agg.participantCount != null ? agg.participantCount : agg.workerCount, true, { ...countStyle });
 
   addSectionTitle(summarySheet, '包活提成');
+  addKV(summarySheet, '已验收单数(计入提成)', statsCountedCount, true, { ...countStyle });
+  addKV(summarySheet, '未验收单数(已完工待验收)', statsPendingCount, true, { ...countStyle });
+  addKV(summarySheet, '未验收金额(元)', statsPendingAmount, false, { ...moneyStyle });
   addKV(summarySheet, '本期工程金额(元)', round2(agg.totalProjectAmount), false, { ...moneyStyle });
   addKV(summarySheet, '工费合计(元)', round2(agg.totalLaborFee), false, { ...moneyStyle });
   addKV(summarySheet, '工人分成池(工费÷2)(元)', round2(agg.totalPool), false, { ...moneyStyle });
@@ -22729,6 +22900,8 @@ async function exportStats() {
   let detailRowNum = 2;
   let detailCommTotal = 0;
   const EFF_COL = 7; // G 列（1-based）
+  const detailBlocks = []; // 每个项目的行区间 {start,end}：多人项目纵向合并 A–I + 按项目交替底色
+  let detailProjectCount = 0;
   commissionProjects.forEach((p) => {
     const wc = (p.workContent || []).filter(Boolean);
     const contentParts = [];
@@ -22751,6 +22924,7 @@ async function exportStats() {
       Number(p.projectAmount) || 0,
       getLaborFee(p),
     ];
+    const blockStart = detailRowNum;
     items.forEach((it, idx) => {
       // 该工人在本项目的考勤工时（人·小时），供财务核算「提成 ÷ 工时」时薪参考
       const itHours = it ? Math.round((p.workLogs || []).filter((l) => l.workerId === it.workerId).reduce((s, l) => s + (Number(l.hours) || 0), 0) * 10) / 10 : "";
@@ -22774,12 +22948,45 @@ async function exportStats() {
       if (it) detailCommTotal = round2(detailCommTotal + it.amount);
       detailRowNum++;
     });
+    detailBlocks.push({ start: blockStart, end: detailRowNum - 1 });
+    detailProjectCount++;
   });
   if (detailRowNum > 2) {
+    // 多人项目：A–I（日期/开工/店面/项目/状态/内容/效果图/金额/工费）纵向合并为一格，
+    // 人员/比例/提成（J–L）与个人工时（M）保持一人一行；整块底色按项目交替（斑马纹按项目而非按行），
+    // 合并后同一项目的信息只出现一次，财务按项目核对一目了然。
+    detailBlocks.forEach((b, bi) => {
+      const tint = bi % 2 === 1 ? "FFF8FAFC" : "FFFFFFFF";
+      for (let r = b.start; r <= b.end; r++) {
+        const row = detailSheet.getRow(r);
+        for (let c = 1; c <= 13; c++) {
+          if (c === 5) continue; // 状态列保留状态色
+          const cell = row.getCell(c);
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: tint } };
+          cell.border = borderThin; // 合并会吃掉非首格边框，先统一补齐
+        }
+      }
+      if (b.end > b.start) {
+        for (let c = 1; c <= 9; c++) {
+          detailSheet.mergeCells(b.start, c, b.end, c);
+          const master = detailSheet.getRow(b.start).getCell(c);
+          master.alignment = {
+            vertical: "middle",
+            horizontal: (c === 8 || c === 9) ? "right" : (c === 1 || c === 2 || c === 5 || c === 7) ? "center" : "left",
+            wrapText: c === 6,
+          };
+        }
+      }
+    });
     detailSheet.addRow(['合计', '', '', '', '', '', '', '', '', '', '', round2(detailCommTotal), '']);
     applyTotalRow(detailSheet, detailRowNum);
     detailSheet.getRow(detailRowNum).getCell(12).style = { ...moneyTotalStyle };
-    applyZebraStripes(detailSheet, 2, detailRowNum - 1);
+    // 合计行 A–K 合并并标注项目数，右侧对齐贴近提成列
+    detailSheet.mergeCells(detailRowNum, 1, detailRowNum, 11);
+    const tCell = detailSheet.getRow(detailRowNum).getCell(1);
+    tCell.value = `合计（${detailProjectCount} 个项目）`;
+    tCell.alignment = { horizontal: "right", vertical: "middle" };
+    for (let c = 1; c <= 13; c++) detailSheet.getRow(detailRowNum).getCell(c).border = borderTotal;
     applyAutoFilter(detailSheet, 1, 13);
   } else {
     detailSheet.addRow(['本期暂无项目数据']);
@@ -23290,7 +23497,7 @@ function renderStoreStats() {
               <td class="ss-num ss-hours">${money(r.amount)}</td>
               <td class="ss-num ss-hours">${money(r.laborFee)}</td>
               <td class="ss-num ss-fulfill" style="color:${rateColor(f.onTimeRate)}">${f.startedCount ? f.onTimeRate + '%' : '—'}</td>
-              <td class="ss-num ss-fulfill" style="color:${Math.abs(f.avgDev) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${f.startedCount ? (f.avgDev > 0 ? '+' : '') + f.avgDev + '分' : '—'}</td>
+              <td class="ss-num ss-fulfill" style="color:${Math.abs(f.avgDev) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${f.startedCount ? (f.avgDev > 0 ? '+' : '') + fmtDevLen(f.avgDev) : '—'}</td>
               <td class="ss-num ss-fulfill" style="color:${rateColor(f.completion)}">${f.total ? f.completion + '%' : '—'}</td>
               <td class="ss-num ss-fulfill" style="color:${f.delayRate > 0 ? '#ef4444' : '#64748b'}">${f.total ? f.delayRate + '%' : '—'}</td>
             </tr>`;
@@ -23304,7 +23511,7 @@ function renderStoreStats() {
             <td class="ss-num ss-hours">${money(tot.amount)}</td>
             <td class="ss-num ss-hours">${money(tot.laborFee)}</td>
             <td class="ss-num ss-fulfill" style="color:${rateColor(tfFulfill.onTimeRate)}">${tfFulfill.startedCount ? tfFulfill.onTimeRate + '%' : '—'}</td>
-            <td class="ss-num ss-fulfill" style="color:${Math.abs(tfFulfill.avgDev) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${tfFulfill.startedCount ? (tfFulfill.avgDev > 0 ? '+' : '') + tfFulfill.avgDev + '分' : '—'}</td>
+            <td class="ss-num ss-fulfill" style="color:${Math.abs(tfFulfill.avgDev) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${tfFulfill.startedCount ? (tfFulfill.avgDev > 0 ? '+' : '') + fmtDevLen(tfFulfill.avgDev) : '—'}</td>
             <td class="ss-num ss-fulfill" style="color:${rateColor(tfFulfill.completion)}">${tfFulfill.total ? tfFulfill.completion + '%' : '—'}</td>
             <td class="ss-num ss-fulfill" style="color:${tfFulfill.delayRate > 0 ? '#ef4444' : '#64748b'}">${tfFulfill.total ? tfFulfill.delayRate + '%' : '—'}</td>
           </tr>
@@ -29957,7 +30164,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vd1f7a2a5";
+  const APP_VERSION = "va790913b";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

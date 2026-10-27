@@ -8013,7 +8013,8 @@ table.data.project-hours-diff td.wrap {
 
 .stats-summary {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  /* 自适应列宽：概览卡片数量可变（含单数统计等），auto-fit 按宽度自动排布，避免固定 7 列留空/挤压 */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }
@@ -8029,6 +8030,95 @@ table.data.project-hours-diff td.wrap {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 提成统计概览卡片可点击展开计入明细（与施工概览 .sched-stat-card.clickable 同交互） */
+.stat-card--link {
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.stat-card--link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, .10);
+}
+.stat-card--link.active {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, .18);
+}
+#statsDetailPanel {
+  overflow-x: auto;
+}
+#statsDetailPanel .sd-title {
+  font-size: 12px;
+  color: #475569;
+  font-weight: 600;
+  padding: 6px 8px 2px;
+  white-space: nowrap;
+}
+#statsDetailPanel table.data {
+  margin: 4px 0 2px;
+  font-size: 12px;
+}
+/* 数值列表头与数据单元格统一右对齐（全局 th 默认左对齐，会导致表头与右对齐数值错位） */
+#statsDetailPanel th.num,
+#statsDetailPanel td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+#statsDetailPanel tbody tr {
+  cursor: pointer;
+}
+#statsDetailPanel tbody tr:hover td {
+  background: #eef2ff;
+}
+#statsDetailPanel tfoot td {
+  font-weight: 700;
+  color: #1e293b;
+  background: #f1f5f9;
+}
+#statsDetailPanel .sd-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#statsDetailPanel .sd-note {
+  font-size: 11px;
+  color: #92400e;
+  padding: 2px 8px 6px;
+}
+
+/* 验收信息字段：桌面端 auto-fit 尽量一行放完（验收人/时间/类型/方式/结果/结论…），
+   手机端仍回退 2 列（.tight 特异性高于媒体查询里的 .info-grid，需显式覆盖） */
+.info-grid.tight {
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px 10px;
+}
+@media (max-width: 768px) {
+  .info-grid.tight {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* 空相册分组（0 张）合并为一行：同一张卡片内横排「标题 0 + 相册按钮」，不再各占一张大卡 */
+.cos-section.cos-empty-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 22px;
+  padding: 8px 14px;
+}
+.cos-empty-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.cos-empty-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  white-space: nowrap;
 }
 /* #statsTable 本身不滚动，避免上方工时日历/人员工时表跟着滚；
    只有项目工时差异表 .hours-diff-wrap 单独横向滚动 */
