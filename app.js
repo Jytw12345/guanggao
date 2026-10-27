@@ -11650,9 +11650,14 @@ function renderFormPhotos() {
     ...(fp.plan || []).map((it) => ({ ...it, _kind: "plan" })),
     ...(fp.material || []).map((it) => ({ ...it, _kind: "material" })),
   ];
-  wrap.innerHTML =
-    block("现场图", fp.site, "site", perms.siteUpload, perms.siteDelete) +
-    block("施工图及物料", pmItems, "plan", perms.pmUpload, perms.pmDelete);
+  const siteHtml = block("现场图", fp.site, "site", perms.siteUpload, perms.siteDelete);
+  const pmHtml = block("施工图及物料", pmItems, "plan", perms.pmUpload, perms.pmDelete);
+  // 两类照片都还没添加时并排两列（每组只剩标题+相册按钮，各占一整行太空旷）；
+  // 任一组有图后恢复各自整行，缩略图墙有足够宽度（2026-10-27）。
+  const bothEmpty = !(fp.site || []).length && !pmItems.length;
+  wrap.innerHTML = bothEmpty
+    ? `<div class="form-photos-duo">${siteHtml}${pmHtml}</div>`
+    : siteHtml + pmHtml;
   fillFormPhotos();
 }
 
@@ -13830,20 +13835,20 @@ function repairPaySummaryHtml(ro) {
   const labor = Number(ro.laborFee) || 0;
   const pool = Number(ro.commissionPool) || 0;
   const alloc = Array.isArray(ro.commissionAlloc) ? ro.commissionAlloc : [];
-  return `<div class="info-item"><div class="k">本单收费</div><div class="v" style="color:#16a34a;font-weight:600;">💵 额外收费 · ${esc(ro.contractType || "包工")}</div></div>
+  return `<div class="info-item"><div class="k">本单费用</div><div class="v" style="color:#16a34a;font-weight:600;">💵 额外收费 · ${esc(ro.contractType || "包工")}</div></div>
     <div class="info-item"><div class="k">本单金额</div><div class="v">¥${amt.toFixed(2)}</div></div>
     <div class="info-item"><div class="k">工费</div><div class="v">¥${labor.toFixed(2)}</div></div>
     <div class="info-item"><div class="k">工人分成池</div><div class="v">¥${pool.toFixed(2)}${alloc.length ? `（${alloc.length} 人均分）` : ""}</div></div>${ro.materialFeeNote ? `<div class="info-item"><div class="k">扣项说明</div><div class="v">${esc(ro.materialFeeNote)}</div></div>` : ""}`;
 }
 
-/* 维修单「本单收费」独立展示块（2026-10-25）。
+/* 维修单「本单费用」独立展示块（2026-10-25；2026-10-27 表头由「本单收费」更名，更名只动文案不动逻辑）。
    背景：维修单几乎都发起在原项目**已审核（REVIEWED）**之后——原项目的「费用管理」
    「包活分成」此时整块 🔒 锁定，而维修单的收费/金额/成本扣项/分成是**额外收费**，
    独立存放在 ro 上（perm.editRepairPay 只认「包活金额」能力，不受 isReviewed 门控；
    patchProject 也无审核锁），照常可查可改。此前这些信息只散落在 info-grid 小字里
    （免费单甚至只有一行「免费维修」），屏幕上显眼的却是原项目两个 🔒 锁定块，
    用户看不懂本单自己的钱在哪、误以为"都被拦截了"。
-   本块把本单收费收敛到一处：免费单给引导（去哪设金额），付费单给
+   本块把本单费用收敛到一处：免费单给引导（去哪设金额），付费单给
    「工程金额 → 工费 → 分成池」链条 + 成本扣项明细 + 工人分成，并明示与原项目互不影响。 */
 function repairFeeBlockHtml(ro) {
   if (!ro) return "";
@@ -13852,7 +13857,7 @@ function repairFeeBlockHtml(ro) {
   // 标签随收费方式走：免费单不能挂「额外收费」字样（与「免费维修」自相矛盾）；
   // 历史付费单（payType==null && payable===true）无金额记录，单说「付费维修」
   const tagText = !isPaid ? "免费维修" : (legacyPaid ? "付费维修" : "额外收费");
-  const head = `<div class="repair-fee__head"><span>💰 本单收费</span><span class="repair-fee__tag">${tagText} · 独立于原项目</span></div>`;
+  const head = `<div class="repair-fee__head"><span>💰 本单费用</span><span class="repair-fee__tag">${tagText} · 独立于原项目</span></div>`;
   if (!isPaid) {
     return `<div class="repair-fee">${head}
       <div class="repair-fee__free">🆓 免费维修 — 不计客户费用，工时仅记考勤，工人无分成</div>
@@ -13887,7 +13892,7 @@ function repairFeeBlockHtml(ro) {
     </div>
     <div class="repair-fee__row"><b>成本扣项</b>（材料/现场/外协）：${cdHtml}</div>
     <div class="repair-fee__row"><b>工人分成</b>：${allocHtml}</div>
-    <div class="money-chain__note">工费 = 本单金额 − 成本扣项；分成池 = 工费 ÷ 2。本单收费<strong>单独叠加</strong>计入提成统计，原项目的工程金额与已分配分成<strong>不变</strong>。</div>
+    <div class="money-chain__note">工费 = 本单金额 − 成本扣项；分成池 = 工费 ÷ 2。本单费用<strong>单独叠加</strong>计入提成统计，原项目的工程金额与已分配分成<strong>不变</strong>。</div>
   </div>`;
 }
 
@@ -17851,6 +17856,30 @@ function generateWorkerScheduleDescription(dateStr = null) {
       const more = normalNotStartedList.length > 2 ? `<div class="sched-warn-more">等${normalNotStartedList.length}个项目</div>` : "";
       smartAlerts.push(`<div class="sched-warn-amber strong">⏰ <strong>逾期未开工</strong>${items}${more}</div>`);
     }
+    // 超期维修单：待维修且预约维修时间已过（跨日提醒，不只看当天）。
+    // 维修单挂在项目 p.repairOrders 下、状态「待维修」，此前概览只扫项目状态，
+    // 项目预约页卡片有「🔴 超期N天」，施工管理里却毫无提示（2026-10-27 补齐）。
+    const overdueRepairs = [];
+    cache.projects.forEach((p) => {
+      if (p.status === STATUS.CANCELLED) return;
+      (p.repairOrders || []).forEach((ro) => {
+        if (!ro || ro.status !== "待维修" || !ro.appointmentTime) return;
+        const apt = new Date(ro.appointmentTime);
+        if (apt < new Date()) {
+          overdueRepairs.push({ p, ro, apt, days: Math.max(1, Math.ceil((Date.now() - apt.getTime()) / 86400000)) });
+        }
+      });
+    });
+    overdueRepairs.sort((a, b) => a.apt - b.apt); // 超期最久的排前面
+    if (overdueRepairs.length > 0) {
+      const items = overdueRepairs.slice(0, 2).map(({ p, ro, apt, days }) => {
+        const aptStr = `${fmtDateShort(apt)} ${fmtTime(apt)}`;
+        const content = String(ro.items || ro.notes || "").slice(0, 20);
+        return `<div class="sched-warn-item"><span class="sched-goto" onclick="gotoConstruction('${esc(p.id)}')">${esc(p.name)}</span><span class="sched-warn-reason">（超期${days}天 · 预约维修 ${aptStr}${content ? ` · ${esc(content)}` : ""}）</span></div>`;
+      }).join("");
+      const more = overdueRepairs.length > 2 ? `<div class="sched-warn-more">等${overdueRepairs.length}张维修单</div>` : "";
+      smartAlerts.push(`<div class="sched-warn-red strong">🛠 <strong>超期维修单</strong>${items}${more}</div>`);
+    }
     if (smartAlerts.length > 0) {
       description += `<div class="sched-smart-alerts">${smartAlerts.join("")}</div>`;
     }
@@ -19957,7 +19986,7 @@ function renderStats() {
   const rateColor = (r) => r >= 90 ? '#10b981' : (r >= 75 ? '#f59e0b' : '#ef4444');
   const fulfillmentHtml = `
     <h3 class="stats-subhead">🚦 调度履约概览</h3>
-    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px">
+    <div class="sched-cards" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px">
       <div class="stat-card"><div class="num" style="color:${rateColor(onTimeRate)}">${onTimeRate}%</div><div class="lbl">开工准点率(${onTimeCount}/${startedProjects.length})</div></div>
       <div class="stat-card"><div class="num" style="color:${Math.abs(avgDevMin) > ON_TIME_GRACE_MIN ? '#ef4444' : '#64748b'}">${avgDevMin > 0 ? '+' : (avgDevMin < 0 ? '−' : '')}${fmtDevLen(avgDevMin)}</div><div class="lbl">平均开工偏差</div></div>
       <div class="stat-card"><div class="num" style="color:${rateColor(completionRate)}">${completionRate}%</div><div class="lbl">完工率(${doneCount}/${totalCount})</div></div>
@@ -25535,14 +25564,18 @@ function renderMine() {
     ? cache.leaveRecords.filter((r) => r.status === LEAVE_STATUS.PENDING).length
     : 0;
 
+  // 未读消息数：「消息」入口移入我的页后，角标在此显示（2026-10-27）
+  const unreadNotifCount = MODE === "cloud" ? (cache.notifications || []).filter((n) => !n.readAt).length : 0;
+
   // 功能中心菜单项（业务类入口，根据权限过滤；系统管理类见下方「系统管理」分组）
   const featureItems = [
     { tab: "workers", icon: "👷", label: "施工人员", color: "#eff6ff", show: perm.viewWorker() || perm.manageOutsourced() },
+    { tab: "notifications", icon: "🔔", label: "消息中心", color: "#fef2f2", badge: unreadNotifCount, show: MODE === "cloud" && cloudConfigured() },
     { tab: "leaves", icon: "🏥", label: "休假管理", color: "#fff7ed", badge: pendingLeaveCount, show: !isStoreManager() || !myStore() },
     { tab: "schedules", icon: svgCal(18), label: "个人日程", color: "#fef3c7", show: perm.viewSchedule() },
     { tab: "stores", icon: "🏪", label: "门店管理", color: "#f0fdf4", show: perm.manageStores() },
     { tab: "storeStats", icon: "📊", label: "店面统计", color: "#eff6ff", show: perm.viewStoreStats() },
-    { tab: "stats", icon: "💰", label: "提成统计", color: "#f0f9ff", show: perm.viewStats() },
+    // 「提成统计」已升入底部主菜单（2026-10-27）
     // 「内部任务」菜单项已随功能下线移除（2026-10-18）
     { tab: "help", icon: "❓", label: "使用帮助", color: "#fef3c7", show: true },
   ].filter(i => i.show);
@@ -26398,6 +26431,8 @@ function applyPermissions() {
     vehicleTrips: perm.viewVehicle(),
     internalTasks: perm.viewTask(),
     workers: (perm.viewWorker() || perm.manageOutsourced()) && role != null,
+    // 提成统计升入底部主菜单（2026-10-27）：原「消息」入口移入「我的」页功能中心
+    stats: perm.viewStats(),
     mine: role != null,
     // 消息中心仅云端模式存在（消息存 Supabase）；本地模式无消息，隐藏入口
     notifications: MODE === "cloud" && cloudConfigured(),
@@ -30164,7 +30199,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va790913b";
+  const APP_VERSION = "vda4ecba4";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

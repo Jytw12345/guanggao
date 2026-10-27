@@ -8198,6 +8198,33 @@ table.data.project-hours-diff thead th {
 .stat-card .num { font-size: 26px; font-weight: 700; color: var(--primary); }
 .stat-card .lbl { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
+/* 新建/编辑预约表单：现场图与施工图及物料都为空时并排两列（省一半高度），
+   任一组有图后恢复整行（见 renderFormPhotos 的 .form-photos-duo 包裹逻辑） */
+.form-photos-duo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.form-photos-duo .detail-block { margin: 0; }
+@media (max-width: 400px) {
+  .form-photos-duo { grid-template-columns: 1fr; } /* 极窄屏回退单列 */
+}
+
+/* 调度履约概览卡片（.sched-cards）：手机端改 2×2 网格，
+   避免「+1天5小时」这类长值在 4 张窄卡里被逐字竖排折行、卡片高低不齐（2026-10-27）。
+   !important 用于覆盖容器行内的 display:flex（桌面端保持 flex 四卡一行）。 */
+@media (max-width: 600px) {
+  .sched-cards {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .sched-cards .stat-card { min-width: 0; max-width: none; padding: 12px 8px; }
+  .sched-cards .stat-card .num { font-size: 21px; white-space: nowrap; }
+  .sched-cards .stat-card .lbl { font-size: 11px; }
+}
+
 .internal-log-item {
   display: flex;
   align-items: center;
