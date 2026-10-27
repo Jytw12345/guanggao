@@ -11106,8 +11106,11 @@ function renderCostDeductionEditor(prefix, items, readonly) {
   const arr = Array.isArray(items) ? items : [];
   const list = arr.map((d) => costDeductionRowHTML(prefix, d, readonly)).join("");
   const sum0 = Math.round(arr.reduce((s, d) => s + (Number(d.amount) || 0), 0) * 100) / 100;
-  // 只读态不渲染「＋ 添加扣项」按钮（合计仍展示）；输入框禁用与删除按钮缺失均在行模板侧完成
-  wrap.innerHTML = `<div class="cd-list">${list}</div>`
+  // 只读态不渲染「＋ 添加扣项」按钮（合计仍展示）；输入框禁用与删除按钮缺失均在行模板侧完成。
+  // 表头与 .cd-row 同网格对齐（1fr / 金额列 / 操作列），窄屏由 CSS 隐藏；
+  // 只读行没有删除按钮（塌成两列），操作列表头留空占位保持对齐。
+  wrap.innerHTML = `<div class="cd-head"><span>扣项名称</span><span>金额（元）</span><span>${readonly ? "" : "操作"}</span></div>`
+    + `<div class="cd-list">${list}</div>`
     + `<div class="cd-foot">${readonly ? "" : `<button type="button" class="btn cd-add" onclick="addCostDeductionRow('${prefix}')">＋ 添加扣项</button>`}`
     + `<span class="cd-sum">合计 <b id="${prefix}CostDeductionsSum">¥${sum0}</b></span></div>`;
   if (typeof window["onCDChange_" + prefix] === "function") window["onCDChange_" + prefix]();
@@ -13586,18 +13589,29 @@ function renderCommissionPanel(p) {
   const bar = workers.length
     ? `<div class="comm-bar" id="commBar" data-pid="${p.id}" data-ids="${workers.map((w) => w.id).join(',')}" ${barDataAttr} data-pool="${pool.toFixed(2)}" data-noteid="commRemainNote">${segs}${handles}</div>`
     : "";
-  // 图例：每人一个同色圆点 + 姓名 + 金额；自定义金额模式下显示金额输入框
+  // 图例：每人一个同色圆点 + 姓名 + 金额；自定义金额模式下显示金额输入框，
+  // 右侧绿字改为「占比」（输入框已示金额，再示一遍是重复；占比补足信息维度）。
+  // 金额模式在图例上方渲染表头（窄屏由 CSS 隐藏）：工人 | 分配金额（元） | 占比
+  const legendHead = (isAmountMode && workers.length) ? `
+    <div class="comm-legend-head">
+      <span class="comm-legend-head__name">工人</span>
+      <span class="comm-legend-head__amt">分配金额（元）</span>
+      <span class="comm-legend-head__pct">占比</span>
+    </div>` : "";
   const legend = workers.map((w, i) => {
     const it = alloc.items.find((x) => x.workerId === w.id);
     const amt = it ? it.amount : 0;
     const amountInput = (isAmountMode && canEditCommission)
-      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBar', this)" style="width:80px;margin-left:auto;text-align:right;" />`
+      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBar', this)" style="width:96px;margin-left:auto;text-align:right;" />`
       : "";
+    const amtDisp = isAmountMode
+      ? `<span class="comm-legend-amt comm-legend-pct" id="commLegAmt_${w.id}">${commPctStr(barAmounts[i], remaining)}</span>`
+      : `<span class="comm-legend-amt" id="commLegAmt_${w.id}">¥${amt.toFixed(2)}</span>`;
     return `<div class="comm-legend-item">
       <span class="comm-dot" style="background:${COMM_COLORS[i % COMM_COLORS.length]}"></span>
       <span class="comm-legend-name">${esc(w.name)}</span>
       ${amountInput}
-      <span class="comm-legend-amt" id="commLegAmt_${w.id}">¥${amt.toFixed(2)}</span>
+      ${amtDisp}
     </div>`;
   }).join("");
   const modeBtns = canEditCommission ? `
@@ -13615,7 +13629,7 @@ function renderCommissionPanel(p) {
     <div class="commission-head"><h3>💰 包活分成</h3>${canEditCommission ? `<button class="btn small primary comm-save-btn" id="commSaveBtn" onclick="saveCommissionAlloc('${p.id}')">💾 保存分成</button>` : ""}</div>
     ${infoGrid}
     ${modeBtns}
-    <div class="commission-list">${bar}${legend}</div>
+    <div class="commission-list">${bar}${legendHead}${legend}</div>
     ${barHint}
   </div>`;
 }
@@ -13982,21 +13996,32 @@ function renderCompleteCommission(p) {
   const bar = workers.length
     ? `<div class="comm-bar" id="commBarComplete" data-ids="${workers.map((w) => w.id).join(',')}" ${barDataAttr} data-pool="${pool.toFixed(2)}" data-noteid="commRemainNoteC">${segs}${handles}</div>`
     : "";
-  // 图例合并考勤工时（系统自动统计 · 仅参考不计入工资）
+  // 图例合并考勤工时（系统自动统计 · 仅参考不计入工资）。
+  // 按金额模式下：金额进输入框，右侧绿字改「占比」，上方带表头（窄屏 CSS 隐藏）。
   const attMap = {};
   attendancePreview(p).forEach((a) => { if (a.wid) attMap[a.wid] = a.hours; });
+  const legendHead = (isAmountMode && workers.length) ? `
+    <div class="comm-legend-head">
+      <span class="comm-legend-head__name">工人</span>
+      <span class="comm-legend-head__amt">分配金额（元）</span>
+      <span class="comm-legend-head__pct">占比</span>
+      <span class="comm-legend-head__hrs">考勤</span>
+    </div>` : "";
   const legend = workers.map((w, i) => {
     const it = alloc.items.find((x) => x.workerId === w.id);
     const amt = it ? it.amount : 0;
     const hrs = attMap[w.id];
     const amountInput = (isAmountMode && canEditCommission)
-      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBarComplete', this)" style="width:80px;margin-left:auto;text-align:right;" />`
+      ? `<input class="comm-amount-input" type="number" min="0" step="0.01" value="${barAmounts[i].toFixed(2)}" data-wid="${w.id}" data-idx="${i}" oninput="onCommissionAmountInput('commBarComplete', this)" style="width:96px;margin-left:auto;text-align:right;" />`
       : "";
+    const amtDisp = isAmountMode
+      ? `<span class="comm-legend-amt comm-legend-pct" id="commLegAmtC_${w.id}">${commPctStr(barAmounts[i], remaining)}</span>`
+      : `<span class="comm-legend-amt" id="commLegAmtC_${w.id}">¥${amt.toFixed(2)}</span>`;
     return `<div class="comm-legend-item">
       <span class="comm-dot" style="background:${COMM_COLORS[i % COMM_COLORS.length]}"></span>
       <span class="comm-legend-name">${esc(w.name)}</span>
       ${amountInput}
-      <span class="comm-legend-amt" id="commLegAmtC_${w.id}">¥${amt.toFixed(2)}</span>
+      ${amtDisp}
       <span class="comm-legend-hrs">${hrs != null ? hrs.toFixed(1) + "h" : "--"}</span>
     </div>`;
   }).join("");
@@ -14020,7 +14045,7 @@ function renderCompleteCommission(p) {
     <h3>💰 包活分成</h3>
     ${infoGrid}
     ${modeBtns}
-    <div class="commission-list">${bar}${legend}</div>
+    <div class="commission-list">${bar}${legendHead}${legend}</div>
     ${footHtml}
     ${barHint}
   </div>`;
@@ -14189,6 +14214,12 @@ function commissionParticipants(p, mode) {
    注意：pool 传「扣除外协固定金额后的剩余池」——比例条只展示内部工人对剩余池的分配，段宽合计恒为 100%。
    金额用整数分最大余额法切分（Σ 恒 = pool，权重大者不少分）；权重与段宽同源（ratios），
    avg 模式段宽 33/33/34 时金额也同序——不会再把尾差全额压给最后一段。 */
+/* 按金额分配：某人金额占分成池的百分比文案（1 位小数，池为 0 时显示 0.0%） */
+function commPctStr(amount, pool) {
+  const pct = pool > 0 ? ((Number(amount) || 0) / pool) * 100 : 0;
+  return (Math.round(pct * 10) / 10).toFixed(1) + "%";
+}
+
 function commBarCalc(ids, ratios, pool) {
   const ratioSum = ids.reduce((s, _, i) => s + (ratios[i] || 0), 0);
   const widths = ids.map((_, i) => {
@@ -14285,7 +14316,13 @@ function recalcCommBar(bar) {
   const amtEls = legendList ? legendList.querySelectorAll(".comm-legend-amt") : [];
   ids.forEach((wid, i) => {
     const amtEl = amtEls[i];
-    if (amtEl) amtEl.textContent = "¥" + amounts[i].toFixed(2);
+    if (!amtEl) return;
+    // 金额模式下图例右侧是「占比」列（金额已在输入框里），实时随输入刷新
+    if (mode === "amount" && amtEl.classList.contains("comm-legend-pct")) {
+      amtEl.textContent = commPctStr(amounts[i], remaining);
+    } else {
+      amtEl.textContent = "¥" + amounts[i].toFixed(2);
+    }
   });
   // 刷新「扣除外协后剩余」提示
   if (mode === "amount") {
@@ -29920,7 +29957,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vf5bf89ff";
+  const APP_VERSION = "vd1f7a2a5";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 

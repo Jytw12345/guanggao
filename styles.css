@@ -6851,6 +6851,32 @@ body.modal-open {
   font-weight: 600;
   color: #16a34a;
 }
+/* 按金额分配：图例右侧「占比」列（金额已在输入框中，不再重复显示绿字金额） */
+.comm-legend-amt.comm-legend-pct {
+  color: #2563eb;
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  text-align: right;
+  flex-shrink: 0;
+}
+/* 按金额分配图例表头（桌面端）：列与图例行对齐 —— 姓名(flex) / 输入框(80px) / 占比；窄屏隐藏 */
+.comm-legend-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #64748b;
+  padding: 2px 2px 4px;
+  border-bottom: 1px dashed var(--border, #e2e8f0);
+  margin-bottom: 2px;
+}
+.comm-legend-head__name { flex: 1; }
+.comm-legend-head__amt { width: 96px; text-align: center; white-space: nowrap; flex-shrink: 0; }
+.comm-legend-head__pct { min-width: 44px; text-align: right; flex-shrink: 0; }
+.comm-legend-head__hrs { min-width: 42px; text-align: right; flex-shrink: 0; }
+@media (max-width: 600px) {
+  .comm-legend-head { display: none; }
+}
 /* 图例内合并的考勤工时（系统自动统计 · 仅参考不计入工资） */
 .comm-legend-hrs {
   font-size: 12px;
@@ -7185,7 +7211,7 @@ body.modal-open {
 .cd-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
 .cd-row {
   display: grid;
-  grid-template-columns: 1fr 84px auto;
+  grid-template-columns: 1fr 110px auto;
   align-items: center;
   gap: 6px;
   padding: 4px 6px;
@@ -7199,8 +7225,29 @@ body.modal-open {
 }
 /* 只读行（无编辑权限/已验收审核）：模板侧不渲染删除按钮，网格退化为 名称+金额 两列，不留空位 */
 .cd-row--ro {
-  grid-template-columns: 1fr 84px;
+  grid-template-columns: 1fr 110px;
   background: #f8fafc;
+}
+/* 手机端金额列收回窄尺寸（110px 是桌面端「金额框有点小」反馈后的加宽值） */
+@media (max-width: 480px) {
+  .cd-row { grid-template-columns: 1fr 84px auto; }
+  .cd-row--ro { grid-template-columns: 1fr 84px; }
+}
+/* 扣项编辑器表头：与 .cd-row 同网格对齐（内边距 7px = 行边框 1px + 行内边距 6px）；
+   窄屏隐藏——手机空间有限，行内 placeholder 已能说明各框用途 */
+.cd-head {
+  display: grid;
+  grid-template-columns: 1fr 110px 26px;
+  gap: 6px;
+  padding: 0 7px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: #64748b;
+}
+.cd-head span:nth-child(2) { text-align: center; white-space: nowrap; }
+.cd-head span:last-child { text-align: center; white-space: nowrap; }
+@media (max-width: 600px) {
+  .cd-head { display: none; }
 }
 .cd-row--ro .cd-name, .cd-row--ro .cd-amount { background: #f1f5f9; color: #475569; }
 /* 外协行姓名格：徽标+姓名包在一起，占网格第 1 列（防止 4 个子项挤爆 3 列网格导致换行错乱） */
@@ -7290,7 +7337,7 @@ body.modal-open {
 .cost-mgmt__label { display: block; font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 4px; }
 .cost-mgmt__amount { display: flex; align-items: center; gap: 6px; }
 .cost-mgmt__yen { color: #64748b; flex-shrink: 0; }
-.cost-mgmt__amount .input { flex: 1; min-width: 0; max-width: 220px; }
+.cost-mgmt__amount .input { flex: 1; min-width: 0; max-width: 320px; }
 
 /* 窄弹窗（小而精）：仅对 modal.open({narrow:true}) 的弹窗生效，默认 420px → 360px，手机端更聚焦 */
 .modal.modal--narrow { width: 84%; max-width: 360px; }
