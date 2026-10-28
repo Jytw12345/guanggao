@@ -11501,7 +11501,33 @@ function renderQuickAllocPreview(id, newType, amt, cdSum) {
   const pv = previewCommissionChange(p, newType, amt, cdSum);
   const changed = pv.rows.filter((r) => Math.abs(r.delta) > 0.005);
   if (!changed.length) {
-    box.innerHTML = `<div class="qc-alloc-preview__none">分成无变化（当前无已分配人员或分成池为 0）</div>`;
+    // 没有金额变化时不再隐藏人员列表：只要有人分到钱，就照常显示每人当前分成（中性样式），
+    // 标题提示「金额未变化」；只有真的无可展示分成（未分配人员/池为 0）才显示原因（2026-10-28）。
+    const shown = pv.rows.filter((r) => r.to > 0.005 || r.from > 0.005);
+    if (shown.length) {
+      const rowsHtml = shown.map((r) =>
+        `<span class="qc-alloc-chip">${esc(r.workerName)} <b>¥${r.to.toFixed(2)}</b></span>`
+      ).join("");
+      const doneHint = isCommissionCounted(p)
+        ? `<div class="qc-alloc-preview__warn" style="background:#fff7ed;border-color:#fdba74;color:#9a3412;">本项目已验收（提成已计入统计），保存后以下提成会立即按新金额重算。</div>`
+        : "";
+      box.innerHTML = `<div class="qc-alloc-preview__title">当前人员分成（金额未变化）</div><div class="qc-alloc-preview__list">${rowsHtml}</div>${doneHint}`;
+      return;
+    }
+    // 无可展示分成：按真实原因分开提示。注意不能用 resolveCommissionAlloc().items 判断
+    // 「是否已分配」——池为 0 时它返回空 items，会把「已分配人员但池被扣项占完」
+    // 误报成「尚未分配施工人员」。这里直接看 assignedWorkerIds（内部施工人员）。
+    const assignedCount = (p.assignedWorkerIds || []).filter((wid) => getWorker(wid)).length;
+    const newPool = pv.pool || 0;
+    let why;
+    if (assignedCount && newPool <= 0.005) {
+      why = "当前分成池为 0（工程金额被成本扣项占完），已分配人员暂无分成";
+    } else if (!assignedCount && newPool <= 0.005) {
+      why = "尚未分配施工人员且分成池为 0，分配人员时将按新分成池计算";
+    } else {
+      why = `尚未分配施工人员：分配人员时将直接按新分成池 ¥${newPool.toFixed(2)} 计算`;
+    }
+    box.innerHTML = `<div class="qc-alloc-preview__none">暂无可展示的分成（${why}）</div>`;
     return;
   }
   const rowsHtml = changed.map((r) => {
@@ -30199,7 +30225,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vda4ecba4";
+  const APP_VERSION = "v5d50b751";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
