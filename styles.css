@@ -8198,6 +8198,14 @@ table.data.project-hours-diff thead th {
 .stat-card .num { font-size: 26px; font-weight: 700; color: var(--primary); }
 .stat-card .lbl { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
+/* 账号管理：人员最近活跃徽标（绿=24小时内有使用，灰=更早/未上报） */
+.active-chip {
+  display: inline-block; padding: 3px 8px; border-radius: 8px;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+  background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0;
+}
+.active-chip.is-on { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+
 /* 账号管理：人员所用版本徽标（绿=与当前一致，橙=旧版/未上报） */
 .ver-chip {
   display: inline-flex; flex-direction: column; align-items: flex-start;

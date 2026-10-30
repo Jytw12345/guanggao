@@ -3791,6 +3791,8 @@ const repo = {
       recordSyncTime();
       // 同步完成后扫描超期项目，给本门店店长发站内通知（fire-and-forget）
       scanOverdueAndNotify();
+      // 全量同步成功视为活跃：节流上报最近活跃时间（fire-and-forget）
+      touchLastActive();
       // 缓存落盘为 best-effort，不阻塞下拉刷新完成（已在后台静默写入）
       persistCloudCache(currentUser && currentUser.id);
       hideCloudLoadError();
@@ -3823,7 +3825,7 @@ const repo = {
     if (MODE !== "cloud") return [];
     const { data, error } = await sb.from("profiles").select("*").order("email");
     if (error) { fail(error); return []; }
-    return (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "", forcePasswordChange: !!(r.force_password_change), appVersion: r.app_version || "", versionAt: r.version_at || null }));
+    return (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "", forcePasswordChange: !!(r.force_password_change), appVersion: r.app_version || "", versionAt: r.version_at || null, lastActiveAt: r.last_active_at || null }));
   },
   async setProfile(userId, patch) {
     if (MODE !== "cloud") return;
@@ -20556,6 +20558,25 @@ function markNotified(projectId, notifType) {
 function clearNotified(projectId, notifType) {
   sb.from("notify_dedup").delete().eq("project_id", projectId).eq("type", notifType).then(() => {}).catch(() => {});
 }
+
+/* 最近活跃上报：把 last_active_at 写回自己的 profiles 行，总经理在「账号管理」
+   可看到每人最近使用时间。节流：本机 10 分钟最多写一次（localStorage 记上次写入），
+   避免每次同步都 UPDATE。调用点：每次全量同步成功后 + 会话启动（startCloudSession）。 */
+let _lastActiveWriting = false;
+function touchLastActive() {
+  if (MODE !== "cloud" || !cloudConfigured() || !currentUser || _lastActiveWriting) return;
+  try {
+    const last = parseInt(localStorage.getItem("lastActiveReportAt") || "0", 10) || 0;
+    if (Date.now() - last < 10 * 60 * 1000) return;
+    localStorage.setItem("lastActiveReportAt", String(Date.now()));
+    _lastActiveWriting = true;
+    sb.from("profiles")
+      .update({ last_active_at: new Date().toISOString() })
+      .eq("id", currentUser.id)
+      .then(({ error }) => { if (error) console.warn("[活跃上报] 写入失败（可能缺少字段或 RLS 未放行）:", error.message); })
+      .finally(() => { _lastActiveWriting = false; });
+  } catch (_) {}
+}
 function getNotifiedSet(key) {
   try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); }
   catch (e) { return new Set(); }
@@ -24072,7 +24093,7 @@ async function renderAccounts() {
     <div class="detail-block" style="padding:0;overflow-x:auto;-webkit-overflow-scrolling:touch">
       ${MODE === "local" ? `<button class="btn" style="margin-bottom:12px" onclick="addLocalAccount()">添加本地账号</button>` : ""}
       <table class="data accounts-table">
-        <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>所属门店</th>${MODE === "cloud" ? `<th>强制改密</th>` : ""}${MODE === "cloud" ? `<th>版本</th>` : ""}<th>操作</th></tr></thead>
+        <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>所属门店</th>${MODE === "cloud" ? `<th>强制改密</th>` : ""}${MODE === "cloud" ? `<th>最近活跃</th>` : ""}${MODE === "cloud" ? `<th>版本</th>` : ""}<th>操作</th></tr></thead>
         <tbody>
           ${accounts.map((a) => `
             <tr>
@@ -24083,6 +24104,12 @@ async function renderAccounts() {
               ${MODE === "cloud" ? `
               <td>
                 <button class="btn btn-small ${a.forcePasswordChange ? "warning" : ""}" onclick="toggleForcePw('${a.id}', ${a.forcePasswordChange ? "true" : "false"})">${a.forcePasswordChange ? "已标记·取消" : "标记强制改密"}</button>
+              </td>` : ""}
+              ${MODE === "cloud" ? `
+              <td>
+                ${a.lastActiveAt
+                  ? (() => { const h = (Date.now() - new Date(a.lastActiveAt).getTime()) / 3600000; return `<span class="active-chip ${h < 24 ? "is-on" : ""}" title="${esc(a.lastActiveAt)}">${esc(formatNotifTime(a.lastActiveAt))}</span>`; })()
+                  : `<span class="active-chip" title="该账号本功能上线后还未使用过">—</span>`}
               </td>` : ""}
               ${MODE === "cloud" ? `
               <td>
@@ -29285,7 +29312,7 @@ async function startCloudSession() {
     // 字段缺失/RLS 不放行时静默失败（控制台留痕），不影响登录流程。
     try {
       sb.from("profiles")
-        .update({ app_version: APP_VERSION, version_at: new Date().toISOString() })
+        .update({ app_version: APP_VERSION, version_at: new Date().toISOString(), last_active_at: new Date().toISOString() })
         .eq("id", newProfile.id)
         .then(({ error }) => { if (error) console.warn("[版本上报] 写入失败（可能缺少字段或 RLS 未放行）:", error.message); });
     } catch (_) {}
@@ -30241,7 +30268,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v9247ac6c";
+  const APP_VERSION = "v82b90079";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
