@@ -8198,6 +8198,16 @@ table.data.project-hours-diff thead th {
 .stat-card .num { font-size: 26px; font-weight: 700; color: var(--primary); }
 .stat-card .lbl { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
+/* 账号管理：人员所用版本徽标（绿=与当前一致，橙=旧版/未上报） */
+.ver-chip {
+  display: inline-flex; flex-direction: column; align-items: flex-start;
+  padding: 3px 8px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  line-height: 1.35; white-space: nowrap;
+}
+.ver-chip i { font-style: normal; font-size: 10px; font-weight: 400; opacity: .75; }
+.ver-chip.is-ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+.ver-chip.is-old { background: #fff7ed; color: #9a3412; border: 1px solid #fdba74; }
+
 /* 新建/编辑预约表单：现场图与施工图及物料都为空时并排两列（省一半高度），
    任一组有图后恢复整行（见 renderFormPhotos 的 .form-photos-duo 包裹逻辑） */
 .form-photos-duo {

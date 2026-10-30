@@ -3823,7 +3823,7 @@ const repo = {
     if (MODE !== "cloud") return [];
     const { data, error } = await sb.from("profiles").select("*").order("email");
     if (error) { fail(error); return []; }
-    return (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "", forcePasswordChange: !!(r.force_password_change) }));
+    return (data || []).map((r) => ({ id: r.id, email: r.email, name: r.name || "", role: r.role, storeId: r.store_id || "", forcePasswordChange: !!(r.force_password_change), appVersion: r.app_version || "", versionAt: r.version_at || null }));
   },
   async setProfile(userId, patch) {
     if (MODE !== "cloud") return;
@@ -24072,7 +24072,7 @@ async function renderAccounts() {
     <div class="detail-block" style="padding:0;overflow-x:auto;-webkit-overflow-scrolling:touch">
       ${MODE === "local" ? `<button class="btn" style="margin-bottom:12px" onclick="addLocalAccount()">添加本地账号</button>` : ""}
       <table class="data accounts-table">
-        <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>所属门店</th>${MODE === "cloud" ? `<th>强制改密</th>` : ""}<th>操作</th></tr></thead>
+        <thead><tr><th>邮箱</th><th>姓名</th><th>角色</th><th>所属门店</th>${MODE === "cloud" ? `<th>强制改密</th>` : ""}${MODE === "cloud" ? `<th>版本</th>` : ""}<th>操作</th></tr></thead>
         <tbody>
           ${accounts.map((a) => `
             <tr>
@@ -24083,6 +24083,12 @@ async function renderAccounts() {
               ${MODE === "cloud" ? `
               <td>
                 <button class="btn btn-small ${a.forcePasswordChange ? "warning" : ""}" onclick="toggleForcePw('${a.id}', ${a.forcePasswordChange ? "true" : "false"})">${a.forcePasswordChange ? "已标记·取消" : "标记强制改密"}</button>
+              </td>` : ""}
+              ${MODE === "cloud" ? `
+              <td>
+                ${a.appVersion
+                  ? `<span class="ver-chip ${a.appVersion === APP_VERSION ? "is-ok" : "is-old"}" title="最近上报：${esc(a.versionAt || "")}">${esc(a.appVersion)}<i>${esc(formatNotifTime(a.versionAt) || "")}</i></span>`
+                  : `<span class="ver-chip is-old" title="该账号本次更新后还未登录过">未上报</span>`}
               </td>` : ""}
               <td>
                 ${a.role === "manager" ? "" : `<button class="btn btn-small" onclick="openUserPermModal('${a.id}', '${esc(a.name || a.email || a.id)}', '${a.role || ""}')">权限</button> `}
@@ -29274,6 +29280,16 @@ async function startCloudSession() {
     currentProfile = newProfile;
     applyProfileToUI();
 
+    // 上报本机版本：会话开始时把 APP_VERSION 写回自己的 profiles 行（app_version/version_at），
+    // 总经理在「账号管理」即可看到每人所用版本与上报时间，识别谁还在旧版（2026-10-28）。
+    // 字段缺失/RLS 不放行时静默失败（控制台留痕），不影响登录流程。
+    try {
+      sb.from("profiles")
+        .update({ app_version: APP_VERSION, version_at: new Date().toISOString() })
+        .eq("id", newProfile.id)
+        .then(({ error }) => { if (error) console.warn("[版本上报] 写入失败（可能缺少字段或 RLS 未放行）:", error.message); });
+    } catch (_) {}
+
     // 注册时填写的真实姓名兜底入库：profile.name 为空且本地暂存了注册姓名时，
     // 由本人写入自己的 profiles.name（依赖放宽后的 RLS profiles_self_name；
     // 若已重跑 trigger SQL，则注册时已由 handle_new_user 入库，此处会跳过）。
@@ -30225,7 +30241,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v5d50b751";
+  const APP_VERSION = "v9247ac6c";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
