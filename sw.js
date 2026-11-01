@@ -1,0 +1,243 @@
+// 缓存策略：版本号（由 release.js 按文件内容自动计算）作为更新闸门。
+// - 版本号不变 → 直接命中本地缓存：秒开、零流量、可离线。
+// - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
+//   用户点「立即更新」或下次打开即生效。
+// 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
+const CACHE = "ad-install-v25877700";
+const VERSION = "v25877700";
+const COS_CACHE = "ad-install-cos-" + VERSION; // 腾讯云 COS 图片运行时缓存，支持现场离线看图
+
+const ASSETS = [
+  "./",
+  "./index.html",
+  "./styles.css",
+  "./app.js",
+  "./config.js",
+  "./vendor/supabase.min.js",
+  "./vendor/jszip.min.js",
+  "./vendor/heic2any.min.js",
+  "./manifest.webmanifest",
+  "./help.html",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png",
+  "./icons/icon-180.png",
+];
+
+// 同源 GET 请求统一走下方「缓存优先」策略。
+
+
+self.addEventListener("install", (e) => {
+  e.waitUntil(
+    caches.open(CACHE)
+      .then((c) => Promise.all(ASSETS.map((url) => c.add(url).catch((err) => console.warn("预缓存失败:", url, err)))))
+      .then(() => {
+        // 通知当前已打开的页面：有新版本待更新（新 SW 停在 waiting，等用户点「立即更新」才接管）
+        self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+          clients.forEach((client) => client.postMessage({ type: "VERSION_UPDATED", version: VERSION }));
+        });
+        // 注意：此处不再调用 self.skipWaiting()，避免新 SW 一下载就自动激活接管，
+        // 导致旧 app.js 收到重复广播而反复弹出更新横幅。是否接管由前端「立即更新」触发。
+      })
+  );
+});
+
+self.addEventListener("activate", (e) => {
+  e.waitUntil(
+    Promise.all([
+      // 只清理「旧版本」的两类缓存；必须保留当前版本的 CACHE 与 COS_CACHE。
+      // 早前这里写成 `k !== CACHE`，而 COS_CACHE = "ad-install-cos-" + VERSION 与 CACHE 名字不同，
+      // 导致每次 SW 更新激活时把刚缓存好的现场图片全部删掉（离线看图失效）。
+      caches.keys().then((keys) => {
+        const keep = new Set([CACHE, COS_CACHE]);
+        return Promise.all(keys.filter((k) => k.startsWith("ad-install") && !keep.has(k)).map((k) => caches.delete(k)));
+      }),
+      self.clients.claim()
+    ])
+  );
+});
+
+// 防御式缓存策略：版本号未变时命中本地缓存（秒开、零流量、可离线）；
+// 缓存未命中或缓存被系统回收（安卓长时间后台常见）时回源网络并重新写入缓存；
+// 网络也失败时用内置兜底页面兜底，确保「冷启动」绝不白屏。
+// 关键点：只匹配「当前 SW 自己版本的缓存」，绝不跨旧缓存命中。
+// 否则新 SW 接管后 reload 会跨缓存命中「旧 app.js」，导致 APP_VERSION 与 controller 版本
+// 永远不一致，更新弹窗陷入死循环（点了立即更新仍弹）。
+let _cacheReady = null;
+function getActiveCache() {
+  if (!_cacheReady) _cacheReady = caches.open(CACHE);
+  return _cacheReady;
+}
+
+// 最后兜底页面：当缓存被系统回收且完全离线时，返回轻量页面而非纯白屏，
+// 并给出「重新加载」按钮，联网后可一键恢复。
+const OFFLINE_FALLBACK = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>广告安装管理</title><style>
+  html,body{height:100%;margin:0;display:flex;align-items:center;justify-content:center;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f1f5f9;color:#475569}
+  .box{text-align:center;padding:24px}
+  .box h1{font-size:18px;margin:0 0 8px;color:#1e293b}
+  .box p{font-size:14px;margin:4px 0;line-height:1.6}
+  .btn{margin-top:16px;padding:10px 20px;border:1px solid #6366f1;border-radius:8px;
+    background:#6366f1;color:#fff;font-size:14px;cursor:pointer}
+</style></head>
+<body><div class="box">
+  <h1>暂时无法连接到网络</h1>
+  <p>应用资源未缓存，或缓存已被系统回收。</p>
+  <p>请在联网后点击下方按钮重新加载。</p>
+  <button class="btn" onclick="location.reload()">重新加载</button>
+</div></body></html>`;
+
+self.addEventListener("fetch", (e) => {
+  const req = e.request;
+  if (req.method !== "GET") return; // PUT 上传等不拦截，直接走网络
+  const url = new URL(req.url);
+  if (url.origin === self.location.origin) {
+    e.respondWith(handleFetch(req));
+    return;
+  }
+  // 腾讯云 COS 图片：跨域 GET，做缓存优先，支持现场离线看图
+  if (url.hostname.endsWith("myqcloud.com")) {
+    e.respondWith(handleCosImage(req));
+    return;
+  }
+  // 打包环境 <img> 直连 Supabase 代理（?key=&raw=1&token=）：
+  // 按 key 归一化缓存（把 token 从缓存键去掉），同一张图再次查看秒开、可离线。
+  if (/\/functions\/v1\/cos-proxy$/.test(url.pathname) && url.searchParams.get("key")) {
+    e.respondWith(handleProxyImage(req));
+    return;
+  }
+  // 其它跨域 GET（如 Supabase）不拦截
+});
+
+// 代理图片：缓存优先。用 CORS 模式重新取一次，才能判断 ok/内容类型（不会把 401 缓存进去）。
+async function handleProxyImage(req) {
+  const u = new URL(req.url);
+  const key = u.searchParams.get("key") || "";
+  if (!key) return fetch(req);
+  // 缓存键：剔除 token，保留 key 与 thumb——缩略图（thumb=400）与原图必须分开缓存，
+  // 否则先看缩略图会把小图当原图命中，点开大图仍是糊的。
+  const thumb = u.searchParams.get("thumb") || "";
+  const normUrl = `${u.origin}${u.pathname}?key=${encodeURIComponent(key)}&raw=1${thumb ? `&thumb=${encodeURIComponent(thumb)}` : ""}`;
+  const cacheKey = new Request(normUrl);
+  let cache = null;
+  try { cache = await caches.open(COS_CACHE); } catch (_) { cache = null; }
+  if (cache) {
+    try {
+      const hit = await cache.match(cacheKey);
+      if (hit) return hit;
+    } catch (_) {}
+  }
+  try {
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    const to = ctrl ? setTimeout(() => ctrl.abort(), 20000) : null;
+    let res;
+    try {
+      res = await fetch(req.url, ctrl ? { mode: "cors", signal: ctrl.signal } : { mode: "cors" });
+    } finally {
+      if (to) clearTimeout(to);
+    }
+    if (res && res.ok) {
+      if (cache) { try { cache.put(cacheKey, res.clone()); } catch (_) {} }
+      return res;
+    }
+    return res;
+  } catch (_) {
+    if (cache) {
+      try {
+        const hit = await cache.match(cacheKey);
+        if (hit) return hit;
+      } catch (_) {}
+    }
+    return new Response("", { status: 504, statusText: "offline" });
+  }
+}
+
+async function handleFetch(req) {
+  const isNav = req.mode === "navigate";
+  let cache = null;
+  try { cache = await getActiveCache(); } catch (_) { cache = null; }
+
+  // 1) 先尝试命中当前版本缓存（导航与子资源都走这里，秒开/离线友好）
+  if (cache) {
+    try {
+      const cached = await cache.match(req);
+      if (cached) return cached;
+    } catch (_) { /* 缓存读取异常，继续走网络 */ }
+  }
+
+  // 2) 缓存未命中（或被回收）→ 回源网络，并把结果写入缓存供下次使用
+  try {
+    const res = await fetch(req);
+    if (res && res.ok && res.type === "basic" && cache) {
+      try { cache.put(req, res.clone()); } catch (_) { /* 写入失败不影响本次响应 */ }
+    }
+    return res;
+  } catch (err) {
+    // 3) 网络也失败 → 兜底（确保 Promise 永不 reject，避免白屏）
+    if (isNav) {
+      if (cache) {
+        try {
+          const fb = await cache.match("./index.html");
+          if (fb) return fb;
+        } catch (_) {}
+      }
+      // 缓存与网络均无 → 返回兜底页面，而非纯白屏
+      return new Response(OFFLINE_FALLBACK, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+    // 子资源（js/css 等）加载失败且无缓存：返回空响应，由页面自行处理
+    return new Response("", { status: 504, statusText: "offline" });
+  }
+}
+
+// 腾讯云 COS 图片：缓存优先（现场弱网/离线可看图），网络可达时顺带回源更新
+async function handleCosImage(req) {
+  let cache = null;
+  try { cache = await caches.open(COS_CACHE); } catch (_) { cache = null; }
+  // 归一化缓存键：去掉签名 query（q-sign-*），同一对象的不同签名 URL 命中同一份缓存，离线可看
+  const u = new URL(req.url);
+  const normReq = new Request(u.origin + u.pathname);
+  if (cache) {
+    try {
+      const hit = await cache.match(normReq);
+      if (hit) return hit;
+    } catch (_) { /* 读取异常继续回源 */ }
+  }
+  try {
+    // 回源地超时（2026-10-25）：PakePlus/WebView2 下直连 COS 常挂死——不报错也不返回，
+    // 无超时的 fetch 会把 <img> 和整条客户端恢复链（onCosImgError → 重签 → 代理出图）
+    // 一起拖住几十秒，表现为「预览加载中…」卡住。10s 拿不到就判失败返回 504，
+    // img 走 onerror 迅速转入代理；正常浏览器直连 COS ~1s，缓存命中更是零网络，均不受影响。
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 10000);
+    let res;
+    try {
+      res = await fetch(req, { signal: ctrl.signal }); // 仍用带签名的原始 URL 回源
+    } finally {
+      clearTimeout(to);
+    }
+    // 只缓存成功响应：把 403/404 也写进缓存，会让这张图在缓存有效期内永久坏图
+    // （签名过期/权限异常一次就把整张图毒化，刷新、重登都救不回来）。
+    if (cache && res && res.ok) { try { cache.put(normReq, res.clone()); } catch (_) { /* 写入失败不影响本次 */ } }
+    return res;
+  } catch (_) {
+    if (cache) {
+      try {
+        const hit = await cache.match(normReq);
+        if (hit) return hit;
+      } catch (_) {}
+    }
+    return new Response("", { status: 504, statusText: "offline" });
+  }
+}
+
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "GET_VERSION") {
+    e.ports[0].postMessage({ type: "VERSION_RESPONSE", version: VERSION });
+  }
+  if (e.data && e.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
