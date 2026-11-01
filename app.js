@@ -30414,7 +30414,10 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
         toast("已是最新版本");
         try { refreshVersionStatus(); } catch (e) {}
       }, 1500);
-    }).catch(() => toast("检查更新失败，请检查网络后重试"));
+    }).catch((err) => {
+      console.warn("[检查更新] update() 失败:", err);
+      toast("检查更新失败：" + ((err && err.message) || "请检查网络后重试"), 4000);
+    });
   };
 
   // 更新完成回执：重载后告知用户「刚才的重新加载是版本更新」，消除"闪退"错觉
@@ -30462,7 +30465,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v25877700";
+  const APP_VERSION = "v58985477";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
