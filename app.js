@@ -14355,38 +14355,73 @@ function onCommissionAmountInput(barId, inp) {
 }
 
 /* 包活制：完工时不再手填工时，由系统按实际在场时段自动统计（仅考勤参考）。
-   返回可直接写入 workLogs 的记录数组；若某工人当日已存在工时记录则保留不重复生成。 */
+   跨天时段按**自然日**拆分：每人每天一条记录（如 11/1 07:52→11/2 17:10 连续施工，
+   11/1 记到当天 24:00、11/2 记 0 点后至完工），提成按天摊分随之跨月正确归属
+   （此前整段挂在完工结算日，跨月单会全压给结算日所在月份）。
+   返回可直接写入 workLogs 的记录数组；某工人某日已存在工时记录则该日保留不重复生成
+   （暂停/延期时按天结算过的工时已落袋，避免重复计）。 */
 function autoAttendanceLogs(p) {
   if (!p) return [];
-  const dateStr = dateKey(new Date());
   const ids = new Set([...(p.assignedWorkerIds || [])]);
   (p.workerChangeHistory || []).forEach((ch) => { if (ch.workerId) ids.add(ch.workerId); });
   (p.workLogs || []).forEach((l) => { if (l.workerId && !l.workerId.startsWith("outsourced:")) ids.add(l.workerId); });
   (p.outsourcedWorkers || "").split(/[,，]/).map((n) => n.trim()).filter(Boolean).forEach((n) => ids.add("outsourced:" + n));
-  const existingToday = new Set((p.workLogs || []).filter((l) => l.date === dateStr).map((l) => l.workerId));
+  const existingDates = new Set((p.workLogs || []).map((l) => `${l.workerId}_${l.date}`));
   const logs = [];
   ids.forEach((wid) => {
-    if (existingToday.has(wid)) return; // 已有当日工时，保留不重复生成
     /* 注意：不要把开放时段提前置 pr.end——calcWorkerRealtimeHours 只统计未关闭时段
        （防重复闸之一），提前关闭会让整段被跳过、工时算成 0。结束时间由该函数内部
        按 getProjectEffectiveEndTime 截断，暂停段也会自动扣除。 */
     const periods = buildWorkerPeriods(p, wid);
-    const hours = Math.round(calcWorkerRealtimeHours(p, wid, periods) * 10) / 10;
-    if (hours > 0) {
-      const w = getWorker(wid);
-      const isOut = wid.startsWith("outsourced:");
-      logs.push({
-        workerId: wid,
-        workerName: w ? w.name : (isOut ? wid.slice(11) : "未知"),
-        hours,
-        level: "中级",
-        workType: "地面作业",
-        date: dateStr,
-        note: "自动·考勤",
-        auto: true,
-        isOutsourced: isOut,
-      });
-    }
+    const openPeriods = periods.filter((pr) => !pr.end);
+    if (!openPeriods.length) return;
+    const projectEnd = getProjectEffectiveEndTime(p);
+    // 暂停区间列表（扣减各自然日内的暂停重叠）
+    const pauses = (p.pauseHistory || [])
+      .filter((ph) => ph.pauseAt && ph.resumedAt)
+      .map((ph) => [new Date(ph.pauseAt), new Date(ph.resumedAt)]);
+    // 按自然日累加在场毫秒数：逐天切 [cur, chunkEnd]，段内扣暂停
+    const perDayMs = {};
+    openPeriods.forEach((pr) => {
+      const segStart = new Date(pr.start);
+      const segEnd = projectEnd > segStart ? projectEnd : segStart;
+      let cur = new Date(segStart);
+      while (cur < segEnd) {
+        const dayEnd = new Date(cur);
+        dayEnd.setHours(24, 0, 0, 0);
+        const chunkEnd = dayEnd < segEnd ? dayEnd : segEnd;
+        let ms = chunkEnd - cur;
+        pauses.forEach(([ps, pe]) => {
+          const os = ps > cur ? ps : cur;
+          const oe = pe < chunkEnd ? pe : chunkEnd;
+          if (oe > os) ms -= (oe - os);
+        });
+        if (ms > 0) {
+          const dk = dateKey(cur);
+          perDayMs[dk] = (perDayMs[dk] || 0) + ms;
+        }
+        cur = chunkEnd;
+      }
+    });
+    Object.keys(perDayMs).sort().forEach((dk) => {
+      if (existingDates.has(`${wid}_${dk}`)) return; // 该日已有工时记录（如按天结算落袋），保留不重复生成
+      const hours = Math.round((perDayMs[dk] / 3600000) * 10) / 10;
+      if (hours > 0) {
+        const w = getWorker(wid);
+        const isOut = wid.startsWith("outsourced:");
+        logs.push({
+          workerId: wid,
+          workerName: w ? w.name : (isOut ? wid.slice(11) : "未知"),
+          hours,
+          level: "中级",
+          workType: "地面作业",
+          date: dk,
+          note: "自动·考勤",
+          auto: true,
+          isOutsourced: isOut,
+        });
+      }
+    });
   });
   return logs;
 }
@@ -19091,7 +19126,18 @@ function openCompleteProjectForm(id) {
         p.actualHours = p.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0);
 
         if (MODE === "cloud" && cloudConfigured()) {
-          await sb.from("work_logs").delete().eq("project_id", id).eq("date", dateStr);
+          // 跨天拆分后 newLogs 可能覆盖多个日期，且已存在的（工人,日期）组合不会重新生成；
+          // 只删将要写入的（工人,日期）对（防上次完工尝试残留的脏数据），不再按完工日整日删除，
+          // 避免误伤其他工人当天已按天结算落袋的工时。
+          const delPairs = [];
+          const _seenPairs = new Set();
+          newLogs.forEach((l) => {
+            const k = `${l.workerId}_${l.date}`;
+            if (!_seenPairs.has(k)) { _seenPairs.add(k); delPairs.push([l.workerId, l.date]); }
+          });
+          for (const [wid, d] of delPairs) {
+            await sb.from("work_logs").delete().eq("project_id", id).eq("worker_id", wid).eq("date", d);
+          }
           await Promise.all([
             sb.from("projects").update({
               status: STATUS.DONE,
@@ -30484,7 +30530,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v9446fc89";
+  const APP_VERSION = "vd1c6fb08";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
