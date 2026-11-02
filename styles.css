@@ -7869,9 +7869,11 @@ table.data.project-hours-diff .col-auto { width: 74px; min-width: 74px; max-widt
 table.data.project-hours-diff .col-notes { width: 140px; min-width: 140px; max-width: 220px; vertical-align: top; }
 table.data.project-hours-diff td.col-notes { word-break: break-word; }
 /* 提成统计「扣项说明」列：每行成本扣项一个标签，外协工钱用紫色🤝 明确标出 */
-.cd-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-.cd-tag { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; line-height: 1.5; padding: 1px 6px; border-radius: 4px; background: #f1f5f9; color: #334155; white-space: nowrap; }
-.cd-tag b { font-weight: 600; }
+.cd-tags { display: flex; flex-wrap: wrap; gap: 4px; max-width: 100%; }
+/* 标签内名称允许换行：扣项名很长（如"锁瞳板1955+灯条扣灯631+…"）时 nowrap 会撑破
+   col-notes 的 220px 列宽、压到右侧金额列（用户实测），金额 b 保持整行不拆 */
+.cd-tag { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px; font-size: 11px; line-height: 1.5; padding: 1px 6px; border-radius: 4px; background: #f1f5f9; color: #334155; overflow-wrap: anywhere; }
+.cd-tag b { font-weight: 600; white-space: nowrap; }
 .cd-tag--out { background: #ede9fe; color: #6d28d9; }
 
 .worker-chip {

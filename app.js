@@ -24327,7 +24327,7 @@ async function renderAccounts() {
               ${MODE === "cloud" ? `
               <td>
                 ${a.appVersion
-                  ? `<span class="ver-chip ${a.appVersion === (window.__APP_VERSION__ || "") ? "is-ok" : "is-old"}" title="最近上报：${esc(a.versionAt || "")}">${esc(a.appVersion)}<i>${esc(formatNotifTime(a.versionAt) || "")}</i></span>`
+                  ? `<span class="ver-chip ${a.appVersion === (window.__APP_VERSION__ || "") ? "is-ok" : "is-old"}" title="最近上报：${esc(a.versionAt || "")}（与最近活跃同口径，随同步节流上报）">${esc(a.appVersion)}</span>`
                   : `<span class="ver-chip is-old" title="该账号本次更新后还未登录过">未上报</span>`}
               </td>` : ""}
               <td>
@@ -30484,7 +30484,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v33ba6a8c";
+  const APP_VERSION = "v9446fc89";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
