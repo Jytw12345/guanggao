@@ -10849,6 +10849,21 @@ table.data.project-hours-diff thead th {
   font-size: 10px;
 }
 
+/* 有施工工时但项目未验收（无提成金额）：灰底虚线框 + ⏳ 标识 */
+.worker-cal-cell.pending-day {
+  background: #f1f5f9;
+  border: 1px dashed #94a3b8;
+}
+
+.worker-cal-cell.pending-day .day-num {
+  color: #64748b;
+}
+
+.worker-cal-cell .day-pending {
+  font-size: 10px;
+  line-height: 1;
+}
+
 .daily-hours-list {
   margin-top: 12px;
   padding-top: 12px;

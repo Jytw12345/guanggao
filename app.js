@@ -19985,12 +19985,20 @@ function renderStats() {
             const isLeaveDay = r.leaveRecords.some((lr) => dateKey >= lr.startDate && dateKey <= lr.endDate);
             const isRestDay = !isLeaveDay && (r.restRecords || []).some((lr) => dateKey >= lr.startDate && dateKey <= lr.endDate);
             const hasInternal = dayLogs.some(log => log.isInternal);
-            calGrid += `<div class="worker-cal-cell ${amt > 0 ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""} ${isRestDay ? "rest-day" : ""} ${hasInternal ? "internal-hours" : ""}"${amt > 0 ? ` data-wid="${esc(r.id)}" data-wname="${esc(r.name)}" onclick="showCommDayDetail(this,'${dateKey}')" title="点击查看当天提成明细"` : ""}>
+            // 有施工工时（非内部任务）但当天无提成金额 = 项目尚未验收，提成验收后才摊入当天
+            const isPendingDay = dayLogs.some(log => !log.isInternal) && amt <= 0 && !isLeaveDay && !isRestDay;
+            const cellTitle = amt > 0
+              ? `点击查看当天提成明细`
+              : isPendingDay
+                ? "当天有施工工时，项目未验收（验收后提成会计入当天）"
+                : "";
+            calGrid += `<div class="worker-cal-cell ${amt > 0 ? "has-hours" : ""} ${isLeaveDay ? "leave-day" : ""} ${isRestDay ? "rest-day" : ""} ${hasInternal ? "internal-hours" : ""} ${isPendingDay ? "pending-day" : ""}"${amt > 0 ? ` data-wid="${esc(r.id)}" data-wname="${esc(r.name)}" onclick="showCommDayDetail(this,'${dateKey}')"` : ""} title="${cellTitle}">
               <div class="day-num">${day}</div>
               ${amt > 0 ? `<div class="day-hours">¥${amt.toFixed(0)}</div>` : ""}
               ${hasInternal ? `<div class="day-internal">📋</div>` : ""}
               ${isLeaveDay ? `<div class="day-leave">🏥</div>` : ""}
               ${isRestDay ? `<div class="day-rest">🌴</div>` : ""}
+              ${isPendingDay ? `<div class="day-pending">⏳</div>` : ""}
             </div>`;
           }
           
@@ -30476,7 +30484,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v6d372094";
+  const APP_VERSION = "v33ba6a8c";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
