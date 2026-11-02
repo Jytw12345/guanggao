@@ -2559,8 +2559,10 @@ function resolveCommissionAlloc(p) {
   custom.forEach((c) => { if (c && c.workerId) customMap[c.workerId] = c; });
   const poolCents = Math.round(pool * 100);
   // 「分池权重」与「显示比例」分开算：权重喂给整数分最大余额法（Σ 恒 = pool），
-  // 比例仅作展示标签。avg 模式权重取 equalCommissionRatios（33/33/34）而非等权 [1,1,1]：
-  // 段宽标签就是 33/33/34，金额必须与标签同序，否则又出现「比例最大的人拿最少」。
+  // 比例仅作展示标签。avg 模式权重取**等权**：splitCentsByWeights 会精确均分
+  // （¥450÷3 → 人人 ¥150.00，尾差最多差 1 分），不再用 33/33/34 整数比例当权重——
+  // 那会把展示用的尾差百分比（34%）当真实权重，导致「平均分配」下最后一人多拿
+  // （¥153 vs ¥148.50）。比例标签用一位小数（33.3%），仅作展示。
   let weights = [];
   let ratioOf = [];
   if (mode === "custom_amount" && custom.length) {
@@ -2578,9 +2580,9 @@ function resolveCommissionAlloc(p) {
     weights = ratioSum > 0 ? ratios : internal.map(() => 1);
     ratioOf = internal.map((w) => ratioSum > 0 ? Math.round((ratioOfW(w) / ratioSum) * 1000) / 10 : Math.round(1000 / internal.length) / 10);
   } else {
-    // avg（或 custom 无保存记录）：内部工人等分池
-    weights = equalCommissionRatios(internal.length);
-    ratioOf = weights.slice();
+    // avg（或 custom 无保存记录）：内部工人精确均分
+    weights = internal.map(() => 1);
+    ratioOf = internal.map(() => Math.round(1000 / internal.length) / 10);
   }
   const centsArr = splitCentsByWeights(poolCents, weights);
   const items = internal.map((w, i) => ({
@@ -13752,7 +13754,12 @@ function renderCommissionPanel(p) {
     const it = alloc.items.find((i) => i.workerId === w.id);
     return it ? it.ratio : 0;
   });
-  const initialRatios = (mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length);
+  // avg 模式：比例标签用一位小数（33.3%），权重等权 → 段宽精确相等、金额精确均分；
+  // 不再用 33/33/34 整数比例（那是展示舍入，当真实权重会把尾差算成金额差）。
+  const avgInitialRatios = () => workers.map(() => Math.round(1000 / workers.length) / 10);
+  const initialRatios = mode === "avg"
+    ? avgInitialRatios()
+    : ((mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length));
   const savedAmounts = workers.map((w) => {
     const c = (Array.isArray(p.commissionCustom) ? p.commissionCustom : []).find((x) => x && x.workerId === w.id);
     return c && c.amount != null ? Math.max(0, Number(c.amount) || 0) : 0;
@@ -13775,7 +13782,7 @@ function renderCommissionPanel(p) {
     acc += pct;
     return `<div class="comm-seg" data-i="${i}" style="left:${left}%;width:${pct}%;background:${COMM_COLORS[i % COMM_COLORS.length]};">
       <span class="comm-seg-name">${esc(surname(w.name))}</span>
-      <span class="comm-seg-pct" id="commPct_${w.id}">${isAmountMode ? "¥" + barAmounts[i].toFixed(2) : commDisplayRatios(initialRatios)[i] + "%"}</span>
+      <span class="comm-seg-pct" id="commPct_${w.id}">${isAmountMode ? "¥" + barAmounts[i].toFixed(2) : (mode === "avg" ? initialRatios[i] + "%" : commDisplayRatios(initialRatios)[i] + "%")}</span>
     </div>`;
   }).join("");
   let acc2 = 0;
@@ -14160,7 +14167,11 @@ function renderCompleteCommission(p) {
     const it = alloc.items.find((i) => i.workerId === w.id);
     return it ? it.ratio : 0;
   });
-  const initialRatios = (mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length);
+  // avg 模式：比例标签用一位小数（33.3%），权重等权 → 段宽精确相等、金额精确均分（与详情页面板同口径）。
+  const avgInitialRatiosC = () => workers.map(() => Math.round(1000 / workers.length) / 10);
+  const initialRatios = mode === "avg"
+    ? avgInitialRatiosC()
+    : ((mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length));
   const savedAmounts = workers.map((w) => {
     const c = (Array.isArray(p.commissionCustom) ? p.commissionCustom : []).find((x) => x && x.workerId === w.id);
     return c && c.amount != null ? Math.max(0, Number(c.amount) || 0) : 0;
@@ -14182,7 +14193,7 @@ function renderCompleteCommission(p) {
     acc += pct;
     return `<div class="comm-seg" data-i="${i}" style="left:${left}%;width:${pct}%;background:${COMM_COLORS[i % COMM_COLORS.length]};">
       <span class="comm-seg-name">${esc(surname(w.name))}</span>
-      <span class="comm-seg-pct" id="commPctC_${w.id}">${isAmountMode ? "¥" + barAmounts[i].toFixed(2) : commDisplayRatios(initialRatios)[i] + "%"}</span>
+      <span class="comm-seg-pct" id="commPctC_${w.id}">${isAmountMode ? "¥" + barAmounts[i].toFixed(2) : (mode === "avg" ? initialRatios[i] + "%" : commDisplayRatios(initialRatios)[i] + "%")}</span>
     </div>`;
   }).join("");
   let acc2 = 0;
@@ -14416,7 +14427,7 @@ function commissionParticipants(p, mode) {
 /* 按 ids/ratios/pool 计算每人金额与分段宽度。
    注意：pool 传「扣除外协固定金额后的剩余池」——比例条只展示内部工人对剩余池的分配，段宽合计恒为 100%。
    金额用整数分最大余额法切分（Σ 恒 = pool，权重大者不少分）；权重与段宽同源（ratios），
-   avg 模式段宽 33/33/34 时金额也同序——不会再把尾差全额压给最后一段。 */
+   avg 模式传等权比例（33.3% 一位小数），段宽精确相等、金额精确均分。 */
 /* 按金额分配：某人金额占分成池的百分比文案（1 位小数，池为 0 时显示 0.0%） */
 function commPctStr(amount, pool) {
   const pct = pool > 0 ? ((Number(amount) || 0) / pool) * 100 : 0;
@@ -30465,7 +30476,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v58985477";
+  const APP_VERSION = "v6d372094";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
