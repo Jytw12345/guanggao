@@ -6851,6 +6851,15 @@ body.modal-open {
   font-weight: 600;
   color: #16a34a;
 }
+/* 多天分成图例：每人比例%（随金额/拖动实时刷新） */
+.comm-legend-pct {
+  font-size: 11px;
+  color: #64748b;
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
 /* 按金额分配：图例右侧「占比」列（金额已在输入框中，不再重复显示绿字金额） */
 .comm-legend-amt.comm-legend-pct {
   color: #2563eb;
@@ -7016,6 +7025,241 @@ body.modal-open {
 .commission-foot-note {
   font-size: 11px;
   color: #94a3b8;
+}
+/* ===== 方案A（2026-11-05）：已移除人员锁定份额 + 多天按天分池 ===== */
+.comm-removed-tag {
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  margin-left: 5px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+.comm-legend-item.is-removed .comm-legend-name,
+.comm-legend-item.is-removed .comm-legend-amt {
+  color: #94a3b8;
+}
+.comm-legend-item.is-removed .comm-legend-amt {
+  text-decoration: none;
+}
+/* 多天按天分池面板（每天一张卡片：头部行 + 分成色条 + 图例，与单天面板同款视觉） */
+.commission-days {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.comm-day {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px 10px;
+  background: #fff;
+}
+.comm-day-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.comm-day-date {
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  min-width: 64px;
+}
+/* 当天池金额编辑（可直接填写当天总额，其余天自动补齐） */
+.comm-day-pool-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #64748b;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.comm-day-pool-edit i {
+  font-style: normal;
+  font-weight: 700;
+  color: #16a34a;
+}
+.comm-day-pool-edit .comm-day-amt {
+  height: 26px;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #166534;
+  background: #f0fdf4;
+  border: 1.5px solid #16a34a;
+  border-radius: 6px;
+  width: 96px;
+}
+.comm-day-pct-show {
+  font-size: 11px;
+  color: #94a3b8;
+  min-width: 42px;
+  text-align: right;
+}
+.comm-day-pool {
+  font-size: 12px;
+  color: #64748b;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.comm-day-pool b {
+  color: #16a34a;
+}
+/* 当天分成色条（静态展示，无拖拽） */
+.comm-day-bar {
+  display: flex;
+  height: 24px;
+  margin-top: 8px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #f1f5f9;
+}
+.comm-day-seg {
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #fff;
+}
+.comm-day-seg .comm-seg-name {
+  font-weight: 600;
+}
+.comm-day-seg .comm-seg-amt {
+  font-variant-numeric: tabular-nums;
+}
+.comm-day-seg.is-removed {
+  color: #475569;
+}
+/* 色条分界拖动手柄（重叠在段边界上，悬停时显示白色抓握条） */
+.comm-day-hd {
+  width: 12px;
+  margin: 0 -6px;
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  cursor: col-resize;
+  touch-action: none;
+}
+.comm-day-hd::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  bottom: 18%;
+  width: 5px;
+  transform: translateX(-50%);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.22);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.comm-day-bar:hover .comm-day-hd::after,
+.comm-day-hd:active::after {
+  opacity: 1;
+}
+/* 当天人员图例行（复用 comm-legend-item 结构） */
+.comm-day-legend {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.comm-day-legend .comm-legend-item {
+  padding: 2px 0;
+}
+.comm-day-legend .comm-legend-amt {
+  margin-left: auto;
+}
+.comm-day-legend .comm-day-pratio,
+.comm-day-legend .comm-day-pamt {
+  width: 72px;
+  padding: 2px 6px;
+  font-size: 12px;
+  text-align: right;
+  height: auto;
+  margin-left: auto;
+}
+.comm-day-legend .comm-legend-item.is-removed .comm-day-pratio,
+.comm-day-legend .comm-legend-item.is-removed .comm-day-pamt {
+  color: #94a3b8;
+}
+.comm-day-sep {
+  margin: 0 6px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+/* 每天分配方式切换（均分/比例/金额）+ 逐人输入框显隐 */
+.comm-day-mode {
+  display: inline-flex;
+  gap: 0;
+  margin-left: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+.day-mode-btn {
+  border: none;
+  background: transparent;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #64748b;
+  cursor: pointer;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.day-mode-btn + .day-mode-btn {
+  border-left: 1px solid var(--border);
+}
+.day-mode-btn.active {
+  background: #eef2ff;
+  color: #4f46e5;
+  font-weight: 600;
+}
+/* 显隐兜底（行内样式为主，旧缓存 CSS 下也能正确隐藏） */
+.comm-day[data-dmode="avg"] .comm-day-pratio,
+.comm-day[data-dmode="avg"] .comm-day-pamt,
+.comm-day[data-dmode="custom"] .comm-day-pamt,
+.comm-day[data-dmode="custom_amount"] .comm-day-pratio {
+  display: none !important;
+}
+/* 统计页提成 chips 中的已移除人员 */
+.worker-chip.is-removed {
+  opacity: 0.72;
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+}
+.worker-chip.is-removed b {
+  color: #64748b;
+}
+@media (max-width: 480px) {
+  .comm-day {
+    padding: 6px 8px 8px;
+  }
+  .comm-day-pool,
+  .comm-day-pool-edit {
+    margin-left: 0;
+  }
+  .comm-day-pool-edit .comm-day-amt {
+    width: 72px !important;
+  }
+  .comm-day-legend .comm-day-pratio,
+  .comm-day-legend .comm-day-pamt {
+    width: 56px !important;
+  }
 }
 @media (max-width: 480px) {
   .comm-bar {

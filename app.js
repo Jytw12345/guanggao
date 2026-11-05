@@ -2539,25 +2539,58 @@ function splitCentsByWeights(totalCents, weights) {
   return out;
 }
 
-// 解析某项目的工人分成明细，返回 { mode, pool, items:[{workerId, workerName, ratio, amount, fixed}], total, outsourcedTotal }
-// 规则（2026-10-20 起）：
+/* 已移除工人的锁定份额项（方案A，2026-11-05）：
+   移除安装人员时把其当时的分成比例冻结写入 commissionCustom
+   （entry: { workerId, workerName, ratio, locked:true, removedAt }）。
+   - 锁定金额 = 当前池 × 锁定比例，随池缩放（改工程金额/成本扣项后同步增减）；
+   - 仅在工人「不在当前 assignedWorkerIds」时生效——重新分配回来则锁定自动失效，回到正常分配；
+   - 同一工人重复移除取最后一次锁定（unassignWorker 写入时已去重，此处兜底）。
+   返回 [{ workerId, workerName, ratio, amount, removed:true }]，amount 已落到分（Σ=锁定总额）。 */
+function commissionLockedEntries(p) {
+  if (!p || !Array.isArray(p.commissionCustom)) return [];
+  const pool = getCommissionPool(p);
+  const assigned = p.assignedWorkerIds || [];
+  const byId = {};
+  p.commissionCustom.forEach((c) => {
+    if (!c || !c.locked || !c.workerId) return;
+    if (assigned.includes(c.workerId)) return;
+    const prev = byId[c.workerId];
+    if (!prev || String(c.removedAt || "") >= String(prev.removedAt || "")) byId[c.workerId] = c;
+  });
+  return Object.keys(byId).map((wid) => {
+    const c = byId[wid];
+    const w = getWorker(wid);
+    const ratio = Math.round((Number(c.ratio) || 0) * 100) / 100;
+    const amount = pool > 0 ? Math.round((pool * ratio / 100) * 100) / 100 : 0;
+    return { workerId: wid, workerName: c.workerName || (w ? w.name : "已移除人员"), ratio, amount, removed: true };
+  });
+}
+
+// 解析某项目的工人分成明细，返回 { mode, pool, items:[{workerId, workerName, ratio, amount, fixed, removed}], total, outsourcedTotal }
+// 规则（2026-10-20 起；2026-11-05 增加移除锁定份额）：
 // - 分成池 = (工程金额 − Σ成本扣项) ÷ 2；**外协费用已计入成本扣项（cost_deductions 中 kind=outsourced）**，不再单独从池扣。
 // - 仅内部安装工人参与比例分配（avg 均分 / custom 比例 / custom_amount 金额）；外协人员不进比例条。
 // - custom 无保存记录（或无内部比例项）时，内部工人均分池作为默认起点。
 // - 旧数据（纯内部比例、合计 100 或≠100）完全兼容。
+// - 已移除工人的锁定份额优先从池中扣出（commissionLockedEntries），剩余池再分给当前在场人员；
+//   单天项目由此保证「移除不丢分成」；多天项目走 resolveCommissionDailyAlloc 按天分池。
 function resolveCommissionAlloc(p) {
   const internal = (p.assignedWorkerIds || [])
     .map((wid) => getWorker(wid))
     .filter(Boolean);
   const pool = getCommissionPool(p);
   const mode = p.commissionMode || "avg";
-  if (pool <= 0 || !internal.length) {
+  const lockedItems = commissionLockedEntries(p);
+  const lockedCents = lockedItems.reduce((s, it) => s + Math.round(it.amount * 100), 0);
+  if (pool <= 0 || (!internal.length && !lockedCents)) {
     return { mode, pool, items: [], total: 0, outsourcedTotal: 0 };
   }
   const custom = Array.isArray(p.commissionCustom) ? p.commissionCustom : [];
   const customMap = {};
   custom.forEach((c) => { if (c && c.workerId) customMap[c.workerId] = c; });
   const poolCents = Math.round(pool * 100);
+  // 剩余池 = 总池 − Σ锁定金额：当前在场人员只对剩余池分配
+  const remainingCents = Math.max(0, poolCents - lockedCents);
   // 「分池权重」与「显示比例」分开算：权重喂给整数分最大余额法（Σ 恒 = pool），
   // 比例仅作展示标签。avg 模式权重取**等权**：splitCentsByWeights 会精确均分
   // （¥450÷3 → 人人 ¥150.00，尾差最多差 1 分），不再用 33/33/34 整数比例当权重——
@@ -2584,18 +2617,154 @@ function resolveCommissionAlloc(p) {
     weights = internal.map(() => 1);
     ratioOf = internal.map(() => Math.round(1000 / internal.length) / 10);
   }
-  const centsArr = splitCentsByWeights(poolCents, weights);
-  const items = internal.map((w, i) => ({
+  const centsArr = splitCentsByWeights(remainingCents, weights);
+  // 锁定项在前（灰显「已移除」），当前在场人员分剩余池
+  const items = lockedItems.map((it) => ({
+    workerId: it.workerId,
+    workerName: it.workerName,
+    ratio: it.ratio,
+    amount: it.amount,
+    fixed: null,
+    removed: true,
+  })).concat(internal.map((w, i) => ({
     workerId: w.id,
     workerName: w.name,
     ratio: ratioOf[i] != null ? ratioOf[i] : 0,
     amount: centsArr[i] / 100,
     fixed: null,
-  }));
+  })));
   return {
     mode, pool, items,
-    total: centsArr.reduce((s, c) => s + c, 0) / 100,
+    total: (lockedCents + centsArr.reduce((s, c) => s + c, 0)) / 100,
     outsourcedTotal: 0,
+  };
+}
+
+/* 每日分成占比（多天项目手动调节用）：复用 commission_custom jsonb 存储
+   （entry: { dayRatios: { "2026-10-01": 50, ... } }，无 workerId → 旧逻辑按 workerId
+   取值时天然跳过，无需数据库新列）。返回 { date: percent }。 */
+function commissionDayRatiosOf(p) {
+  if (!p || !Array.isArray(p.commissionCustom)) return {};
+  const c = p.commissionCustom.find((x) => x && x.dayRatios && !x.workerId);
+  return (c && c.dayRatios) || {};
+}
+
+/* 每日人员分配覆盖（多天项目每天独立调节用）：复用 commission_custom jsonb 存储
+   （entry: { dayAllocs: { "<date>": { mode:"avg"|"custom"|"custom_amount",
+     entries:[{workerId, ratio?|amount?}] } } }，无 workerId → 旧逻辑天然跳过）。
+   仅对用户手动改过的天生效，未改的天沿用项目级分成方式，保持动态。返回 {date: override}。 */
+function commissionDayAllocsOf(p) {
+  if (!p || !Array.isArray(p.commissionCustom)) return {};
+  const c = p.commissionCustom.find((x) => x && x.dayAllocs && !x.workerId);
+  return (c && c.dayAllocs) || {};
+}
+
+/* 多天项目「按天分池」模型（2026-11-05）：
+   - 总池先按「每天占比」切成各天池：默认占比 = 当天内部人员考勤工时合计占比，
+     可被 commissionDayRatios 手动覆盖（各天占比归一化）；
+   - 每天池分给「当天有考勤工时的内部人员」（含已移除但当天在场的工人——移除不抹掉已施工天的分成）；
+   - 当天内按项目分成方式切分：avg=当天在场者均分；custom=各人比例（含锁定者的冻结比例）归一；
+     custom_amount=各人金额归一。
+   单天项目（考勤日期 < 2 天）不走此模型（走 resolveCommissionAlloc + 锁定份额）。
+   返回 null（不具备多天条件）或：
+   { mode, pool, days:[{date,cents,pct}], perDay:{date:{wid:amt}}, items:[{...同单天项, perDay:{date:amt}}], total } */
+function resolveCommissionDailyAlloc(p) {
+  if (!p) return null;
+  const pool = getCommissionPool(p);
+  const mode = p.commissionMode || "avg";
+  if (pool <= 0) return null;
+  // 各天各内部人员的考勤工时（手动登记 + 自动考勤都落在 workLogs）
+  const hours = {};
+  (p.workLogs || []).forEach((l) => {
+    if (!l || !l.date || !l.workerId || l.isOutsourced || String(l.workerId).startsWith("outsourced:")) return;
+    const h = Number(l.hours) || 0;
+    if (h <= 0) return;
+    hours[l.date] = hours[l.date] || {};
+    hours[l.date][l.workerId] = (hours[l.date][l.workerId] || 0) + h;
+  });
+  const dates = Object.keys(hours).filter((d) => {
+    const o = hours[d];
+    for (const k in o) if (o[k] > 0) return true;
+    return false;
+  }).sort();
+  if (dates.length < 2) return null;
+  const custom = Array.isArray(p.commissionCustom) ? p.commissionCustom : [];
+  const assignedIds = p.assignedWorkerIds || [];
+  const lockedIds = new Set(custom.filter((c) => c && c.locked && c.workerId && !assignedIds.includes(c.workerId)).map((c) => c.workerId));
+  // 每天占比：默认=当天考勤工时合计；手动覆盖（归一化交给 splitCentsByWeights）
+  let weights = dates.map((d) => Object.keys(hours[d]).reduce((s, wid) => s + hours[d][wid], 0));
+  const ov = commissionDayRatiosOf(p);
+  const ovs = dates.map((d) => Number(ov[d]) || 0);
+  if (ovs.reduce((s, v) => s + v, 0) > 0) weights = ovs;
+  const poolCents = Math.round(pool * 100);
+  const dayCents = splitCentsByWeights(poolCents, weights);
+  const acc = {}; // {wid: {totalCents, perDayCents:{date:cents}}}
+  const dayAllocs = commissionDayAllocsOf(p);
+  dates.forEach((d, di) => {
+    const parts = Object.keys(hours[d]).filter((wid) => hours[d][wid] > 0);
+    if (!parts.length || !(dayCents[di] > 0)) return;
+    // 当天方式：优先用户当天手动覆盖（dayAllocs）；
+    // 默认「hours」= 按当日出勤工时加权（含已移除但在场者，出勤多久分多少）
+    const dayOv = dayAllocs[d];
+    const effMode = (dayOv && dayOv.mode) || "hours";
+    let w2;
+    if (effMode === "custom_amount" || effMode === "custom") {
+      const em = {};
+      (dayOv && Array.isArray(dayOv.entries) ? dayOv.entries : []).forEach((en) => { if (en && en.workerId) em[en.workerId] = en; });
+      const vals = parts.map((wid) => effMode === "custom_amount"
+        ? (Number(em[wid] && em[wid].amount) || 0)
+        : (Number(em[wid] && em[wid].ratio) || 0));
+      // 无有效数值时回退当日工时加权，避免有人分 0
+      w2 = vals.reduce((s, v) => s + v, 0) > 0 ? vals : parts.map((wid) => hours[d][wid]);
+    } else if (effMode === "avg") {
+      w2 = parts.map(() => 1); // 均分：当天在场者平分当天池
+    } else {
+      w2 = parts.map((wid) => hours[d][wid]); // hours：当日出勤工时加权（默认）
+    }
+    const cents = splitCentsByWeights(dayCents[di], w2);
+    parts.forEach((wid, k) => {
+      if (!acc[wid]) acc[wid] = { totalCents: 0, perDayCents: {} };
+      acc[wid].totalCents += cents[k];
+      acc[wid].perDayCents[d] = (acc[wid].perDayCents[d] || 0) + cents[k];
+    });
+  });
+  if (!Object.keys(acc).length) return null;
+  const removedNames = {};
+  custom.forEach((c) => { if (c && c.locked && c.workerName) removedNames[c.workerId] = c.workerName; });
+  const perDay = {}; // {date: {wid: amt(元)}} 供 commissionDaily 直接使用
+  const items = Object.keys(acc).map((wid) => {
+    const w = getWorker(wid);
+    const a = acc[wid];
+    const perDayAmt = {};
+    Object.keys(a.perDayCents).forEach((d) => {
+      perDayAmt[d] = a.perDayCents[d] / 100;
+      (perDay[d] = perDay[d] || {})[wid] = a.perDayCents[d] / 100;
+    });
+    return {
+      workerId: wid,
+      workerName: (w && w.name) || removedNames[wid] || "未知",
+      ratio: poolCents > 0 ? Math.round((a.totalCents / poolCents) * 1000) / 10 : 0,
+      amount: a.totalCents / 100,
+      fixed: null,
+      removed: lockedIds.has(wid) || !assignedIds.includes(wid),
+      perDay: perDayAmt,
+    };
+  }).sort((a, b) => (a.removed === b.removed)
+    ? String(a.workerName).localeCompare(String(b.workerName), "zh-CN")
+    : (a.removed ? 1 : -1));
+  return {
+    mode, pool, dates,
+    days: dates.map((d, i) => ({
+      date: d,
+      cents: dayCents[i],
+      pct: poolCents > 0 ? Math.round((dayCents[i] / poolCents) * 1000) / 10 : 0,
+      mode: (dayAllocs[d] && dayAllocs[d].mode) || "hours", // 当天生效的分配方式（默认按出勤工时）
+    })),
+    dayAllocs, // 当天手动覆盖（供面板回填输入框默认值）
+    dayHours: hours, // {date:{wid:h}} 当天各人出勤工时（面板展示/说明占比来源）
+    perDay,
+    items,
+    total: poolCents / 100,
   };
 }
 
@@ -2613,7 +2782,7 @@ function sumWorkerCommission(workerId, projects) {
   let total = 0;
   list.forEach((p) => {
     if (!isCommissionCounted(p)) return;
-    if (!(p.assignedWorkerIds || []).includes(workerId)) return;
+    // 不再按 assignedWorkerIds 前置过滤：已移除工人的锁定份额/按天在场分成也要计入（2026-11-05）
     const alloc = resolveCommissionAlloc(p);
     const it = alloc.items.find((i) => i.workerId === workerId);
     if (it) total += it.amount;
@@ -2637,6 +2806,14 @@ function commissionDaily(p) {
     out[date] = out[date] || {};
     out[date][wid] = (out[date][wid] || 0) + amt;
   };
+  // 多天项目：按天分池模型（每天池分给当天有考勤的人，含已移除但在场者），与分成面板同源
+  const dailyAlloc = resolveCommissionDailyAlloc(p);
+  if (dailyAlloc) {
+    Object.keys(dailyAlloc.perDay).forEach((d) => {
+      Object.keys(dailyAlloc.perDay[d]).forEach((wid) => add(d, wid, dailyAlloc.perDay[d][wid]));
+    });
+    return out;
+  }
   // 无考勤兜底：项目各施工分段涉及的自然日
   let segDates = [];
   try {
@@ -13741,12 +13918,431 @@ function todaySchedule() {
   renderConstruction();
 }
 
+/* 「2026-10-01」→「10月01日」（每日分池行显示） */
+function commDayLabel(ds) {
+  const m = String(ds || "").match(/^\d{4}-(\d{2})-(\d{2})$/);
+  return m ? `${parseInt(m[1], 10)}月${parseInt(m[2], 10)}日` : String(ds || "");
+}
+
+/* 多天项目按天分池面板（详情页 renderCommissionPanel 与完工弹窗 renderCompleteCommission 共用）。
+   每天一行：日期 + 占比输入（可编辑，保存为 commissionDayRatios）+ 当天池金额 + 当天人员分成；
+   当天人员含已移除但在场的工人（灰标）。人员级分成方式（avg/custom/custom_amount）作用于每天内部。 */
+function renderCommissionMultiDayPanel(p, da, opts) {
+  const canEdit = !!(opts && opts.canEdit);
+  const isDetail = !opts || opts.variant !== "complete";
+  const pool = da.pool;
+  const infoHtml = isDetail ? `
+    <div class="money-chain">
+      <span class="money-chain__tag">${esc(p.contractType || "包工")}</span>
+      <span class="money-chain__step"><i>工程金额</i><b>¥${(Number(p.projectAmount) || 0).toFixed(2)}</b></span>
+      <span class="money-chain__arrow">→</span>
+      <span class="money-chain__step"><i>工费</i><b>¥${getLaborFee(p).toFixed(2)}</b></span>
+      <span class="money-chain__arrow">→</span>
+      <span class="money-chain__step is-pool"><i>工人分成池</i><b>¥${pool.toFixed(2)}</b></span>
+    </div>
+    <div class="money-chain__note">跨天施工按天分池：每人默认按当日出勤工时占比分摊当天池，含已移除但当天在场的工人</div>` : `
+    <div class="info-grid">
+      <div class="info-item"><div class="k">包活方式</div><div class="v">${esc(p.contractType || "包工")}</div></div>
+      <div class="info-item"><div class="k">工程金额</div><div class="v">¥${(Number(p.projectAmount) || 0).toFixed(2)}</div></div>
+      <div class="info-item"><div class="k">工费</div><div class="v">¥${getLaborFee(p).toFixed(2)}</div></div>
+      <div class="info-item"><div class="k">工人分成池</div><div class="v" style="color:#16a34a;font-weight:600">¥${pool.toFixed(2)}</div></div>
+    </div>`;
+  // 多天按天分池：分配方式下沉到「每天」独立选择（默认按当日出勤工时），不再用项目级单选
+  const COMM_COLORS = ['#16a34a', '#2563eb', '#d97706', '#db2777', '#7c3aed', '#0891b2', '#dc2626', '#65a30d', '#ca8a04', '#0d9488'];
+  const dayRows = da.days.map((day) => {
+    const dayPool = day.cents / 100;
+    const parts = Object.keys(da.perDay[day.date] || {}).map((wid) => {
+      const it = da.items.find((x) => x.workerId === wid);
+      return { wid, name: it ? it.workerName : "未知", amt: da.perDay[day.date][wid], removed: !!(it && it.removed) };
+    }).sort((a, b) => (a.removed === b.removed) ? String(a.name).localeCompare(String(b.name), "zh-CN") : (a.removed ? 1 : -1));
+    // 当天手动覆盖的已存值（回填输入框默认值）
+    const dayOv = (da.dayAllocs && da.dayAllocs[day.date]) || null;
+    const ovMap = {};
+    if (dayOv && Array.isArray(dayOv.entries)) dayOv.entries.forEach((en) => { if (en && en.workerId) ovMap[en.workerId] = en; });
+    // 每天一条分成色条 + 图例行（与单天面板同款视觉）；段内显示姓氏+金额，可编辑时段间加拖动手柄
+    const surname = (nm) => (nm && nm.trim() ? nm.trim().charAt(0) : "?");
+    const segs = parts.map((m, i) => {
+      const w = dayPool > 0 ? (m.amt / dayPool) * 100 : 0;
+      const seg = `<div class="comm-day-seg${m.removed ? " is-removed" : ""}" data-wid="${m.wid}" style="width:${w}%;background:${m.removed ? "#cbd5e1" : COMM_COLORS[i % COMM_COLORS.length]}"><span class="comm-seg-name">${esc(surname(m.name))}</span><span class="comm-seg-amt">¥${m.amt.toFixed(2)}</span></div>`;
+      const hd = canEdit && i < parts.length - 1
+        ? `<div class="comm-day-hd" data-i="${i}" title="左右拖动调整两侧人员分成" onpointerdown="commDayHandleDown(event, this)"></div>`
+        : "";
+      return seg + hd;
+    }).join("");
+    const members = parts.map((m, i) => {
+      const color = m.removed ? "#94a3b8" : COMM_COLORS[i % COMM_COLORS.length];
+      const h = (da.dayHours && da.dayHours[day.date] && da.dayHours[day.date][m.wid]) || 0;
+      const hrsTxt = h > 0 ? `<span class="comm-legend-hrs" title="当日出勤工时">${h % 1 === 0 ? h : h.toFixed(1)}h</span>` : "";
+      const pctTxt = dayPool > 0 ? Math.round((m.amt / dayPool) * 1000) / 10 : 0;
+      if (!canEdit) {
+        return `<div class="comm-legend-item${m.removed ? " is-removed" : ""}">
+          <span class="comm-dot" style="background:${color}"></span>
+          <span class="comm-legend-name">${esc(m.name)}${m.removed ? '<i class="comm-removed-tag">已移除</i>' : ""}</span>
+          ${hrsTxt}
+          <span class="comm-legend-pct">${pctTxt}%</span>
+          <span class="comm-legend-amt">¥${m.amt.toFixed(2)}</span>
+        </div>`;
+      }
+      const saved = ovMap[m.wid] || {};
+      const ratioVal = saved.ratio != null ? saved.ratio : (dayPool > 0 ? Math.round((m.amt / dayPool) * 1000) / 10 : 0);
+      const amtVal = saved.amount != null ? saved.amount : Math.round(m.amt * 100) / 100;
+      // 两种输入框都渲染（显隐由 data-dmode + 行内样式双重控制）；改动一人时其余人自动补齐
+      // data-amt=当前展示金额（拖动条用）；data-def-amt=按当日工时加权的默认金额（切回「工时」时还原）
+      return `<div class="comm-legend-item${m.removed ? " is-removed" : ""}" data-wid="${m.wid}" data-amt="${amtVal}" data-def-amt="${Math.round(m.amt * 100) / 100}">
+        <span class="comm-dot" style="background:${color}"></span>
+        <span class="comm-legend-name">${esc(m.name)}${m.removed ? '<i class="comm-removed-tag">已移除</i>' : ""}</span>
+        ${hrsTxt}
+        <input class="input comm-day-pratio" type="number" min="0" max="100" step="0.1" value="${ratioVal}" data-def="${ratioVal}" title="当天比例%（改动后其余人自动补齐100%）" oninput="onCommDayPersonInput(this)"${day.mode === "custom" ? "" : ' style="display:none"'} />
+        <input class="input comm-day-pamt" type="number" min="0" step="0.01" value="${amtVal}" data-def="${amtVal}" title="当天金额¥（改动后其余人自动补齐当天池）" oninput="onCommDayPersonInput(this)"${day.mode === "custom_amount" ? "" : ' style="display:none"'} />
+        <span class="comm-legend-pct">${pctTxt}%</span>
+        <span class="comm-legend-amt">¥${m.amt.toFixed(2)}</span>
+      </div>`;
+    }).join("");
+    const dayPoolCtrl = canEdit
+      ? `<span class="comm-day-pool-edit"><i>当天池</i> ¥<input class="input comm-day-amt" type="number" min="0" step="0.01" value="${dayPool.toFixed(2)}" data-date="${day.date}" data-def="${dayPool.toFixed(2)}" style="text-align:right;" oninput="onCommDayPoolInput(this)" /><span class="comm-day-pct-show">${day.pct}%</span></span>`
+      : `<span class="comm-day-pool">当天池 <b>¥${dayPool.toFixed(2)}</b>（${day.pct}%）</span>`;
+    const modeBtns = canEdit ? `<span class="comm-day-mode">` + [
+      ["hours", "工时"], ["avg", "均分"], ["custom", "比例"], ["custom_amount", "金额"],
+    ].map(([m, label]) => `<button type="button" class="day-mode-btn${day.mode === m ? " active" : ""}" data-m="${m}" onclick="setCommDayMode(this)">${label}</button>`).join("") + `</span>` : "";
+    return `<div class="comm-day" data-date="${day.date}" data-dmode="${day.mode}" data-pool="${dayPool}">
+      <div class="comm-day-row">
+        <span class="comm-day-date">${commDayLabel(day.date)}</span>
+        ${dayPoolCtrl}
+        ${modeBtns}
+      </div>
+      <div class="comm-day-bar">${segs}</div>
+      <div class="comm-day-legend">${members || '<span class="comm-day-sep">当天无内部人员考勤</span>'}</div>
+    </div>`;
+  }).join("");
+  const dayHint = canEdit
+    ? `<p class="hint" style="margin:6px 0 0;color:#64748b;">每人默认按<b>当日出勤工时</b>占比分摊当天池（含已移除但在场者）；每天可切换「工时/均分/比例/金额」并逐人调节，未改动的天保持按工时分摊，${isDetail ? "点「保存分成」生效" : "确认完工时生效"}。</p>`
+    : `<p class="hint" style="margin:6px 0 0;color:#64748b;">跨天施工按天分池，每天池分给当天在场人员（默认按当日出勤工时占比）。</p>`;
+  const footHtml = `<div class="commission-foot">
+    <span>合计 <b class="comm-total-amt">¥${pool.toFixed(2)}</b> · ${da.days.length} 天</span>
+    <span class="commission-foot-note">${da.items.filter((i) => i.removed).length > 0 ? "含已移除人员当天在场分成" : ""}</span>
+  </div>`;
+  const saveBtn = (isDetail && canEdit) ? `<button class="btn small primary comm-save-btn" id="commSaveBtn" onclick="saveCommissionAlloc('${p.id}')">💾 保存分成</button>` : "";
+  const headHtml = isDetail
+    ? `<div class="commission-head"><h3>💰 包活分成</h3>${saveBtn}</div>`
+    : `<h3>💰 包活分成</h3>`;
+  return `<div class="detail-block commission-panel" id="${isDetail ? "commissionPanelWrap" : ""}">
+    ${headHtml}
+    ${infoHtml}
+    <div class="commission-days" data-total="${pool}">${dayRows}</div>
+    ${isDetail ? "" : footHtml}
+    ${dayHint}
+  </div>`;
+}
+
+/* 切换某一天的分配方式（均分/比例/金额）：仅改当天行 data-dmode 控制输入框显隐，
+   保存时只对「方式与项目级不同或有人工改动」的天落库覆盖（dayAllocs） */
+function setCommDayMode(btn) {
+  const day = btn.closest(".comm-day");
+  if (!day) return;
+  day.dataset.dmode = btn.dataset.m;
+  day.querySelectorAll(".day-mode-btn").forEach((b) => b.classList.toggle("active", b === btn));
+  // 切换方式 → 重置手动锁定标记（重新以新方式的默认值为起点）
+  day.querySelectorAll(".comm-legend-item[data-wid]").forEach((el) => { delete el.dataset.touched; });
+  // 行内样式同步显隐（不完全依赖 CSS，避免旧缓存下比例/金额输入框同时显示）
+  day.querySelectorAll(".comm-legend-item[data-wid]").forEach((el) => {
+    const r = el.querySelector(".comm-day-pratio");
+    const a = el.querySelector(".comm-day-pamt");
+    if (r) r.style.display = btn.dataset.m === "custom" ? "" : "none";
+    if (a) a.style.display = btn.dataset.m === "custom_amount" ? "" : "none";
+  });
+  recalcDayPreview(day); // 切换方式后立即按新方式重算金额/色条展示（如均分→平分当天池）
+}
+
+/* 按当天当前模式重算每人金额并同步展示：
+   hours=按当日工时加权（随池归一化缩放）；avg=均分；
+   custom=比例×当天池；custom_amount=直接用输入金额。
+   avg/hours 末位吸收舍入差，保证展示 Σ=当天池 */
+function recalcDayPreview(day) {
+  if (!day) return;
+  const pool = Number(day.dataset.pool) || 0;
+  const mode = day.dataset.dmode || "hours";
+  const items = Array.from(day.querySelectorAll(".comm-legend-item[data-wid]"));
+  const n = items.length;
+  if (!n) return;
+  let amts;
+  if (mode === "avg") {
+    amts = items.map(() => pool / n);
+  } else if (mode === "hours") {
+    const defs = items.map((el) => Number(el.dataset.defAmt) || 0);
+    const s = defs.reduce((a, b) => a + b, 0);
+    amts = s > 0 ? defs.map((v) => pool * (v / s)) : items.map(() => pool / n);
+  } else if (mode === "custom") {
+    amts = items.map((el) => {
+      const r = el.querySelector(".comm-day-pratio");
+      return pool * ((Number(r && r.value) || 0) / 100);
+    });
+  } else {
+    amts = items.map((el) => {
+      const a = el.querySelector(".comm-day-pamt");
+      return Number(a && a.value) || 0;
+    });
+    items.forEach((el, i) => applyCommDayAmt(day, el, amts[i]));
+    return; // 金额模式以输入为准，不做归一
+  }
+  const rounded = amts.map((v) => Math.max(0, Math.round(v * 100) / 100));
+  const rest = Math.round((pool - rounded.slice(0, -1).reduce((a, b) => a + b, 0)) * 100) / 100;
+  if (rest >= 0) rounded[n - 1] = rest; // 末位吸收舍入差
+  items.forEach((el, i) => applyCommDayAmt(day, el, rounded[i]));
+}
+
+/* 把某人当前金额写回展示：data-amt、¥ 标签、比例%、色条段宽 */
+function applyCommDayAmt(day, item, amt) {
+  if (!item) return;
+  const v = Math.max(0, Math.round((Number(amt) || 0) * 100) / 100);
+  item.dataset.amt = String(v);
+  const pool = Number(day.dataset.pool) || 0;
+  const label = item.querySelector(".comm-legend-amt");
+  if (label) label.textContent = "¥" + v.toFixed(2);
+  const pctEl = item.querySelector(".comm-legend-pct");
+  if (pctEl) pctEl.textContent = (pool > 0 ? Math.round((v / pool) * 1000) / 10 : 0) + "%";
+  const seg = day.querySelector('.comm-day-seg[data-wid="' + item.dataset.wid + '"]');
+  if (seg) {
+    seg.style.width = (pool > 0 ? (v / pool) * 100 : 0) + "%";
+    const segAmt = seg.querySelector(".comm-seg-amt");
+    if (segAmt) segAmt.textContent = "¥" + v.toFixed(2);
+  }
+}
+
+/* 拖动色条分界手柄：调整相邻两人金额（此消彼长，当天总额不变），松手自动落为「金额」模式 */
+let commDayDrag = null;
+function commDayHandleDown(e, h) {
+  const bar = h.closest(".comm-day-bar");
+  const day = h.closest(".comm-day");
+  if (!bar || !day || !(Number(day.dataset.pool) > 0)) return;
+  const idx = Number(h.dataset.i);
+  const segs = Array.from(bar.querySelectorAll(".comm-day-seg"));
+  const items = Array.from(day.querySelectorAll(".comm-legend-item[data-wid]"));
+  const leftItem = items.find((el) => el.dataset.wid === (segs[idx] && segs[idx].dataset.wid));
+  const rightItem = items.find((el) => el.dataset.wid === (segs[idx + 1] && segs[idx + 1].dataset.wid));
+  if (!leftItem || !rightItem) return;
+  e.preventDefault();
+  commDayDrag = {
+    day, leftItem, rightItem,
+    pool: Number(day.dataset.pool) || 0,
+    startX: e.clientX,
+    barW: bar.getBoundingClientRect().width,
+    startLeft: Number(leftItem.dataset.amt) || 0,
+    startRight: Number(rightItem.dataset.amt) || 0,
+  };
+  document.addEventListener("pointermove", commDayHandleMove);
+  document.addEventListener("pointerup", commDayHandleUp);
+}
+function commDayHandleMove(e) {
+  const d = commDayDrag;
+  if (!d) return;
+  const total = d.startLeft + d.startRight;
+  const delta = (e.clientX - d.startX) / (d.barW || 1) * d.pool; // 像素位移 → 金额
+  const left = Math.min(total, Math.max(0, Math.round((d.startLeft + delta) * 100) / 100));
+  applyCommDayAmt(d.day, d.leftItem, left);
+  applyCommDayAmt(d.day, d.rightItem, Math.round((total - left) * 100) / 100);
+}
+function commDayHandleUp() {
+  const d = commDayDrag;
+  commDayDrag = null;
+  document.removeEventListener("pointermove", commDayHandleMove);
+  document.removeEventListener("pointerup", commDayHandleUp);
+  if (!d) return;
+  // 松手 → 该天落为「金额」模式：各人金额输入框与色条/展示同步，保存时按金额口径收集
+  const day = d.day;
+  day.dataset.dmode = "custom_amount";
+  day.querySelectorAll(".day-mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.m === "custom_amount"));
+  day.querySelectorAll(".comm-legend-item[data-wid]").forEach((el) => {
+    const r = el.querySelector(".comm-day-pratio");
+    const a = el.querySelector(".comm-day-pamt");
+    if (a) { a.value = (Number(el.dataset.amt) || 0).toFixed(2); a.style.display = ""; }
+    if (r) r.style.display = "none";
+  });
+  // 拖动过的两人视为手动锁定（之后再改别人时保持他们不动）
+  if (d.leftItem) d.leftItem.dataset.touched = "1";
+  if (d.rightItem) d.rightItem.dataset.touched = "1";
+}
+
+/* 修改当天池金额：其余天按当前占比自动补齐，保证每天金额合计恒等于分成池总额；
+   占比展示同步换算，回写 data-pool 供当天逐人自动补齐使用 */
+function onCommDayPoolInput(inp) {
+  const daysWrap = inp.closest(".commission-days");
+  const day = inp.closest(".comm-day");
+  if (!day) return;
+  const total = Number(daysWrap && daysWrap.dataset.total) || 0;
+  const amt = Math.max(0, Number(inp.value) || 0);
+  day.dataset.pool = String(amt);
+  const showPct = (row, v) => {
+    const el = row.querySelector(".comm-day-pct-show");
+    if (el) el.textContent = (total > 0 ? Math.round((v / total) * 1000) / 10 : 0) + "%";
+  };
+  showPct(day, amt);
+  recalcDayPreview(day); // 当天人员金额随新池重算（工时/均分模式自动缩放）
+  const rows = daysWrap
+    ? Array.from(daysWrap.querySelectorAll(".comm-day")).map((r) => ({ r, inp: r.querySelector(".comm-day-amt") })).filter((x) => x.inp)
+    : [];
+  const others = rows.filter((x) => x.inp !== inp);
+  if (!others.length || !(total > 0)) return;
+  const rest = Math.max(0, Math.round((total - amt) * 100) / 100);
+  const setVal = (x, v) => { x.inp.value = v; x.r.dataset.pool = String(v); showPct(x.r, v); recalcDayPreview(x.r); };
+  const othersSum = others.reduce((s, x) => s + (Math.max(0, Number(x.inp.value) || 0)), 0);
+  if (othersSum <= 0) {
+    // 其余天无值：均分剩余金额（末位吸收舍入差）
+    const each = Math.round((rest / others.length) * 100) / 100;
+    others.forEach((x, i) => setVal(x, i === others.length - 1 ? Math.round((rest - each * (others.length - 1)) * 100) / 100 : each));
+    return;
+  }
+  // 其余天按当前值占比缩放补齐（末位吸收舍入差）
+  let acc = 0;
+  others.forEach((x, i) => {
+    if (i === others.length - 1) { setVal(x, Math.round((rest - acc) * 100) / 100); return; }
+    const v = Math.round(rest * ((Math.max(0, Number(x.inp.value) || 0)) / othersSum) * 100) / 100;
+    acc += v;
+    setVal(x, v);
+  });
+}
+
+/* 逐人金额/比例改动 → 其余人按当前占比自动补齐（金额补齐到当天池，比例补齐到100%），
+   保证保存时总额恒等于当天池，无需手动画差额 */
+function onCommDayPersonInput(inp) {
+  const item = inp.closest(".comm-legend-item");
+  const day = inp.closest(".comm-day");
+  if (!item || !day) return;
+  const pool = Number(day.dataset.pool) || 0;
+  const isAmt = inp.classList.contains("comm-day-pamt");
+  if (isAmt && !(pool > 0)) { syncDayAmtLabels(day); return; }
+  item.dataset.touched = "1"; // 手动改过的人锁定，之后再改别人也不会重算他
+  const rows = Array.from(day.querySelectorAll(".comm-legend-item[data-wid]")).map((el) => ({
+    el,
+    inp: el.querySelector(isAmt ? ".comm-day-pamt" : ".comm-day-pratio"),
+  })).filter((x) => x.inp);
+  if (rows.length < 2) { syncDayAmtLabels(day); return; }
+  const others = rows.filter((x) => x.inp !== inp);
+  const locked = others.filter((x) => x.el.dataset.touched === "1"); // 之前手动改过的人（保持不动）
+  const free = others.filter((x) => x.el.dataset.touched !== "1"); // 未动过的人（自动补齐对象）
+  const total = isAmt ? pool : 100; // 金额补齐到当天池；比例补齐到100
+  const v = Math.max(0, Number(inp.value) || 0);
+  const rest = total - (v + locked.reduce((s, x) => s + (Number(x.inp.value) || 0), 0));
+  const freeSum = free.reduce((s, x) => s + (Number(x.inp.value) || 0), 0);
+  if (rest < 0) {
+    free.forEach((x) => { x.inp.value = 0; }); // 已锁定者+当前值超总额：未动者归0，保存校验会拦截
+  } else if (freeSum <= 0) {
+    const unit = isAmt ? 100 : 10;
+    const each = Math.round((rest / free.length) * unit) / unit;
+    free.forEach((x, i) => {
+      x.inp.value = i === free.length - 1
+        ? Math.round((rest - each * (free.length - 1)) * unit) / unit
+        : each;
+    });
+  } else {
+    let acc = 0;
+    const unit = isAmt ? 100 : 10;
+    free.forEach((x, i) => {
+      if (i === free.length - 1) {
+        x.inp.value = Math.round((rest - acc) * unit) / unit; // 末位吸收舍入差
+        return;
+      }
+      const val = Math.round((rest * ((Number(x.inp.value) || 0) / freeSum)) * unit) / unit;
+      acc += val;
+      x.inp.value = val;
+    });
+  }
+  // 其他人全部已手动锁定时不再动他们，总额差额由保存校验提示
+  syncDayAmtLabels(day);
+}
+
+/* 同步某天图例行的展示金额（¥xx）与输入框一致，改完即可见 */
+function syncDayAmtLabels(day) {
+  if (!day) return;
+  const pool = Number(day.dataset.pool) || 0;
+  day.querySelectorAll(".comm-legend-item[data-wid]").forEach((el) => {
+    const amtInp = el.querySelector(".comm-day-pamt");
+    const ratioInp = el.querySelector(".comm-day-pratio");
+    const label = el.querySelector(".comm-legend-amt");
+    if (!label) return;
+    let v = null;
+    if (amtInp && amtInp.style.display !== "none") v = Number(amtInp.value) || 0;
+    else if (ratioInp && ratioInp.style.display !== "none") v = Math.round((pool * ((Number(ratioInp.value) || 0) / 100)) * 100) / 100;
+    if (v != null) {
+      label.textContent = "¥" + v.toFixed(2);
+      el.dataset.amt = String(v);
+      const pctEl = el.querySelector(".comm-legend-pct");
+      if (pctEl) pctEl.textContent = (pool > 0 ? Math.round((v / pool) * 1000) / 10 : 0) + "%";
+    }
+  });
+}
+
+/* 收集每日分池输入（详情页/完工弹窗共用）。返回 null（非每日面板）或
+   { dayRatios, dayAllocs, resetDays, error }：
+   - dayRatios：每天占池比（由当天池金额换算），仅有人工改动才返回（未动 → null，保持按考勤工时自动切分）；
+   - dayAllocs：仅收集「切到非默认方式」的天（默认=hours 按当日出勤工时）；
+   - resetDays：切回「工时」默认的天，调用方删除这些天的已有覆盖，保持动态；
+   - error：校验失败提示（每天金额合计=分成池总额；覆盖天的比例合计=100%、金额合计=当天池）。 */
+function collectCommissionDayInputs(rootSel, projMode, pool) {
+  const root = document.querySelector(rootSel);
+  const rows = root ? Array.from(root.querySelectorAll(".comm-day[data-date]")) : [];
+  if (!rows.length) return null;
+  const pm = "hours"; // 每天默认方式：按当日出勤工时加权
+  const dayRatios = {};
+  const dayAmts = {};
+  const dayAllocs = {};
+  const resetDays = [];
+  let amtChanged = false;
+  let amtSum = 0;
+  rows.forEach((row) => {
+    const date = row.dataset.date;
+    const amtEl = row.querySelector(".comm-day-amt");
+    const dayAmt = amtEl
+      ? Math.max(0, Math.round((Number(amtEl.value) || 0) * 100) / 100)
+      : Math.max(0, Number(row.dataset.pool) || 0); // 只读视图无输入框
+    if (amtEl && Math.abs(dayAmt - (Number(amtEl.dataset.def) || 0)) > 0.005) amtChanged = true;
+    dayRatios[date] = pool > 0 ? Math.round((dayAmt / pool) * 1000) / 10 : 0;
+    dayAmts[date] = dayAmt;
+    amtSum = Math.round((amtSum + dayAmt) * 100) / 100;
+    const dmode = row.dataset.dmode || pm;
+    if (dmode === pm) { resetDays.push(date); return; } // 切回默认 → 删除该天已有覆盖
+    if (dmode === "avg") { dayAllocs[date] = { mode: "avg", entries: [] }; return; } // 均分无需 entries（隐藏的比例输入框旧值不入库）
+    const entries = [];
+    row.querySelectorAll(".comm-legend-item[data-wid]").forEach((el) => {
+      const isAmt = dmode === "custom_amount";
+      const inp = el.querySelector(isAmt ? ".comm-day-pamt" : ".comm-day-pratio");
+      if (!inp) return;
+      const val = Math.round((Number(inp.value) || 0) * (isAmt ? 100 : 10)) / (isAmt ? 100 : 10);
+      entries.push(isAmt ? { workerId: el.dataset.wid, amount: val } : { workerId: el.dataset.wid, ratio: val });
+    });
+    if (entries.length) dayAllocs[date] = { mode: dmode, entries };
+  });
+  const outRatios = amtChanged ? dayRatios : null;
+  if (amtSum <= 0) return { dayRatios: outRatios, dayAllocs, error: "每天金额合计需大于 0" };
+  if (Math.abs(amtSum - pool) > Math.max(0.5, pool * 0.005)) return { dayRatios: outRatios, dayAllocs, error: "每天金额合计需等于 ¥" + pool.toFixed(2) + "，当前 ¥" + amtSum.toFixed(2) };
+  let error = null;
+  Object.keys(dayAllocs).forEach((date) => {
+    if (error) return;
+    const ov = dayAllocs[date];
+    const dayPool = dayAmts[date] || 0;
+    if (ov.mode === "custom") {
+      const s = ov.entries.reduce((t, e) => t + (Number(e.ratio) || 0), 0);
+      if (Math.abs(s - 100) > 0.5) error = commDayLabel(date) + " 人员比例合计需等于 100%，当前 " + s.toFixed(1) + "%";
+    } else if (ov.mode === "custom_amount") {
+      const s = ov.entries.reduce((t, e) => t + (Number(e.amount) || 0), 0);
+      if (Math.abs(s - dayPool) > Math.max(0.5, dayPool * 0.005)) error = commDayLabel(date) + " 人员金额合计需等于当天池 ¥" + dayPool.toFixed(2) + "，当前 ¥" + s.toFixed(2);
+    }
+  });
+  return { dayRatios: outRatios, dayAllocs, resetDays, error };
+}
+
 /* 包活分成分配面板（项目详情内，经理/店长可编辑，工人只读） */
 function renderCommissionPanel(p) {
   if (!p) return "";
   const canEditCommission = perm.editCommission(p);
   const alloc = resolveCommissionAlloc(p);
   const pool = alloc.pool;
+  // 多天项目：按天分池面板（每天池分给当天在场人员，与提成统计同源）
+  const dailyAlloc = resolveCommissionDailyAlloc(p);
+  if (dailyAlloc) {
+    return renderCommissionMultiDayPanel(p, dailyAlloc, { canEdit: canEditCommission, variant: "detail" });
+  }
+  // 已移除人员锁定份额：当前在场人员只对「池 − Σ锁定金额」的剩余池分配
+  const lockedTotal = Math.round(alloc.items.filter((i) => i.removed).reduce((s, i) => s + (Number(i.amount) || 0), 0) * 100) / 100;
   const mode = p.commissionMode || "avg";
   const workers = commissionParticipants(p, mode);
   const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).map((n) => n.trim()).filter(Boolean);
@@ -13760,8 +14356,8 @@ function renderCommissionPanel(p) {
       <span class="money-chain__arrow">→</span>
       <span class="money-chain__step is-pool"><i>工人分成池</i><b>¥${pool.toFixed(2)}</b></span>
     </div>
-    <div class="money-chain__note">分成池 = 工费 ÷ 2；工费 = 工程金额${cdSum > 0 ? ` − 成本扣项（¥${cdSum.toFixed(2)}）` : `（无成本扣项）`}</div>`;
-  if (!workers.length && !outsourcedNames.length) {
+    <div class="money-chain__note">分成池 = 工费 ÷ 2；工费 = 工程金额${cdSum > 0 ? ` − 成本扣项（¥${cdSum.toFixed(2)}）` : `（无成本扣项）`}${lockedTotal > 0 ? `；已移除人员锁定 ¥${lockedTotal.toFixed(2)}，剩余 ¥${Math.max(0, Math.round((pool - lockedTotal) * 100) / 100).toFixed(2)} 由在场人员分配` : ""}</div>`;
+  if (!workers.length && !outsourcedNames.length && !alloc.items.length) {
     return `<div class="detail-block commission-panel">
       <h3>💰 包活分成</h3>
       ${infoGrid}
@@ -13775,7 +14371,8 @@ function renderCommissionPanel(p) {
   const customEditable = (mode === "custom" || isAmountMode) && canEditCommission;
   // 外协工钱已计入成本扣项（cost_deductions 中 kind=outsourced），已从工费（= 总额 − Σ成本扣项）中扣除，
   // 不在分成池二次扣除——分成池剩余 = 池本身（已扣完外协等全部成本扣项）。
-  const remaining = Math.round(pool * 100) / 100;
+  // 剩余池 = 池 − Σ已移除锁定金额（recalcCommBar 通过 data-outfixed 同口径扣减）
+  const remaining = Math.round((pool - lockedTotal) * 100) / 100;
   // 不能改用 alloc.items.fixed——resolveCommissionAlloc 会把未填归一成 0，无法区分「忘填」与「明确 0」。
   const savedRatios = workers.map((w) => {
     const it = alloc.items.find((i) => i.workerId === w.id);
@@ -13820,9 +14417,9 @@ function renderCommissionPanel(p) {
       handles.push(`<div class="comm-handle" data-k="${i}" style="left:${acc2}%;" title="${isAmountMode ? "拖动调整相邻两人金额" : "拖动调整相邻两人占比"}"><span></span></div>`);
     }
   }
-  const barDataAttr = isAmountMode
+  const barDataAttr = (isAmountMode
     ? `data-mode="amount" data-amounts="${barAmounts.join(',')}" data-locked=""`
-    : `data-mode="ratio" data-ratios="${initialRatios.join(',')}"`;
+    : `data-mode="ratio" data-ratios="${initialRatios.join(',')}"`) + (lockedTotal > 0 ? ` data-outfixed="${lockedTotal.toFixed(2)}"` : "");
   const bar = workers.length
     ? `<div class="comm-bar" id="commBar" data-pid="${p.id}" data-ids="${workers.map((w) => w.id).join(',')}" ${barDataAttr} data-pool="${pool.toFixed(2)}" data-noteid="commRemainNote">${segs}${handles}</div>`
     : "";
@@ -13851,6 +14448,13 @@ function renderCommissionPanel(p) {
       ${amtDisp}
     </div>`;
   }).join("");
+  // 已移除人员锁定份额行（灰显）：金额 = 池 × 锁定比例，随池缩放；多天项目不走此处（按天分池面板）
+  const lockedLegend = alloc.items.filter((i) => i.removed).map((it) => `
+    <div class="comm-legend-item is-removed">
+      <span class="comm-dot" style="background:#94a3b8"></span>
+      <span class="comm-legend-name">${esc(it.workerName)}<i class="comm-removed-tag">已移除·锁定 ${it.ratio}%</i></span>
+      <span class="comm-legend-amt">¥${(Number(it.amount) || 0).toFixed(2)}</span>
+    </div>`).join("");
   const modeBtns = canEditCommission ? `
     <div class="commission-mode">
       <label class="radio-inline"><input type="radio" name="commMode" value="avg" ${mode === "avg" ? "checked" : ""} onchange="onCommissionModeChange('${p.id}','avg')"> 平均分配</label>
@@ -13866,7 +14470,7 @@ function renderCommissionPanel(p) {
     <div class="commission-head"><h3>💰 包活分成</h3>${canEditCommission ? `<button class="btn small primary comm-save-btn" id="commSaveBtn" onclick="saveCommissionAlloc('${p.id}')">💾 保存分成</button>` : ""}</div>
     ${infoGrid}
     ${modeBtns}
-    <div class="commission-list">${bar}${legendHead}${legend}</div>
+    <div class="commission-list">${bar}${legendHead}${legend}${lockedLegend}</div>
     ${barHint}
   </div>`;
 }
@@ -14166,6 +14770,12 @@ function renderCompleteCommission(p) {
   const canEditCommission = perm.editCommission(p);
   const alloc = resolveCommissionAlloc(p);
   const pool = alloc.pool;
+  // 多天项目：按天分池面板（与详情页/提成统计同源，确认完工时一并保存每日占比）
+  const dailyAlloc = resolveCommissionDailyAlloc(p);
+  if (dailyAlloc) {
+    return renderCommissionMultiDayPanel(p, dailyAlloc, { canEdit: canEditCommission, variant: "complete" });
+  }
+  const lockedTotal = Math.round(alloc.items.filter((i) => i.removed).reduce((s, i) => s + (Number(i.amount) || 0), 0) * 100) / 100;
   const mode = p.commissionMode || "avg";
   const workers = commissionParticipants(p, mode);
   const outsourcedNames = (p.outsourcedWorkers || "").split(/[,，]/).map((n) => n.trim()).filter(Boolean);
@@ -14176,7 +14786,7 @@ function renderCompleteCommission(p) {
       <div class="info-item"><div class="k">工费</div><div class="v">¥${getLaborFee(p).toFixed(2)}</div></div>
       <div class="info-item"><div class="k">工人分成池</div><div class="v" style="color:#16a34a;font-weight:600">¥${pool.toFixed(2)}</div></div>
     </div>`;
-  if (!workers.length && !outsourcedNames.length) {
+  if (!workers.length && !outsourcedNames.length && !alloc.items.length) {
     return `<div class="detail-block commission-panel">
       <h3>💰 包活分成</h3>
       ${infoGrid}
@@ -14189,7 +14799,8 @@ function renderCompleteCommission(p) {
   const customEditable = (mode === "custom" || isAmountMode) && canEditCommission;
   // 外协工钱已计入成本扣项（cost_deductions 中 kind=outsourced），已从工费（= 总额 − Σ成本扣项）中扣除，
   // 不在分成池二次扣除——分成池剩余 = 池本身（已扣完外协等全部成本扣项）。
-  const remaining = Math.round(pool * 100) / 100;
+  // 剩余池 = 池 − Σ已移除锁定金额（recalcCommBar 通过 data-outfixed 同口径扣减）
+  const remaining = Math.round((pool - lockedTotal) * 100) / 100;
   const savedRatios = workers.map((w) => {
     const it = alloc.items.find((i) => i.workerId === w.id);
     return it ? it.ratio : 0;
@@ -14231,9 +14842,9 @@ function renderCompleteCommission(p) {
       handles.push(`<div class="comm-handle" data-k="${i}" style="left:${acc2}%;" title="${isAmountMode ? "拖动调整相邻两人金额" : "拖动调整相邻两人占比"}"><span></span></div>`);
     }
   }
-  const barDataAttr = isAmountMode
+  const barDataAttr = (isAmountMode
     ? `data-mode="amount" data-amounts="${barAmounts.join(',')}" data-locked=""`
-    : `data-mode="ratio" data-ratios="${initialRatios.join(',')}"`;
+    : `data-mode="ratio" data-ratios="${initialRatios.join(',')}"`) + (lockedTotal > 0 ? ` data-outfixed="${lockedTotal.toFixed(2)}"` : "");
   const bar = workers.length
     ? `<div class="comm-bar" id="commBarComplete" data-ids="${workers.map((w) => w.id).join(',')}" ${barDataAttr} data-pool="${pool.toFixed(2)}" data-noteid="commRemainNoteC">${segs}${handles}</div>`
     : "";
@@ -14266,6 +14877,14 @@ function renderCompleteCommission(p) {
       <span class="comm-legend-hrs">${hrs != null ? hrs.toFixed(1) + "h" : "--"}</span>
     </div>`;
   }).join("");
+  // 已移除人员锁定份额行（灰显）：金额 = 池 × 锁定比例，随池缩放；多天项目走按天分池面板
+  const lockedLegend = alloc.items.filter((i) => i.removed).map((it) => `
+    <div class="comm-legend-item is-removed">
+      <span class="comm-dot" style="background:#94a3b8"></span>
+      <span class="comm-legend-name">${esc(it.workerName)}<i class="comm-removed-tag">已移除·锁定 ${it.ratio}%</i></span>
+      <span class="comm-legend-amt">¥${(Number(it.amount) || 0).toFixed(2)}</span>
+      <span class="comm-legend-hrs"></span>
+    </div>`).join("");
   const attTotal = Object.keys(attMap).reduce((s, k) => s + (Number(attMap[k]) || 0), 0);
   const footHtml = `<div class="commission-foot">
     <span>合计 <b class="comm-total-amt">¥${(alloc.total > 0 ? alloc.total : pool).toFixed(2)}</b>${attTotal > 0 ? ` · ${attTotal.toFixed(1)}h` : ""}</span>
@@ -14286,7 +14905,7 @@ function renderCompleteCommission(p) {
     <h3>💰 包活分成</h3>
     ${infoGrid}
     ${modeBtns}
-    <div class="commission-list">${bar}${legendHead}${legend}</div>
+    <div class="commission-list">${bar}${legendHead}${legend}${lockedLegend}</div>
     ${footHtml}
     ${barHint}
   </div>`;
@@ -14309,8 +14928,32 @@ function onCompleteCommMode(id, mode) {
    故此处只产出内部安装人员的比例/金额项。 */
 function getCompleteCommissionAlloc(p) {
   const mode = (document.querySelector('input[name="commModeC"]:checked') || {}).value || p.commissionMode || "avg";
+  // 已移除锁定份额与每日占比条目必须原样保留（方案A 2026-11-05，此前整表覆盖会把它们抹掉）
+  const savedCustom = Array.isArray(p.commissionCustom) ? p.commissionCustom : [];
+  const custom = savedCustom.filter((c) => c && (c.locked || c.dayRatios || c.dayAllocs));
   const bar = document.getElementById("commBarComplete");
-  const custom = [];
+  let dayRatiosInvalid = false;
+  // 多天面板（按天分池）：无比例条，收集每天占比 + 每天独立分配方式/逐人覆盖
+  const dayColl = bar ? null : collectCommissionDayInputs("#completeCommissionWrap", mode, getCommissionPool(p));
+  if (dayColl) {
+    if (dayColl.error) {
+      dayRatiosInvalid = true; // 完工被拦截，提示在 onConfirm 中统一 toast
+    } else {
+      if (dayColl.dayRatios) {
+        const idx = custom.findIndex((c) => c && c.dayRatios && !c.workerId);
+        if (idx >= 0) custom[idx] = { dayRatios: dayColl.dayRatios }; else custom.push({ dayRatios: dayColl.dayRatios });
+      }
+      // 每日覆盖合并：切回「工时」的天删除已有覆盖，保持按出勤动态分摊
+      const savedDayAllocsEntry = custom.find((c) => c && c.dayAllocs && !c.workerId);
+      const mergedDayAllocs = (savedDayAllocsEntry && savedDayAllocsEntry.dayAllocs) ? Object.assign({}, savedDayAllocsEntry.dayAllocs) : {};
+      (dayColl.resetDays || []).forEach((d) => { delete mergedDayAllocs[d]; });
+      Object.keys(dayColl.dayAllocs).forEach((d) => { mergedDayAllocs[d] = dayColl.dayAllocs[d]; });
+      if (Object.keys(mergedDayAllocs).length) {
+        const idx = custom.findIndex((c) => c && c.dayAllocs && !c.workerId);
+        if (idx >= 0) custom[idx] = { dayAllocs: mergedDayAllocs }; else custom.push({ dayAllocs: mergedDayAllocs });
+      }
+    }
+  }
   if (mode === "custom" && bar) {
     const ids = bar.dataset.ids ? bar.dataset.ids.split(",") : (p.assignedWorkerIds || []);
     const ratios = bar.dataset.ratios ? bar.dataset.ratios.split(",").map(Number) : [];
@@ -14328,7 +14971,7 @@ function getCompleteCommissionAlloc(p) {
       custom.push({ workerId: wid, amount: Math.round((amounts[i] != null ? amounts[i] : 0) * 100) / 100 });
     });
   }
-  return { mode, custom };
+  return { mode, custom, dayRatiosInvalid, dayError: dayColl ? dayColl.error : null };
 }
 
 /* 锁定超池兜底：手填/拖动会把该人加入 dataset.locked（固定值），其余人自动均分剩余额度。
@@ -14736,28 +15379,64 @@ async function saveCommissionAlloc(id) {
   if (!perm.editCommission(p)) { toast("权限不足：无法修改工人分成"); return; }
   const mode = (document.querySelector('input[name="commMode"]:checked') || {}).value || p.commissionMode || "avg";
   const pool = getCommissionPool(p);
-  const custom = [];
+  // 已移除锁定份额与每日占比条目必须原样保留（方案A 2026-11-05，此前整表覆盖会把它们抹掉）
+  const savedCustom = Array.isArray(p.commissionCustom) ? p.commissionCustom : [];
+  const custom = savedCustom.filter((c) => c && (c.locked || c.dayRatios || c.dayAllocs));
+  // 多天项目（按天分池面板）：保存每天占比 + 每天独立分配方式/逐人覆盖
+  const dayColl = collectCommissionDayInputs("#commissionPanelWrap", mode, pool);
+  if (dayColl) {
+    if (dayColl.error) { toast(dayColl.error); return; }
+    if (dayColl.dayRatios) {
+      const idx = custom.findIndex((c) => c && c.dayRatios && !c.workerId);
+      if (idx >= 0) custom[idx] = { dayRatios: dayColl.dayRatios }; else custom.push({ dayRatios: dayColl.dayRatios });
+    }
+    // 每日覆盖合并：切回「工时」的天删除已有覆盖，保持按出勤动态分摊
+    const savedDayAllocsEntry = custom.find((c) => c && c.dayAllocs && !c.workerId);
+    const mergedDayAllocs = (savedDayAllocsEntry && savedDayAllocsEntry.dayAllocs) ? Object.assign({}, savedDayAllocsEntry.dayAllocs) : {};
+    (dayColl.resetDays || []).forEach((d) => { delete mergedDayAllocs[d]; });
+    Object.keys(dayColl.dayAllocs).forEach((d) => { mergedDayAllocs[d] = dayColl.dayAllocs[d]; });
+    if (Object.keys(mergedDayAllocs).length) {
+      const idx = custom.findIndex((c) => c && c.dayAllocs && !c.workerId);
+      if (idx >= 0) custom[idx] = { dayAllocs: mergedDayAllocs }; else custom.push({ dayAllocs: mergedDayAllocs });
+    }
+    try {
+      await repo.saveProject({ commissionMode: mode, commissionCustom: custom }, id);
+      clearCommissionDraft(id);
+      toast("已保存每日分成");
+      renderConstruction();
+    } catch (e) {
+      console.error("保存分成失败:", e);
+      toast("保存失败：" + (e.message || "未知错误"));
+    }
+    return;
+  }
   // 内部工人比例项（仅 custom 模式保存；avg 模式内部均分，不存比例）
   if (mode === "custom") {
     const bar = document.getElementById("commBar");
     const ids = bar && bar.dataset.ids ? bar.dataset.ids.split(",") : (p.assignedWorkerIds || []);
     const ratios = bar && bar.dataset.ratios ? bar.dataset.ratios.split(",").map(Number) : [];
+    let curRatioTotal = 0;
     ids.forEach((wid, i) => {
+      const r = Math.round((ratios[i] != null ? ratios[i] : 0) * 10) / 10;
+      curRatioTotal += r;
       custom.push({
         workerId: wid,
-        ratio: Math.round((ratios[i] != null ? ratios[i] : 0) * 10) / 10,
+        ratio: r,
         fixed: null,
       });
     });
-    const total = custom.reduce((s, c) => s + c.ratio, 0);
-    if (Math.abs(total - 100) > 0.01) { toast("自定义比例合计需等于 100%，当前 " + total.toFixed(1) + "%"); return; }
+    // 校验只针对当前在场人员的比例（锁定项的 ratio 是历史冻结值，不参与合计）
+    if (Math.abs(curRatioTotal - 100) > 0.01) { toast("自定义比例合计需等于 100%，当前 " + curRatioTotal.toFixed(1) + "%"); return; }
   } else if (mode === "custom_amount") {
     const bar = document.getElementById("commBar");
     const ids = bar && bar.dataset.ids ? bar.dataset.ids.split(",") : (p.assignedWorkerIds || []);
     const amounts = bar && bar.dataset.amounts ? bar.dataset.amounts.split(",").map(Number) : [];
-    const remaining = Math.round(pool * 100) / 100;
+    // 金额模式当前人员分「剩余池」（池 − Σ锁定金额），与面板 data-outfixed 同口径
+    const lockedTotalAmt = savedCustom.filter((c) => c && c.locked && c.workerId && !(p.assignedWorkerIds || []).includes(c.workerId))
+      .reduce((s, c) => s + Math.round((pool * (Number(c.ratio) || 0) / 100) * 100) / 100, 0);
+    const remaining = Math.round((pool - lockedTotalAmt) * 100) / 100;
     const total = amounts.reduce((s, v) => s + (Number(v) || 0), 0);
-    if (Math.abs(total - remaining) > 0.01) { toast(`按金额分配合计需等于 ¥${remaining.toFixed(2)}（分成池），当前 ¥${total.toFixed(2)}`); return; }
+    if (Math.abs(total - remaining) > 0.01) { toast(`按金额分配合计需等于 ¥${remaining.toFixed(2)}（剩余池），当前 ¥${total.toFixed(2)}`); return; }
     ids.forEach((wid, i) => {
       custom.push({ workerId: wid, amount: Math.round((amounts[i] != null ? amounts[i] : 0) * 100) / 100 });
     });
@@ -16168,6 +16847,26 @@ async function unassignWorker(pid, wid) {
     const actionLogs = [...(p.actionLogs || [])];
 
     if (!alreadyUnassigned) {
+      /* 方案A（2026-11-05）：移除时冻结该工人当时的分成份额——锁定后仍显示在分成面板
+         （灰标「已移除」），分得金额 = 池 × 锁定比例随池缩放；重新分配回来则锁定自动失效。
+         必须在 resolveCommissionAlloc 口径变化前用「移除前」的项目数据计算。 */
+      try {
+        const allocPre = resolveCommissionAlloc(p);
+        const itPre = allocPre.items.find((i) => i.workerId === wid && !i.removed);
+        if (itPre && allocPre.pool > 0 && itPre.amount > 0) {
+          const lockedRatio = Math.round((itPre.amount / allocPre.pool) * 10000) / 100;
+          const baseCustom = (Array.isArray(p.commissionCustom) ? p.commissionCustom : [])
+            .filter((c) => c && !(c.locked && c.workerId === wid));
+          baseCustom.push({
+            workerId: wid,
+            workerName: worker ? worker.name : "未知",
+            ratio: lockedRatio,
+            locked: true,
+            removedAt: nowStr,
+          });
+          p.commissionCustom = baseCustom;
+        }
+      } catch (eLock) { console.warn("锁定分成份额失败：", eLock); }
       workerChangeHistory.push({
         time: nowStr,
         action: "unassign",
@@ -16228,7 +16927,7 @@ async function unassignWorker(pid, wid) {
       return;
     }
     confirmLocalAssign(pid);
-    const patchOk = await repo.patchProject(pid, { workerChangeHistory, actionLogs });
+    const patchOk = await repo.patchProject(pid, { workerChangeHistory, actionLogs, commissionCustom: p.commissionCustom });
     if (patchOk === false) {
       // patchProject 内部已处理版本冲突并刷新
       clearAssignGuard(pid);
@@ -19062,6 +19761,11 @@ function openCompleteProjectForm(id) {
         // 外协工钱已计入成本扣项（cost_deductions 中 kind=outsourced），不在 commission_custom 另存，
         // 故此处只取内部工人的分成方式，无需外协固定额校验/提醒。
         const cc = getCompleteCommissionAlloc(p);
+        if (cc.dayRatiosInvalid) {
+          toast(cc.dayError || "跨天分池：每天占比合计需等于 100%，请调整后再完工");
+          window._savingCompleteProject = false;
+          return false;
+        }
         p.commissionMode = cc.mode;
         p.commissionCustom = cc.custom;
 
@@ -20210,7 +20914,7 @@ function renderStats() {
             } else {
               _noteCell = _note || "—";
             }
-            const chips = alloc.items.map((it) => `<span class="worker-chip internal">${esc(it.workerName)} <b>¥${(it.amount * _r).toFixed(2)}</b></span>`).join("");
+            const chips = alloc.items.map((it) => `<span class="worker-chip internal${it.removed ? " is-removed" : ""}">${esc(it.workerName)}${it.removed ? '<i class="comm-removed-tag">已移除</i>' : ""} <b>¥${(it.amount * _r).toFixed(2)}</b></span>`).join("");
             const d = p.appointmentTime ? new Date(p.appointmentTime) : null;
             // 投入工时（人·小时）：跨期项目按摊分比例折算，避免跨月重复累计
             const _hours = Math.round((p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0) * _r * 10) / 10;
@@ -23125,7 +23829,7 @@ async function exportStats() {
     // 投入工时（人·小时）= 该项目全部考勤工时之和；与详情页挂钟「施工时长」同源不同口径（2026-10-22 改名消歧义）
     const hours = p ? Math.round((p.workLogs || []).reduce((s, l) => s + (Number(l.hours) || 0), 0) * 10) / 10 : 0;
     const comm = alloc.items.reduce((s, it) => s + it.amount, 0);
-    const commText = alloc.items.map((it) => `${it.workerName} ¥${it.amount.toFixed(2)}`).join('、');
+    const commText = alloc.items.map((it) => `${it.workerName}${it.removed ? "(已移除)" : ""} ¥${it.amount.toFixed(2)}`).join('、');
     pjAmount = round2(pjAmount + amount);
     pjLabor = round2(pjLabor + laborFee);
     pjDeduct = round2(pjDeduct + deduct);
@@ -23376,7 +24080,9 @@ async function exportStats() {
     let rowNum = 1;
 
     // 该工人的包活提成项目明细（按施工天归期：本期无施工天的项目不计入，跨期项目按比例缩放）
-    const myCommissionProjects = commissionProjects.filter((p) => (p.assignedWorkerIds || []).includes(r.id) && shareOf(p).ratio > 0.0001);
+    // 含已移除工人的锁定份额/按天在场分成（不再按 assignedWorkerIds 前置过滤）
+    const myCommissionProjects = commissionProjects.filter((p) => shareOf(p).ratio > 0.0001
+      && ((p.assignedWorkerIds || []).includes(r.id) || (resolveCommissionAlloc(p).items || []).some((i) => i.workerId === r.id && i.amount > 0)));
     const myCommRows = [];
     myCommissionProjects.forEach((p) => {
       const _r = shareOf(p).ratio;
@@ -28548,6 +29254,26 @@ async function timelineQuickAssignWorker(pid, wid) {
 async function timelineUnassignWorker(pid, wid) {
   const p = getProject(pid);
   if (!p) return;
+  /* 方案A：时间线移除同样锁定分成份额（移除前口径计算，详见 unassignWorker 内注释） */
+  let lockedCustom = null;
+  try {
+    const allocPre = resolveCommissionAlloc(p);
+    const itPre = allocPre.items.find((i) => i.workerId === wid && !i.removed);
+    if (itPre && allocPre.pool > 0 && itPre.amount > 0) {
+      const worker = getWorker(wid);
+      const lockedRatio = Math.round((itPre.amount / allocPre.pool) * 10000) / 100;
+      lockedCustom = (Array.isArray(p.commissionCustom) ? p.commissionCustom : [])
+        .filter((c) => c && !(c.locked && c.workerId === wid));
+      lockedCustom.push({
+        workerId: wid,
+        workerName: worker ? worker.name : "未知",
+        ratio: lockedRatio,
+        locked: true,
+        removedAt: new Date().toISOString(),
+      });
+      p.commissionCustom = lockedCustom;
+    }
+  } catch (eLock) { console.warn("时间线移除锁定分成份额失败：", eLock); }
   const next = (p.assignedWorkerIds || []).filter((x) => x !== wid);
   const tlP = getProject(pid);
   if (tlP) tlP.assignedWorkerIds = next;
@@ -28569,6 +29295,9 @@ async function timelineUnassignWorker(pid, wid) {
     return;
   }
   confirmLocalAssign(pid);
+  if (lockedCustom) {
+    repo.patchProject(pid, { commissionCustom: lockedCustom }).catch((e) => console.warn("时间线移除同步分成锁定失败：", e));
+  }
   repo.loadAll().then(() => renderTimelineInDetail()).catch((e) => console.warn("时间轴移除后台同步失败：", e));
 }
 
@@ -30557,7 +31286,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v95087c13";
+  const APP_VERSION = "vd7efcacb";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
