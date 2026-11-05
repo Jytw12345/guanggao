@@ -2623,7 +2623,9 @@ function sumWorkerCommission(workerId, projects) {
 
 /* 项目内每人提成按天拆分（跨天）：每人项目提成总额 = 分成池×比例（与工时脱钩，由比例/平均决定），
    再按该工人「每日在场工时占比」把提成摊到各天（施工时长只作分摊参考，不改变提成总额）；
-   无考勤数据时平均摊到项目各施工分段日；仍无则计入项目主日期。
+   无考勤数据时优先摊到该工人实际在场时段覆盖的自然日（开工→完工）；
+   仍无（时段缺失，如数据不全的旧单）则退回项目各施工分段日（预约窗口）；
+   最后兜底计入项目主日期（完工日/预约日）。
    返回 { [date]: { [workerId]: amount } }。 */
 function commissionDaily(p) {
   const out = {};
@@ -2648,6 +2650,26 @@ function commissionDaily(p) {
   } catch (e) { segDates = []; }
   const fallbackDate = p.finishedAt ? dateKey(new Date(p.finishedAt))
     : (p.appointmentTime ? dateKey(new Date(p.appointmentTime)) : dateKey(new Date()));
+  // 无考勤兜底②：该工人实际在场时段覆盖的自然日（开工→完工，跨天枚举）。
+  // 优先于预约分段日：实际施工日与预约日不一致时（如预约 10/30、实际 11/1 才开工），
+  // 提成应归实际施工日（用户实测：2 分钟快单无考勤，被兜底到预约日 10/30）。
+  const realDatesFor = (wid) => {
+    try {
+      const periods = buildWorkerPeriods(p, wid) || [];
+      const endT = getProjectEffectiveEndTime(p);
+      const set = {};
+      periods.forEach((pr) => {
+        if (!pr || !pr.start) return;
+        const s = new Date(pr.start);
+        const e = pr.end ? new Date(pr.end) : (endT > s ? endT : s);
+        if (!(e > s)) { set[dateKey(s)] = 1; return; }
+        let cur = new Date(s);
+        let guard = 0;
+        while (cur <= e && guard < 400) { set[dateKey(cur)] = 1; cur = new Date(cur); cur.setHours(24, 0, 0, 0); guard++; }
+      });
+      return Object.keys(set).sort();
+    } catch (e) { return []; }
+  };
   alloc.items.forEach((it) => {
     const daily = {};
     (p.workLogs || []).forEach((l) => {
@@ -2657,10 +2679,15 @@ function commissionDaily(p) {
     const total = dates.reduce((s, d) => s + daily[d], 0);
     if (dates.length && total > 0) {
       dates.forEach((d) => add(d, it.workerId, it.amount * (daily[d] / total)));
-    } else if (segDates.length) {
-      segDates.forEach((d) => add(d, it.workerId, it.amount / segDates.length));
     } else {
-      add(fallbackDate, it.workerId, it.amount);
+      const realDates = realDatesFor(it.workerId);
+      if (realDates.length) {
+        realDates.forEach((d) => add(d, it.workerId, it.amount / realDates.length));
+      } else if (segDates.length) {
+        segDates.forEach((d) => add(d, it.workerId, it.amount / segDates.length));
+      } else {
+        add(fallbackDate, it.workerId, it.amount);
+      }
     }
   });
   return out;
@@ -30530,7 +30557,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vd1c6fb08";
+  const APP_VERSION = "v95087c13";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
