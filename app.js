@@ -13963,16 +13963,26 @@ function renderCommissionMultiDayPanel(p, da, opts) {
     const surname = (nm) => (nm && nm.trim() ? nm.trim().charAt(0) : "?");
     const segs = parts.map((m, i) => {
       const w = dayPool > 0 ? (m.amt / dayPool) * 100 : 0;
-      const seg = `<div class="comm-day-seg${m.removed ? " is-removed" : ""}" data-wid="${m.wid}" style="width:${w}%;background:${m.removed ? "#cbd5e1" : COMM_COLORS[i % COMM_COLORS.length]}"><span class="comm-seg-name">${esc(surname(m.name))}</span><span class="comm-seg-amt">¥${m.amt.toFixed(2)}</span></div>`;
+      // 比例模式段内显示占比%，其他模式显示金额¥
+      const segLabel = day.mode === "custom"
+        ? (dayPool > 0 ? (Math.round((m.amt / dayPool) * 1000) / 10) + "%" : "")
+        : "¥" + m.amt.toFixed(2);
+      const seg = `<div class="comm-day-seg${m.removed ? " is-removed" : ""}" data-wid="${m.wid}" style="width:${w}%;background:${m.removed ? "#cbd5e1" : COMM_COLORS[i % COMM_COLORS.length]}"><span class="comm-seg-name">${esc(surname(m.name))}</span><span class="comm-seg-amt">${segLabel}</span></div>`;
       const hd = canEdit && i < parts.length - 1
         ? `<div class="comm-day-hd" data-i="${i}" title="左右拖动调整两侧人员分成" onpointerdown="commDayHandleDown(event, this)"></div>`
         : "";
       return seg + hd;
     }).join("");
+    // 当天出勤工时合计：用于计算「工时」模式下每人的默认金额（切回工时须还原为工时加权值）
+    const dayHrsSum = parts.reduce((s, m) => s + ((da.dayHours && da.dayHours[day.date] && da.dayHours[day.date][m.wid]) || 0), 0);
     const members = parts.map((m, i) => {
       const color = m.removed ? "#94a3b8" : COMM_COLORS[i % COMM_COLORS.length];
       const h = (da.dayHours && da.dayHours[day.date] && da.dayHours[day.date][m.wid]) || 0;
       const hrsTxt = h > 0 ? `<span class="comm-legend-hrs" title="当日出勤工时">${h % 1 === 0 ? h : h.toFixed(1)}h</span>` : "";
+      // 工时加权默认金额（总工时缺失时退化为均分），切回「工时」时以它为基准
+      const defAmt = dayHrsSum > 0
+        ? Math.round(((dayPool * h) / dayHrsSum) * 100) / 100
+        : (parts.length ? Math.round((dayPool / parts.length) * 100) / 100 : 0);
       const pctTxt = dayPool > 0 ? Math.round((m.amt / dayPool) * 1000) / 10 : 0;
       if (!canEdit) {
         return `<div class="comm-legend-item${m.removed ? " is-removed" : ""}">
@@ -13988,7 +13998,7 @@ function renderCommissionMultiDayPanel(p, da, opts) {
       const amtVal = saved.amount != null ? saved.amount : Math.round(m.amt * 100) / 100;
       // 两种输入框都渲染（显隐由 data-dmode + 行内样式双重控制）；改动一人时其余人自动补齐
       // data-amt=当前展示金额（拖动条用）；data-def-amt=按当日工时加权的默认金额（切回「工时」时还原）
-      return `<div class="comm-legend-item${m.removed ? " is-removed" : ""}" data-wid="${m.wid}" data-amt="${amtVal}" data-def-amt="${Math.round(m.amt * 100) / 100}">
+      return `<div class="comm-legend-item${m.removed ? " is-removed" : ""}" data-wid="${m.wid}" data-amt="${amtVal}" data-def-amt="${defAmt}">
         <span class="comm-dot" style="background:${color}"></span>
         <span class="comm-legend-name">${esc(m.name)}${m.removed ? '<i class="comm-removed-tag">已移除</i>' : ""}</span>
         ${hrsTxt}
@@ -14043,6 +14053,17 @@ function setCommDayMode(btn) {
   day.querySelectorAll(".day-mode-btn").forEach((b) => b.classList.toggle("active", b === btn));
   // 切换方式 → 重置手动锁定标记（重新以新方式的默认值为起点）
   day.querySelectorAll(".comm-legend-item[data-wid]").forEach((el) => { delete el.dataset.touched; });
+  // 切到「比例/金额」时，把当前展示金额带进输入框，避免沿用旧模式的过期数值
+  const curPool = Number(day.dataset.pool) || 0;
+  if (btn.dataset.m === "custom" || btn.dataset.m === "custom_amount") {
+    day.querySelectorAll(".comm-legend-item[data-wid]").forEach((el) => {
+      const cur = Number(el.dataset.amt) || 0;
+      const a = el.querySelector(".comm-day-pamt");
+      const r = el.querySelector(".comm-day-pratio");
+      if (a) a.value = cur.toFixed(2);
+      if (r) r.value = (curPool > 0 ? Math.round((cur / curPool) * 1000) / 10 : 0).toFixed(1);
+    });
+  }
   // 行内样式同步显隐（不完全依赖 CSS，避免旧缓存下比例/金额输入框同时显示）
   day.querySelectorAll(".comm-legend-item[data-wid]").forEach((el) => {
     const r = el.querySelector(".comm-day-pratio");
@@ -14104,7 +14125,9 @@ function applyCommDayAmt(day, item, amt) {
   if (seg) {
     seg.style.width = (pool > 0 ? (v / pool) * 100 : 0) + "%";
     const segAmt = seg.querySelector(".comm-seg-amt");
-    if (segAmt) segAmt.textContent = "¥" + v.toFixed(2);
+    if (segAmt) segAmt.textContent = (day.dataset.dmode === "custom" && pool > 0)
+      ? (Math.round((v / pool) * 1000) / 10) + "%" // 比例模式段内显示占比%
+      : "¥" + v.toFixed(2);
   }
 }
 
@@ -31286,7 +31309,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vd7efcacb";
+  const APP_VERSION = "vc674bec7";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
