@@ -2241,6 +2241,20 @@ select.input {
 }
 .worker-status-btn.is-resigned { border-color: #cbd5e1; color: #64748b; background: #f1f5f9; }
 .worker-status-btn.is-resigned::before { color: #94a3b8; }
+/* 统计表格里已离职人员的行内标记（有历史提成时保留该行，避免漏账） */
+.resign-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #64748b;
+  font-size: 10px;
+  line-height: 15px;
+  font-weight: 400;
+  vertical-align: 1px;
+}
 
 /* 外协人员卡片：比施工人员卡片更紧凑精致 */
 #outsourcedWorkerList {

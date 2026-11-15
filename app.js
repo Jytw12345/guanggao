@@ -7063,7 +7063,8 @@ function renderWorkerSchedules() {
 }
 
 function workerScheduleForm(s = {}) {
-  const workerOptions = cache.workers.map(w => 
+  // 离职人员不出现在新建日程的候选；编辑已有日程时保留原人员，避免保存时被清空
+  const workerOptions = cache.workers.filter(w => w.active !== false || s.workerId === w.id).map(w => 
     `<option value="${esc(w.id)}" ${s.workerId === w.id ? 'selected' : ''}>${esc(w.name)}</option>`
   ).join("");
   
@@ -7339,7 +7340,7 @@ function openLeaveForm(workerId) {
   const workerSelect = w ? "" : `
     <select class="input" id="leaveWorkerSelect" required>
       <option value="">请选择施工人员</option>
-      ${cache.workers.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("")}
+      ${cache.workers.filter(x => x.active !== false).map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("")}
     </select>`;
   const form = `
     <div class="repair-form">
@@ -7837,7 +7838,8 @@ function readRotMemory(key) {
 
 function rotWorkerPicker(group, selectedIds) {
   if (!cache.workers.length) return `<div class="rot-pick__empty">暂无人员</div>`;
-  return cache.workers.map(w => {
+  // 离职人员不出现在轮休候选；已勾选的仍显示，方便取消
+  return cache.workers.filter(w => w.active !== false || selectedIds.includes(w.id)).map(w => {
     const on = selectedIds.includes(w.id) ? " checked" : "";
     return `<label class="rot-pick__item"><input type="checkbox" data-rot-group="${group}" value="${esc(w.id)}"${on} onchange="updateBatchRotPreview()" /><span>${esc(w.name)}</span></label>`;
   }).join("");
@@ -13507,8 +13509,8 @@ function openRepairAssign(projectId, repairId) {
   if (!ro) { toast("维修单不存在"); return; }
   if (ro.status !== "待维修") { toast("该维修单已完成，无法改派人员"); return; }
   const cur = Array.isArray(ro.assignedWorkerIds) ? ro.assignedWorkerIds.slice() : [];
-  // 可选人员：全部内部工人（维修单可独立于原项目派人），排除已删除的
-  const workers = (cache.workers || []).filter(w => w && w.id);
+  // 可选人员：全部内部工人（维修单可独立于原项目派人），排除已删除的；离职人员仅保留已派工的人（便于取消）
+  const workers = (cache.workers || []).filter(w => w && w.id && (w.active !== false || cur.includes(w.id)));
   if (!workers.length) { toast("暂无施工人员"); return; }
   // 兜底：已派但不在工人表里的历史人员也要列出来（否则保存时被静默清空，需用户显式取消勾选）
   const missing = cur.filter(wid => !workers.some(w => w.id === wid));
@@ -18810,11 +18812,12 @@ function generateWorkerScheduleDescription(dateStr = null) {
   
   const availableWorkers = cache.workers.filter(w => {
     const wid = w.id;
+    if (w.active === false) return false; // 离职人员不参与派工/排班
     if (workerSchedule[wid] && workerSchedule[wid].length > 0) return false;
     return !isWorkerOnLeave(wid, dateStrFormatted);
   });
   
-  const onLeaveWorkers = cache.workers.filter(w => isWorkerOnLeave(w.id, dateStrFormatted));
+  const onLeaveWorkers = cache.workers.filter(w => w.active !== false && isWorkerOnLeave(w.id, dateStrFormatted));
   
   let description = `<div class="schedule-description">`;
 
@@ -18908,7 +18911,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
   const inProgressProjects = statusCounts[STATUS.BOOKED] + statusCounts[STATUS.WORKING] + statusCounts[STATUS.PAUSED] + statusCounts[STATUS.DELAYED];
   const totalWorkers = allWorkerIds.size;
   const onJobWorkers = totalWorkers;
-  const totalAvailable = cache.workers.length;
+  const totalAvailable = cache.workers.filter(w => w.active !== false).length;
 
   const activeBreakdown = [];
   const pushBd = (label, count) => { if (count > 0) activeBreakdown.push(`${label}${count}`); };
@@ -20979,9 +20982,15 @@ function renderStats() {
   // 仅当外协人员确有分成（如付费维修勾选了外协）时保留。
   window.__commDayDetail = buildCommDayDetail(commProjects); // 供日历点击查看当天明细（含上月预约本月施工的单）
   const commRows = rows.filter((r) => !r.isOutsourced || commOf(r.id) > 0.005);
-  const workerTable = commRows.length === 0
+  // 已离职人员：本期既无提成、也无工时/请假/轮休的，直接不列出；
+  // 仍有账（如已锁定分成、上月预约本月施工）的保留并标注「已离职」，避免漏账。
+  const _resignedIds = new Set(cache.workers.filter((w) => w.active === false).map((w) => w.id));
+  const commRowsView = commRows.filter((r) => !_resignedIds.has(r.id)
+    || commOf(r.id) > 0.005 || r.days > 0 || r.hours > 0
+    || (r.leaveRecords || []).length > 0 || (r.restRecords || []).length > 0);
+  const workerTable = commRowsView.length === 0
     ? `<div class="empty">所选月份暂无施工记录。</div>`
-    : commRows.map((r) => {
+    : commRowsView.map((r) => {
         const monthVal = document.getElementById("statsMonth").value;
         let calGrid = "";
         if (monthVal) {
@@ -21054,7 +21063,7 @@ function renderStats() {
             </thead>
             <tbody>
               <tr>
-                <td style="${rowColor}">${esc(r.name)}${r.isOutsourced ? ' (外协)' : ''}</td>
+                <td style="${rowColor}">${esc(r.name)}${r.isOutsourced ? ' (外协)' : ''}${_resignedIds.has(r.id) ? ' <span class="resign-tag">已离职</span>' : ''}</td>
                 <td style="${rowColor}"><b style="color:#16a34a">${yuan(commOf(r.id))}</b></td>
                 <td>${r.days}</td>
                 <td>${r.leaveDays > 0 ? `<span style="color:#ef4444;font-weight:600">${r.leaveDays}天</span>` : "0"}</td>
@@ -21931,7 +21940,7 @@ function showInternalWorkLogModal() {
   closeInternalWorkLogModal();
   
   const logs = getInternalWorkLogs();
-  const workerOptions = cache.workers.map(w => `<option value="${w.id}" data-name="${esc(w.name)}">${esc(w.name)}</option>`).join("");
+  const workerOptions = cache.workers.filter(w => w.active !== false).map(w => `<option value="${w.id}" data-name="${esc(w.name)}">${esc(w.name)}</option>`).join("");
   const logRows = logs.map(l => `
     <div class="internal-log-item">
       <div class="internal-log-info">
@@ -22307,7 +22316,7 @@ function showNewInternalTaskModal() {
   if (!perm.addTask()) { toast("无「下达内部任务」权限"); return; }
   closeNewInternalTaskModal();
   
-  const workerChips = cache.workers.map(w => `
+  const workerChips = cache.workers.filter(w => w.active !== false).map(w => `
     <label class="it-worker-chip">
       <input type="checkbox" value="${w.id}" data-name="${escAttr(w.name)}" onchange="updateNewTaskWorkerSummary()">
       <span>${esc(w.name)}</span>
@@ -22882,7 +22891,8 @@ function openEditInternalTaskModal(id) {
   closeEditInternalTaskModal();
 
   const taskWids = getTaskWorkerIds(task);
-  const workerChips = cache.workers.map(w => {
+  // 离职人员不再出现在新增候选；任务里已指派的人仍显示勾选，避免编辑历史任务时丢人
+  const workerChips = cache.workers.filter(w => w.active !== false || taskWids.includes(w.id)).map(w => {
     const checked = taskWids.includes(w.id) ? "checked" : "";
     return `
     <label class="it-worker-chip">
@@ -28661,7 +28671,7 @@ function renderCalendar() {
        轻松容量 = 在岗人数 × 8h（含吃饭休息，正常排班）
        满负荷   = 在岗人数 × 10h（8:00-18:00，不休息）
        > 满负荷 → 超载需加班(红)；> 轻松容量 → 满负荷/不休息(橙)；其余为轻松(蓝) */
-    const onDutyWorkers = cache.workers.filter(w => !isWorkerOnLeave(w.id, ds)).length;
+    const onDutyWorkers = cache.workers.filter(w => w.active !== false && !isWorkerOnLeave(w.id, ds)).length;
     const easyCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS_EASY;
     const fullCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS;
     const avgPerPerson = totalHours / Math.max(onDutyWorkers, 1);
@@ -28755,7 +28765,7 @@ function renderCalDay() {
   const internalHours = items
     .filter(p => (p.assignedWorkerIds || []).length > 0)
     .reduce((sum, p) => sum + getProjectDayEstimatedHours(p, calSelectedDate), 0);
-  const onDutyWorkers = cache.workers.filter(w => !isWorkerOnLeave(w.id, calSelectedDate)).length;
+  const onDutyWorkers = cache.workers.filter(w => w.active !== false && !isWorkerOnLeave(w.id, calSelectedDate)).length;
   const easyCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS_EASY;
   const fullCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS;
   const loadRatio = fullCapacity > 0 ? internalHours / fullCapacity : 0;
@@ -28951,7 +28961,7 @@ function renderTimelineInDetail() {
   }).length;
 
   /* 内部人员产能与负荷（与列表式视图同一口径） */
-  const onDutyWorkers = cache.workers.filter(w => !isWorkerOnLeave(w.id, calSelectedDate)).length;
+  const onDutyWorkers = cache.workers.filter(w => w.active !== false && !isWorkerOnLeave(w.id, calSelectedDate)).length;
   const easyCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS_EASY;
   const fullCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS;
   const loadRatio = fullCapacity > 0 ? statInternalHours / fullCapacity : 0;
@@ -31531,7 +31541,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v7e14a416";
+  const APP_VERSION = "va0f70594";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
