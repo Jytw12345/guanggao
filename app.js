@@ -12364,36 +12364,58 @@ function ggShowCameraButton() {
   return true;
 }
 
-/* file input 的「视觉隐藏」内联样式：保留在渲染树里但移出屏幕左侧（-9999px）。
-   不用 display:none —— 打包壳（PackPlus apk）的 WebView 里对 display:none 元素
-   调用 .click() 和 <label for> 都不生效；也不用 opacity:0 / clip:rect() ——
-   部分 WebView 对透明裁剪元素的 label for 关联同样失效，必须让元素在布局上
-   「真实存在且可交互」。 */
-const FILE_INPUT_SR_STYLE = 'style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:1;overflow:hidden;white-space:nowrap;border:0;padding:0;margin:0;"';
+/* ===== WebView 兼容层：file input 触发 =====
+ *
+ * 用户实测（小米12 自带浏览器 PWA + PackPlus apk 打包壳）：
+ *   ① <label for="id"> 在这类定制 WebView 里完全不触发关联 input 的文件选择器；
+ *   ② capture="environment" 被忽略，带 capture 的 input 弹相册而非相机。
+ *
+ * 解法：完全抛弃 <label for> 原生关联，改为 JS 手动触发 input.click()，
+ *      拍照按钮在 click() 前强制设置 input.capture = "environment"。
+ *      input 用 display:none 隐藏（JS click 对现代 WebView 不受 display:none 限制）。
+ */
+const FILE_INPUT_SR_STYLE = 'style="display:none;"';
 
-/* 相机按钮 + 隐藏 input（按能力检测条件渲染；onChangeAttr 为该 input 的 onchange 表达式）。
-   用 <label for> 原生触发选择器，不依赖 JS 的 .click()。 */
+/** JS 手动触发 file input（兜底方案，兼容 WebView 忽略 label for 的情况）。
+ *  @param {string} id       —— <input type="file"> 的 id
+ *  @param {string} [capture] —— 可选 "environment"/"user"，设了就强制写 input.capture */
+function ggTriggerFile(id, capture) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  if (capture) {
+    try { el.setAttribute("capture", capture); el.capture = capture; } catch (e) {}
+  }
+  try { el.click(); } catch (e) {}
+}
+
+/* 相机按钮 + 隐藏 input（按能力检测条件渲染）。
+   用 JS onclick 手动调 ggTriggerFile 强制设置 capture 再 click，
+   彻底绕开 WebView 对 label for / capture 属性的支持缺陷。 */
 function ggCamButton(idBase, onChangeAttr) {
   if (!ggShowCameraButton()) return "";
+  var camId = idBase + "_cam";
   return (
-    `<label class="cos-add cos-add--cam" for="${idBase}_cam">📷 拍照</label>` +
-    `<input id="${idBase}_cam" type="file" accept="image/*" capture="environment" ${FILE_INPUT_SR_STYLE} onchange="${onChangeAttr}">`
+    `<button type="button" class="cos-add cos-add--cam" onclick="ggTriggerFile('${camId}','environment')">📷 拍照</button>` +
+    `<input id="${camId}" type="file" accept="image/*" capture="environment" ${FILE_INPUT_SR_STYLE} onchange="${onChangeAttr}">`
+  );
+}
+
+/* 相册按钮 —— 不设 capture，走普通文件选择（系统弹相册/文件管理器）。 */
+function ggAlbumButton(idBase, onChangeAttr, multiple) {
+  var fileId = idBase + "_file";
+  var m = multiple !== false ? " multiple" : "";
+  return (
+    `<button type="button" class="cos-add" onclick="ggTriggerFile('${fileId}')">🖼️ 相册</button>` +
+    `<input id="${fileId}" type="file" accept="image/*"${m} ${FILE_INPUT_SR_STYLE} onchange="${onChangeAttr}">`
   );
 }
 
 /* ===== 通用「拍照 + 相册/文件夹」双入口图片上传 =====
- * 旧的单 file input 改为：📷 拍照（capture=environment 直接调相机）+ 🖼️ 相册（普通 file 弹相册/文件夹），
- * 两个 input 共用同一个 onchange handler（handler 内部读 input.files，与具体哪个 input 触发无关）。
- * 桌面端点「相册」弹文件管理器、点「拍照」多数浏览器也回退为文件选择；移动端点「拍照」直接调相机。 */
+ * 两个 input 共用同一个 onchange handler。桌面端点「拍照」多数浏览器回退为文件选择，
+ * 移动端（Android WebView 含打包壳）JS 强制设 capture=environment 后直接调相机。 */
 function dualPhotoInputHTML(idBase, onChange, opts) {
   opts = opts || {};
-  const multiple = opts.multiple !== false;
-  const m = multiple ? " multiple" : "";
-  return (
-    ggCamButton(idBase, onChange) +
-    `<label class="cos-add" for="${idBase}_file">🖼️ 相册</label>` +
-    `<input id="${idBase}_file" type="file" accept="image/*"${m} ${FILE_INPUT_SR_STYLE} onchange="${onChange}">`
-  );
+  return ggCamButton(idBase, onChange) + ggAlbumButton(idBase, onChange, opts.multiple);
 }
 
 /* 维修单照片（问题照片 / 修复后效果）：暂存工作集按 prefix 区分，提交时再上传 COS。 */
@@ -12404,8 +12426,7 @@ function repairPhotoBlockHTML(prefix, label) {
       `<div class="photo-block">` +
         `<div class="photo-block__actions">` +
           ggCamButton(prefix, `stagePhotoBlock(this,'${prefix}')`) +
-          `<label class="cos-add" for="${prefix}_file">🖼️ 相册</label>` +
-          `<input id="${prefix}_file" type="file" accept="image/*" multiple ${FILE_INPUT_SR_STYLE} onchange="stagePhotoBlock(this,'${prefix}')">` +
+          ggAlbumButton(prefix, `stagePhotoBlock(this,'${prefix}')`) +
         `</div>` +
         `<div class="cos-grid" id="phGrid_${prefix}"></div>` +
       `</div>` +
@@ -20029,9 +20050,8 @@ function openCompleteProjectForm(id) {
       <div id="completePhotosWrap" class="cos-grid"></div>
       <div class="photo-block__actions" style="margin-top:8px;">
         ${ggCamButton("completePhotoInput", "stageCompletePhotos(this)")}
-        <label class="cos-add" for="completePhotoInput_file">🖼️ 相册</label>
+        ${ggAlbumButton("completePhotoInput", "stageCompletePhotos(this)")}
       </div>
-      <input id="completePhotoInput_file" type="file" accept="image/*" multiple ${FILE_INPUT_SR_STYLE} onchange="stageCompletePhotos(this)">
     </div>`;
   }
   
@@ -31758,7 +31778,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v4462bfb2";
+  const APP_VERSION = "va6e4dd4b";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
