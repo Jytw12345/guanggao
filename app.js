@@ -12329,11 +12329,13 @@ window.__ggHasCamera = undefined;
 (function ggDetectCamera() {
   try {
     var ua = (navigator.userAgent || "").toLowerCase();
-    // 打包壳 WebView（PackPlus / PakePlus / 通用 Android WebView，UA 含 "wv)" 或 "webview"）：
-    // capture 属性被 WebView 完全忽略，带 capture 的 input 弹相册而非相机 → 拍照按钮和相册按钮 100% 重复，直接隐藏。
-    // 注意：Chrome TWA PWA（从 Chrome 安装到桌面的 PWA）UA 不含 "wv"，capture 正常工作，不属于此类。
-    var isPackagedWV = /packplus|pakeplus|webview|;\s*wv\)/.test(ua);
-    if (isPackagedWV) { window.__ggHasCamera = false; return; }
+    // 仅对**原生打包壳**（PackPlus / PakePlus）隐藏拍照按钮：
+    // 这类壳的 WebView 里 capture 属性被彻底忽略，拍照 input 永远弹相册 → 和相册按钮 100% 重复。
+    // 注意区别：
+    // - Chrome TWA PWA / 小米浏览器 standalone PWA → UA 可能含 wv 但 capture 走系统 Camera Intent 正常工作
+    //   （即便 capture 最终被忽略，也和相册按钮行为一致，不至于隐藏）
+    var isNativePackager = /packplus|pakeplus/.test(ua);
+    if (isNativePackager) { window.__ggHasCamera = false; return; }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { window.__ggHasCamera = false; return; }
     var done = function (has) { window.__ggHasCamera = !!has; };
@@ -12364,21 +12366,25 @@ function ggShowCameraButton() {
   return true;
 }
 
-/* ===== WebView 兼容层：file input 触发 =====
+/* ===== file input 双保险触发：label 原生关联 + JS click =====
  *
- * 用户实测（小米12 自带浏览器 PWA + PackPlus apk 打包壳）：
- *   ① <label for="id"> 在这类定制 WebView 里完全不触发关联 input 的文件选择器；
- *   ② capture="environment" 被忽略，带 capture 的 input 弹相册而非相机。
+ * 实测（小米12 自带浏览器 + 安装到桌面的 standalone PWA + PackPlus 壳）：
+ *   ① display:none 的 input → <label for> 关联失效 + JS click 也失效（两条路一起堵）
+ *   ② opacity:0 / clip:rect → 部分 WebView 忽略 label for
+ *   ③ 只留 JS click → standalone PWA WebView 会拦
  *
- * 解法：完全抛弃 <label for> 原生关联，改为 JS 手动触发 input.click()，
- *      拍照按钮在 click() 前强制设置 input.capture = "environment"。
- *      input 用 display:none 隐藏（JS click 对现代 WebView 不受 display:none 限制）。
+ * 解法：input 移出屏幕左侧（left:-9999px，在渲染树中真实存在且可交互）；
+ *      按钮用 <label for="id" onclick="ggTriggerFile(id, capture)"> —— label
+ *      点下去先走浏览器原生 label→input 关联触发文件选择器，同时 JS onclick 也
+ *      再补一次 click()。两条链路并行，任一生效即可。
  */
-const FILE_INPUT_SR_STYLE = 'style="display:none;"';
+const FILE_INPUT_SR_STYLE = 'style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:1;overflow:hidden;white-space:nowrap;border:0;padding:0;margin:0;"';
 
-/** JS 手动触发 file input（兜底方案，兼容 WebView 忽略 label for 的情况）。
+/** JS 手动触发 file input（作为 label for 原生关联的兜底补充）。
  *  @param {string} id       —— <input type="file"> 的 id
- *  @param {string} [capture] —— 可选 "environment"/"user"，设了就强制写 input.capture */
+ *  @param {string} [capture] —— 可选 "environment"/"user"，设了就强制写 input.capture
+ *  注意：label for 已经会触发 input，这里的 click() 是「再补一次」，
+ *  浏览器对重复触发有去重，不会弹两次选择器。 */
 function ggTriggerFile(id, capture) {
   var el = document.getElementById(id);
   if (!el) return;
@@ -12388,24 +12394,24 @@ function ggTriggerFile(id, capture) {
   try { el.click(); } catch (e) {}
 }
 
-/* 相机按钮 + 隐藏 input（按能力检测条件渲染）。
-   用 JS onclick 手动调 ggTriggerFile 强制设置 capture 再 click，
-   彻底绕开 WebView 对 label for / capture 属性的支持缺陷。 */
+/* 相机按钮 + 隐藏 input。
+   <label for> 原生关联 + onclick 里 JS click 双保险，
+   确保小米 standalone PWA / PackPlus 壳都能触发。 */
 function ggCamButton(idBase, onChangeAttr) {
   if (!ggShowCameraButton()) return "";
   var camId = idBase + "_cam";
   return (
-    `<button type="button" class="cos-add cos-add--cam" onclick="ggTriggerFile('${camId}','environment')">📷 拍照</button>` +
+    `<label class="cos-add cos-add--cam" for="${camId}" onclick="ggTriggerFile('${camId}','environment')">📷 拍照</label>` +
     `<input id="${camId}" type="file" accept="image/*" capture="environment" ${FILE_INPUT_SR_STYLE} onchange="${onChangeAttr}">`
   );
 }
 
-/* 相册按钮 —— 不设 capture，走普通文件选择（系统弹相册/文件管理器）。 */
+/* 相册按钮 —— 不设 capture，走普通文件选择。 */
 function ggAlbumButton(idBase, onChangeAttr, multiple) {
   var fileId = idBase + "_file";
   var m = multiple !== false ? " multiple" : "";
   return (
-    `<button type="button" class="cos-add" onclick="ggTriggerFile('${fileId}')">🖼️ 相册</button>` +
+    `<label class="cos-add" for="${fileId}" onclick="ggTriggerFile('${fileId}')">🖼️ 相册</label>` +
     `<input id="${fileId}" type="file" accept="image/*"${m} ${FILE_INPUT_SR_STYLE} onchange="${onChangeAttr}">`
   );
 }
@@ -31778,7 +31784,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v6213643f";
+  const APP_VERSION = "v50f8578e";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
