@@ -341,7 +341,9 @@ const CAP_LABEL = {
   manage_outsourced: "管理外协人员",
   project_edit_appointment_own: "修改自己项目预约时间",
   project_edit_appointment_all: "修改所有项目预约时间",
-  project_edit_contract: "修改包活金额",
+  // 命名口径（2026-11-15）：权限项叫「修改全部项目金额」，避免用户误以为只管"包活"这一种
+  // 结算方式的金额；它实际控制的是工程金额（包活方式 / 金额）这一整类字段。
+  project_edit_contract: "修改全部项目金额",
   project_edit_commission: "修改工人分成",
   project_edit_cost_deduction: "修改成本扣项",
   export_projects: "导出项目数据",
@@ -563,13 +565,14 @@ const perm = {
   // 门店兜底：与 editProject / rework / reviewProject 同口径 —— 「编辑所有项目」权限 或 总经理 或
   // 未绑定门店（跨店账号）放行；否则仅限本门店项目。防止单独勾了本权限的账号改到别店项目的工钱。
   // 改工程金额：管理员（包活金额权限 + 门店兜底）审核前随时可改；
-  // 另加「预约人直改」——验收前，建单人可改自己项目的工程金额（用户口径 2026-10-22：
-  // 「工程金额只有管理员可修改吗？应该是验收前项目预约人可编辑吧，当然管理员肯定也是可以修改的」）。
-  // 预约人路径无需门店兜底（自己的单必然同店）；验收后仅管理员可改，审核后一律锁定。
+  // 另加「预约人直改」——审核前，建单人可改自己项目的工程金额（用户口径 2026-10-22：
+  // 「工程金额只有管理员可修改吗？应该是验收前项目预约人可编辑吧，当然管理员肯定也是可以修改的」；
+  // 2026-11-15 放宽为：完工/验收后到审核前，预约人仍可改（已审核由外层 !isReviewed 统一锁定）。
+  // 预约人路径无需门店兜底（自己的单必然同店）。
   editContract: (p) => !isReviewed(p) && (
     (can(CAP.PROJECT_EDIT_CONTRACT)
       && (explicitGrant(CAP.PROJECT_EDIT_CONTRACT) || can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())))
-    || (isProjectBooker(p) && p.status !== STATUS.ACCEPTED && p.status !== STATUS.CANCELLED)
+    || (isProjectBooker(p) && p.status !== STATUS.CANCELLED)
   ),
   editCommission: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COMMISSION)
     && (explicitGrant(CAP.PROJECT_EDIT_COMMISSION) || can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
@@ -654,9 +657,17 @@ function isReviewed(p) {
 
 /* 是否为该项目的预约人（建单人）：createdBy 存 auth user id，
    与 currentProfile.id 同源（profiles.id = auth uid，见登录后 newProfile 构造）。
+   两处兜底（2026-11-15，用户反馈「已完工的单预约人改不了金额」）：
+   ① 同时比对 currentUser.id，避免 profiles.id 与 auth uid 不一致时误判；
+   ② 历史数据（本地迁移 / CSV 导入的项目 projectToRow 不写 created_by）没有预约人，
+      此时把「同门店店长」视作预约人，否则这批老单的金额在店长手上永远改不了。
    本地单机模式 currentProfile 无 id 字段，恒 false（单机本就是全权限管理员）。 */
 function isProjectBooker(p) {
-  return !!p && !!p.createdBy && !!currentProfile && p.createdBy === currentProfile.id;
+  if (!p) return false;
+  const meIds = [currentProfile && currentProfile.id, currentUser && currentUser.id].filter(Boolean);
+  if (p.createdBy) return meIds.includes(p.createdBy);
+  // created_by 缺失：同店店长兜底
+  return isStoreManager() && !!myStore() && p.storeId === myStore();
 }
 
 /* 判断项目是否为系统自动审核（验收满设定时长后自动置为已审核）。
@@ -710,17 +721,57 @@ function isForgotWork(p) {
 
 /* 预约时间 / 预约工时是否已锁定。
    业务规则：项目一旦开工，预约时间与预约工时即成为历史基准（用于对比实际工时、考核准点率），
-   不允许再回头修改——即使拥有「修改所有项目预约时间/工时」权限也不行。
-   需要改期请走「延期」流程（带原因与延期记录），需要记录实际耗时请登记工时。 */
+   普通情况下不允许再回头修改——即使拥有「修改所有项目预约时间/工时」权限也不行。
+   需要改期请走「延期」流程（带原因与延期记录），需要记录实际耗时请登记工时。
+   例外（用户口径 2026-11-15）：**已完工（未验收）允许改**——跨天预约提前干完时要能减掉
+   多余的预约天，否则第二天还挂着一条已完工的预约；已验收/已审核仍永久锁定。 */
 function isAppointmentLocked(p) {
-  return isProjectLocked(p) || isConstructionStarted(p);
+  if (!p) return false;
+  if ([STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) return true;
+  if (p.status === STATUS.DONE) return false;
+  return isConstructionStarted(p);
 }
 
 /* 预约锁定原因文案，用于 toast 与表单提示 */
 function appointmentLockReason(p) {
-  if (isProjectLocked(p)) return "已完工/已验收/已审核的项目不可修改预约时间和工时";
+  if (!p) return "";
+  if ([STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) return "已验收/已审核的项目不可修改预约时间和工时";
+  if (p.status === STATUS.DONE) return ""; // 已完工未验收：允许改（2026-11-15）
   if (isConstructionStarted(p)) return "项目已开工，预约时间与预约工时不可再修改；如需改期请使用「延期」";
   return "";
+}
+
+/* 提前完工时截断「未来」的预约时段（跨天预约在第一天就把活干完）。
+   业务诉求（2026-11-15）：预约 11/08~11/09，11/08 当天完工，第二天不该再显示预约信息，
+   否则日历/时间线上仍挂着一条已经干完的预约。
+   规则：
+   - 只处理多段（跨天）预约，单段预约保持原样；
+   - 保留开始时间早于完工时刻的时段；含完工时刻的那段把结束时间截到完工时刻；
+   - 返回 { workSegments, endTime, removedSegs }；未发生截断返回 null。 */
+function trimBookedSegmentsOnFinish(p, finishedAt) {
+  if (!p || !Array.isArray(p.workSegments) || p.workSegments.length < 2) return null;
+  const fin = finishedAt instanceof Date ? finishedAt : new Date(finishedAt);
+  if (isNaN(fin)) return null;
+  const segs = getBookedSegments(p); // 已排序、已解析成 Date
+  if (!segs.length) return null;
+  const kept = [];
+  let touched = false;
+  for (const s of segs) {
+    if (s.start >= fin) { touched = true; continue; } // 该段开始时活已干完 → 整天减掉
+    if (s.end > fin) {
+      touched = true;
+      kept.push({ date: s.date, start: s.startHM, end: hmOf(fin), endDate: dateKey(fin) });
+    } else {
+      kept.push({ date: s.date, start: s.startHM, end: s.endHM });
+    }
+  }
+  if (!touched || !kept.length) return null; // 全在完工之后（异常数据）不动，避免删空
+  const last = kept[kept.length - 1];
+  return {
+    workSegments: kept.map(({ date, start, end }) => ({ date, start, end })),
+    endTime: buildLocalDateTime(last.endDate || last.date, last.end),
+    removedSegs: segs.length - kept.length,
+  };
 }
 
 /* 判断项目预约时间是否真正被改期（当前预约时间 ≠ 最初预约时间）。
@@ -10995,7 +11046,7 @@ function renderProjects() {
         </div>
 
         <!-- 包活制：工程金额 /（扣项）/ 分成池（视觉重点：淡绿金额条，主数字放大加粗）
-             有包活编辑权限时整块可点，直接弹「修改包活金额」快捷弹窗。
+             有包活编辑权限时整块可点，直接弹「修改项目金额」快捷弹窗。
              ① 金额未填显示「未填金额」而非 ¥0（¥0 会被误读成"这单 0 块钱"）；
              ② 标签写全「工程金额」而非「工程」，消除歧义；
              ③ 有扣项时显示被扣除的部分（包工包料=材料，包工=吊车/运费等），
@@ -11008,7 +11059,7 @@ function renderProjects() {
           const _pool = getCommissionPool(p);
           if (!(_a > 0) && !canEditContract) return "";
           return `
-        <div class="card-contract${canEditContract ? " is-editable" : ""}"${canEditContract ? ` onclick="openQuickContractEdit('${p.id}')" title="点击修改包活金额"` : ""}>
+        <div class="card-contract${canEditContract ? " is-editable" : ""}"${canEditContract ? ` onclick="openQuickContractEdit('${p.id}')" title="点击修改项目金额"` : ""}>
           <span class="card-contract__tag">💰 ${esc(_t)}</span>
           ${_a > 0
             ? `<span class="card-contract__amt"><i>工程金额</i><b>¥${_a.toFixed(0)}</b></span>`
@@ -11254,7 +11305,7 @@ function projectForm(p = {}, opts = {}) {
   // 仅拥有「修改预约时间/工时」等子权限的用户打开表单时，这些字段只读，避免越权。
   // 注意：这里用「终态锁」而非「预约锁」——开工后基本信息仍可编辑，只锁预约时间与工时。
   const basicDisabled = !!p.id && (isProjectLocked(p) || !perm.editProject(p));
-  // 包活字段（包活方式/工程金额/材料费）由独立权限「修改包活金额」控制（2026-10-18 从 editProject 拆出），
+  // 包活字段（包活方式/工程金额/材料费）由独立权限「修改全部项目金额」控制（2026-10-18 从 editProject 拆出），
   // 便于把「能改基本信息但不能动钱」或「只让店长改钱」这类授权分开配置。
   const contractDisabled = !!p.id && (isProjectLocked(p) || !perm.editContract(p));
   // 初始化表单照片工作集（现场图 / 施工图及物料 两类，预约时即可添加）；新建项目默认可添加
@@ -11544,7 +11595,7 @@ function costDeductionNoteSummary(items) {
 }
 
 /* ===== 费用管理 板块（施工管理详情页，2026-10-21）=====
-   工程金额：验收前预约人（建单人，isProjectBooker）可改，管理员（包活金额权限+门店兜底）
+   工程金额：审核前预约人（建单人，isProjectBooker）可改，管理员（包活金额权限+门店兜底）
    审核前随时可改，统一走 perm.editContract；成本扣项 / 添加明细：仅成本扣项权限
    （perm.editCostDeduction）可改。见 renderConstruction 中的 .cost-mgmt-block。 */
 function cmCalc() {
@@ -11623,7 +11674,7 @@ function removeOutsourcedCostLine(cd, name) {
    包活金额快捷修改（2026-10-18）
    项目详情里的「💰 包活 / 工程金额 / 工费 / 分成池」摘要块做成可点击：
    点一下即弹出小表单改「包活方式 + 工程金额（+ 材料费）」，实时联动工费与分成池，
-   无需回预约表单里翻找。权限沿用 perm.editContract（修改包活金额）。
+   无需回预约表单里翻找。权限沿用 perm.editContract（修改全部项目金额）。
    ============================================================ */
 /* 计算包活金额/成本扣项改动后的「每人分成前后对比」，供快捷弹窗实时预览。
    返回 { pool, oldMap, newMap, rows, outShrink }：
@@ -11651,7 +11702,7 @@ function previewCommissionChange(p, newType, amt, cdSum) {
 function openQuickContractEdit(id) {
   const p = getProject(id);
   if (!p) return;
-  if (!perm.editContract(p)) { toast("权限不足，无法修改包活金额"); return; }
+  if (!perm.editContract(p)) { toast("权限不足，无法修改项目金额"); return; }
   const isMaterial = (p.contractType || "包工") === "包工包料";
   // 底部提示分级：已验收项目（提成已计入统计）用橙红强警示；未验收用中性说明
   const isCounted = typeof isCommissionCounted === "function" && isCommissionCounted(p);
@@ -11688,8 +11739,8 @@ function openQuickContractEdit(id) {
     <div class="qc-alloc-preview" id="qcAllocPreview"></div>
     ${callout}
   </div>`;
-  modal.open("修改包活金额", body, {
-    titleHtml: "💰 修改包活金额",
+  modal.open("修改项目金额", body, {
+    titleHtml: "💰 修改项目金额",
     narrow: true,
     confirmText: "保存",
     cancelText: "取消",
@@ -11760,7 +11811,7 @@ function openQuickContractEdit(id) {
       actionLogs.push({
         time: new Date().toISOString(),
         action: "contract_edit",
-        description: `修改包活金额：${changes.join("；")}（工费 ¥${labor.toFixed(2)}，分成池 ¥${(Math.round(labor / 2 * 100) / 100).toFixed(2)}）`,
+        description: `修改项目金额：${changes.join("；")}（工费 ¥${labor.toFixed(2)}，分成池 ¥${(Math.round(labor / 2 * 100) / 100).toFixed(2)}）`,
         operator: currentProfile?.name || currentUser?.email || "系统",
         operatorRole: currentProfile?.role,
       });
@@ -12146,12 +12197,19 @@ function ggShowCameraButton() {
   return true;
 }
 
-/* 相机按钮 + 隐藏 input（按能力检测条件渲染；onChangeAttr 为该 input 的 onchange 表达式）。 */
+/* file input 的「视觉隐藏」内联样式：保留在渲染树里（1px + 透明 + 裁剪），
+   不用 display:none —— 打包壳（PackPlus exe/apk）的 WebView 里，
+   对 display:none 的 file input 调用 .click() 常常被直接忽略（点击无反应），
+   而 <label for> 原生触发对「已渲染但不可见」的 input 是可靠的。 */
+const FILE_INPUT_SR_STYLE = 'style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;padding:0;margin:-1px;"';
+
+/* 相机按钮 + 隐藏 input（按能力检测条件渲染；onChangeAttr 为该 input 的 onchange 表达式）。
+   用 <label for> 原生触发选择器，不依赖 JS 的 .click()。 */
 function ggCamButton(idBase, onChangeAttr) {
   if (!ggShowCameraButton()) return "";
   return (
-    `<button type="button" class="cos-add cos-add--cam" onclick="document.getElementById('${idBase}_cam').click()">📷 拍照</button>` +
-    `<input id="${idBase}_cam" type="file" accept="image/*" capture="environment" class="hidden" onchange="${onChangeAttr}">`
+    `<label class="cos-add cos-add--cam" for="${idBase}_cam">📷 拍照</label>` +
+    `<input id="${idBase}_cam" type="file" accept="image/*" capture="environment" ${FILE_INPUT_SR_STYLE} onchange="${onChangeAttr}">`
   );
 }
 
@@ -12165,8 +12223,8 @@ function dualPhotoInputHTML(idBase, onChange, opts) {
   const m = multiple ? " multiple" : "";
   return (
     ggCamButton(idBase, onChange) +
-    `<button type="button" class="cos-add" onclick="document.getElementById('${idBase}_file').click()">🖼️ 相册</button>` +
-    `<input id="${idBase}_file" type="file" accept="image/*"${m} class="hidden" onchange="${onChange}">`
+    `<label class="cos-add" for="${idBase}_file">🖼️ 相册</label>` +
+    `<input id="${idBase}_file" type="file" accept="image/*"${m} ${FILE_INPUT_SR_STYLE} onchange="${onChange}">`
   );
 }
 
@@ -12178,8 +12236,8 @@ function repairPhotoBlockHTML(prefix, label) {
       `<div class="photo-block">` +
         `<div class="photo-block__actions">` +
           ggCamButton(prefix, `stagePhotoBlock(this,'${prefix}')`) +
-          `<button type="button" class="cos-add" onclick="document.getElementById('${prefix}_file').click()">🖼️ 相册</button>` +
-          `<input id="${prefix}_file" type="file" accept="image/*" multiple class="hidden" onchange="stagePhotoBlock(this,'${prefix}')">` +
+          `<label class="cos-add" for="${prefix}_file">🖼️ 相册</label>` +
+          `<input id="${prefix}_file" type="file" accept="image/*" multiple ${FILE_INPUT_SR_STYLE} onchange="stagePhotoBlock(this,'${prefix}')">` +
         `</div>` +
         `<div class="cos-grid" id="phGrid_${prefix}"></div>` +
       `</div>` +
@@ -12758,7 +12816,7 @@ async function saveProject(id) {
       payload.workContent = _ex.workContent;
       payload.storeId = _ex.storeId;
       payload.workerCount = _ex.workerCount;
-      // 包活字段由独立权限「修改包活金额」保护（2026-10-18 拆分），无权者保持原值
+      // 包活字段由独立权限「修改全部项目金额」保护（2026-10-18 拆分），无权者保持原值
       if (!perm.editContract(_ex)) {
         payload.contractType = _ex.contractType;
         payload.projectAmount = _ex.projectAmount;
@@ -13397,7 +13455,7 @@ async function submitRepairAssign(projectId, repairId) {
 function openRepairPayEdit(projectId, repairId) {
   const p = getProject(projectId);
   if (!p) { toast("项目不存在"); return; }
-  if (!perm.editRepairPay(p)) { toast("无权限修改维修单收费（需「包活金额」权限）"); return; }
+  if (!perm.editRepairPay(p)) { toast("无权限修改维修单收费（需「修改全部项目金额」权限）"); return; }
   const ro = (p.repairOrders || []).find(r => r.id === repairId);
   if (!ro) { toast("维修单不存在"); return; }
   const legacyPaid = ro.payType == null && ro.payable === true;
@@ -13508,7 +13566,7 @@ async function submitRepairPayEdit(projectId, repairId) {
 function openRepairCommission(projectId, repairId) {
   const p = getProject(projectId);
   if (!p) { toast("项目不存在"); return; }
-  if (!perm.editRepairPay(p)) { toast("无权限调整维修工钱分成（需「包活金额」权限）"); return; }
+  if (!perm.editRepairPay(p)) { toast("无权限调整维修工钱分成（需「修改全部项目金额」权限）"); return; }
   const ro = (p.repairOrders || []).find(r => r.id === repairId);
   if (!ro) { toast("维修单不存在"); return; }
   const isPaid = ro.payType === "paid" || (ro.payType == null && ro.payable === true);
@@ -13572,7 +13630,7 @@ async function submitRepairCommission(projectId, repairId) {
   const idx = p.repairOrders.findIndex(r => r.id === repairId);
   if (idx < 0) { toast("维修单不存在"); return; }
   const ro = p.repairOrders[idx];
-  if (!perm.editRepairPay(p)) { toast("无权限调整维修工钱分成（需「包活金额」权限）"); return; }
+  if (!perm.editRepairPay(p)) { toast("无权限调整维修工钱分成（需「修改全部项目金额」权限）"); return; }
   const poolCents = Math.round((Number(ro.commissionPool) || 0) * 100);
   if (poolCents <= 0) { toast("该维修单没有分成池"); return; }
   const inputs = [...document.querySelectorAll(".rc-input")];
@@ -15504,7 +15562,7 @@ function renderConstruction() {
   // 手动登记工时（添加/编辑/删除）只允许「施工中」或「已暂停」；预约中没开工、已完工/已验收后不应再改工时。
   const canAssign = perm.assignWorker(p);
   const canReview = perm.reviewProject(p);
-  // 包活金额摘要块可点编辑（perm.editContract = 修改包活金额权限 + 未审核）
+  // 包活金额摘要块可点编辑（perm.editContract = 修改全部项目金额权限 + 未审核）
   const canEditContract = perm.editContract(p);
   const logsRows = (p.workLogs || []).length
     ? p.workLogs.map((l) => {
@@ -15816,7 +15874,7 @@ function renderConstruction() {
     ${assignBlock}
 
     ${(() => {
-      // 费用管理 板块：工程金额=验收前预约人（建单人）可改 + 管理员（包活金额权限，带门店兜底）
+      // 费用管理 板块：工程金额=审核前预约人（建单人）可改 + 管理员（包活金额权限，带门店兜底）
       // 随时可改，两者都走 perm.editContract；成本扣项（材料/现场成本/外协工钱）仅成本扣项权限
       // （editCostDeduction）可改。仅已审核（isReviewed）后整块锁定，只能走维修/返工整改；
       // 已验收(ACCEPTED)未审核前有权限仍可修正（用户口径 2026-10-22）。
@@ -15827,12 +15885,21 @@ function renderConstruction() {
       // 与完全没有权限点（角色/个性权限都未授予）是两种不同处置。
       const blockedByStore = !canAmt && !canCost
         && (can(CAP.PROJECT_EDIT_CONTRACT) || can(CAP.PROJECT_EDIT_COST_DEDUCTION));
+      // 无权限且非预约人时，明确指出「本单预约人是谁」，避免用户误以为是自己建的单却改不了
+      const bookerName = (() => {
+        if (!p.createdBy) return "";
+        const a = (cache.accounts || []).find((x) => x.id === p.createdBy);
+        return (a && (a.name || a.email)) || "";
+      })();
+      const readOnlyWhy = blockedByStore
+        ? "仅该项目所属门店的账号可改"
+        : (bookerName ? `只读：本单预约人为「${bookerName}」，当前角色无「修改全部项目金额」权限` : "当前角色只读");
       const amt = Number(p.projectAmount) || 0;
       return `
         <div class="detail-block cost-mgmt-block">
           <div class="assign-head" style="display:flex;align-items:center;justify-content:space-between;">
             <h3>💰 费用管理</h3>
-            ${isReviewed(p) ? `<span class="hint" style="margin:0;color:var(--warn)">🔒 已审核，费用不可改</span>` : (!canAmt && !canCost ? `<span class="hint" style="margin:0">${blockedByStore ? "仅该项目所属门店的账号可改" : "当前角色只读"}</span>` : "")}
+            ${isReviewed(p) ? `<span class="hint" style="margin:0;color:var(--warn)">🔒 已审核，费用不可改</span>` : (!canAmt && !canCost ? `<span class="hint" style="margin:0">${readOnlyWhy}</span>` : "")}
           </div>
           <div class="cost-mgmt__row">
             <label class="cost-mgmt__label">工程金额<span style="font-size:11px;color:#64748b;font-weight:400;">（预约人/管理员可改${canAmt ? "" : " · 只读"}）</span></label>
@@ -15854,7 +15921,7 @@ function renderConstruction() {
     ${(p.appointmentTime || p.startedAt || p.finishedAt || p.workSessions.length > 0 || p.pauseCount > 0 || p.reviewedAt || p.pauseHistory.length > 0 || p.delayHistory.length > 0 || (p.acceptance && p.acceptance.acceptedAt) || p.workerChangeHistory.length > 0 || p.actionLogs.length > 0 || p.cancelledAt) ? `
     <div class="detail-block">
       <h3>📝 施工记录</h3>
-      <div class="rec-hint">开工 / 暂停 / 延期 / 完工 / 分配人员 / <b>修改包活金额</b>等改动都记在下方「📋 操作日志」里</div>
+      <div class="rec-hint">开工 / 暂停 / 延期 / 完工 / 分配人员 / <b>修改项目金额</b>等改动都记在下方「📋 操作日志」里</div>
       <div class="rec-timeline">
         ${buildStatusTimeCards(p)}
         ${projectWorkerStats.totalHours > 0 ? `<div class="rec-node rec-node--violet">
@@ -19738,11 +19805,11 @@ function openCompleteProjectForm(id) {
     form += `<div class="form-row" style="grid-column:1/-1;">
       <label>上传完工图</label>
       <div id="completePhotosWrap" class="cos-grid"></div>
-      ${ggCamButton("completePhotoInput", "stageCompletePhotos(this)")}
-      <input id="completePhotoInput_file" type="file" accept="image/*" multiple class="hidden" onchange="stageCompletePhotos(this)">
       <div class="photo-block__actions" style="margin-top:8px;">
-        <button type="button" class="cos-add" onclick="document.getElementById('completePhotoInput_file').click()">🖼️ 相册</button>
+        ${ggCamButton("completePhotoInput", "stageCompletePhotos(this)")}
+        <label class="cos-add" for="completePhotoInput_file">🖼️ 相册</label>
       </div>
+      <input id="completePhotoInput_file" type="file" accept="image/*" multiple ${FILE_INPUT_SR_STYLE} onchange="stageCompletePhotos(this)">
     </div>`;
   }
   
@@ -19794,6 +19861,14 @@ function openCompleteProjectForm(id) {
 
         const now = new Date();
         const nowStr = now.toISOString();
+
+        // 跨天预约提前完工：把「还没到」的预约时段截掉，避免第二天仍挂着一条已完工的预约
+        // （2026-11-15 用户口径：预约 11/08~11/09，第一天干完点完工后就该只剩 11/08）
+        const trimRes = trimBookedSegmentsOnFinish(p, now);
+        if (trimRes) {
+          p.workSegments = trimRes.workSegments;
+          p.endTime = trimRes.endTime;
+        }
 
         const pauseCount = derivePauseCount(p);
         if (pauseCount > 0) {
@@ -19866,7 +19941,7 @@ function openCompleteProjectForm(id) {
         completionActionLogs.push({
           time: nowStr,
           action: "complete",
-          description: `完成安装，登记总工时 ${totalHours.toFixed(1)} 工时`,
+          description: `完成安装，登记总工时 ${totalHours.toFixed(1)} 工时${trimRes ? `；提前完工，已减掉 ${trimRes.removedSegs} 个未开始的预约时段` : ""}`,
           operator: currentProfile?.name || currentUser?.email || "系统",
           operatorRole: currentProfile?.role
         });
@@ -19903,6 +19978,9 @@ function openCompleteProjectForm(id) {
               in_rework: false,
               commission_mode: cc.mode,
               commission_custom: cc.custom,
+              // 提前完工截断预约时段后同步落库（未截断时为原值，写入无副作用）
+              end_time: p.endTime || null,
+              work_segments: (Array.isArray(p.workSegments) && p.workSegments.length) ? JSON.stringify(p.workSegments) : null,
               updated_at: nowStr
             }).eq("id", id),
             ...newLogs.map(log =>
@@ -31309,7 +31387,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vc674bec7";
+  const APP_VERSION = "v5552f8a9";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
