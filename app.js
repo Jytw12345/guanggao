@@ -12329,11 +12329,11 @@ window.__ggHasCamera = undefined;
 (function ggDetectCamera() {
   try {
     var ua = (navigator.userAgent || "").toLowerCase();
-    // Android WebView（含 PackPlus / PakePlus / 原生 WebView，UA 含 "wv)" 或 "webview"）：
-    // capture="environment" 走系统 Camera Intent，不依赖 WebRTC 的 getUserMedia/enumerateDevices。
-    // 这类环境的 WebView 常常没有完整的 WebRTC API，但拍照 intent 是正常的。
-    var isAndroidWV = /android/.test(ua) && /\bwv\)|webview|packplus|pakeplus/.test(ua);
-    if (isAndroidWV) { window.__ggHasCamera = true; return; }
+    // 打包壳 WebView（PackPlus / PakePlus / 通用 Android WebView，UA 含 "wv)" 或 "webview"）：
+    // capture 属性被 WebView 完全忽略，带 capture 的 input 弹相册而非相机 → 拍照按钮和相册按钮 100% 重复，直接隐藏。
+    // 注意：Chrome TWA PWA（从 Chrome 安装到桌面的 PWA）UA 不含 "wv"，capture 正常工作，不属于此类。
+    var isPackagedWV = /packplus|pakeplus|webview|;\s*wv\)/.test(ua);
+    if (isPackagedWV) { window.__ggHasCamera = false; return; }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { window.__ggHasCamera = false; return; }
     var done = function (has) { window.__ggHasCamera = !!has; };
@@ -31778,7 +31778,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va6e4dd4b";
+  const APP_VERSION = "v6213643f";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -31895,10 +31895,29 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   const installModalLater = document.getElementById("installModalLater");
   if (!bar || !btn || !closeBtn || !text) return;
 
-  // 弹窗关闭记忆：用户点过"以后再说"或×后，当前会话不再自动弹出
+  // 弹窗关闭记忆：当前会话（本页生命周期）不再自动弹出
   let installModalDismissed = false;
 
-  const DISMISS_KEY = "pwa_install_dismissed";
+  // 冷却记忆：存 dismiss 时刻的时间戳，24h 内不再自动弹，过期后自动恢复
+  const DISMISS_KEY = "pwa_install_dismissed_at";
+  const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 小时
+
+  function isDismissCooling() {
+    try {
+      const raw = localStorage.getItem(DISMISS_KEY);
+      if (!raw) return false;
+      const ts = Number(raw);
+      if (!ts) return false;
+      if (Date.now() - ts < DISMISS_COOLDOWN_MS) return true;
+      // 过期了，清理掉
+      localStorage.removeItem(DISMISS_KEY);
+      return false;
+    } catch (e) { return false; }
+  }
+  function markDismissed() {
+    try { localStorage.setItem(DISMISS_KEY, String(Date.now())); } catch (e) {}
+  }
+
   // 读取脚本顶部提前捕获的 deferredPrompt（可能已存在）
   let deferredPrompt = window.__pwaDeferredPrompt || null;
 
@@ -31920,13 +31939,20 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     return false;
   }
 
+  // 当前是否处于「登录面板可见」状态（用于文案贴合场景）
+  function isAuthScreenVisible() {
+    return !!(authScreen && !authScreen.classList.contains("hidden"));
+  }
+
   function showBar(iosMode) {
-    if (localStorage.getItem(DISMISS_KEY) === "1") return;
+    if (isDismissCooling()) return;
     if (iosMode) {
       text.innerHTML = "点击底部 <b>分享 ⤴</b> → <b>添加到主屏幕</b>";
-      btn.style.display = "none"; // iOS 无法用代码呼出安装框
+      btn.style.display = "none";
     } else {
-      text.textContent = "安装到桌面，使用更流畅";
+      text.textContent = isAuthScreenVisible()
+        ? "📲 登录后可离线使用，建议安装到桌面"
+        : "📲 安装到桌面，使用更流畅";
       btn.style.display = "";
     }
     bar.classList.remove("hidden");
@@ -31939,12 +31965,12 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   // ===== 安装引导弹窗 =====
   // 当浏览器触发 beforeinstallprompt（确认可以安装 PWA），自动弹出一个醒目的安装卡片。
   // 注意：prompt() 必须在用户手势中调用，所以弹窗中有"立即安装"按钮让用户点击。
-  // 用户关闭弹窗后，当前会话不再自动弹出（避免打扰）。
+  // 用户关闭弹窗后，当前会话 + 24h 冷却不再自动弹出（避免打扰）。
   function showInstallModal() {
     if (!installModal) return;
-    if (isStandalone()) return;          // 已安装
-    if (installModalDismissed) return;    // 用户已关闭过
-    if (localStorage.getItem(DISMISS_KEY) === "1") return; // 用户已永久关闭横幅
+    if (isStandalone()) return;
+    if (installModalDismissed) return;
+    if (isDismissCooling()) return;
     installModal.classList.remove("hidden");
   }
   function hideInstallModal() {
@@ -31952,42 +31978,33 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     installModal.classList.add("hidden");
   }
 
-  // 关闭：记住不再打扰（同一浏览器长期有效）
+  // 底部横幅 ✕ 按钮 → 24h 冷却
   closeBtn.addEventListener("click", () => {
     hideBar();
-    try { localStorage.setItem(DISMISS_KEY, "1"); } catch (e) {}
+    markDismissed();
   });
 
-  // 登录面板可见且浏览器「确认支持 PWA 安装」时，才显示面板内的「安装」按钮。
-  // 关键：只有浏览器真正触发了 beforeinstallprompt（确认支持一键安装）才显示，
-  // 不支持的浏览器（iOS Safari / 华为 / UC / 小米 / QQ / Firefox 等）完全不显示按钮、不提示。
   function syncLoginInstallBtn() {
     if (!loginInstallBtn) return;
-    // 已以独立模式（已安装）运行 → 不显示安装按钮
     if (isStandalone()) {
       loginInstallBtn.style.display = "none";
       if (loginInstallHint) loginInstallHint.style.display = "none";
       return;
     }
-    // 登录面板可见时，所有未安装的浏览器都展示安装入口：
-    // - 支持 beforeinstallprompt（Android Chrome/Edge）→ 一键安装到桌面
-    // - 不支持的（iOS Safari / 华为 / 小米 / UC / QQ 等自带浏览器）→ 点击后给「菜单→添加到主屏幕」指引
     const visible = authScreen && !authScreen.classList.contains("hidden");
     if (!visible) {
       loginInstallBtn.style.display = "none";
       return;
     }
     loginInstallBtn.style.display = "";
-    loginInstallBtn.textContent = deferredPrompt ? "📲 一键安装到桌面" : "📲 安装到主屏幕";
+    loginInstallBtn.textContent = deferredPrompt
+      ? "📲 一键安装到桌面（可离线）"
+      : "📲 安装到主屏幕";
   }
 
-  // 主动呼出安装框（底部横幅按钮与登录面板按钮共用）
-  // 有 deferredPrompt → 呼出系统安装框；没有 / prompt() 静默失败 → 给出明确的浏览器菜单指引
   function doPrompt() {
-    // 在登录面板按钮下方显示一条醒目的内联提示（不受 z-index / 遮罩遮挡）
     function showInlineHint(msg) {
-      toast(msg); // toast z-index 已提至 99999，确保在登录面板之上
-      // 同时在按钮正下方插入一条内联提示，双重保险
+      toast(msg);
       if (loginInstallHint) {
         loginInstallHint.textContent = msg;
         loginInstallHint.style.display = "";
@@ -32020,113 +32037,79 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
       return;
     }
     const p = deferredPrompt;
-    // 部分国产浏览器触发 beforeinstallprompt 但 e.prompt 不是函数或静默失败
     if (typeof p.prompt !== "function") {
-      deferredPrompt = null;
-      window.__pwaDeferredPrompt = null;
-      syncLoginInstallBtn();
-      fallbackHint();
-      return;
+      deferredPrompt = null; window.__pwaDeferredPrompt = null;
+      syncLoginInstallBtn(); fallbackHint(); return;
     }
-    try {
-      p.prompt();
-    } catch (e) {
-      // prompt() 抛异常 → 兜底
-      deferredPrompt = null;
-      window.__pwaDeferredPrompt = null;
-      syncLoginInstallBtn();
-      fallbackHint();
-      return;
+    try { p.prompt(); } catch (e) {
+      deferredPrompt = null; window.__pwaDeferredPrompt = null;
+      syncLoginInstallBtn(); fallbackHint(); return;
     }
-    // 超时兜底：800ms 内 userChoice 没返回 → 视为静默失败，给菜单指引
-    // （部分国产浏览器 prompt() 不弹框也不抛异常，userChoice 永远 pending）
     let settled = false;
     const fallbackTimer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        fallbackHint();
-      }
+      if (!settled) { settled = true; fallbackHint(); }
     }, 800);
     try {
       p.userChoice.then((choice) => {
-        settled = true;
-        clearTimeout(fallbackTimer);
+        settled = true; clearTimeout(fallbackTimer);
         if (choice && choice.outcome === "accepted") {
           hideBar();
         } else {
-          // 用户取消了系统安装框 → 给出菜单指引（仍可通过菜单安装）
           fallbackHint();
         }
-        deferredPrompt = null;
-        window.__pwaDeferredPrompt = null;
+        deferredPrompt = null; window.__pwaDeferredPrompt = null;
         syncLoginInstallBtn();
       }).catch(() => {
-        settled = true;
-        clearTimeout(fallbackTimer);
-        deferredPrompt = null;
-        window.__pwaDeferredPrompt = null;
-        syncLoginInstallBtn();
-        fallbackHint();
+        settled = true; clearTimeout(fallbackTimer);
+        deferredPrompt = null; window.__pwaDeferredPrompt = null;
+        syncLoginInstallBtn(); fallbackHint();
       });
     } catch (e) {
       clearTimeout(fallbackTimer);
-      deferredPrompt = null;
-      window.__pwaDeferredPrompt = null;
-      syncLoginInstallBtn();
-      fallbackHint();
+      deferredPrompt = null; window.__pwaDeferredPrompt = null;
+      syncLoginInstallBtn(); fallbackHint();
     }
   }
 
-  // 暴露给外部（手机 PWA 后台回前台时,可能错过 beforeinstallprompt，重新评估一次安装按钮状态）
   window.__pwaSyncInstallBtn = syncLoginInstallBtn;
 
-  // beforeinstallprompt 已在脚本顶部提前捕获（避免错过早期触发的事件）。
-  // 这里监听顶部发出的 __pwaPromptReady 自定义事件，同步到本地变量并刷新 UI。
-  // 当浏览器触发此事件 = 确认支持 PWA 安装，自动弹出安装引导弹窗。
+  // 浏览器触发 beforeinstallprompt → 确认可安装。
+  // 延迟 2.5s 自动弹引导：避开登录面板、加载动画、SW 激活等前置阶段。
+  const AUTO_POP_DELAY_MS = 2500;
+
   window.addEventListener("__pwaPromptReady", () => {
     deferredPrompt = window.__pwaDeferredPrompt;
     if (deferredPrompt) {
       showBar(false);
       syncLoginInstallBtn();
-      // 浏览器确认可安装 → 自动弹出醒目安装弹窗
-      // 延迟 600ms 弹出，避免与页面加载动画冲突
-      setTimeout(showInstallModal, 600);
+      setTimeout(showInstallModal, AUTO_POP_DELAY_MS);
     }
   });
-  // 如果顶部已捕获（IIFE 执行时 deferredPrompt 已非空），立即初始化 UI
   if (deferredPrompt) {
     showBar(false);
     syncLoginInstallBtn();
-    setTimeout(showInstallModal, 600);
+    setTimeout(showInstallModal, AUTO_POP_DELAY_MS);
   }
 
-  // 点击「安装」主动呼出安装框
   btn.addEventListener("click", doPrompt);
-  // 登录面板内的「安装」按钮（与横幅共用同一套安装逻辑）
   if (loginInstallBtn) loginInstallBtn.addEventListener("click", doPrompt);
 
-  // 安装弹窗按钮事件
   if (installModalBtn) installModalBtn.addEventListener("click", () => {
-    hideInstallModal();
-    doPrompt();
+    hideInstallModal(); doPrompt();
   });
+  // 弹窗上的关闭按钮 / 以后再说 → 24h 冷却
   if (installModalClose) installModalClose.addEventListener("click", () => {
-    installModalDismissed = true;
-    hideInstallModal();
+    installModalDismissed = true; hideInstallModal(); markDismissed();
   });
   if (installModalLater) installModalLater.addEventListener("click", () => {
-    installModalDismissed = true;
-    hideInstallModal();
+    installModalDismissed = true; hideInstallModal(); markDismissed();
   });
-  // 点击弹窗遮罩区域关闭
   if (installModal) installModal.addEventListener("click", (e) => {
     if (e.target === installModal) {
-      installModalDismissed = true;
-      hideInstallModal();
+      installModalDismissed = true; hideInstallModal(); markDismissed();
     }
   });
 
-  // 已成功安装：隐藏引导并清记忆
   window.addEventListener("appinstalled", () => {
     hideBar();
     hideInstallModal();
@@ -32135,21 +32118,13 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
     try { localStorage.removeItem(DISMISS_KEY); } catch (e) {}
   });
 
-  // iOS Safari 没有 beforeinstallprompt，无法用代码呼出安装框，
-  // 但仍需在登录面板显示「安装到主屏幕」入口，点击后引导用户用「分享 → 添加到主屏幕」。
-  // 非 iOS 浏览器同理：不支持一键安装的，也显示入口并给菜单指引（华为/小米/UC/QQ 等）。
   syncLoginInstallBtn();
-  if (isIOS()) {
-    // iOS 不自动弹横幅/弹窗（依赖 deferredPrompt 的逻辑在 iOS 不会触发），仅保留登录面板入口即可
-    return;
-  }
+  if (isIOS()) return;
 
   if (authScreen && "MutationObserver" in window) {
-    new MutationObserver(() => {
-      syncLoginInstallBtn();
-    }).observe(authScreen, { attributes: true, attributeFilter: ["class"] });
+    new MutationObserver(() => syncLoginInstallBtn())
+      .observe(authScreen, { attributes: true, attributeFilter: ["class"] });
   }
-  // 页面加载 1.2s 后再评估一次（部分浏览器 beforeinstallprompt 触发较晚）
   setTimeout(syncLoginInstallBtn, 1200);
 })();
 
