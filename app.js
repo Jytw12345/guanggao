@@ -542,15 +542,16 @@ const perm = {
   rework: (p) => can(CAP.REWORK_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
   // 「管理工时单价」权限点与工资单价配置 UI 已整体移除（2026-10-18 包活制改造），恒 false
   manageWageConfig: () => false,
-  // 注意：项目一旦开工或进入终态，预约时间即锁定，任何权限都不能再改（须走「延期」流程）
+  // 注意：预约时间在已验收/已审核后锁定；已完工（未验收）仍可改——跨天提前完工要能减掉多余天数。
   editAppointment: (p) => !isReviewed(p) && !isAppointmentLocked(p) && (
     // "所有"权限：跨门店，覆盖全部门店的项目
     can(CAP.PROJECT_EDIT_APPOINTMENT_ALL) ||
     can(CAP.PROJECT_EDIT_ALL) ||
-    // 本门店内：仅本人创建的项目
+    // 本门店内：仅本人创建的项目（走 isProjectBooker，与「改金额」同一口径，
+    // 历史单 created_by 缺失时同店店长同样放行）
     ((isManager() || !myStore() || (p && p.storeId === myStore())) && (
-      (can(CAP.PROJECT_EDIT_APPOINTMENT_OWN) && p && p.createdBy === currentProfile.id) ||
-      (can(CAP.PROJECT_EDIT_OWN) && p && p.createdBy === currentProfile.id)
+      (can(CAP.PROJECT_EDIT_APPOINTMENT_OWN) && isProjectBooker(p)) ||
+      (can(CAP.PROJECT_EDIT_OWN) && isProjectBooker(p))
     ))
   ),
   // 「修改预约工时」权限点已于 2026-10-18 移除：预约表单已无工时输入，预计总工时按施工时段
@@ -741,23 +742,78 @@ function appointmentLockReason(p) {
   return "";
 }
 
+/* 已完工项目修改预约时间的约束（2026-11-15 用户口径）：
+   ① 只允许缩短，不能把结束时间往后推（否则历史工期/准点率基准被篡改）；
+   ② 要减天数时，**只能减掉没有施工记录的日期**——已经记过工时的那天必须保留，
+      避免把有考勤/工时的施工日从预约里删掉，导致预约与实际记录对不上。
+   返回 false 表示需要拦截（内部已 toast 原因）。 */
+function guardDoneAppointmentEdit(p, nextSegments, nextStart, nextEnd) {
+  if (!p || p.status !== STATUS.DONE) return true;
+  // ① 不能延长
+  if (p.endTime && nextEnd) {
+    const oldEnd = new Date(p.endTime);
+    const newEnd = new Date(nextEnd);
+    if (!isNaN(oldEnd) && !isNaN(newEnd) && newEnd.getTime() > oldEnd.getTime() + 60 * 1000) {
+      toast("已完工项目的预约时间只能缩短，不能晚于当前预约结束时间；确需延长请走「延期」");
+      return false;
+    }
+  }
+  // ② 有施工记录的日期不能删
+  const loggedDates = new Set((p.workLogs || []).map((l) => l.date).filter(Boolean));
+  if (!loggedDates.size) return true;
+  const nextDates = new Set();
+  if (Array.isArray(nextSegments) && nextSegments.length) {
+    nextSegments.forEach((s) => { if (s && s.date) nextDates.add(s.date); });
+  } else if (nextStart && nextEnd) {
+    dateListBetween(nextStart, nextEnd).forEach((d) => nextDates.add(d));
+  }
+  if (!nextDates.size) return true; // 取不到新时段：交给上层原值回退逻辑
+  const missing = [...loggedDates].filter((d) => !nextDates.has(d));
+  if (missing.length) {
+    toast(`这些日期已有施工记录，不能从预约中删掉：${missing.sort().join("、")}`);
+    return false;
+  }
+  return true;
+}
+
+/* 枚举两个时间点之间的日历日期（'YYYY-MM-DD'，含首尾，最多 60 天防御） */
+function dateListBetween(startStr, endStr) {
+  const s = new Date(startStr);
+  const e = new Date(endStr);
+  if (isNaN(s) || isNaN(e) || e < s) return [];
+  const out = [];
+  const cur = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+  while (cur <= e && out.length < 60) {
+    out.push(dateKey(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
 /* 提前完工时截断「未来」的预约时段（跨天预约在第一天就把活干完）。
    业务诉求（2026-11-15）：预约 11/08~11/09，11/08 当天完工，第二天不该再显示预约信息，
    否则日历/时间线上仍挂着一条已经干完的预约。
    规则：
-   - 只处理多段（跨天）预约，单段预约保持原样；
+   - 只要实际预约跨度是多天（显式 workSegments 或由起止时间合成的多段都算），就参与截断；
    - 保留开始时间早于完工时刻的时段；含完工时刻的那段把结束时间截到完工时刻；
-   - 返回 { workSegments, endTime, removedSegs }；未发生截断返回 null。 */
+   - 同时按截断后的时段重算预计工时（各段时长之和 × 人数），避免统计里预计工时仍按原天数；
+   - 返回 { workSegments, endTime, estimatedHours, removedSegs }；未发生截断返回 null。 */
 function trimBookedSegmentsOnFinish(p, finishedAt) {
-  if (!p || !Array.isArray(p.workSegments) || p.workSegments.length < 2) return null;
+  if (!p) return null;
   const fin = finishedAt instanceof Date ? finishedAt : new Date(finishedAt);
   if (isNaN(fin)) return null;
-  const segs = getBookedSegments(p); // 已排序、已解析成 Date
-  if (!segs.length) return null;
+  const segs = getBookedSegments(p); // 已排序、已解析成 Date（无 workSegments 时由起止时间合成）
+  if (segs.length < 2) return null; // 单段（单日）无需截断
   const kept = [];
   let touched = false;
+  // 已有施工记录（考勤/工时）的日期不删，与手动改预约时的约束保持一致
+  const loggedDates = new Set((p.workLogs || []).map((l) => l.date).filter(Boolean));
   for (const s of segs) {
-    if (s.start >= fin) { touched = true; continue; } // 该段开始时活已干完 → 整天减掉
+    if (s.start >= fin) {
+      if (loggedDates.has(s.date)) { kept.push({ date: s.date, start: s.startHM, end: s.endHM }); continue; }
+      touched = true;
+      continue; // 该段开始时活已干完 → 整天减掉
+    }
     if (s.end > fin) {
       touched = true;
       kept.push({ date: s.date, start: s.startHM, end: hmOf(fin), endDate: dateKey(fin) });
@@ -767,9 +823,20 @@ function trimBookedSegmentsOnFinish(p, finishedAt) {
   }
   if (!touched || !kept.length) return null; // 全在完工之后（异常数据）不动，避免删空
   const last = kept[kept.length - 1];
+  const workSegments = kept.map(({ date, start, end }) => ({ date, start, end }));
+  // 预计工时 = Σ各段时长 × 施工人数（与预约表单保存时的口径一致）
+  const workerCount = Math.max(1, (p.assignedWorkerIds || []).length || p.workerCount || 1);
+  let bookedHours = 0;
+  for (const s of workSegments) {
+    const st = new Date(`${s.date}T${s.start}`);
+    let en = new Date(`${s.date}T${s.end}`);
+    if (en < st) en = new Date(en.getTime() + 24 * 3600 * 1000); // 跨午夜段
+    bookedHours += (en - st) / (1000 * 60 * 60);
+  }
   return {
-    workSegments: kept.map(({ date, start, end }) => ({ date, start, end })),
+    workSegments,
     endTime: buildLocalDateTime(last.endDate || last.date, last.end),
+    estimatedHours: Math.round(bookedHours * workerCount * 10) / 10,
     removedSegs: segs.length - kept.length,
   };
 }
@@ -11307,7 +11374,9 @@ function projectForm(p = {}, opts = {}) {
   const basicDisabled = !!p.id && (isProjectLocked(p) || !perm.editProject(p));
   // 包活字段（包活方式/工程金额/材料费）由独立权限「修改全部项目金额」控制（2026-10-18 从 editProject 拆出），
   // 便于把「能改基本信息但不能动钱」或「只让店长改钱」这类授权分开配置。
-  const contractDisabled = !!p.id && (isProjectLocked(p) || !perm.editContract(p));
+  // 工程金额由「修改全部项目金额」权限控制（perm.editContract 内部已含 !isReviewed 与预约人直改），
+  // 这里不再叠加终态锁，否则已完工的单在完整表单里改不了金额，只能走卡片快捷弹窗，口径不一致。
+  const contractDisabled = !!p.id && !perm.editContract(p);
   // 初始化表单照片工作集（现场图 / 施工图及物料 两类，预约时即可添加）；新建项目默认可添加
   const isNewForm = !p.id;
   window._formPhotos = JSON.parse(JSON.stringify(normalizePhotos(p)));
@@ -11638,6 +11707,18 @@ async function saveCostMgmt(id) {
     payload.materialFeeNote = joinCostNotes({ costDeductions: cd });
   }
   if (!Object.keys(payload).length) { toast("当前角色无修改权限"); return; }
+  // 已验收/已审核：金额/扣项已计入提成统计，改动会改变工人已落袋的提成，需二次确认
+  const oldAmtC = Math.round((Number(p.projectAmount) || 0) * 100) / 100;
+  const oldCdC = Math.round(sumCostDeductions(p) * 100) / 100;
+  const amountChanged = (payload.projectAmount != null && Math.abs(oldAmtC - payload.projectAmount) > 0.005)
+    || (payload.costDeductions != null && Math.abs(oldCdC - Math.round(sumCostDeductions({ costDeductions: payload.costDeductions }) * 100) / 100) > 0.005);
+  if (amountChanged && typeof isCommissionCounted === "function" && isCommissionCounted(p)) {
+    const okEdit = await confirmDialog(
+      `⚠️ 该项目<b>已验收，提成已计入统计</b>。<br><br>保存后会立即按新金额重算分成，工人已统计的提成会随之变化。确认保存吗？`,
+      "确认修改金额"
+    );
+    if (!okEdit) return;
+  }
   // 工费 = 有效工程金额 − 有效成本扣项。无论只改金额（无扣项权限）还是只改扣项（无金额权限），
   // 都必须重算冗余 laborFee：getLaborFee 优先读存储的 laborFee，漏算会让工费/分成池/提成持续算旧值。
   const effAmt = (payload.projectAmount != null) ? payload.projectAmount : (Number(p.projectAmount) || 0);
@@ -11771,6 +11852,15 @@ function openQuickContractEdit(id) {
       if (oldType !== newType) changes.push(`包活方式: ${oldType} → ${newType}`);
       if (Math.abs(oldAmt - amt) > 0.005) changes.push(`工程金额: ¥${oldAmt.toFixed(2)} → ¥${amt.toFixed(2)}`);
       if (Math.abs(oldCdSum - mat) > 0.005 || oldCdCount !== cd.length) changes.push(`成本扣项: ¥${oldCdSum.toFixed(2)}（${oldCdCount}项） → ¥${mat.toFixed(2)}（${cd.length}项）`);
+
+      // 已验收/已审核：金额已计入提成统计，改动会直接改变工人已落袋的钱，需二次确认
+      if (changes.length && typeof isCommissionCounted === "function" && isCommissionCounted(_ex)) {
+        const okEdit = await confirmDialog(
+          `⚠️ 该项目<b>已验收，提成已计入统计</b>。<br><br>${changes.join("<br>")}<br><br>保存后会立即按新金额重算分成，工人已统计的提成会随之变化。确认修改吗？`,
+          "确认修改金额"
+        );
+        if (!okEdit) return false;
+      }
 
       const payload = {
         contractType: newType,
@@ -12593,6 +12683,8 @@ async function saveQuickEditProjectTime(id) {
     payload.endTime = p.endTime;
     if (segPayload) payload.workSegments = p.workSegments; // 分段决定预约时间，无权限时回退原值
   }
+  // 已完工项目：只能缩短，且不能删掉已有施工记录的日期
+  if (!guardDoneAppointmentEdit(p, payload.workSegments || segPayload, payload.appointmentTime, payload.endTime)) return;
 
   // 工时可行性校验：人均剩余工时显著超过可用施工窗口时给出提示
   const consumedQuick = p ? hoursDiff(p).act : 0;
@@ -12797,6 +12889,8 @@ async function saveProject(id) {
       payload.endTime = _ex.endTime;
       payload.workSegments = _ex.workSegments;
     }
+    // 已完工项目：只能缩短，且不能删掉已有施工记录的日期
+    if (_ex && !guardDoneAppointmentEdit(_ex, payload.workSegments, payload.appointmentTime, payload.endTime)) return;
     if (_ex && !perm.editAppointment(_ex)) {
       payload.estimatedHours = _ex.estimatedHours;
     }
@@ -19868,6 +19962,8 @@ function openCompleteProjectForm(id) {
         if (trimRes) {
           p.workSegments = trimRes.workSegments;
           p.endTime = trimRes.endTime;
+          // 预计工时同步按截断后的时段重算，避免统计里预计工时仍按原天数
+          p.estimatedHours = trimRes.estimatedHours;
         }
 
         const pauseCount = derivePauseCount(p);
@@ -19981,6 +20077,7 @@ function openCompleteProjectForm(id) {
               // 提前完工截断预约时段后同步落库（未截断时为原值，写入无副作用）
               end_time: p.endTime || null,
               work_segments: (Array.isArray(p.workSegments) && p.workSegments.length) ? JSON.stringify(p.workSegments) : null,
+              estimated_hours: p.estimatedHours || 0,
               updated_at: nowStr
             }).eq("id", id),
             ...newLogs.map(log =>
@@ -31387,7 +31484,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v5552f8a9";
+  const APP_VERSION = "vd7d772e3";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
