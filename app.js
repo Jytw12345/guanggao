@@ -11710,9 +11710,37 @@ async function saveCostMgmt(id) {
   const effAmt = (payload.projectAmount != null) ? payload.projectAmount : (Number(p.projectAmount) || 0);
   const effCd = (payload.costDeductions != null) ? payload.costDeductions : getCostDeductions(p);
   payload.laborFee = Math.round(Math.max(0, effAmt - sumCostDeductions({ costDeductions: effCd })) * 100) / 100;
+
+  /* 变更留痕（2026-11-15 补齐）：费用管理入口此前既不写操作日志、也不写项目时间线，
+     导致「保存费用」改了金额在日志里查不到。与快捷改金额同口径：操作日志(PROJECT_EDIT) + 项目时间线。 */
+  const changes = [];
+  if (payload.projectAmount != null) {
+    const oldAmt = Math.round((Number(p.projectAmount) || 0) * 100) / 100;
+    if (Math.abs(oldAmt - payload.projectAmount) > 0.005) changes.push(`工程金额: ¥${oldAmt.toFixed(2)} → ¥${payload.projectAmount.toFixed(2)}`);
+  }
+  if (payload.costDeductions != null) {
+    const oldCd = getCostDeductions(p);
+    const oldSum = Math.round(sumCostDeductions({ costDeductions: oldCd }) * 100) / 100;
+    const newSum = Math.round(sumCostDeductions({ costDeductions: payload.costDeductions }) * 100) / 100;
+    if (Math.abs(oldSum - newSum) > 0.005 || oldCd.length !== payload.costDeductions.length) {
+      changes.push(`成本扣项: ¥${oldSum.toFixed(2)}（${oldCd.length}项） → ¥${newSum.toFixed(2)}（${payload.costDeductions.length}项）`);
+    }
+  }
+  if (changes.length) {
+    const actionLogs = [...(p.actionLogs || [])];
+    actionLogs.push({
+      time: new Date().toISOString(),
+      action: "contract_edit",
+      description: `修改费用：${changes.join("；")}（工费 ¥${payload.laborFee.toFixed(2)}，分成池 ¥${(Math.round(payload.laborFee / 2 * 100) / 100).toFixed(2)}）`,
+      operator: currentProfile?.name || currentUser?.email || "系统",
+      operatorRole: currentProfile?.role,
+    });
+    payload.actionLogs = actionLogs;
+  }
   try {
     const saved = await repo.patchProject(id, payload);
     if (saved === false) { renderConstruction(); return; } // 版本冲突：patchProject 已 toast + loadAll 补偿，不假成功
+    if (changes.length) logOperation("PROJECT_EDIT", p.name || "项目", `ID: ${id}, 变更: ${changes.join("; ")}`);
     const p2 = getProject(id);
     if (p2) Object.assign(p2, payload);
     window._cmDraft = null;
@@ -31470,7 +31498,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v6a3bf085";
+  const APP_VERSION = "v629b0fc5";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
