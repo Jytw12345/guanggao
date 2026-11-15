@@ -25154,7 +25154,11 @@ function showStoreProjects(storeId, storeNameParam, monthFilter) {
   const hasFilter = !!monthFilter;
 
   const render = (showAll) => {
-    const projs = showAll ? allProjs : allProjs.filter((p) => monthKey(p.appointmentTime) === monthFilter);
+    // 未指定月份（从门店管理直接点「查看项目」）时必须展示全部，
+    // 否则按 undefined 月份过滤会得到空列表——之前就是这里只出现一个空分组标题
+    const projs = (!hasFilter || showAll)
+      ? allProjs.slice()
+      : allProjs.filter((p) => monthKey(p.appointmentTime) === monthFilter);
     const inMonthCount = allProjs.filter((p) => monthKey(p.appointmentTime) === monthFilter).length;
 
     /* 按状态排序：活跃 > 等待 > 终态 */
@@ -31565,7 +31569,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v10471250";
+  const APP_VERSION = "v33fdb4e9";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
