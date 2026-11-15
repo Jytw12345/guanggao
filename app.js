@@ -12328,6 +12328,13 @@ async function uploadFormPhotos(projectId, fpOverride) {
 window.__ggHasCamera = undefined;
 (function ggDetectCamera() {
   try {
+    var ua = (navigator.userAgent || "").toLowerCase();
+    // Android WebView（含 PackPlus / PakePlus / 原生 WebView，UA 含 "wv)" 或 "webview"）：
+    // capture="environment" 走系统 Camera Intent，不依赖 WebRTC 的 getUserMedia/enumerateDevices。
+    // 这类环境的 WebView 常常没有完整的 WebRTC API，但拍照 intent 是正常的。
+    var isAndroidWV = /android/.test(ua) && /\bwv\)|webview|packplus|pakeplus/.test(ua);
+    if (isAndroidWV) { window.__ggHasCamera = true; return; }
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { window.__ggHasCamera = false; return; }
     var done = function (has) { window.__ggHasCamera = !!has; };
     var enumChk = function () {
@@ -12357,11 +12364,12 @@ function ggShowCameraButton() {
   return true;
 }
 
-/* file input 的「视觉隐藏」内联样式：保留在渲染树里（1px + 透明 + 裁剪），
-   不用 display:none —— 打包壳（PackPlus exe/apk）的 WebView 里，
-   对 display:none 的 file input 调用 .click() 常常被直接忽略（点击无反应），
-   而 <label for> 原生触发对「已渲染但不可见」的 input 是可靠的。 */
-const FILE_INPUT_SR_STYLE = 'style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;padding:0;margin:-1px;"';
+/* file input 的「视觉隐藏」内联样式：保留在渲染树里但移出屏幕左侧（-9999px）。
+   不用 display:none —— 打包壳（PackPlus apk）的 WebView 里对 display:none 元素
+   调用 .click() 和 <label for> 都不生效；也不用 opacity:0 / clip:rect() ——
+   部分 WebView 对透明裁剪元素的 label for 关联同样失效，必须让元素在布局上
+   「真实存在且可交互」。 */
+const FILE_INPUT_SR_STYLE = 'style="position:absolute;left:-9999px;top:0;width:1px;height:1px;opacity:1;overflow:hidden;white-space:nowrap;border:0;padding:0;margin:0;"';
 
 /* 相机按钮 + 隐藏 input（按能力检测条件渲染；onChangeAttr 为该 input 的 onchange 表达式）。
    用 <label for> 原生触发选择器，不依赖 JS 的 .click()。 */
@@ -31750,7 +31758,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vb2e33243";
+  const APP_VERSION = "v4462bfb2";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
