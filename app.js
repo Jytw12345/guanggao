@@ -2695,7 +2695,7 @@ function resolveCommissionAlloc(p) {
   const lockedItems = commissionLockedEntries(p);
   const lockedCents = lockedItems.reduce((s, it) => s + Math.round(it.amount * 100), 0);
   if (pool <= 0 || (!internal.length && !lockedCents)) {
-    return { mode, pool, items: [], total: 0, outsourcedTotal: 0 };
+    return { mode, pool, items: [], total: 0, outsourcedTotal: 0, hoursOf: {} };
   }
   const custom = Array.isArray(p.commissionCustom) ? p.commissionCustom : [];
   const customMap = {};
@@ -2708,9 +2708,22 @@ function resolveCommissionAlloc(p) {
   // （¥450÷3 → 人人 ¥150.00，尾差最多差 1 分），不再用 33/33/34 整数比例当权重——
   // 那会把展示用的尾差百分比（34%）当真实权重，导致「平均分配」下最后一人多拿
   // （¥153 vs ¥148.50）。比例标签用一位小数（33.3%），仅作展示。
+  // 各人本项目出勤工时（手动登记 + 自动考勤都落在 workLogs）：供「按出勤工时」分配与面板展示
+  const hoursOf = {};
+  (p.workLogs || []).forEach((l) => {
+    if (!l || !l.workerId || l.isOutsourced || String(l.workerId).startsWith("outsourced:")) return;
+    const h = Number(l.hours) || 0;
+    if (h > 0) hoursOf[l.workerId] = (hoursOf[l.workerId] || 0) + h;
+  });
   let weights = [];
   let ratioOf = [];
-  if (mode === "custom_amount" && custom.length) {
+  if (mode === "hours") {
+    // 按出勤工时：权重=各人本项目累计工时；全员无工时时退化为均分
+    const hrs = internal.map((w) => hoursOf[w.id] || 0);
+    const hrsSum = hrs.reduce((s, v) => s + v, 0);
+    weights = hrsSum > 0 ? hrs : internal.map(() => 1);
+    ratioOf = internal.map((w, i) => hrsSum > 0 ? Math.round((hrs[i] / hrsSum) * 1000) / 10 : Math.round(1000 / internal.length) / 10);
+  } else if (mode === "custom_amount" && custom.length) {
     // 自定义金额：权重=各人填写金额；合计为 0 时退化为均分
     const amountOf = (w) => { const c = customMap[w.id]; return Number(c && c.amount) || 0; };
     const amounts = internal.map(amountOf);
@@ -2746,7 +2759,7 @@ function resolveCommissionAlloc(p) {
     fixed: null,
   })));
   return {
-    mode, pool, items,
+    mode, pool, items, hoursOf,
     total: (lockedCents + centsArr.reduce((s, c) => s + c, 0)) / 100,
     outsourcedTotal: 0,
   };
@@ -14604,7 +14617,9 @@ function renderCommissionPanel(p) {
   const avgInitialRatios = () => workers.map(() => Math.round(1000 / workers.length) / 10);
   const initialRatios = mode === "avg"
     ? avgInitialRatios()
-    : ((mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length));
+    : (mode === "hours"
+      ? savedRatios // 工时模式：比例由各人本项目出勤工时算出，只读展示
+      : ((mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length)));
   const savedAmounts = workers.map((w) => {
     const c = (Array.isArray(p.commissionCustom) ? p.commissionCustom : []).find((x) => x && x.workerId === w.id);
     return c && c.amount != null ? Math.max(0, Number(c.amount) || 0) : 0;
@@ -14667,6 +14682,7 @@ function renderCommissionPanel(p) {
       <span class="comm-legend-name">${esc(w.name)}</span>
       ${amountInput}
       ${amtDisp}
+      <span class="comm-legend-hrs">${(alloc.hoursOf && alloc.hoursOf[w.id] != null) ? Number(alloc.hoursOf[w.id]).toFixed(1) + "h" : "--"}</span>
     </div>`;
   }).join("");
   // 已移除人员锁定份额行（灰显）：金额 = 池 × 锁定比例，随池缩放；多天项目不走此处（按天分池面板）
@@ -14679,6 +14695,7 @@ function renderCommissionPanel(p) {
   const modeBtns = canEditCommission ? `
     <div class="commission-mode">
       <label class="radio-inline"><input type="radio" name="commMode" value="avg" ${mode === "avg" ? "checked" : ""} onchange="onCommissionModeChange('${p.id}','avg')"> 平均分配</label>
+      <label class="radio-inline"><input type="radio" name="commMode" value="hours" ${mode === "hours" ? "checked" : ""} onchange="onCommissionModeChange('${p.id}','hours')"> 按出勤工时</label>
       <label class="radio-inline"><input type="radio" name="commMode" value="custom" ${mode === "custom" ? "checked" : ""} onchange="onCommissionModeChange('${p.id}','custom')"> 自定义比例</label>
       <label class="radio-inline"><input type="radio" name="commMode" value="custom_amount" ${mode === "custom_amount" ? "checked" : ""} onchange="onCommissionModeChange('${p.id}','custom_amount')"> 按金额分配</label>
     </div>` : "";
@@ -14686,7 +14703,9 @@ function renderCommissionPanel(p) {
     ? (isAmountMode
       ? `<p class="hint" style="margin:6px 0 0;color:#64748b;">手填 / 拖动过的金额为<strong>固定值</strong>（蓝框），其余人自动均分剩余；填超了会自动只保留你手填的那位固定，其余人重新均分。</p>`
       : `<p class="hint" style="margin:6px 0 0;color:#64748b;">拖动分隔点调整相邻两人占比（1% 刻度），松手自动补到 100%。</p>`)
-    : `<p class="hint" style="margin:6px 0 0;color:#64748b;">工人分成 = 工费 ÷ 2，按上方方式分摊给已派工人${canEditCommission ? "" : "（仅经理/店长可调整）"}。</p>`;
+    : (mode === "hours"
+      ? `<p class="hint" style="margin:6px 0 0;color:#64748b;">按每人本项目出勤工时占比分配（右侧 <b>h</b> 为工时）；工时在下方「施工记录」登记，变动后比例自动重算。</p>`
+      : `<p class="hint" style="margin:6px 0 0;color:#64748b;">工人分成 = 工费 ÷ 2，按上方方式分摊给已派工人${canEditCommission ? "" : "（仅经理/店长可调整）"}。</p>`);
   return `<div class="detail-block commission-panel" id="commissionPanelWrap">
     <div class="commission-head"><h3>💰 包活分成</h3>${canEditCommission ? `<button class="btn small primary comm-save-btn" id="commSaveBtn" onclick="saveCommissionAlloc('${p.id}')">💾 保存分成</button>` : ""}</div>
     ${infoGrid}
@@ -15030,7 +15049,9 @@ function renderCompleteCommission(p) {
   const avgInitialRatiosC = () => workers.map(() => Math.round(1000 / workers.length) / 10);
   const initialRatios = mode === "avg"
     ? avgInitialRatiosC()
-    : ((mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length));
+    : (mode === "hours"
+      ? savedRatios // 工时模式：比例由各人本项目出勤工时算出，只读展示
+      : ((mode === "custom" && savedRatios.some((r) => r > 0)) ? savedRatios : equalCommissionRatios(workers.length)));
   const savedAmounts = workers.map((w) => {
     const c = (Array.isArray(p.commissionCustom) ? p.commissionCustom : []).find((x) => x && x.workerId === w.id);
     return c && c.amount != null ? Math.max(0, Number(c.amount) || 0) : 0;
@@ -15114,6 +15135,7 @@ function renderCompleteCommission(p) {
   const modeBtns = canEditCommission ? `
     <div class="commission-mode">
       <label class="radio-inline"><input type="radio" name="commModeC" value="avg" ${mode === "avg" ? "checked" : ""} onchange="onCompleteCommMode('${p.id}','avg')"> 平均分配</label>
+      <label class="radio-inline"><input type="radio" name="commModeC" value="hours" ${mode === "hours" ? "checked" : ""} onchange="onCompleteCommMode('${p.id}','hours')"> 按出勤工时</label>
       <label class="radio-inline"><input type="radio" name="commModeC" value="custom" ${mode === "custom" ? "checked" : ""} onchange="onCompleteCommMode('${p.id}','custom')"> 自定义比例</label>
       <label class="radio-inline"><input type="radio" name="commModeC" value="custom_amount" ${mode === "custom_amount" ? "checked" : ""} onchange="onCompleteCommMode('${p.id}','custom_amount')"> 按金额分配</label>
     </div>` : "";
@@ -15121,7 +15143,9 @@ function renderCompleteCommission(p) {
     ? (isAmountMode
       ? `<p class="hint" style="margin:6px 0 0;color:#64748b;">手填 / 拖动过的金额为<strong>固定值</strong>（蓝框），其余人自动均分剩余；填超了会自动只保留你手填的那位固定，其余人重新均分。</p>`
       : `<p class="hint" style="margin:6px 0 0;color:#64748b;">拖动分隔点调整相邻两人占比（1% 刻度），松手自动补到 100%。</p>`)
-    : `<p class="hint" style="margin:6px 0 0;color:#64748b;">工人分成 = 工费 ÷ 2，按上方方式分摊${canEditCommission ? "（可切到自定义比例调整）" : "（仅经理/店长可调整）"}。</p>`;
+    : (mode === "hours"
+      ? `<p class="hint" style="margin:6px 0 0;color:#64748b;">按每人本项目出勤工时占比分配（右侧「考勤」列为工时）；各人工时不同则分得比例不同。</p>`
+      : `<p class="hint" style="margin:6px 0 0;color:#64748b;">工人分成 = 工费 ÷ 2，按上方方式分摊${canEditCommission ? "（可切到自定义比例调整）" : "（仅经理/店长可调整）"}。</p>`);
   return `<div class="detail-block commission-panel">
     <h3>💰 包活分成</h3>
     ${infoGrid}
@@ -31541,7 +31565,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va0f70594";
+  const APP_VERSION = "v10471250";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
