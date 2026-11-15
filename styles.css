@@ -2229,6 +2229,19 @@ select.input {
 }
 .worker-card-head .card-title { margin-bottom: 0; flex: 1; }
 
+/* 离职人员卡片：档案保留但整体弱化；在职/离职切换按钮自身显示当前状态（2026-11-15） */
+.card.is-resigned { opacity: 0.62; background: #f8fafc; }
+.card.is-resigned .worker-avatar { filter: grayscale(1); }
+.worker-status-btn { border-color: #86efac; color: #15803d; background: #f0fdf4; }
+.worker-status-btn::before {
+  content: "●";
+  margin-right: 4px;
+  font-size: 8px;
+  vertical-align: 1px;
+}
+.worker-status-btn.is-resigned { border-color: #cbd5e1; color: #64748b; background: #f1f5f9; }
+.worker-status-btn.is-resigned::before { color: #94a3b8; }
+
 /* 外协人员卡片：比施工人员卡片更紧凑精致 */
 #outsourcedWorkerList {
   display: grid;

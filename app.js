@@ -4094,6 +4094,7 @@ const repo = {
       cache.measurements = []; // 上门量尺功能已下线（2026-10-18）
       cache.workers = (wRes.data || []).map((r) => ({
         id: r.id, name: r.name, phone: r.phone, role: r.role,
+        active: r.active !== false, // 离职标记：false=已离职（档案保留，不再出现在派工候选）
       }));
       
       const logs = (lRes.data || []).map((r) => ({ ...mapLog(r), _pid: r.project_id }));
@@ -4396,6 +4397,8 @@ const repo = {
   async saveWorker(worker, id) {
     if (MODE === "cloud") {
       const row = { id: id || uid(), name: worker.name, phone: worker.phone || null, role: worker.role || null };
+      // 仅当调用方显式带 active 时才写该列，避免旧库未加字段时报错（离职开关需先执行加列 SQL）
+      if ("active" in worker) row.active = worker.active !== false;
       const { error } = await sb.from("workers").upsert(row);
       if (error) return fail(error);
     } else {
@@ -5140,7 +5143,7 @@ async function applyIncrementalUpdate(tableName) {
   switch (tableName) {
     case "workers": {
       const data = await loadTableData("workers");
-      cache.workers = data.map(r => ({ id: r.id, name: r.name, phone: r.phone, role: r.role }));
+      cache.workers = data.map(r => ({ id: r.id, name: r.name, phone: r.phone, role: r.role, active: r.active !== false }));
       break;
     }
     case "stores": {
@@ -6114,7 +6117,7 @@ function renderWorkers(dateStr) {
       const monthProjects = cache.projects.filter(p => monthKey(p.appointmentTime) === ym);
       const monthComm = sumWorkerCommission(w.id, monthProjects);
       return `
-        <div class="card">
+        <div class="card${w.active === false ? " is-resigned" : ""}">
           <div class="worker-card-head">
             <div class="worker-avatar">${esc((w.name || "?").charAt(0))}</div>
             <div class="card-title">
@@ -6129,7 +6132,7 @@ function renderWorkers(dateStr) {
             <span class="worker-hours-item"><span class="worker-hours-label">本月提成</span><b>¥${monthComm.toFixed(2)}</b></span>
           </div>
           <div class="card-actions">
-            ${perm.editWorker() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button>` : ""}${perm.deleteWorker() ? `<button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
+            ${perm.editWorker() ? `<button class="btn small" onclick="editWorker('${w.id}')">编辑</button>` : ""}${perm.editWorker() ? `<button class="btn small worker-status-btn${w.active === false ? " is-resigned" : ""}" onclick="toggleWorkerActive('${w.id}')" title="点击切换 在职 / 离职">${w.active === false ? "已离职" : "在职"}</button>` : ""}${perm.deleteWorker() ? `<button class="btn small danger" onclick="deleteWorker('${w.id}')">删除</button>` : ""}
             <button class="btn small" onclick="renderWorkerSchedule('${displayDate}', '${w.id}')">查看安排</button>
             ${perm.applyLeave() ? `<button class="btn small danger" onclick="openLeaveForm('${w.id}')">请假</button>` : ""}
           </div>
@@ -6565,6 +6568,33 @@ async function saveWorker(id) {
   } catch (e) {
     console.error("保存施工人员失败:", e);
     toast("保存失败：" + (e.message || "请重试"));
+  }
+}
+
+/* 离职开关（2026-11-15）：档案保留、历史工时/提成完全不动，只是从派工候选里隐藏。
+   与「删除人员」的区别——删除会让人在建项目中查不到姓名（显示未知），离职不会。 */
+async function toggleWorkerActive(id) {
+  if (!perm.editWorker()) { toast("权限不足"); return; }
+  const w = getWorker(id);
+  if (!w) return;
+  const toResign = w.active !== false;
+  if (toResign) {
+    // 仍在未完工项目里派工时提醒：离职只影响「新的派工候选」，不会自动撤掉现有派工
+    const busy = cache.projects.filter((p) => p && !isCompleted(p) && !p.cancelledAt && (p.assignedWorkerIds || []).includes(id));
+    const msg = busy.length
+      ? `「${esc(w.name)}」仍在 ${busy.length} 个未完工项目中派工：<br>${busy.slice(0, 5).map((p) => `· ${esc(p.name || "(未命名项目)")}`).join("<br>")}${busy.length > 5 ? "<br>…" : ""}<br><br>设为离职后<b>不再出现在新的派工候选</b>，但这些项目的现有派工不会自动撤销（需在项目里手动移除才会结算工时/锁定分成）。确定设为离职吗？`
+      : `确定将「${esc(w.name)}」设为离职？<br><br>档案与历史工时/提成全部保留，仅不再出现在派工候选；随时可一键恢复在职。`;
+    if (!(await confirmDialog(msg, "设为离职"))) return;
+  }
+  try {
+    await repo.saveWorker({ name: w.name, phone: w.phone || "", role: w.role || "", active: !toResign }, id);
+    w.active = !toResign;
+    renderAll();
+    toast(toResign ? `已设为离职：${w.name}` : `已恢复在职：${w.name}`);
+    repo.loadAll().then(() => renderAll()).catch((e) => console.warn("[sync] toggleWorkerActive 后台同步失败:", e));
+  } catch (e) {
+    console.error("切换人员在职状态失败:", e);
+    toast("操作失败：" + (e.message || "请重试"));
   }
 }
 
@@ -15713,6 +15743,7 @@ function renderConstruction() {
   const endDateStr = projectEndDate ? `${projectEndDate.getFullYear()}-${String(projectEndDate.getMonth() + 1).padStart(2, "0")}-${String(projectEndDate.getDate()).padStart(2, "0")}` : startDateStr;
   
   const assignSelectOpts = cache.workers
+    .filter((w) => w.active !== false) // 已离职人员不再出现在派工候选（档案与历史数据保留）
     .filter((w) => !assigned.includes(w.id))
     .map((w) => {
       const leaveRecord = startDateStr ? getProjectLeaveConflict(w.id, startDateStr, endDateStr || startDateStr) : null;
@@ -16696,6 +16727,8 @@ async function assignWorker(pid) {
     const sel = document.getElementById("assignWorkerSel");
     const wid = sel ? sel.value : "";
     if (!wid) { toast("请选择安装人员"); return; }
+    const _wSel = getWorker(wid);
+    if (_wSel && _wSel.active === false) { toast(`${_wSel.name || "该人员"} 已离职，不能分配；如需继续派工请先在人员管理恢复在职`); return; }
     const p = getProject(pid);
     if (isCompleted(p)) { toast("项目已完工，不允许再分配人员"); return; }
     const cur = p.assignedWorkerIds || [];
@@ -31498,7 +31531,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v629b0fc5";
+  const APP_VERSION = "v7e14a416";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
