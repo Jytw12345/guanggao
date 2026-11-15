@@ -684,12 +684,6 @@ function isAutoReviewed(p) {
   return false;
 }
 
-/* 终态项目（已完工 / 已验收 / 已审核）：预约时间与预约工时不可再修改，
-   编辑表单中对应控件禁用，快速修改入口直接拦截。与代码内既有的终态集合保持一致。 */
-function isProjectLocked(p) {
-  return p && [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status);
-}
-
 /* 是否已实际开工：施工中/已暂停必然已开工；已延期的项目若由「施工中/已暂停」延期而来也会带 startedAt。
    注意：由「预约中」延期来的项目没有 startedAt，仍属未开工，允许改期。 */
 function isConstructionStarted(p) {
@@ -3111,8 +3105,9 @@ function aggregateCommission(projects, inPeriod) {
 }
 
 /* 按天 × 人员 × 项目 的提成明细（供提成日历点击某天查看）。
-   摊分口径与 commissionDaily 完全一致：
-   有考勤 → 按该工人当天工时占该项目总工时的比例摊；无考勤 → 按施工分段自然日均摊；再无 → 记完工日/预约日。
+   **数据源必须与日历格子一致**：日历用 commissionDaily(p) 汇总 byWorkerDate，
+   这里也直接取 commissionDaily(p)，否则多天项目会出现「格子显示当天分摊额、弹窗显示整单金额」的矛盾
+   （2026-11-15 用户反馈：11/13 格子 ¥34.6，点开却是 ¥150.00）。
    付费维修单整额记到完成日（无则预约日）。
    返回 { [date]: { [wid]: [ {projId, name, status, amt, hours, isRepair} ] } }。 */
 function buildCommDayDetail(projects) {
@@ -3125,29 +3120,18 @@ function buildCommDayDetail(projects) {
   };
   (projects || []).forEach((p) => {
     if (!isCommissionCounted(p)) return;
-    const alloc = resolveCommissionAlloc(p);
-    if (!alloc.items.length) return;
-    let segDates = [];
-    try {
-      const segs = getBookedSegments(p) || [];
-      const set = {};
-      segs.forEach((s) => { const d = s.date || (s.start != null ? dateKey(new Date(s.start)) : null); if (d) set[d] = 1; });
-      segDates = Object.keys(set).sort();
-    } catch (e) { segDates = []; }
-    const fallbackDate = p.finishedAt ? dateKey(new Date(p.finishedAt))
-      : (p.appointmentTime ? dateKey(new Date(p.appointmentTime)) : dateKey(new Date()));
-    alloc.items.forEach((it) => {
-      const daily = {};
-      (p.workLogs || []).forEach((l) => { if (l.workerId === it.workerId && l.date) daily[l.date] = (daily[l.date] || 0) + (Number(l.hours) || 0); });
-      const dates = Object.keys(daily);
-      const total = dates.reduce((s, d) => s + daily[d], 0);
-      if (dates.length && total > 0) {
-        dates.forEach((d) => push(d, it.workerId, { projId: p.id, name: p.name || "(未命名项目)", status: p.status, amt: it.amount * (daily[d] / total), hours: daily[d] }));
-      } else if (segDates.length) {
-        segDates.forEach((d) => push(d, it.workerId, { projId: p.id, name: p.name || "(未命名项目)", status: p.status, amt: it.amount / segDates.length, hours: 0 }));
-      } else {
-        push(fallbackDate, it.workerId, { projId: p.id, name: p.name || "(未命名项目)", status: p.status, amt: it.amount, hours: 0 });
-      }
+    // 与日历格子同源：每日每人的金额直接取 commissionDaily（多天项目=当天分池结果）
+    const daily = commissionDaily(p);
+    Object.keys(daily).forEach((d) => {
+      Object.keys(daily[d]).forEach((wid) => {
+        const amt = daily[d][wid];
+        if (!(amt > 0.005)) return;
+        // 该工人当天在该项目的出勤工时（仅展示用）
+        const hours = (p.workLogs || []).reduce((s, l) => (
+          l.workerId === wid && l.date === d ? s + (Number(l.hours) || 0) : s
+        ), 0);
+        push(d, wid, { projId: p.id, name: p.name || "(未命名项目)", status: p.status, amt, hours });
+      });
     });
     (p.repairOrders || []).forEach((ro) => {
       if (!ro || ro.payType !== "paid") return;
@@ -11370,8 +11354,10 @@ function projectForm(p = {}, opts = {}) {
   const apptDisabled = !!p.id && (locked || !perm.editAppointment(p));
   // 基本信息字段（名称/客户/地址/施工内容/人数等）仅在「编辑项目」权限下可改；
   // 仅拥有「修改预约时间/工时」等子权限的用户打开表单时，这些字段只读，避免越权。
-  // 注意：这里用「终态锁」而非「预约锁」——开工后基本信息仍可编辑，只锁预约时间与工时。
-  const basicDisabled = !!p.id && (isProjectLocked(p) || !perm.editProject(p));
+  // 基础信息（门店/客户/电话/地址/名称/施工内容/备注）只看「编辑项目」权限，
+  // 不再叠加「终态锁」：已完工/已验收但未审核时允许改正录错的信息（用户口径 2026-11-15），
+  // 审核后由 perm.editProject 内部的 !isReviewed 统一锁定。
+  const basicDisabled = !!p.id && !perm.editProject(p);
   // 包活字段（包活方式/工程金额/材料费）由独立权限「修改全部项目金额」控制（2026-10-18 从 editProject 拆出），
   // 便于把「能改基本信息但不能动钱」或「只让店长改钱」这类授权分开配置。
   // 工程金额由「修改全部项目金额」权限控制（perm.editContract 内部已含 !isReviewed 与预约人直改），
@@ -31484,7 +31470,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vd7d772e3";
+  const APP_VERSION = "va8672aac";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
