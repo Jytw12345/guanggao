@@ -15898,7 +15898,7 @@ function renderConstruction() {
         <!-- 已完工/已验收/已审核后的操作：合并到同一 action-group，移动端横向排列 -->
         ${(canReview && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p)) || (reviewed && perm.unreviewProject(p)) || (perm.deleteWorkLog(p) && (p.workLogs || []).length > 0) ? `
         <div class="action-group action-group--post-completion">
-          ${canReview && !reviewed && p.status === STATUS.DONE ? `<button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>${!ac && perm.acceptProject(p) ? `<button class="btn small outline" onclick="openAcceptance('${p.id}')">📋 验收登记</button>` : ""}` : ""}
+          ${canReview && !reviewed && p.status === STATUS.DONE ? `<button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>` : ""}
           ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `<button class="btn small success" onclick="reviewProject('${p.id}')">🔍 审核项目</button>` : ""}
           ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `<button class="btn small outline" onclick="openRepairOrderForm('${p.id}')">🔧 发起维修</button>` : ""}
           ${[STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `<button class="btn small" onclick="reworkProject('${p.id}')">🔄 发起返工</button>` : ""}
@@ -16282,7 +16282,7 @@ function renderConstruction() {
           </div>
         </div>` : ""}
       ` : (canEdit ? `
-        <p class="hint" style="margin:0">项目完成后，可在上方操作区「验收登记」填写验收信息。</p>
+        <p class="hint" style="margin:0">项目完成后，点上方「✅ 确认验收」填写验收信息。</p>
       ` : `<p class="hint" style="margin:0">暂无验收信息。</p>`)}
     </div>` : ``}
   `;
@@ -31470,7 +31470,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va8672aac";
+  const APP_VERSION = "v6a3bf085";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
