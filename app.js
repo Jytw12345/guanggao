@@ -23906,69 +23906,114 @@ async function exportStats() {
   workbook.modified = new Date();
 
   const summarySheet = workbook.addWorksheet("统计概览");
-  let sr = 1;
-  summarySheet.addRow(['广告施工预约系统 — 提成统计报表']);
-  summarySheet.mergeCells(`A${sr}:D${sr}`);
-  summarySheet.getRow(sr).getCell(1).style = { ...titleStyle };
-  summarySheet.getRow(sr).height = 34;
-  sr++;
+  // 版面：四列固定语义 —— A 指标 / B 数值 / C 单位 / D 说明。
+  // 数值统一右对齐、说明列自动换行；分区标题深蓝底白字，重点金额（提成合计）整行高亮。
+  summarySheet.columns = [{ key: 'A', width: 26 }, { key: 'B', width: 18 }, { key: 'C', width: 9 }, { key: 'D', width: 46 }];
 
-  summarySheet.addRow(['统计周期', month, '统计类型', period === 'month' ? '月度' : period === 'quarter' ? '季度' : '年度']);
-  summarySheet.getRow(sr).eachCell((cell, ci) => { cell.style = ci % 2 === 1 ? { ...labelStyle } : { ...valueStyle } });
-  sr++;
-  summarySheet.addRow(['统计口径', '仅统计已验收 / 已审核项目（已完工未验收、施工中、暂停、延期、预约中、已取消不计）', '', '']);
-  summarySheet.getRow(sr).getCell(1).style = { ...labelStyle };
-  summarySheet.getRow(sr).getCell(2).style = { ...valueStyle };
-  summarySheet.mergeCells(`B${sr}:D${sr}`);
-  sr += 2;
+  const sLabelStyle = {
+    font: { bold: true, color: { argb: 'FF334155' } },
+    fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } },
+    alignment: { horizontal: 'left', vertical: 'middle', indent: 1 },
+    border: borderThin,
+  };
+  const sTextStyle = {
+    font: { color: { argb: 'FF0F172A' } },
+    alignment: { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true },
+    border: borderThin,
+  };
+  const sNumStyle = {
+    font: { bold: true, color: { argb: 'FF0F172A' } },
+    alignment: { horizontal: 'right', vertical: 'middle', indent: 1 },
+    border: borderThin,
+    numFmt: '#,##0.00',
+  };
+  const sNoteStyle = {
+    font: { size: 9, color: { argb: 'FF64748B' } },
+    alignment: { horizontal: 'left', vertical: 'middle', wrapText: true, indent: 1 },
+    border: borderThin,
+  };
 
-  function addSectionTitle(sheet, title) {
-    const r = sheet.addRow([title]);
-    sheet.mergeCells(`A${r.number}:D${r.number}`);
-    sheet.getRow(r.number).getCell(1).style = { ...sectionTitleStyle };
-    sheet.getRow(r.number).height = 26;
-    return r.number;
+  function addSummarySection(title) {
+    const r = summarySheet.addRow([title, '', '', '']);
+    summarySheet.mergeCells(`A${r.number}:D${r.number}`);
+    summarySheet.getRow(r.number).height = 25;
+    summarySheet.getRow(r.number).getCell(1).style = {
+      font: { bold: true, size: 12, color: { argb: 'FFFFFFFF' } },
+      fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } },
+      alignment: { horizontal: 'left', vertical: 'middle', indent: 1 },
+      border: borderThin,
+    };
   }
 
-  function addKV(sheet, label, value, isNum, cellStyleOverride) {
-    const r = sheet.addRow([label, value, '', '']);
-    r.getCell(1).style = { ...labelStyle };
-    r.getCell(2).style = cellStyleOverride || (isNum ? { ...numStyle } : { ...valueStyle });
-    r.getCell(3).style = { ...valueStyle };
-    r.getCell(4).style = { ...valueStyle };
-    sheet.mergeCells(`B${r.number}:D${r.number}`);
-    return r.number;
+  function addSummaryRow(label, value, opts = {}) {
+    const note = opts.note || '';
+    const unit = opts.unit || '';
+    const row = summarySheet.addRow([label, value, unit, note]);
+    const rn = row.number;
+    const isNum = typeof value === 'number';
+    const isLongText = !isNum && String(value).length > 24;
+    summarySheet.getRow(rn).height = (isLongText || note.length > 30) ? 30 : 22;
+    row.getCell(1).style = { ...sLabelStyle };
+    row.getCell(2).style = isNum ? { ...sNumStyle, numFmt: opts.numFmt || '#,##0.00' } : { ...sTextStyle };
+    row.getCell(3).style = { ...sTextStyle, alignment: { horizontal: 'center', vertical: 'middle' } };
+    row.getCell(4).style = { ...sNoteStyle };
+    if (isLongText) summarySheet.mergeCells(`B${rn}:D${rn}`); // 长文本横向合并，避免被列宽截断
+    if (opts.emphasis) {
+      for (let c = 1; c <= 4; c++) {
+        const cell = row.getCell(c);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+        if (cell.font) cell.font = { ...cell.font, bold: true, color: { argb: 'FF92400E' } };
+      }
+    }
+    return rn;
   }
 
-  addSectionTitle(summarySheet, '人员统计');
-  addKV(summarySheet, '施工人员总数', rows.length, true, { ...countStyle });
-  addKV(summarySheet, '内部人员', totalWorkers, true, { ...countStyle });
-  addKV(summarySheet, '外协人员', totalOutsourcedWorkers, true, { ...countStyle });
-  addKV(summarySheet, '参与分成人数', agg.participantCount != null ? agg.participantCount : agg.workerCount, true, { ...countStyle });
+  function addSummaryGap() {
+    const r = summarySheet.addRow([]);
+    summarySheet.getRow(r.number).height = 8;
+  }
 
-  addSectionTitle(summarySheet, '包活提成');
-  addKV(summarySheet, '已验收单数(计入提成)', statsCountedCount, true, { ...countStyle });
-  addKV(summarySheet, '未验收单数(已完工待验收)', statsPendingCount, true, { ...countStyle });
-  addKV(summarySheet, '未验收金额(元)', statsPendingAmount, false, { ...moneyStyle });
-  addKV(summarySheet, '本期工程金额(元)', round2(agg.totalProjectAmount), false, { ...moneyStyle });
-  addKV(summarySheet, '工费合计(元)', round2(agg.totalLaborFee), false, { ...moneyStyle });
-  addKV(summarySheet, '工人分成池(工费÷2)(元)', round2(agg.totalPool), false, { ...moneyStyle });
-  addKV(summarySheet, '成本扣项合计(元)', round2(agg.totalMaterialFee || 0), false, { ...moneyStyle });
-  addKV(summarySheet, '工人提成合计(元)', round2(agg.totalAmount), false, { ...moneyTotalStyle });
+  summarySheet.addRow(['广告施工预约系统 · 提成统计报表']);
+  summarySheet.mergeCells('A1:D1');
+  summarySheet.getRow(1).height = 40;
+  summarySheet.getRow(1).getCell(1).style = { ...titleStyle };
 
-  addSectionTitle(summarySheet, '考勤参考（不计入工资）');
-  addKV(summarySheet, '总工时(小时)', fmtHoursNum(totalHours), true);
-  addKV(summarySheet, '人均工时(小时)', fmtHoursNum(avgHours), true);
-  addKV(summarySheet, '外协工时(小时)', fmtHoursNum(totalOutsourcedHours), true);
-  addKV(summarySheet, '返工工时(小时)', fmtHoursNum(totalReworkAct), true);
+  addSummaryRow('统计周期', month, {
+    note: `统计类型：${period === 'month' ? '月度' : period === 'quarter' ? '季度' : '年度'}　·　按实际施工天归期，跨期项目按施工天摊分`,
+  });
+  addSummaryRow('统计口径', '仅统计已验收 / 已审核项目（已完工未验收、施工中、暂停、延期、预约中、已取消不计入）');
+  addSummaryGap();
 
-  addSectionTitle(summarySheet, '分析与预警');
-  addKV(summarySheet, '提成之星', topEarnerText, false);
-  addKV(summarySheet, '高负荷预警', highWorkloadWorkers.length > 0 ? highWorkloadWorkers.map(w => w.name).join("、") : '无', false);
-  addKV(summarySheet, '出勤提示', lowAttendanceWorkers.length > 0 ? lowAttendanceWorkers.map(w => w.name).join("、") : '无', false);
-  addKV(summarySheet, '外协说明', totalOutsourcedWorkers > 0 ? `${totalOutsourcedWorkers} 名外协人员：费用计入成本扣项（工程金额内扣除），不占分成池；工费÷2 的分成池全部分配给安装人员` : '无', false);
+  addSummarySection('人员统计');
+  addSummaryRow('施工人员总数', rows.length, { unit: '人', numFmt: '0', note: `内部 ${totalWorkers} 人 · 外协 ${totalOutsourcedWorkers} 人` });
+  addSummaryRow('内部人员', totalWorkers, { unit: '人', numFmt: '0', note: '参与包活分成' });
+  addSummaryRow('外协人员', totalOutsourcedWorkers, { unit: '人', numFmt: '0', note: '费用计入成本扣项，不占分成池' });
+  addSummaryRow('参与分成人数', agg.participantCount != null ? agg.participantCount : agg.workerCount, { unit: '人', numFmt: '0' });
+  addSummaryGap();
 
-  summarySheet.columns = [{ key: 'A', width: 24 }, { key: 'B', width: 22 }, { key: 'C', width: 18 }, { key: 'D', width: 18 }];
+  addSummarySection('包活提成');
+  addSummaryRow('已验收单数', statsCountedCount, { unit: '单', numFmt: '0', note: '计入本期提成' });
+  addSummaryRow('未验收单数', statsPendingCount, { unit: '单', numFmt: '0', note: '已完工待验收' });
+  addSummaryRow('未验收金额', statsPendingAmount, { unit: '元', note: '验收完成后自动计入' });
+  addSummaryRow('本期工程金额', round2(agg.totalProjectAmount), { unit: '元' });
+  addSummaryRow('成本扣项合计', round2(agg.totalMaterialFee || 0), { unit: '元' });
+  addSummaryRow('工费合计', round2(agg.totalLaborFee), { unit: '元', note: '工程金额 − 成本扣项' });
+  addSummaryRow('工人分成池', round2(agg.totalPool), { unit: '元', note: '工费 ÷ 2' });
+  addSummaryRow('工人提成合计', round2(agg.totalAmount), { unit: '元', note: '分成池全部分配给安装人员', emphasis: true });
+  addSummaryGap();
+
+  addSummarySection('考勤参考（不计入工资）');
+  addSummaryRow('总工时', fmtHoursNum(totalHours), { unit: '小时', numFmt: '0.0' });
+  addSummaryRow('人均工时', fmtHoursNum(avgHours), { unit: '小时', numFmt: '0.0' });
+  addSummaryRow('外协工时', fmtHoursNum(totalOutsourcedHours), { unit: '小时', numFmt: '0.0' });
+  addSummaryRow('返工工时', fmtHoursNum(totalReworkAct), { unit: '小时', numFmt: '0.0' });
+  addSummaryGap();
+
+  addSummarySection('分析与预警');
+  addSummaryRow('提成之星', topEarnerText);
+  addSummaryRow('高负荷预警', highWorkloadWorkers.length > 0 ? highWorkloadWorkers.map(w => w.name).join("、") : '无');
+  addSummaryRow('出勤提示', lowAttendanceWorkers.length > 0 ? lowAttendanceWorkers.map(w => w.name).join("、") : '无');
+  addSummaryRow('外协说明', totalOutsourcedWorkers > 0 ? `${totalOutsourcedWorkers} 名外协人员：费用计入成本扣项（工程金额内扣除），不占分成池；工费÷2 的分成池全部分配给安装人员` : '无');
 
   const workerData = [['施工人员', '类型', '本期提成(元)', '施工天数', '请假天数', '轮休天数']];
   let workerSheetTotal = 0;
@@ -24238,7 +24283,11 @@ async function exportStats() {
   let detailRowNum = 2;
   let detailCommTotal = 0;
   const EFF_COL = 7; // G 列（1-based）
+  const EFF_COL_WIDTH = 20; // 与文件末尾 detailSheet.columns 中 G 列宽度保持一致
+  const EFF_COL_PX = Math.round(EFF_COL_WIDTH * 7 + 5); // Excel 列宽(字符)→像素（Calibri 11 经验公式）
+  const EMU_PER_PX = 9525; // ExcelJS 图片锚点偏移单位为 EMU，1px = 9525 EMU
   const detailBlocks = []; // 每个项目的行区间 {start,end}：多人项目纵向合并 A–I + 按项目交替底色
+  const pendingEffectImages = []; // 效果图延后插入：需等行合并完成才能算出单元格实际宽高做居中
   let detailProjectCount = 0;
   commissionProjects.forEach((p) => {
     // 按施工天归期：本期无施工天的项目不计入；跨期项目金额/工时按摊分比例缩放并在名称中标注
@@ -24274,13 +24323,7 @@ async function exportStats() {
       detailSheet.addRow([...base, it ? it.workerName : "—", it ? it.ratio + "%" : "", it ? round2(it.amount * _r) : "", itHours === "" ? "—" : itHours]);
       const row = detailSheet.getRow(detailRowNum);
       if (eff.thumb && idx === 0) { // 同一项目多工人时只嵌一次图，避免重复占体积
-        row.height = Math.ceil(eff.thumb.height * 0.75) + 8;
-        const imgId = workbook.addImage({ base64: eff.thumb.base64, extension: eff.thumb.extension });
-        detailSheet.addImage(imgId, {
-          tl: { col: EFF_COL - 1, row: detailRowNum - 1 },
-          editAs: "oneCell",
-          ext: { width: eff.thumb.width, height: eff.thumb.height },
-        });
+        pendingEffectImages.push({ thumb: eff.thumb, blockStart });
       }
       row.eachCell((cell, ci) => {
         if (ci === 5) styleStatusCell(cell, cell.value);
@@ -24320,6 +24363,29 @@ async function exportStats() {
           };
         }
       }
+    });
+    // 效果图：按合并块的单元格实际宽高做水平 + 垂直居中
+    // （先把块内各行高度摊匀，保证图片完整落在块内，再用 EMU 偏移锚点定位）
+    pendingEffectImages.forEach(({ thumb, blockStart }) => {
+      const b = detailBlocks.find((x) => x.start === blockStart);
+      if (!b) return;
+      const rowsInBlock = b.end - b.start + 1;
+      const perRowPt = Math.max(20, ((thumb.height + 12) * 0.75) / rowsInBlock);
+      for (let rr = b.start; rr <= b.end; rr++) detailSheet.getRow(rr).height = perRowPt; // 块内行高摊匀，图片才能垂直居中
+      const blockHpx = (perRowPt * rowsInBlock * 4) / 3; // 行高单位 pt，1pt = 4/3 px
+      const offX = Math.max(0, (EFF_COL_PX - thumb.width) / 2);
+      const offY = Math.max(0, (blockHpx - thumb.height) / 2);
+      const imgId = workbook.addImage({ base64: thumb.base64, extension: thumb.extension });
+      detailSheet.addImage(imgId, {
+        tl: {
+          nativeCol: EFF_COL - 1,
+          nativeRow: b.start - 1,
+          nativeColOff: Math.round(offX * EMU_PER_PX),
+          nativeRowOff: Math.round(offY * EMU_PER_PX),
+        },
+        ext: { width: thumb.width, height: thumb.height },
+        editAs: "oneCell",
+      });
     });
     detailSheet.addRow(['合计', '', '', '', '', '', '', '', '', '', '', round2(detailCommTotal), '']);
     applyTotalRow(detailSheet, detailRowNum);
@@ -24379,9 +24445,10 @@ async function exportStats() {
     });
     const myCommTotal = round2(myCommRows.reduce((s, x) => s + x.comm, 0));
 
-    sheet.addRow(['施工人员提成核算表']);
+    sheet.addRow([`施工人员提成核算表 · ${r.name}`]);
     sheet.getRow(rowNum).getCell(1).style = { ...titleStyle };
     sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+    sheet.getRow(rowNum).height = 32;
     rowNum++;
 
     rowNum++;
@@ -24426,9 +24493,9 @@ async function exportStats() {
     sheet.getRow(rowNum).height = 26;
     rowNum++;
 
-    sheet.addRow(['项目', '工程金额(元)', '工费(元)', '分成池(元)', '分成比例', '提成(元)', '', '', '']);
-    sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci <= 5) cell.style = { ...headerStyle }; });
-    sheet.mergeCells(`F${rowNum}:I${rowNum}`);
+    sheet.addRow(['项目', '', '工程金额(元)', '工费(元)', '分成池(元)', '分成比例', '提成(元)', '', '']);
+    sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci <= 7) cell.style = { ...headerStyle }; });
+    sheet.mergeCells(`A${rowNum}:B${rowNum}`); // 项目名称跨 A:B，避免长名称被窄列挤压换行
     rowNum++;
 
     let myCommTotalRowNum = null;
@@ -24436,26 +24503,26 @@ async function exportStats() {
       const commRowNums = [];
       myCommRows.forEach((x) => {
         commRowNums.push(rowNum);
-        sheet.addRow([x.name, x.amount, x.laborFee, x.pool, x.ratio + '%', x.comm, '', '', '']);
+        sheet.addRow([x.name, '', x.amount, x.laborFee, x.pool, x.ratio + '%', x.comm, '', '']);
         sheet.getRow(rowNum).eachCell((cell, ci) => {
-          if (ci === 1) cell.style = { ...dataStyle };
-          else if (ci === 2 || ci === 3 || ci === 4) cell.style = { ...moneyStyle };
-          else if (ci === 5) cell.style = { ...centerDataStyle };
-          else if (ci === 6) cell.style = { ...moneyStyle };
+          if (ci === 1 || ci === 2) cell.style = { ...dataStyle };
+          else if (ci === 3 || ci === 4 || ci === 5) cell.style = { ...moneyStyle };
+          else if (ci === 6) cell.style = { ...centerDataStyle };
+          else if (ci === 7) cell.style = { ...moneyStyle };
           else cell.style = { ...dataStyle };
         });
-        sheet.mergeCells(`F${rowNum}:I${rowNum}`);
+        sheet.mergeCells(`A${rowNum}:B${rowNum}`);
         rowNum++;
       });
       sheet.addRow(['合计', '', '', '', '', '', '', '', '']);
-      const totalCell = sheet.getRow(rowNum).getCell(6);
-      totalCell.value = { formula: `=SUM(F${commRowNums[0]}:F${commRowNums[commRowNums.length - 1]})`, result: myCommTotal };
+      const totalCell = sheet.getRow(rowNum).getCell(7);
+      totalCell.value = { formula: `=SUM(G${commRowNums[0]}:G${commRowNums[commRowNums.length - 1]})`, result: myCommTotal };
       totalCell.style = { ...moneyTotalStyle };
       sheet.getRow(rowNum).eachCell((cell, ci) => {
-        if (ci === 6) return;
+        if (ci === 7) return;
         cell.style = { ...totalStyle };
       });
-      sheet.mergeCells(`F${rowNum}:I${rowNum}`);
+      sheet.mergeCells(`A${rowNum}:B${rowNum}`);
       myCommTotalRowNum = rowNum;
       rowNum++;
     } else {
@@ -24464,6 +24531,82 @@ async function exportStats() {
       sheet.mergeCells(`A${rowNum}:I${rowNum}`);
       rowNum++;
     }
+
+    rowNum++;
+
+    // 工资核算：紧跟在分成明细合计之后，避免被 30 多行日历挤到最底部
+    sheet.addRow(['工资核算']);
+    sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
+    sheet.mergeCells(`A${rowNum}:I${rowNum}`);
+    sheet.getRow(rowNum).height = 26;
+    rowNum++;
+
+    sheet.addRow(['项目', '金额(元)', '', '计算公式']);
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      if (ci <= 4) cell.style = { ...headerStyle };
+    });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
+    rowNum++;
+
+    const wageRowNum = rowNum;
+    sheet.addRow(['包活提成工资', '', '', '包活分成合计（工时仅作考勤参考，不计入工资）']);
+    const wageCell = sheet.getRow(rowNum).getCell(2);
+    wageCell.value = myCommTotalRowNum
+      ? { formula: `=G${myCommTotalRowNum}`, result: myCommTotal }
+      : myCommTotal;
+    wageCell.style = { ...moneyStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      if (ci === 2) return;
+      if (ci === 1) cell.style = { ...labelStyle };
+      else cell.style = { ...dataStyle };
+    });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
+    rowNum++;
+
+    sheet.addRow(['其他补贴', '', '', '']);
+    sheet.getRow(rowNum).getCell(1).style = { ...labelStyle };
+    sheet.getRow(rowNum).getCell(2).style = { ...moneyStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci > 2) cell.style = { ...dataStyle }; });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
+    rowNum++;
+
+    const grossRowNum = rowNum;
+    sheet.addRow(['应发工资合计', '', '', '包活提成工资 + 其他补贴']);
+    const grossCell = sheet.getRow(rowNum).getCell(2);
+    grossCell.value = { formula: `=B${wageRowNum}+B${rowNum - 1}`, result: myCommTotal };
+    grossCell.style = { ...moneyTotalStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      if (ci === 2) return;
+      if (ci === 1) cell.style = { ...labelStyle };
+      else cell.style = { ...totalStyle };
+    });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
+    rowNum++;
+
+    sheet.addRow(['扣款/其他', '', '', '']);
+    sheet.getRow(rowNum).getCell(1).style = { ...labelStyle };
+    sheet.getRow(rowNum).getCell(2).style = { ...moneyStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci > 2) cell.style = { ...dataStyle }; });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
+    rowNum++;
+
+    sheet.addRow(['实发工资', '', '', '应发工资 - 扣款']);
+    const netCell = sheet.getRow(rowNum).getCell(2);
+    netCell.value = { formula: `=B${grossRowNum}-B${rowNum - 1}`, result: myCommTotal };
+    netCell.style = { ...moneyTotalStyle };
+    sheet.getRow(rowNum).eachCell((cell, ci) => {
+      if (ci === 2) return;
+      if (ci === 1) cell.style = { ...labelStyle };
+      else cell.style = { ...totalStyle };
+    });
+    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
+    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
+    rowNum++;
 
     rowNum++;
 
@@ -24488,8 +24631,9 @@ async function exportStats() {
     rowNum++;
 
     const calHeaderRowNum = rowNum;
-    sheet.addRow(['日期', '星期', '当日提成(元)', '项目', '请假/轮休']);
+    sheet.addRow(['日期', '星期', '当日提成(元)', '项目', '', '', '', '', '请假/轮休']);
     applyHeaderRow(sheet, rowNum);
+    sheet.mergeCells(`D${rowNum}:H${rowNum}`); // 项目列跨 D:H，名称不被截断
     rowNum++;
 
     const dates = [];
@@ -24539,11 +24683,11 @@ async function exportStats() {
       calTotalComm = round2(calTotalComm + amt);
       const isLeaveDay = !!leaveMap[date];
       const isRestDay = !isLeaveDay && !!restMap[date];
-      sheet.addRow([date, weekDay, amt, projByDate[date] || '', isLeaveDay ? leaveMap[date] : (isRestDay ? '轮休' : '')]);
+      sheet.addRow([date, weekDay, amt, projByDate[date] || '', '', '', '', '', isLeaveDay ? leaveMap[date] : (isRestDay ? '轮休' : '')]);
       sheet.getRow(rowNum).eachCell((cell, ci) => {
-        if (isLeaveDay && ci === 5) {
+        if (isLeaveDay && ci === 9) {
           cell.style = { ...leaveStyle };
-        } else if (isRestDay && ci === 5) {
+        } else if (isRestDay && ci === 9) {
           cell.font = { color: { argb: 'FF92400E' } };
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
           cell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -24553,17 +24697,20 @@ async function exportStats() {
           cell.style = { ...dataStyle };
         }
       });
+      sheet.mergeCells(`D${rowNum}:H${rowNum}`);
       rowNum++;
     });
 
-    sheet.addRow(['合计', '', calTotalComm, '', '']);
+    sheet.addRow(['合计', '', calTotalComm, '', '', '', '', '', '']);
+    sheet.mergeCells(`D${rowNum}:H${rowNum}`);
     sheet.getRow(rowNum).eachCell((cell, ci) => {
       if (ci === 3) cell.style = { ...moneyTotalStyle };
       else cell.style = { ...totalStyle };
     });
     rowNum++;
 
-    sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: calHeaderRowNum }];
+    // 只冻结标题行：之前冻结到日历表头，把上方所有内容钉死后「只有日历在滚」，正文反而看不到
+    sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: 1 }];
     applyZebraStripes(sheet, calHeaderRowNum + 1, rowNum - 2);
 
     rowNum++;
@@ -24624,82 +24771,9 @@ async function exportStats() {
       rowNum++;
     }
 
-    sheet.addRow(['工资核算']);
-    sheet.getRow(rowNum).getCell(1).style = { ...sectionTitleStyle };
-    sheet.mergeCells(`A${rowNum}:I${rowNum}`);
-    sheet.getRow(rowNum).height = 26;
-    rowNum++;
-
-    sheet.addRow(['项目', '金额(元)', '', '计算公式']);
-    sheet.getRow(rowNum).eachCell((cell, ci) => {
-      if (ci <= 4) cell.style = { ...headerStyle };
-    });
-    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
-    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
-    rowNum++;
-
-    const wageRowNum = rowNum;
-    sheet.addRow(['包活提成工资', '', '', '包活分成合计（工时仅作考勤参考，不计入工资）']);
-    const wageCell = sheet.getRow(rowNum).getCell(2);
-    wageCell.value = myCommTotalRowNum
-      ? { formula: `=F${myCommTotalRowNum}`, result: myCommTotal }
-      : myCommTotal;
-    wageCell.style = { ...moneyStyle };
-    sheet.getRow(rowNum).eachCell((cell, ci) => {
-      if (ci === 2) return;
-      if (ci === 1) cell.style = { ...labelStyle };
-      else cell.style = { ...dataStyle };
-    });
-    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
-    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
-    rowNum++;
-
-    sheet.addRow(['其他补贴', '', '', '']);
-    sheet.getRow(rowNum).getCell(1).style = { ...labelStyle };
-    sheet.getRow(rowNum).getCell(2).style = { ...moneyStyle };
-    sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci > 2) cell.style = { ...dataStyle }; });
-    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
-    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
-    rowNum++;
-
-    const grossRowNum = rowNum;
-    sheet.addRow(['应发工资合计', '', '', '包活提成工资 + 其他补贴']);
-    const grossCell = sheet.getRow(rowNum).getCell(2);
-    grossCell.value = { formula: `=B${wageRowNum}+B${rowNum - 1}`, result: myCommTotal };
-    grossCell.style = { ...moneyTotalStyle };
-    sheet.getRow(rowNum).eachCell((cell, ci) => {
-      if (ci === 2) return;
-      if (ci === 1) cell.style = { ...labelStyle };
-      else cell.style = { ...totalStyle };
-    });
-    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
-    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
-    rowNum++;
-
-    sheet.addRow(['扣款/其他', '', '', '']);
-    sheet.getRow(rowNum).getCell(1).style = { ...labelStyle };
-    sheet.getRow(rowNum).getCell(2).style = { ...moneyStyle };
-    sheet.getRow(rowNum).eachCell((cell, ci) => { if (ci > 2) cell.style = { ...dataStyle }; });
-    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
-    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
-    rowNum++;
-
-    sheet.addRow(['实发工资', '', '', '应发工资 - 扣款']);
-    const netCell = sheet.getRow(rowNum).getCell(2);
-    netCell.value = { formula: `=B${grossRowNum}-B${rowNum - 1}`, result: myCommTotal };
-    netCell.style = { ...moneyTotalStyle };
-    sheet.getRow(rowNum).eachCell((cell, ci) => {
-      if (ci === 2) return;
-      if (ci === 1) cell.style = { ...labelStyle };
-      else cell.style = { ...totalStyle };
-    });
-    sheet.mergeCells(`B${rowNum}:C${rowNum}`);
-    sheet.mergeCells(`D${rowNum}:I${rowNum}`);
-    rowNum++;
-
     sheet.columns = [
-      { key: 'A', width: 16 }, { key: 'B', width: 14 }, { key: 'C', width: 12 }, { key: 'D', width: 14 },
-      { key: 'E', width: 14 }, { key: 'F', width: 10 }, { key: 'G', width: 10 }, { key: 'H', width: 28 }, { key: 'I', width: 14 }
+      { key: 'A', width: 16 }, { key: 'B', width: 14 }, { key: 'C', width: 13 }, { key: 'D', width: 13 },
+      { key: 'E', width: 12 }, { key: 'F', width: 11 }, { key: 'G', width: 12 }, { key: 'H', width: 26 }, { key: 'I', width: 14 }
     ];
   });
 
@@ -31569,7 +31643,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v33fdb4e9";
+  const APP_VERSION = "v74b29003";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
