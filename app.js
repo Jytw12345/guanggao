@@ -2060,13 +2060,21 @@ function diffColor(diff) {
   return "var(--muted)";
 }
 
-/* 项目卡片进度（包活制：不再按工时，改为按状态给一个大致进度） */
+/* 项目卡片进度：按实际进度（工时/挂钟时长）计算，不再硬编码 50%。
+   有登记实际工时 → actual/estimated；
+   有 startedAt（已开工但无工时）→ calcProjectActualPersonHours/estimated（实时估算）；
+   已完工状态 → 100%；
+   预约中等未开工 → 0%。
+   与 getProjectProgress 同一口径，卡片和详情/统计进度一致。 */
 function cardStatusProgress(p) {
-  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED, STATUS.CANCELLED].includes(p.status)) return 100;
-  if (p.status === STATUS.WORKING) return 50;
-  if (p.status === STATUS.PAUSED) return 40;
-  if (p.status === STATUS.DELAYED) return 30;
-  return 0; // 预约中等未开工
+  if ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) return 100;
+  if ([STATUS.CANCELLED].includes(p.status)) return 0;
+  if (!p.startedAt) return 0;
+
+  const est = Number(p.estimatedHours) || getProjectDayEstimatedHours(p, todayStr()) || 0;
+  const act = calcProjectActualPersonHours(p);
+  if (est <= 0) return 0;
+  return Math.min(100, Math.round((act / est) * 100));
 }
 
 /* Excel 导出专用：差异列前景色 + 背景色（diffColor 返回 CSS 变量，不能直接写 argb） */
@@ -19784,14 +19792,22 @@ function generateSmartAlertsHtml(dateStrFormatted, doneList) {
     const names = doneList.map(p => `<span class="sched-goto" onclick="gotoConstruction('${p.id}')">${esc(p.name)}</span>`).join("、");
     smartAlerts.push(`<div class="sched-info-done">✅ <strong>已完工</strong>：${names}</div>`);
   }
-  /* 超期未完工：WORKING/PAUSED 项目，用统一的三级兜底取 end，
-     避免"没填 endTime → 永远不进 overdueList"的漏报。 */
+  /* 超期未完工：WORKING/PAUSED 项目。
+     语义核心：**此刻已经过了约定的完工时间，但项目还在施工/暂停状态**。
+     之前用 end < _alertsCutoff（所选日 23:59）→ 选下周一（11/24）时，今天（11/17）结束的项目
+     因为 11/17 18:00 < 11/24 23:59 被误拉进来，不管此刻是不是真的过了结束时间。
+     正确条件：
+       ① end < Date.now()  —— 此刻确实已经超期（正在施工但还没到结束时间 ≠ 超期）
+       ② dateKey(end) <= _dateKey —— 项目该完工的日期 ≤ 所选日（排除明天及以后的） */
   const overdueList = cache.projects.filter(p => {
     if (p.status === STATUS.CANCELLED || isCompleted(p)) return false;
     if (p.status === STATUS.DELAYED || p.status === STATUS.BOOKED) return false;
     if (p.status !== STATUS.WORKING && p.status !== STATUS.PAUSED) return false;
     const end = getProjectOverdueEndTime(p);
-    return end && end < _alertsCutoff;
+    if (!end) return false;
+    if (end.getTime() > Date.now()) return false;       // 此刻还没到结束时间 → 不算超期
+    if (dateKey(end) > _dateKey) return false;          // 结束日期在所选日之后 → 不算
+    return true;
   });
   if (overdueList.length > 0) {
     const items = overdueList.slice(0, 2).map(p => {
@@ -31883,7 +31899,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v7d4774a2";
+  const APP_VERSION = "v29b695e3";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
