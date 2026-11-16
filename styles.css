@@ -10916,6 +10916,15 @@ table.data.project-hours-diff thead th {
   text-overflow: ellipsis;
   line-height: 1.5;
 }
+/* 纯外协项目：不消耗内部产能，在月历小格里弱化显示 —— 灰色 + 半透明
+   内部项目颜色保持正常，用户一眼就能看出"哪些需要内部排班、哪些已经外包"。 */
+.cal-ev.cal-ev-outsourced {
+  color: var(--muted);
+  opacity: 0.7;
+}
+.cal-ev.cal-ev-outsourced .dot {
+  display: none;
+}
 .cal-more { font-size: 11px; color: var(--muted); }
 
 .cal-hours {

@@ -89,6 +89,27 @@ const STATUS = {
   CANCELLED: "已取消",
 };
 
+/** 维修单状态（与项目状态独立） */
+const REPAIR_STATUS = {
+  PENDING: "待维修",
+  COMPLETED: "已维修",
+};
+// 维修单状态 → 显示名（兼容后端可能新增的状态值）
+const REPAIR_STATUS_LABEL = {
+  [REPAIR_STATUS.PENDING]: "🔧 待维修",
+  [REPAIR_STATUS.COMPLETED]: "✅ 已维修",
+};
+
+/** 判断项目是否「纯外协」：没有分配内部工人，但有外协工人。
+ *  纯外协项目不消耗内部产能，月历小格等视图应该弱化显示。 */
+function isPureOutsourcedProject(p) {
+  if (!p) return false;
+  const hasInternal = p.assignedWorkerIds && p.assignedWorkerIds.length > 0;
+  if (hasInternal) return false;
+  const names = (p.outsourcedWorkers || "").split(/[,，]/).map(n => n.trim()).filter(Boolean);
+  return names.length > 0;
+}
+
 /*
  * 状态色唯一来源（单一事实来源）。
  * fg=文字/色条主色，bg=徽章浅底，border=徽章描边。
@@ -682,6 +703,25 @@ function isAutoReviewed(p) {
     }
   }
   return false;
+}
+
+/** 项目「超期判定」专用的有效结束时间（统一三级兜底）：
+ *   ① 显式 endTime → 直接用；
+ *   ② 没 endTime 但有 workSegments → 取最后一段的 end（跨天项目真实施工窗口）；
+ *   ③ 都没有 → 开始时间 + 估算工时（最少兜底 2h，避免"0 分钟时长瞬间超期"bug）。
+ * 用途：isOverdue / overdueList / 通知逻辑等所有"是否超期"判定。
+ * 注意：这和 getProjectEffectiveEndTime（工时计算用，WORKING 状态返回 now）不同 —— 超期判定是看"约定该什么时候完工"，不是"现在实际干到什么时候"。 */
+function getProjectOverdueEndTime(p) {
+  if (!p) return null;
+  if (p.endTime) return new Date(p.endTime);
+  const segs = getBookedSegments(p);
+  if (segs && segs.length) return segs[segs.length - 1].end;
+  const s = projectStart(p);
+  if (s) {
+    const estH = Number(p.estimatedHours) || 2;
+    return new Date(s.getTime() + estH * 3600000);
+  }
+  return p.startTime ? new Date(p.startTime) : (p.appointmentTime ? new Date(p.appointmentTime) : null);
 }
 
 /* 是否已实际开工：施工中/已暂停必然已开工；已延期的项目若由「施工中/已暂停」延期而来也会带 startedAt。
@@ -5920,7 +5960,7 @@ function renderWorkerOverdueSection(workerId = null) {
   // ⑤ 维修单：待维修（挂在原项目上）且超预约未维修，或匹配当前工人
   cache.projects.forEach(p => {
     (p.repairOrders || []).forEach(ro => {
-      if (!ro || ro.status !== "待维修" || !ro.appointmentTime) return;
+      if (!ro || ro.status !== REPAIR_STATUS.PENDING || !ro.appointmentTime) return;
       const assigned = p.assignedWorkerIds || [];
       if (workerId && !assigned.includes(workerId)) return;
       if (!workerId && assigned.length === 0) return;
@@ -6008,7 +6048,7 @@ function renderWorkerAssignmentsText(dateStr, workerId = null) {
   const dayProjects = cache.projects.filter(p => {
     if (p.status === STATUS.CANCELLED) return false;
     // 待维修的维修单（挂在原项目上）在其预约日也要出现在人员安排
-    const isRepairDay = (p.repairOrders || []).some(ro => ro && ro.status === "待维修" && ro.appointmentTime && fmtDate(new Date(ro.appointmentTime)) === target);
+    const isRepairDay = (p.repairOrders || []).some(ro => ro && ro.status === REPAIR_STATUS.PENDING && ro.appointmentTime && fmtDate(new Date(ro.appointmentTime)) === target);
     if (isRepairDay) return true;
     if (isCompleted(p)) return false; // 非维修单日的已完工项目不出现
     const start = projectStart(p);
@@ -6037,7 +6077,7 @@ function renderWorkerAssignmentsText(dateStr, workerId = null) {
     projects.forEach(p => {
       const store = getStore(p.storeId);
       const place = p.address || (store ? store.name : "地点待定");
-      const repairRo = (p.repairOrders || []).find(ro => ro && ro.status === "待维修");
+      const repairRo = (p.repairOrders || []).find(ro => ro && ro.status === REPAIR_STATUS.PENDING);
       const isRepairTask = !!repairRo;
       const evStart = isRepairTask ? new Date(repairRo.appointmentTime) : projectStart(p);
       const evEnd = isRepairTask ? new Date(new Date(repairRo.appointmentTime).getTime() + 2 * 60 * 60 * 1000) : projectEnd(p);
@@ -10795,7 +10835,7 @@ function makeVirtualRepairCard(src, ro) {
     repairOrder: ro,
     name: src.name,
     appointmentTime: ro.appointmentTime,
-    status: "待维修",
+    status: REPAIR_STATUS.PENDING,
     storeId: src.storeId || "",
     customer: ro.customer || src.customer || "",
     address: ro.address || src.address || "",
@@ -10833,7 +10873,7 @@ function virtualRepairCardHtml(p) {
           ${_pool > 0 ? `<span class="card-contract__pool"><i>分成池</i><b>¥${_pool.toFixed(0)}</b></span>` : ""}
         </div>` : "";
   return `
-      <div class="card card-repair${isRepairOverdue ? " card-overdue" : ""}" data-status="待维修" data-id="${esc(p.id)}" data-repair-of="${esc(p._repairOf)}">
+      <div class="card card-repair${isRepairOverdue ? " card-overdue" : ""}" data-status=REPAIR_STATUS.PENDING data-id="${esc(p.id)}" data-repair-of="${esc(p._repairOf)}">
         <div class="card-status-bar"></div>
         <div class="card-title card-title--with-status">
           <div class="card-title__right">
@@ -10922,7 +10962,7 @@ function renderProjects() {
     const virtualRepairCards = [];
     cache.projects.forEach((src) => {
       (src.repairOrders || []).forEach((ro) => {
-        if (ro && ro.status === "待维修" && ro.appointmentTime) {
+        if (ro && ro.status === REPAIR_STATUS.PENDING && ro.appointmentTime) {
           virtualRepairCards.push(makeVirtualRepairCard(src, ro));
         }
       });
@@ -11068,19 +11108,8 @@ function renderProjects() {
     const reviewed = isReviewed(p);
     const canUnreview = reviewed && perm.unreviewProject(p);
     
-    // 项目结束时间兜底：
-    //   ① 有显式 endTime → 用它；
-    //   ② 没 endTime 但有 workSegments → 取最后一段的 end（跨天项目的真实施工窗口）；
-    //   ③ 都没有 → 用开始时间 + 估算工时（最少兜底 2h，避免"0 分钟时长瞬间超期"的 bug）。
-    const end = (() => {
-      if (p.endTime) return new Date(p.endTime);
-      const segs = getBookedSegments(p);
-      if (segs.length) return segs[segs.length - 1].end;
-      const s = projectStart(p);
-      const estH = Number(p.estimatedHours) || 2;
-      return s ? new Date(s.getTime() + estH * 3600000) : new Date(p.startTime || p.appointmentTime);
-    })();
-    const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
+    const end = getProjectOverdueEndTime(p);
+    const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && end && new Date() > end;
     const isPending = isPendingOverdue(p); // 未完工且预约时间已过的超期待处理
     const isForgotWorkFlag = isForgotWork(p); // 逾期未开工且已跨夜：疑似忘记施工
     const forgottenInfo = getForgottenCompleteInfo(p); // 开工超阈值 / 跨夜仍施工中（疑似忘点完工）
@@ -13351,7 +13380,7 @@ async function submitRepairOrder(projectId) {
     payable: pay.payType === "paid", // 兼容旧字段（工资核算/详情展示）
     assignedWorkerIds,
     notes,
-    status: "待维修",
+    status: REPAIR_STATUS.PENDING,
     createdAt: new Date().toISOString(),
   };
   // 问题照片：随维修单一起上传（COS key 绑定本维修单 id，避免串单）
@@ -13374,7 +13403,7 @@ async function completeRepair(projectId, repairId) {
   if (!perm.completeRepair()) { toast("无权限完成维修"); return; }
   const p = getProject(projectId);
   if (!p || !p.repairOrders || !p.repairOrders.length) { toast("维修单不存在"); return; }
-  const ro = repairId ? p.repairOrders.find(r => r.id === repairId) : p.repairOrders.find(r => r.status === "待维修");
+  const ro = repairId ? p.repairOrders.find(r => r.id === repairId) : p.repairOrders.find(r => r.status === REPAIR_STATUS.PENDING);
   if (!ro) { toast("未找到待维修的维修单"); return; }
   openCompleteRepairForm(projectId, ro.id);
 }
@@ -13592,7 +13621,7 @@ function openRepairAssign(projectId, repairId) {
   if (!p || !p.repairOrders) { toast("维修单不存在"); return; }
   const ro = p.repairOrders.find(r => r.id === repairId);
   if (!ro) { toast("维修单不存在"); return; }
-  if (ro.status !== "待维修") { toast("该维修单已完成，无法改派人员"); return; }
+  if (ro.status !== REPAIR_STATUS.PENDING) { toast("该维修单已完成，无法改派人员"); return; }
   const cur = Array.isArray(ro.assignedWorkerIds) ? ro.assignedWorkerIds.slice() : [];
   // 可选人员：全部内部工人（维修单可独立于原项目派人），排除已删除的；离职人员仅保留已派工的人（便于取消）
   const workers = (cache.workers || []).filter(w => w && w.id && (w.active !== false || cur.includes(w.id)));
@@ -13637,7 +13666,7 @@ async function submitRepairAssign(projectId, repairId) {
   const idx = p.repairOrders.findIndex(r => r.id === repairId);
   if (idx < 0) { toast("维修单不存在"); return; }
   const cur = p.repairOrders[idx];
-  if (cur.status !== "待维修") { toast("该维修单已完成，无法改派人员"); return; }
+  if (cur.status !== REPAIR_STATUS.PENDING) { toast("该维修单已完成，无法改派人员"); return; }
   const next = [];
   document.querySelectorAll("#repairAssignBody .ra-cb").forEach(cb => {
     if (cb.checked && cb.dataset.wid) next.push(cb.dataset.wid);
@@ -13797,7 +13826,7 @@ function openRepairCommission(projectId, repairId) {
   const isPaid = ro.payType === "paid" || (ro.payType == null && ro.payable === true);
   const pool = Number(ro.commissionPool) || 0;
   if (!isPaid || pool <= 0) { toast("该维修单为免费或金额为 0，没有工钱可分配"); return; }
-  if (ro.status === "待维修") { toast("待维修单会在完工时自动均分，完工后才能手动调整"); return; }
+  if (ro.status === REPAIR_STATUS.PENDING) { toast("待维修单会在完工时自动均分，完工后才能手动调整"); return; }
   const ids = (ro.assignedWorkerIds || []).filter(Boolean);
   if (!ids.length) { toast("该维修单没有指定维修人员，无法分配"); return; }
   const alloc = Array.isArray(ro.commissionAlloc) ? ro.commissionAlloc : [];
@@ -15906,15 +15935,8 @@ function renderConstruction() {
     </div>`;
 
   // 详情页内的超期判定 —— 与主卡片列表同口径：补 end 兜底，避免没填结束时间时瞬间超期
-  const end = (() => {
-    if (p.endTime) return new Date(p.endTime);
-    const segs = getBookedSegments(p);
-    if (segs.length) return segs[segs.length - 1].end;
-    const s = projectStart(p);
-    const estH = Number(p.estimatedHours) || 2;
-    return s ? new Date(s.getTime() + estH * 3600000) : new Date(p.startTime || p.appointmentTime);
-  })();
-  const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && new Date() > end;
+  const end = getProjectOverdueEndTime(p);
+  const isOverdue = p.status === STATUS.BOOKED && !p.startedAt && end && new Date() > end;
   const delayCount = p.delayCount || (p.delayHistory || []).length;
   const pauseCount = p.pauseCount || 0;
   const projectWorkerStats = calcProjectWorkerStats(p);
@@ -16085,7 +16107,7 @@ function renderConstruction() {
             <div class="info-item"><div class="k">维修原因</div><div class="v">${esc(ro.reason || "—")}</div></div>
             <div class="info-item"><div class="k">维修地址</div><div class="v">${esc(ro.address || "—")}</div></div>
             <div class="info-item"><div class="k">预约维修时间</div><div class="v">${ro.appointmentTime ? fmtDateTime(ro.appointmentTime) : "—"}</div></div>
-            <div class="info-item"><div class="k">维修状态</div><div class="v">${ro.status || "待维修"}</div></div>
+            <div class="info-item"><div class="k">维修状态</div><div class="v">${ro.status || REPAIR_STATUS.PENDING}</div></div>
             <div class="info-item"><div class="k">紧急程度</div><div class="v" style="${ro.urgency === '加急' ? 'color:#dc2626;font-weight:600;' : ''}">${esc(ro.urgency || "普通")}</div></div>
             <div class="info-item"><div class="k">维修人员</div><div class="v">${esc(repairWorkerNames)}</div></div>
             ${ro.originalRepairTime ? `<div class="info-item"><div class="k">原预约维修</div><div class="v">${fmtDateTime(ro.originalRepairTime)}</div></div>` : ""}
@@ -16098,7 +16120,7 @@ function renderConstruction() {
             <div class="info-item"><div class="k">维修工时（考勤参考）</div><div class="v">${(ro.actualHours || ro.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0)).toFixed(1)} 小时</div></div>
           </div>` : ""}
           ${repairPhotosHtml(ro)}
-          ${(ro.status === "待维修") ? `
+          ${(ro.status === REPAIR_STATUS.PENDING) ? `
           <div class="card-actions" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
             ${perm.completeRepair() ? `<button class="btn small success" onclick="completeRepair('${p.id}','${ro.id}')">✅ 完成</button>` : ""}
             ${perm.createRepair() ? `<button class="btn small" onclick="openRepairReschedule('${p.id}','${ro.id}')">${svgCal(13)} 改期</button>` : ""}
@@ -16106,7 +16128,7 @@ function renderConstruction() {
             ${perm.editRepairPay(p) ? `<button class="btn small" onclick="openRepairPayEdit('${p.id}','${ro.id}')">💰 收费</button>` : ""}
             ${perm.createRepair() ? `<button class="btn small danger" onclick="deleteRepairOrder('${p.id}','${ro.id}')">🗑 删除</button>` : ""}
           </div>` : ""}
-          ${ro.status !== "待维修" && perm.editRepairPay(p) ? `
+          ${ro.status !== REPAIR_STATUS.PENDING && perm.editRepairPay(p) ? `
           <div class="card-actions" style="margin-top:8px;">
             <button class="btn small" onclick="openRepairPayEdit('${p.id}','${ro.id}')">💰 收费</button>
             ${(() => { const _isPaid = ro.payType === "paid" || (ro.payType == null && ro.payable === true); return (_isPaid && (Number(ro.commissionPool) || 0) > 0 && (ro.assignedWorkerIds || []).length) ? `<button class="btn small" onclick="openRepairCommission('${p.id}','${ro.id}')">💵 分工钱</button>` : ""; })()}
@@ -19762,13 +19784,14 @@ function generateSmartAlertsHtml(dateStrFormatted, doneList) {
     const names = doneList.map(p => `<span class="sched-goto" onclick="gotoConstruction('${p.id}')">${esc(p.name)}</span>`).join("、");
     smartAlerts.push(`<div class="sched-info-done">✅ <strong>已完工</strong>：${names}</div>`);
   }
+  /* 超期未完工：WORKING/PAUSED 项目，用统一的三级兜底取 end，
+     避免"没填 endTime → 永远不进 overdueList"的漏报。 */
   const overdueList = cache.projects.filter(p => {
     if (p.status === STATUS.CANCELLED || isCompleted(p)) return false;
     if (p.status === STATUS.DELAYED || p.status === STATUS.BOOKED) return false;
-    if ((p.status === STATUS.WORKING || p.status === STATUS.PAUSED) && p.endTime) {
-      return new Date(p.endTime) < _alertsCutoff;
-    }
-    return false;
+    if (p.status !== STATUS.WORKING && p.status !== STATUS.PAUSED) return false;
+    const end = getProjectOverdueEndTime(p);
+    return end && end < _alertsCutoff;
   });
   if (overdueList.length > 0) {
     const items = overdueList.slice(0, 2).map(p => {
@@ -19820,7 +19843,7 @@ function generateSmartAlertsHtml(dateStrFormatted, doneList) {
   cache.projects.forEach((p) => {
     if (p.status === STATUS.CANCELLED) return;
     (p.repairOrders || []).forEach((ro) => {
-      if (!ro || ro.status !== "待维修" || !ro.appointmentTime) return;
+      if (!ro || ro.status !== REPAIR_STATUS.PENDING || !ro.appointmentTime) return;
       const apt = new Date(ro.appointmentTime);
       if (apt < _alertsCutoff) {
         overdueRepairs.push({ p, ro, apt, days: Math.max(1, Math.ceil((_alertsCutoff.getTime() - apt.getTime()) / 86400000)) });
@@ -21968,7 +21991,9 @@ async function scanOverdueAndNotify() {
   const overdueProjects = (cache.projects || []).filter((p) => {
     if (p.status === STATUS.CANCELLED || isCompleted(p)) return false;
     if (p.status === STATUS.DELAYED || p.status === STATUS.BOOKED) return false;
-    return (p.status === STATUS.WORKING || p.status === STATUS.PAUSED) && p.endTime && (now > new Date(p.endTime));
+    if (p.status !== STATUS.WORKING && p.status !== STATUS.PAUSED) return false;
+    const end = getProjectOverdueEndTime(p);
+    return end && now > end;
   });
   for (const p of overdueProjects) {
     stillOverdue.add(p.id);
@@ -27026,11 +27051,18 @@ function refreshVersionStatus() {
     setTimeout(refreshVersionStatus, 3000);
     return;
   }
-  // 4) 无 waiting：对比「运行中的 SW 缓存版本」与「页面版本」，两者不一致说明页面跑的是旧缓存
+  // 4) 无 waiting：对比「运行中的 SW 缓存版本」与「页面版本」
   if (ask) {
     ask(navigator.serviceWorker.controller, (cv) => {
       if (cv && appVer && cv !== appVer) {
-        setState(`<span style="color:#dc2626;">⚠️ 缓存版本 ${esc(cv)} 与当前页面 ${esc(appVer)} 不一致，请点「立即更新」强制刷新加载。</span>`);
+        if (cv < appVer) {
+          // controller 版本**比页面旧** → 反常场景（硬刷新绕过 SW 拿了新代码但 controller 没跟上）
+          // 这种情况 banner 层已经在处理了，这里弹窗只清晰提示
+          setState(`<span style="color:#dc2626;">⚠️ 缓存版本 ${esc(cv)} 比当前页面 ${esc(appVer)} 落后，即将自动强制刷新修复。</span>`);
+        } else {
+          // controller 版本**比页面新** → 典型的"有新版本待安装，点立即更新即可"
+          setState(`<span style="color:#b45309;">🚀 新版本 ${esc(cv)} 已下载，当前页面还是旧版 ${esc(appVer)}，请点「立即更新」生效。</span>`);
+        }
       } else {
         setState(`<span style="color:#059669;">✅ 已是最新版本 <b>${esc(appVer || "—")}</b></span>`);
       }
@@ -28792,7 +28824,7 @@ function projectsOnDate(ds) {
   cache.projects.forEach((p) => {
     if (mainIds.has(p.id)) return;
     (p.repairOrders || []).forEach((ro) => {
-      if (!ro || ro.status !== "待维修" || !ro.appointmentTime) return;
+      if (!ro || ro.status !== REPAIR_STATUS.PENDING || !ro.appointmentTime) return;
       if (dateKey(new Date(ro.appointmentTime)) !== ds) return;
       const start = new Date(ro.appointmentTime);
       const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
@@ -28804,7 +28836,7 @@ function projectsOnDate(ds) {
         name: p.name,
         appointmentTime: ro.appointmentTime,
         endTime: end.toISOString(),
-        status: "待维修",
+        status: REPAIR_STATUS.PENDING,
         storeId: p.storeId || "",
         customer: ro.customer || p.customer || "",
         assignedWorkerIds: Array.isArray(ro.assignedWorkerIds) && ro.assignedWorkerIds.length
@@ -28866,30 +28898,37 @@ function renderCalendar() {
     const isHolidayDate = isHoliday(ds);
     const holidayIcon = isHolidayDate ? "🎊" : "";
     const evHtml = items.slice(0, 3).map((p) => {
-      const isRepair = p.isVirtualRepair || (p.repairOrders || []).some(ro => ro && ro.status === "待维修");
+      const isRepair = p.isVirtualRepair || (p.repairOrders || []).some(ro => ro && ro.status === REPAIR_STATUS.PENDING);
+      const isOutsourced = isPureOutsourcedProject(p);
       const dotClass = isRepair ? "repair" : (STATUS_DOT[p.status] || "");
-      const prefix = isRepair ? "🔧" : "";
+      const prefix = (isRepair ? "🔧" : "") + (isOutsourced ? "🤝" : "");
+      const extraCls = isOutsourced ? " cal-ev-outsourced" : "";
       const clickTarget = p.isVirtualRepair ? (p._repairOf || p.id) : p.id;
-      return `<div class="cal-ev" data-project-id="${esc(clickTarget)}"><span class="dot ${dotClass}"></span>${prefix}${esc(p.name)}</div>`;
+      return `<div class="cal-ev${extraCls}" data-project-id="${esc(clickTarget)}"><span class="dot ${dotClass}"></span>${prefix}${esc(p.name)}</div>`;
     }).join("");
     const more = items.length > 3 ? `<div class="cal-more">+${items.length - 3} 更多</div>` : "";
     const countBadge = items.length ? `<span class="cal-count">${items.length}</span>` : "";
-    const totalHours = items.reduce((sum, p) => sum + getProjectDayEstimatedHours(p, ds), 0);
-    /* 日历工时三级口径（按当天实际在岗人数均摊）：
-       轻松容量 = 在岗人数 × 8h（含吃饭休息，正常排班）
-       满负荷   = 在岗人数 × 10h（8:00-18:00，不休息）
-       > 满负荷 → 超载需加班(红)；> 轻松容量 → 满负荷/不休息(橙)；其余为轻松(蓝) */
+    /* 工时只算「分配了内部人员」的项目（纯外协不消耗内部产能，不计入超载判断），
+       与列表详情 / timeline 的 internalHours 口径对齐，避免外协多的日子月历格子误报红。 */
+    const internalHours = items
+      .filter((p) => (p.assignedWorkerIds && p.assignedWorkerIds.length > 0))
+      .reduce((sum, p) => sum + getProjectDayEstimatedHours(p, ds), 0);
     const onDutyWorkers = cache.workers.filter(w => w.active !== false && !isWorkerOnLeave(w.id, ds)).length;
     const easyCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS_EASY;
     const fullCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS;
-    const avgPerPerson = totalHours / Math.max(onDutyWorkers, 1);
+    const avgPerPerson = internalHours / Math.max(onDutyWorkers, 1);
+    const activeInternal = items.filter((p) => !isCompleted(p) && (p.assignedWorkerIds && p.assignedWorkerIds.length > 0));
+    const isSingleInternal = activeInternal.length === 1;
+    /* 颜色分级：
+       单项目全员集中投入 → 温和 warn（不是真超载）；多项目合计超出 → danger（真超载需加班/外协）。
+       这样避免"只干一个大项目"的格子和"3 个项目挤爆产能"的格子同色。 */
     let hoursClass = "cal-hours";
-    if (totalHours >= fullCapacity) hoursClass += " danger";
-    else if (totalHours > easyCapacity) hoursClass += " warn";
-    const hoursTitle = totalHours > 0
-      ? `当天预约 ${fmtHours(totalHours)}h，在岗 ${onDutyWorkers} 人；轻松容量 ${fmtHours(easyCapacity)}h（${DAILY_WORK_HOURS_EASY}h/人），满负荷 ${fmtHours(fullCapacity)}h（${DAILY_WORK_HOURS}h/人）；当前人均 ${fmtHours(avgPerPerson)}h`
+    if (internalHours >= fullCapacity) hoursClass += isSingleInternal ? " warn" : " danger";
+    else if (internalHours > easyCapacity) hoursClass += " warn";
+    const hoursTitle = internalHours > 0
+      ? `内部工时 ${fmtHours(internalHours)}h，在岗 ${onDutyWorkers} 人；轻松容量 ${fmtHours(easyCapacity)}h（${DAILY_WORK_HOURS_EASY}h/人），满负荷 ${fmtHours(fullCapacity)}h（${DAILY_WORK_HOURS}h/人）；人均 ${fmtHours(avgPerPerson)}h${isSingleInternal ? '（单项目集中施工）' : ''}`
       : "";
-    const hoursHtml = totalHours > 0 ? `<div class="${hoursClass}" title="${hoursTitle}">${fmtHours(totalHours)}h</div>` : "";
+    const hoursHtml = internalHours > 0 ? `<div class="${hoursClass}" title="${hoursTitle}">${fmtHours(internalHours)}h</div>` : "";
     cells += `
       <div class="cal-cell ${items.length ? "has" : ""} ${isToday ? "today" : ""} ${isSelected ? "selected" : ""} ${isHolidayDate ? "holiday" : ""}" onclick="selectCalDay('${ds}');">
         <div class="cal-daynum">${day}${countBadge}${holidayIcon}</div>
@@ -29042,12 +29081,25 @@ function renderCalDay() {
       </div>`;
   }).join("");
 
-  /* 工时超载 / 人员冲突提示横幅 */
+  /* 工时超载 / 人员冲突提示横幅
+   *  区分「单项目全员集中投入」和「多项目合计超载」：
+   *    单项目：全员干一个项目 → 这是正常的集中施工，不该叫"超载"，改为温和提示
+   *    多项目：多个项目合计超出 → 才是真超载，需要拆分或外协 */
   const alerts = [];
+  const activeProjects = items.filter(p => !isCompleted(p) && (p.assignedWorkerIds || []).length > 0);
+  const isSingleProject = activeProjects.length === 1;
   if (internalHours >= fullCapacity) {
-    alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，完成全部项目可能需要加班或外协</b>：已分配 ${fmtHours(internalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），建议拆分到其他日期或安排外协。</div>`);
+    if (isSingleProject) {
+      alerts.push(`<div class="cal-alert warn">⚡ <b>全员满负荷施工</b>：当日共 ${fmtHours(internalHours)}h（满负荷 ${fmtHours(fullCapacity)}h，人均 ${DAILY_WORK_HOURS}h），请合理安排休息，避免疲劳作业。</div>`);
+    } else {
+      alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，完成全部项目可能需要加班或外协</b>：已分配 ${fmtHours(internalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），建议拆分到其他日期或安排外协。</div>`);
+    }
   } else if (internalHours > easyCapacity) {
-    alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时接近满负荷（不休息）</b>：已分配 ${fmtHours(internalHours)}h，轻松容量 ${fmtHours(easyCapacity)}h（人均 ${DAILY_WORK_HOURS_EASY}h），满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），请留意排班。</div>`);
+    if (isSingleProject) {
+      alerts.push(`<div class="cal-alert warn">⚡ <b>全员集中施工中</b>：已分配 ${fmtHours(internalHours)}h，轻松容量 ${fmtHours(easyCapacity)}h（人均 ${DAILY_WORK_HOURS_EASY}h），请留意施工节奏。</div>`);
+    } else {
+      alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时接近满负荷（不休息）</b>：已分配 ${fmtHours(internalHours)}h，轻松容量 ${fmtHours(easyCapacity)}h（人均 ${DAILY_WORK_HOURS_EASY}h），满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），请留意排班。</div>`);
+    }
   }
   const conflictWorkers = [...new Set(items.flatMap((p) => {
     if (isCompleted(p)) return [];
@@ -29062,14 +29114,15 @@ function renderCalDay() {
   const alertsHtml = alerts.length ? `<div class="cal-alerts">${alerts.join("")}</div>` : "";
 
   const workerStatsText = Object.keys(workerHours).length > 0 ? ` · 👷 ${Object.entries(workerHours).map(([name, hours]) => `${esc(name)}${fmtHours(hours)}h`).join("、")}` : "";
-  /* 汇总栏工时数值按内部人员负荷着色 */
-  let estColorStyle = "";
-  if (loadRatio > 1) estColorStyle = "color:var(--danger)";
-  else if (loadRatio > 0.8) estColorStyle = "color:var(--warn)";
+  /* 汇总栏：总预计工时（含外协）用默认色；内部人员工时按自身 loadRatio 着色。
+     之前把 totalEst 用 loadRatio 着色 —— 但 totalEst 里外协工时不消耗内部产能，着色会误导用户。 */
+  let internalColorStyle = "";
+  if (loadRatio > 1) internalColorStyle = "color:var(--danger)";
+  else if (loadRatio > 0.8) internalColorStyle = "color:var(--warn)";
   box.innerHTML = `
     <div class="detail-block">
       <h3>${svgCal(18)} ${esc(calSelectedDate)}（当天 ${items.length} 个预约）</h3>
-      <div class="cal-summary-bar">总预计工时 <b style="${estColorStyle}">${fmtHours(totalEst)}h</b> / 总实际工时 ${totalAct > 0 ? fmtHours(totalAct) + 'h' : '—'}${workerStatsText}</div>
+      <div class="cal-summary-bar">总预计工时 <b>${fmtHours(totalEst)}h</b> / 内部人员工时 <b style="${internalColorStyle}">${fmtHours(internalHours)}h</b> / 总实际工时 ${totalAct > 0 ? fmtHours(totalAct) + 'h' : '—'}${workerStatsText}</div>
       ${alertsHtml}
       ${generateSmartAlertsHtml(calSelectedDate, items.filter(p => [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)))}
       <div class="cal-detail-list">${rows}</div>
@@ -29209,11 +29262,21 @@ function renderTimelineInDetail() {
   const loadRatio = fullCapacity > 0 ? statInternalHours / fullCapacity : 0;
 
   // 工时超载 / 人员冲突提示横幅（与列表式视图对齐）
+  const tlActiveProjects = items.filter(p => !isCompleted(p) && hasInternalWorker(p));
+  const tlIsSingle = tlActiveProjects.length === 1;
   const alerts = [];
   if (statInternalHours >= fullCapacity) {
-    alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，完成全部项目可能需要加班或外协</b>：已分配 ${fmtHours(statInternalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），建议拆分到其他日期或安排外协。</div>`);
+    if (tlIsSingle) {
+      alerts.push(`<div class="cal-alert warn">⚡ <b>全员满负荷施工</b>：当日共 ${fmtHours(statInternalHours)}h（满负荷 ${fmtHours(fullCapacity)}h，人均 ${DAILY_WORK_HOURS}h），请合理安排休息，避免疲劳作业。</div>`);
+    } else {
+      alerts.push(`<div class="cal-alert danger">⚠ <b>内部人员工时超载，完成全部项目可能需要加班或外协</b>：已分配 ${fmtHours(statInternalHours)}h / 满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），建议拆分到其他日期或安排外协。</div>`);
+    }
   } else if (statInternalHours > easyCapacity) {
-    alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时接近满负荷（不休息）</b>：已分配 ${fmtHours(statInternalHours)}h，轻松容量 ${fmtHours(easyCapacity)}h（人均 ${DAILY_WORK_HOURS_EASY}h），满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），请留意排班。</div>`);
+    if (tlIsSingle) {
+      alerts.push(`<div class="cal-alert warn">⚡ <b>全员集中施工中</b>：已分配 ${fmtHours(statInternalHours)}h，轻松容量 ${fmtHours(easyCapacity)}h（人均 ${DAILY_WORK_HOURS_EASY}h），请留意施工节奏。</div>`);
+    } else {
+      alerts.push(`<div class="cal-alert warn">⚠ <b>内部人员工时接近满负荷（不休息）</b>：已分配 ${fmtHours(statInternalHours)}h，轻松容量 ${fmtHours(easyCapacity)}h（人均 ${DAILY_WORK_HOURS_EASY}h），满负荷 ${fmtHours(fullCapacity)}h（人均 ${DAILY_WORK_HOURS}h），请留意排班。</div>`);
+    }
   }
 
   const conflictInfo = {};
@@ -29418,7 +29481,7 @@ function renderTimelineInDetail() {
             <span class="timeline-task-name">${esc(p.name)}</span>
             <div class="timeline-task-chips">
               ${p.reworkCount > 0 && !isVirtualRepairTask ? `<span class="timeline-task-rework-badge" style="cursor:pointer" title="查看返工记录" onclick="showReworkInfo('${esc(p.id)}')">🔄 返工 ${p.reworkCount}</span>` : ""}
-              ${isVirtualRepairTask || (p.repairOrders || []).some(ro => ro && ro.status === "待维修") ? `<span class="timeline-task-repair-badge">🔧 维修</span>` : ""}
+              ${isVirtualRepairTask || (p.repairOrders || []).some(ro => ro && ro.status === REPAIR_STATUS.PENDING) ? `<span class="timeline-task-repair-badge">🔧 维修</span>` : ""}
               ${isOverdue ? `<span class="timeline-task-overdue-badge" style="cursor:pointer" title="查看超期信息" onclick="showOverdueInfo('${esc(p.id)}')">🔴 超期</span>` : ""}
               ${hasOutsourced(p) ? `<span class="timeline-task-outsourced-badge">🤝 外协</span>` : ""}
               ${isProjectTimeModified(p) ? `<span class="timeline-task-modified-badge" style="cursor:pointer" title="查看改期信息" onclick="showRescheduleInfo('${esc(p.id)}')">${svgCal(12)} 已改期</span>` : ""}
@@ -29437,7 +29500,7 @@ function renderTimelineInDetail() {
     timelineHtml = `
       <div class="timeline-container timeline-horizontal">
         <div class="tl-stats">
-          <span class="tl-stat-item"><span class="tl-stat-label">总预计工时</span><span class="tl-stat-value ${loadRatio > 1 ? 'danger' : loadRatio > 0.8 ? 'warn' : ''}">${fmtHours(statEstHours)}h</span></span>
+          <span class="tl-stat-item"><span class="tl-stat-label">总预计工时</span><span class="tl-stat-value">${fmtHours(statEstHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">施工人员工时</span><span class="tl-stat-value ${loadRatio > 1 ? 'danger' : loadRatio > 0.8 ? 'warn' : ''}">${fmtHours(statInternalHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">外协工时</span><span class="tl-stat-value outsourced">${fmtHours(statOutsourcedHours)}h</span></span>
           <span class="tl-stat-item"><span class="tl-stat-label">外协人员</span><span class="tl-stat-value outsourced">${statOutsourcedWorkers}人</span></span>
@@ -29675,7 +29738,7 @@ function openTimelineActionMenu(taskEl, projectId) {
     </div>` : `<div class="tl-menu-info"><div><span>人员</span><b>${esc(workers)}</b></div></div>`}
     <div class="tl-menu-actions">
       <button class="btn small primary" onclick="closeTimelineActionMenu(); gotoConstruction('${p.id}')">施工管理</button>
-      ${(p.repairOrders || []).filter(ro => ro.status === "待维修").map(ro => `<button class="btn small" onclick="closeTimelineActionMenu(); completeRepair('${p.id}','${ro.id}')">✅ 完成维修${(p.repairOrders.filter(r => r.status === "待维修").length > 1) ? " #" + (ro.seq || "") : ""}</button>`).join("")}
+      ${(p.repairOrders || []).filter(ro => ro.status === REPAIR_STATUS.PENDING).map(ro => `<button class="btn small" onclick="closeTimelineActionMenu(); completeRepair('${p.id}','${ro.id}')">✅ 完成维修${(p.repairOrders.filter(r => r.status === REPAIR_STATUS.PENDING).length > 1) ? " #" + (ro.seq || "") : ""}</button>`).join("")}
       ${perm.editProject(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); editProject('${p.id}')">编辑</button>` : ""}
       ${perm.editAppointment(p) && !isAppointmentLocked(p) ? `<button class="btn small" onclick="closeTimelineActionMenu(); quickEditProjectTime('${p.id}')">✏️ 修改预约</button>` : ""}
       ${perm.reviewProject(p) && !isReviewed(p) && p.status === STATUS.ACCEPTED ? `<button class="btn small" onclick="closeTimelineActionMenu(); reviewProject('${p.id}')">审核</button>` : ""}
@@ -31810,7 +31873,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vb3ccdb87";
+  const APP_VERSION = "vb3dc2719";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -31865,8 +31928,36 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
           if (shouldSuppressUpdateNotice()) return;
           const channel = new MessageChannel();
           channel.port1.onmessage = (ev) => {
-            const v = ev.data && ev.data.version;
-            if (v && v !== APP_VERSION && !shouldSuppressUpdateNotice()) showUpdateBanner(v);
+            const cv = ev.data && ev.data.version;
+            if (!cv) return;
+            if (cv === APP_VERSION) return; // 一致，正常
+
+            // 版本号比较：controller 版本 和 页面版本（都是 hash）
+            // hash 长短一致（8 位十六进制），直接字符串比较即可
+            if (cv > APP_VERSION) {
+              // controller 版本**比页面新** → 典型的"点了立即更新后 controller 变新但页面代码没刷新"
+              // 走 showUpdateBanner（提示用户需要立即更新）
+              if (!shouldSuppressUpdateNotice()) showUpdateBanner(cv);
+            } else {
+              // controller 版本**比页面旧** → 反常场景
+              // 典型成因：用户硬刷新 / PWA 重启时绕过 SW cache 直接从网络拉了最新 app.js，
+              // 但 controller 还是旧 SW（waiting 的新 SW 没被 skipWaiting），
+              // 此时页面代码跑的是新版本，但任何 fetch 仍会命中旧 SW 的旧 cache → 行为越来越混乱。
+              // 这种情况直接清掉所有 cache + 强制 reload，让新 controller 正常接管。
+              try {
+                const already = localStorage.getItem("gg_controller_outdated_reloaded");
+                if (!already) {
+                  localStorage.setItem("gg_controller_outdated_reloaded", "1");
+                  // 不立即 reload（可能用户正在操作），延迟 3s 后台处理
+                  setTimeout(() => {
+                    toast("检测到缓存版本落后，正在强制刷新…", 2500);
+                    setTimeout(hardReloadNow, 1500);
+                  }, 3000);
+                }
+              } catch (_) {}
+              // 仍然弹横幅提示用户
+              if (!shouldSuppressUpdateNotice()) showUpdateBanner(cv);
+            }
           };
           navigator.serviceWorker.controller.postMessage({ type: "GET_VERSION" }, [channel.port2]);
         } catch (_) {}
