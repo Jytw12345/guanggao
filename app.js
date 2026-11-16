@@ -19801,16 +19801,26 @@ function generateSmartAlertsHtml(dateStrFormatted, doneList) {
     const more = overdueList.length > 2 ? `<div class="sched-warn-more">等${overdueList.length}个项目</div>` : "";
     smartAlerts.push(`<div class="sched-warn-amber">⏰ <strong>超期未完工</strong>${items}${more}</div>`);
   }
+  // —— 忘记施工 / 逾期未开工 ——
+  // 语义核心：**到此刻（Date.now()）还没开工**。
+  // 之前错误地和「所选日 23:59」比 → 今天下午 18:00 的预约（还没到时间）因为 18:00 < 23:59 被误报。
+  // 逻辑：预约时间已过此刻 + 状态还是 BOOKED + 没 startedAt。
+  // 区分忘记施工 vs 逾期未开工：
+  //   忘记施工 = 预约日期 < 今天（已经跨日了还没开）
+  //   逾期未开工 = 预约日期 == 今天（今天到点了还没开）
+  const _dateKey = dateKey(new Date());
   const _alertsOverdueNotStarted = (p) => {
     if (!p || p.status !== STATUS.BOOKED || p.startedAt) return false;
     const appt = p.appointmentTime || p.startTime;
     if (!appt) return false;
-    return new Date(appt) < _alertsCutoff;
+    const apptDateKey = dateKey(new Date(appt));
+    if (apptDateKey > _dateKey) return false; // 明天及以后 → 不提醒（还没到时间）
+    return new Date(appt) < new Date();       // 预约时间已过此刻 → 真逾期
   };
   const _alertsForgot = (p) => {
     const appt = p.appointmentTime || p.startTime;
     if (!appt) return false;
-    return dateKey(new Date(appt)) < dateKey(_alertsCutoff);
+    return dateKey(new Date(appt)) < _dateKey; // 预约日期 < 今天 → 忘记施工（已跨日）
   };
   const notStartedList = cache.projects.filter(p =>
     p.status !== STATUS.CANCELLED && !isCompleted(p) && _alertsOverdueNotStarted(p)
@@ -31873,7 +31883,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vb3dc2719";
+  const APP_VERSION = "v7d4774a2";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
