@@ -12366,28 +12366,21 @@ function ggShowCameraButton() {
   return true;
 }
 
-/* ===== file input 触发层：朴素原生 input =====
+/* ===== file input 触发层 =====
  *
- * 用户实测环境汇总：
- *   ✅ 小米浏览器直开 → 透明覆盖层方案 OK
- *   ✅ 狐猴浏览器 PWA → 透明覆盖层方案 OK
- *   ❌ 小米浏览器 standalone PWA → 任何「间接」方式全挂
- *     - display:none / left:-9999px / opacity:0 / clip:rect 的隐藏 input → 不响应
- *     - label for 关联 → 不触发
- *     - JS .click() → 被 WebView 拦截
- *     - 透明覆盖层（input 覆盖按钮）→ 依然不认
+ * 用户实测环境汇总（持续更新）：
+ *   ✅ Chrome/Edge 浏览器直开 / standalone → 透明覆盖层 OK
+ *   ✅ 狐猴浏览器直开 / standalone PWA     → 透明覆盖层 OK（朴素原生 input 反而显示"选择文件"默认外观）
+ *   ✅ 小米浏览器直开                      → 透明覆盖层 OK
+ *   ❌ 小米浏览器 standalone PWA           → **所有**方式全挂（朴素 input 都不响应）
+ *   ✅ PackPlus APK 打包壳                → 拍照按钮被隐藏（capture 无效），相册走同一套
  *
- * 推测：小米 standalone PWA 的 WebView 对 file input 有「必须原生直接渲染」的硬性限制，
- * 任何间接触发链路都会被它的内部逻辑跳过。
+ * 结论：小米浏览器 standalone PWA 的 WebView 内置了 file input 拦截逻辑，任何间接触发 + 朴素直接
+ * 渲染的 input 都被跳过。这是 WebView 实现的硬限制，前端彻底无能为力。
  *
- * 终极朴素方案：让 <input type="file"> 自己就是按钮本身。
- *   - appearance:none 去掉浏览器默认外观
- *   - 直接给 input 加按钮的 padding/bg/圆角/字体样式
- *   - 不做任何隐藏/覆盖/label/JS.click 的花招
- *   - 拍照按钮加 capture="environment" 属性 + mousedown JS 兜底
- *
- * 如果这招在小米 standalone PWA 下依然不行 → 确认是 WebView 不支持 file input，
- * 前端彻底无能为力，只能引导用户换浏览器或用 PackPlus 壳。
+ * 方案：
+ *   - 按钮结构回到「透明覆盖层」（狐猴/Chrome/Edge/小米直开等绝大多数环境正常）
+ *   - 小米 standalone PWA 特殊检测 → 点击时 toast 引导换浏览器（狐猴/Chrome）
  */
 
 /** 拍照按钮 mousedown 时设置 capture（click 之前）。 */
@@ -12395,42 +12388,54 @@ function ggSetInputCapture(el, capture) {
   try { el.setAttribute("capture", capture); el.capture = capture; } catch (e) {}
 }
 
-/** 朴素原生 file input 按钮。
- *  @param {string} label        —— 按钮显示文字（含 emoji）
- *  @param {string} [capture]    —— "environment" / "user" / undefined（相册不设）
- *  @param {string} [extraCls]   —— 按钮额外 class
- *  @param {string} onChangeAttr  —— input 的 onchange
- *  @param {boolean} multiple    —— 是否多选（相册） */
-function ggFileNativeBtn(label, capture, extraCls, onChangeAttr, multiple) {
+/** 检测是否为「小米浏览器安装的 standalone PWA」（当前已知唯一不支持 file input 的环境）。 */
+function ggIsXiaomiStandalonePWA() {
+  try {
+    var ua = (navigator.userAgent || "").toLowerCase();
+    var isMiBrowser = /miuibrowser|mibrowser|xiaomi/i.test(ua);
+    var isStandalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+                       (typeof navigator.standalone !== "undefined" && navigator.standalone);
+    return isMiBrowser && isStandalone;
+  } catch (e) { return false; }
+}
+
+/** 透明覆盖按钮：input 绝对定位覆盖整个按钮容器（inset:0）。
+ *  覆盖在文字 span 上方，用户点文字实际点到 input → 原生触发文件选择器。
+ *  opacity:0.01 而非 0（部分 WebView 对完全透明元素不派发事件）。 */
+function ggFileCoverBtn(label, capture, extraCls, onChangeAttr, multiple) {
   var m = multiple ? " multiple" : "";
-  var captureAttr = capture ? ' capture="' + capture + '"' : '';
+  var inputStyle = 'position:absolute;inset:0;width:100%;height:100%;opacity:0.01;cursor:pointer;border:0;padding:0;margin:0;';
   var mouseDownAttr = capture ? ' onmousedown="ggSetInputCapture(this,\'' + capture + '\')"' : '';
-  // appearance:none 去掉浏览器默认按钮样式，用自定义 CSS 把 input 画成按钮
-  var btnStyle = [
-    'appearance:none', '-webkit-appearance:none',
-    'display:inline-flex', 'align-items:center', 'justify-content:center',
-    'padding:8px 14px', 'border-radius:8px', 'border:1px solid #d9d9d9',
-    'background:#fafafa', 'color:#333', 'font-size:14px',
-    'cursor:pointer', 'line-height:1', 'white-space:nowrap',
-    'vertical-align:middle', 'margin:0 6px 0 0'
-  ].join(';');
+  var captureAttr = capture ? ' capture="' + capture + '"' : '';
   return (
-    '<input type="file" accept="image/*"' + captureAttr + m +
-      ' class="cos-add' + (extraCls ? ' ' + extraCls : '') + '"' +
-      ' style="' + btnStyle + '"' + mouseDownAttr + ' onchange="' + onChangeAttr + '"' +
-      ' value="' + label + '"' + '>'
+    '<span class="cos-add' + (extraCls ? ' ' + extraCls : '') + '" style="position:relative;display:inline-flex;align-items:center;justify-content:center;">' +
+      '<span style="pointer-events:none;">' + label + '</span>' +
+      '<input type="file" accept="image/*"' + captureAttr + m + ' ' +
+             'style="' + inputStyle + '"' + mouseDownAttr + ' onchange="' + onChangeAttr + '">' +
+    '</span>'
   );
 }
 
-/* 相机按钮（按能力检测条件渲染）。 */
-function ggCamButton(idBase, onChangeAttr) {
-  if (!ggShowCameraButton()) return "";
-  return ggFileNativeBtn("📷 拍照", "environment", "cos-add--cam", onChangeAttr, false);
+/** 小米 standalone PWA 下的降级按钮：点了后给 toast 引导换浏览器。
+ *  依然渲染和正常按钮一样的外观（cos-add 类名），避免样式错乱。 */
+function ggXiaomiFallbackBtn(label, extraCls) {
+  var style = 'position:relative;display:inline-flex;align-items:center;justify-content:center;';
+  var cls = 'cos-add' + (extraCls ? ' ' + extraCls : '');
+  var click = 'onclick="toast(\'小米自带浏览器安装的桌面版暂不支持拍照/相册，请用狐猴或 Chrome 浏览器打开\')"';
+  return '<span class="' + cls + '" style="' + style + '" ' + click + '>' + label + '</span>';
 }
 
-/* 相册按钮 —— 不设 capture，走普通文件选择。 */
+/* 相机按钮（按能力检测条件渲染 + 小米 standalone PWA 降级）。 */
+function ggCamButton(idBase, onChangeAttr) {
+  if (ggIsXiaomiStandalonePWA()) return ggXiaomiFallbackBtn("📷 拍照", "cos-add--cam");
+  if (!ggShowCameraButton()) return "";
+  return ggFileCoverBtn("📷 拍照", "environment", "cos-add--cam", onChangeAttr, false);
+}
+
+/* 相册按钮 —— 小米 standalone PWA 降级，其他正常走透明覆盖层。 */
 function ggAlbumButton(idBase, onChangeAttr, multiple) {
-  return ggFileNativeBtn("🖼️ 相册", null, null, onChangeAttr, multiple !== false);
+  if (ggIsXiaomiStandalonePWA()) return ggXiaomiFallbackBtn("🖼️ 相册", null);
+  return ggFileCoverBtn("🖼️ 相册", null, null, onChangeAttr, multiple !== false);
 }
 
 /* ===== 通用「拍照 + 相册/文件夹」双入口图片上传 =====
@@ -31801,7 +31806,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v9e7a9a45";
+  const APP_VERSION = "vbf6772ad";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
