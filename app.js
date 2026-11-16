@@ -12404,7 +12404,11 @@ function ggIsXiaomiStandalonePWA() {
  *  opacity:0.01 而非 0（部分 WebView 对完全透明元素不派发事件）。 */
 function ggFileCoverBtn(label, capture, extraCls, onChangeAttr, multiple) {
   var m = multiple ? " multiple" : "";
-  var inputStyle = 'position:absolute;inset:0;width:100%;height:100%;opacity:0.01;cursor:pointer;border:0;padding:0;margin:0;';
+  // 透明覆盖层：appearance:none 去掉浏览器原生 file 按钮外观（否则狐猴等 WebView
+  // 里默认"选择文件"边框和文字会透过 opacity:0.01 叠在 emoji 下方）
+  var inputStyle = 'position:absolute;inset:0;width:100%;height:100%;opacity:0.01;' +
+                   'appearance:none;-webkit-appearance:none;outline:none;' +
+                   'cursor:pointer;border:0;padding:0;margin:0;background:transparent;min-width:0;min-height:0;';
   var mouseDownAttr = capture ? ' onmousedown="ggSetInputCapture(this,\'' + capture + '\')"' : '';
   var captureAttr = capture ? ' capture="' + capture + '"' : '';
   return (
@@ -31806,7 +31810,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vbf6772ad";
+  const APP_VERSION = "vb3ccdb87";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
