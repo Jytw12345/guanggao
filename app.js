@@ -19799,6 +19799,7 @@ function getProjectStatusNote(p, { includeStatus = true, maxLen = 60, showReason
 function generateSmartAlertsHtml(dateStrFormatted, doneList) {
   const _alertsCutoff = new Date(`${dateStrFormatted}T23:59:59`);
   const _todayKey = dateKey(new Date());
+  const _dateKey = dateKey(new Date());
   // 只有真正的未来日期（明天及以后）才跳过；今天必须渲染（此刻 < 23:59 但截止时刻还没到，
   // 说明我们还在这一天里，"逾期未开工/忘记施工"可能才刚出现）。
   if (_alertsCutoff.getTime() > Date.now() && dateStrFormatted !== _todayKey) return "";
@@ -19840,7 +19841,6 @@ function generateSmartAlertsHtml(dateStrFormatted, doneList) {
   // 区分忘记施工 vs 逾期未开工：
   //   忘记施工 = 预约日期 < 今天（已经跨日了还没开）
   //   逾期未开工 = 预约日期 == 今天（今天到点了还没开）
-  const _dateKey = dateKey(new Date());
   const _alertsOverdueNotStarted = (p) => {
     if (!p || p.status !== STATUS.BOOKED || p.startedAt) return false;
     const appt = p.appointmentTime || p.startTime;
@@ -31935,7 +31935,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v052d2813";
+  const APP_VERSION = "v4ac3ee45";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
