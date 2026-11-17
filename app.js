@@ -19797,62 +19797,59 @@ function getProjectStatusNote(p, { includeStatus = true, maxLen = 60, showReason
  *   - 看未来日期 → 返回空（未来不可能"已经"超期）。
  * 独立函数：施工管理概览、施工概览月历列表、timeline 空日/非空日 三处共用。 */
 function generateSmartAlertsHtml(dateStrFormatted, doneList) {
-  const _alertsCutoff = new Date(`${dateStrFormatted}T23:59:59`);
-  const _todayKey = dateKey(new Date());
-  const _dateKey = dateKey(new Date());
-  // 只有真正的未来日期（明天及以后）才跳过；今天必须渲染（此刻 < 23:59 但截止时刻还没到，
-  // 说明我们还在这一天里，"逾期未开工/忘记施工"可能才刚出现）。
-  if (_alertsCutoff.getTime() > Date.now() && dateStrFormatted !== _todayKey) return "";
+  // 两个"日期 key"，语义不同，不重名：
+  const _selectedDateKey = dateKey(new Date(dateStrFormatted));  // 所选日（过滤超期/维修单的日期上界）
+  const _todayKey = dateKey(new Date());                         // 今天（区分"忘记施工"vs"逾期未开工"）
+  const _now = Date.now();
+  // 只有真正的未来日期（明天及以后）才跳过；今天必须渲染。
+  if (_selectedDateKey !== _todayKey) {
+    const cutoff = new Date(`${dateStrFormatted}T23:59:59`);
+    if (cutoff.getTime() > _now) return ""; // 未来日期直接返回空
+  }
   const smartAlerts = [];
 
+  // —— 已完工 ——
   if (doneList && doneList.length > 0) {
     const names = doneList.map(p => `<span class="sched-goto" onclick="gotoConstruction('${p.id}')">${esc(p.name)}</span>`).join("、");
     smartAlerts.push(`<div class="sched-info-done">✅ <strong>已完工</strong>：${names}</div>`);
   }
-  /* 超期未完工：WORKING/PAUSED 项目。
-     语义核心：**此刻已经过了约定的完工时间，但项目还在施工/暂停状态**。
-     之前用 end < _alertsCutoff（所选日 23:59）→ 选下周一（11/24）时，今天（11/17）结束的项目
-     因为 11/17 18:00 < 11/24 23:59 被误拉进来，不管此刻是不是真的过了结束时间。
-     正确条件：
-       ① end < Date.now()  —— 此刻确实已经超期（正在施工但还没到结束时间 ≠ 超期）
-       ② dateKey(end) <= _dateKey —— 项目该完工的日期 ≤ 所选日（排除明天及以后的） */
+
+  // —— 超期未完工 ——
+  // 语义：WORKING/PAUSED 项目，此刻已过约定完工时间 + 结束日期 ≤ 所选日
   const overdueList = cache.projects.filter(p => {
     if (p.status === STATUS.CANCELLED || isCompleted(p)) return false;
     if (p.status === STATUS.DELAYED || p.status === STATUS.BOOKED) return false;
     if (p.status !== STATUS.WORKING && p.status !== STATUS.PAUSED) return false;
     const end = getProjectOverdueEndTime(p);
     if (!end) return false;
-    if (end.getTime() > Date.now()) return false;       // 此刻还没到结束时间 → 不算超期
-    if (dateKey(end) > _dateKey) return false;          // 结束日期在所选日之后 → 不算
+    if (end.getTime() > _now) return false;                 // 此刻还没到结束时间
+    if (dateKey(end) > _selectedDateKey) return false;      // 结束日期在所选日之后
     return true;
   });
   if (overdueList.length > 0) {
     const items = overdueList.slice(0, 2).map(p => {
-      const note = p.note || (getProjectStatusNote(p, { includeStatus: true, maxLen: 40 }));
+      const note = p.note || getProjectStatusNote(p, { includeStatus: true, maxLen: 40 });
       return `<div class="sched-warn-item"><span class="sched-goto" onclick="gotoConstruction('${p.id}')">${esc(p.name)}</span>${note ? `<span class="sched-warn-reason">（${esc(note)}）</span>` : ""}</div>`;
     }).join("");
     const more = overdueList.length > 2 ? `<div class="sched-warn-more">等${overdueList.length}个项目</div>` : "";
     smartAlerts.push(`<div class="sched-warn-amber">⏰ <strong>超期未完工</strong>${items}${more}</div>`);
   }
+
   // —— 忘记施工 / 逾期未开工 ——
-  // 语义核心：**到此刻（Date.now()）还没开工**。
-  // 之前错误地和「所选日 23:59」比 → 今天下午 18:00 的预约（还没到时间）因为 18:00 < 23:59 被误报。
-  // 逻辑：预约时间已过此刻 + 状态还是 BOOKED + 没 startedAt。
-  // 区分忘记施工 vs 逾期未开工：
-  //   忘记施工 = 预约日期 < 今天（已经跨日了还没开）
-  //   逾期未开工 = 预约日期 == 今天（今天到点了还没开）
+  // 区分：忘记施工 = 预约日期 < 今天（已跨日还没开）
+  //      逾期未开工 = 预约日期 == 今天（今天到点了还没开）
   const _alertsOverdueNotStarted = (p) => {
     if (!p || p.status !== STATUS.BOOKED || p.startedAt) return false;
     const appt = p.appointmentTime || p.startTime;
     if (!appt) return false;
     const apptDateKey = dateKey(new Date(appt));
-    if (apptDateKey > _dateKey) return false; // 明天及以后 → 不提醒（还没到时间）
-    return new Date(appt) < new Date();       // 预约时间已过此刻 → 真逾期
+    if (apptDateKey > _todayKey) return false;   // 明天及以后 → 不提醒
+    return new Date(appt).getTime() < _now;        // 预约时间已过此刻
   };
   const _alertsForgot = (p) => {
     const appt = p.appointmentTime || p.startTime;
     if (!appt) return false;
-    return dateKey(new Date(appt)) < _dateKey; // 预约日期 < 今天 → 忘记施工（已跨日）
+    return dateKey(new Date(appt)) < _todayKey;    // 预约日期 < 今天 → 忘记施工
   };
   const notStartedList = cache.projects.filter(p =>
     p.status !== STATUS.CANCELLED && !isCompleted(p) && _alertsOverdueNotStarted(p)
@@ -19889,7 +19886,7 @@ function generateSmartAlertsHtml(dateStrFormatted, doneList) {
       const apt = new Date(ro.appointmentTime);
       // 维修单超期判定：和此刻比（不是所选日 23:59）。避免选下周一的时候，今天还没到预约时间的维修单也被误报。
       // 同时过滤：维修单预约日期必须 ≤ 所选日（否则时间线/月历选未来日期时不该出现"今天"的维修单提醒）。
-      if (apt.getTime() <= Date.now() && dateKey(apt) <= _dateKey) {
+      if (apt.getTime() <= _now && dateKey(apt) <= _selectedDateKey) {
         overdueRepairs.push({ p, ro, apt, days: Math.max(1, Math.ceil((Date.now() - apt.getTime()) / 86400000)) });
       }
     });
@@ -31935,7 +31932,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v4ac3ee45";
+  const APP_VERSION = "v45579e51";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
