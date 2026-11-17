@@ -287,6 +287,8 @@ const CAP = {
   MANAGE_STORES: "manage_stores",
   MANAGE_OUTSOURCED: "manage_outsourced",
   REPAIR_CREATE: "repair_create",
+  REPAIR_RESCHEDULE: "repair_reschedule",
+  REPAIR_ASSIGN: "repair_assign",
   REPAIR_COMPLETE: "repair_complete",
   REWORK_PROJECT: "rework_project",
   PROJECT_EDIT_APPOINTMENT_OWN: "project_edit_appointment_own",
@@ -387,6 +389,8 @@ const CAP_LABEL = {
   vehicle_trip_delete: "删除里程记录",
   vehicle_manage: "管理车辆",
   repair_create: "发起维修单",
+  repair_reschedule: "维修单改期",
+  repair_assign: "维修单改派",
   repair_complete: "完成维修",
   rework_project: "返工项目",
   photo_upload_site: "上传现场图",
@@ -405,7 +409,7 @@ const CAP_GROUPS = [
   { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","worklog_delete","worker_assign","worker_unassign"] },
   { label: "人员管理", caps: ["worker_add","worker_edit","worker_delete","worker_view","manage_outsourced"] },
   { label: "休假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","leave_delete","leave_withdraw","leave_batch_rotational"] },
-  { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_complete","rework_project"] },
+  { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_reschedule","repair_assign","repair_complete","rework_project"] },
   { label: "数据统计", caps: ["view_stats_global","view_stats_store"] },
   { label: "数据工具", caps: ["export_projects","export_worklogs","export_leaves","export_workers","export_stores","export_all","import_data","view_operation_logs"] },
   { label: "系统管理", caps: ["manage_stores"] },
@@ -435,7 +439,7 @@ const DEFAULT_ROLE_PERMS = {
     project_edit_contract: true, project_edit_cost_deduction: true, project_edit_commission: true,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
     import_data: false, view_operation_logs: false,
-    repair_create: true, repair_complete: false, rework_project: true,
+    repair_create: true, repair_reschedule: true, repair_assign: true, repair_complete: false, rework_project: true,
     photo_upload_site: true, photo_delete_site: true, photo_upload_pm: true, photo_delete_pm: true, photo_upload_completion: true, photo_delete_completion: true, photo_download: true,
     schedule_view: true, schedule_view_all: true, schedule_add: true, schedule_edit_own: true, schedule_edit_all: true, schedule_delete_own: true, schedule_delete_all: true,
     vehicle_view: true, vehicle_trip_add: true, vehicle_trip_delete: false,
@@ -455,7 +459,7 @@ const DEFAULT_ROLE_PERMS = {
     review_project: false, unreview_project: false, accept_project: false,
     view_stats_global: false, view_stats_store: false,
     manage_stores: false,
-    repair_create: false, repair_complete: true, rework_project: false,
+    repair_create: false, repair_reschedule: false, repair_assign: false, repair_complete: true, rework_project: false,
     photo_upload_site: true, photo_delete_site: true, photo_upload_pm: true, photo_delete_pm: true, photo_upload_completion: true, photo_delete_completion: true, photo_download: true,
     manage_outsourced: false,
     project_edit_appointment_own: false, project_edit_appointment_all: false,
@@ -559,7 +563,9 @@ const perm = {
   manageOutsourced: () => can(CAP.MANAGE_OUTSOURCED),
   exportData: () => can(CAP.EXPORT_PROJECTS) || can(CAP.EXPORT_WORKLOGS) || can(CAP.EXPORT_LEAVES) || can(CAP.EXPORT_WORKERS) || can(CAP.EXPORT_STORES) || can(CAP.EXPORT_ALL) || can(CAP.IMPORT_DATA) || can(CAP.VIEW_OPERATION_LOGS),
   createRepair: () => can(CAP.REPAIR_CREATE),
-  completeRepair: () => can(CAP.REPAIR_COMPLETE),
+  rescheduleRepair: (p) => can(CAP.REPAIR_RESCHEDULE) && (isManager() || !myStore() || (p && p.storeId === myStore())),
+  assignRepair: (p) => can(CAP.REPAIR_ASSIGN) && (isManager() || !myStore() || (p && p.storeId === myStore())),
+  completeRepair: (p) => can(CAP.REPAIR_COMPLETE) && (isManager() || !myStore() || (p && p.storeId === myStore())),
   rework: (p) => can(CAP.REWORK_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
   // 「管理工时单价」权限点与工资单价配置 UI 已整体移除（2026-10-18 包活制改造），恒 false
   manageWageConfig: () => false,
@@ -970,14 +976,16 @@ function fmtDurationFromMs(ms) {
   return `${m}分`;
 }
 
-/* 点击「🔴 超期」标记：查看逾期时长与原定完工时间 */
+/* 点击「🔴 超期」标记：查看逾期时长与原定完工时间
+   原定完工时间走 getProjectOverdueEndTime 三级兜底（显式 endTime → workSegments 末段 → 估算工时），
+   和 smartAlerts / overdueList / isOverdueNotStarted 口径一致。 */
 function showOverdueInfo(projectId) {
   const p = getProject(projectId);
   if (!p) return;
   const now = new Date();
-  const pEnd = new Date(p.endTime || p.appointmentTime);
+  const pEnd = getProjectOverdueEndTime(p) || new Date(p.appointmentTime || p.startTime || 0);
   const pStart = new Date(p.appointmentTime || p.startTime);
-  const overdueMs = now - pEnd;
+  const overdueMs = Math.max(0, now - pEnd);
   const items = [
     { label: "项目状态", value: p.status, variant: "warn", icon: "📋" },
     { label: "原定开工时间", value: fmtDateTime(pStart), icon: "🚀" },
@@ -987,12 +995,13 @@ function showOverdueInfo(projectId) {
   showKVModal("超期信息", items);
 }
 
-/* 点击「⚠️ 人员请假/轮休」标记：查看冲突人员与假期详情 */
+/* 点击「⚠️ 人员请假/轮休」标记：查看冲突人员与假期详情
+   项目时段走 getProjectOverdueEndTime 三级兜底，和 showOverdueInfo 口径一致。 */
 function showLeaveConflictInfo(projectId) {
   const p = getProject(projectId);
   if (!p) return;
   const pStart = new Date(p.appointmentTime || p.startTime);
-  const pEnd = new Date(p.endTime || p.appointmentTime);
+  const pEnd = getProjectOverdueEndTime(p) || new Date(p.appointmentTime);
   const all = cache.leaveRecords.filter(r => {
     if (r.status !== LEAVE_STATUS.APPROVED) return false;
     return p.assignedWorkerIds && p.assignedWorkerIds.includes(r.workerId);
@@ -10922,11 +10931,16 @@ function virtualRepairCardHtml(p) {
         </div>` : ""}
         ${contractHtml}
         <div class="card-actions">
-          <button class="btn small" onclick="event.stopPropagation();gotoConstruction('${esc(p._repairOf)}')">查看原单</button>
-          ${perm.createRepair() ? `<button class="btn small" onclick="event.stopPropagation();openRepairReschedule('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">${svgCal(13)} 改期</button>` : ""}
-          ${perm.createRepair() ? `<button class="btn small" onclick="event.stopPropagation();openRepairAssign('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">👷 改派</button>` : ""}
-          ${(() => { const rp = getProject(p._repairOf); return (rp && perm.editRepairPay(rp)) ? `<button class="btn small" onclick="event.stopPropagation();openRepairPayEdit('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">💰 收费</button>` : ""; })()}
-          <button class="btn small primary" onclick="event.stopPropagation();completeRepair('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">完成维修</button>
+          ${(() => {
+            const rp = getProject(p._repairOf);
+            return `
+              <button class="btn small" onclick="event.stopPropagation();gotoConstruction('${esc(p._repairOf)}')">查看原单</button>
+              ${perm.rescheduleRepair(rp) ? `<button class="btn small" onclick="event.stopPropagation();openRepairReschedule('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">${svgCal(13)} 改期</button>` : ""}
+              ${perm.assignRepair(rp) ? `<button class="btn small" onclick="event.stopPropagation();openRepairAssign('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">👷 改派</button>` : ""}
+              ${(rp && perm.editRepairPay(rp)) ? `<button class="btn small" onclick="event.stopPropagation();openRepairPayEdit('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">💰 收费</button>` : ""}
+              ${perm.completeRepair(rp) ? `<button class="btn small primary" onclick="event.stopPropagation();completeRepair('${esc(p._repairOf)}','${esc(p._repairOrderId)}')">完成维修</button>` : ""}
+            `;
+          })()}
         </div>
       </div>`;
 }
@@ -13408,8 +13422,8 @@ async function submitRepairOrder(projectId) {
 }
 
 async function completeRepair(projectId, repairId) {
-  if (!perm.completeRepair()) { toast("无权限完成维修"); return; }
   const p = getProject(projectId);
+  if (!perm.completeRepair(p)) { toast("无权限完成维修（仅限本店）"); return; }
   if (!p || !p.repairOrders || !p.repairOrders.length) { toast("维修单不存在"); return; }
   const ro = repairId ? p.repairOrders.find(r => r.id === repairId) : p.repairOrders.find(r => r.status === REPAIR_STATUS.PENDING);
   if (!ro) { toast("未找到待维修的维修单"); return; }
@@ -13583,11 +13597,11 @@ function openRepairReschedule(projectId, repairId) {
 }
 
 async function submitRepairReschedule(projectId, repairId) {
-  if (!perm.createRepair()) { toast("无权限改期维修单"); return; }
+  const p = getProject(projectId);
+  if (!perm.rescheduleRepair(p)) { toast("无权限改期维修单（仅限本店）"); return; }
   const date = document.getElementById("repairReschedDate").value;
   const time = document.getElementById("repairReschedTime").value;
   if (!date || !time) { toast("请选择预约维修时间"); return; }
-  const p = getProject(projectId);
   if (!p || !p.repairOrders) { toast("维修单不存在"); return; }
   const idx = p.repairOrders.findIndex(r => r.id === repairId);
   if (idx < 0) { toast("维修单不存在"); return; }
@@ -13668,8 +13682,8 @@ function openRepairAssign(projectId, repairId) {
 }
 
 async function submitRepairAssign(projectId, repairId) {
-  if (!perm.createRepair()) { toast("无权限改派维修人员"); return; }
   const p = getProject(projectId);
+  if (!perm.assignRepair(p)) { toast("无权限改派维修人员（仅限本店）"); return; }
   if (!p || !p.repairOrders) { toast("维修单不存在"); return; }
   const idx = p.repairOrders.findIndex(r => r.id === repairId);
   if (idx < 0) { toast("维修单不存在"); return; }
@@ -19871,8 +19885,10 @@ function generateSmartAlertsHtml(dateStrFormatted, doneList) {
     (p.repairOrders || []).forEach((ro) => {
       if (!ro || ro.status !== REPAIR_STATUS.PENDING || !ro.appointmentTime) return;
       const apt = new Date(ro.appointmentTime);
-      if (apt < _alertsCutoff) {
-        overdueRepairs.push({ p, ro, apt, days: Math.max(1, Math.ceil((_alertsCutoff.getTime() - apt.getTime()) / 86400000)) });
+      // 维修单超期判定：和此刻比（不是所选日 23:59）。避免选下周一的时候，今天还没到预约时间的维修单也被误报。
+      // 同时过滤：维修单预约日期必须 ≤ 所选日（否则时间线/月历选未来日期时不该出现"今天"的维修单提醒）。
+      if (apt.getTime() <= Date.now() && dateKey(apt) <= _dateKey) {
+        overdueRepairs.push({ p, ro, apt, days: Math.max(1, Math.ceil((Date.now() - apt.getTime()) / 86400000)) });
       }
     });
   });
@@ -31899,7 +31915,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v29b695e3";
+  const APP_VERSION = "v2135fe15";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
