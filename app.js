@@ -290,6 +290,7 @@ const CAP = {
   REPAIR_RESCHEDULE: "repair_reschedule",
   REPAIR_ASSIGN: "repair_assign",
   REPAIR_COMPLETE: "repair_complete",
+  REPAIR_ALL: "repair_all",
   REWORK_PROJECT: "rework_project",
   PROJECT_EDIT_APPOINTMENT_OWN: "project_edit_appointment_own",
   PROJECT_EDIT_APPOINTMENT_ALL: "project_edit_appointment_all",
@@ -392,6 +393,7 @@ const CAP_LABEL = {
   repair_reschedule: "维修单改期",
   repair_assign: "维修单改派",
   repair_complete: "完成维修",
+  repair_all: "全部门店维修管理",
   rework_project: "返工项目",
   photo_upload_site: "上传现场图",
   photo_delete_site: "删除现场图",
@@ -409,7 +411,7 @@ const CAP_GROUPS = [
   { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","worklog_delete","worker_assign","worker_unassign"] },
   { label: "人员管理", caps: ["worker_add","worker_edit","worker_delete","worker_view","manage_outsourced"] },
   { label: "休假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","leave_delete","leave_withdraw","leave_batch_rotational"] },
-  { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_reschedule","repair_assign","repair_complete","rework_project"] },
+  { label: "审核验收", caps: ["review_project","unreview_project","accept_project","repair_create","repair_reschedule","repair_assign","repair_complete","repair_all","rework_project"] },
   { label: "数据统计", caps: ["view_stats_global","view_stats_store"] },
   { label: "数据工具", caps: ["export_projects","export_worklogs","export_leaves","export_workers","export_stores","export_all","import_data","view_operation_logs"] },
   { label: "系统管理", caps: ["manage_stores"] },
@@ -563,9 +565,9 @@ const perm = {
   manageOutsourced: () => can(CAP.MANAGE_OUTSOURCED),
   exportData: () => can(CAP.EXPORT_PROJECTS) || can(CAP.EXPORT_WORKLOGS) || can(CAP.EXPORT_LEAVES) || can(CAP.EXPORT_WORKERS) || can(CAP.EXPORT_STORES) || can(CAP.EXPORT_ALL) || can(CAP.IMPORT_DATA) || can(CAP.VIEW_OPERATION_LOGS),
   createRepair: () => can(CAP.REPAIR_CREATE),
-  rescheduleRepair: (p) => can(CAP.REPAIR_RESCHEDULE) && (isManager() || !myStore() || (p && p.storeId === myStore())),
-  assignRepair: (p) => can(CAP.REPAIR_ASSIGN) && (isManager() || !myStore() || (p && p.storeId === myStore())),
-  completeRepair: (p) => can(CAP.REPAIR_COMPLETE) && (isManager() || !myStore() || (p && p.storeId === myStore())),
+  rescheduleRepair: (p) => can(CAP.REPAIR_RESCHEDULE) && (can(CAP.REPAIR_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
+  assignRepair: (p) => can(CAP.REPAIR_ASSIGN) && (can(CAP.REPAIR_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
+  completeRepair: (p) => can(CAP.REPAIR_COMPLETE) && (can(CAP.REPAIR_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   rework: (p) => can(CAP.REWORK_PROJECT) && (isManager() || !myStore() || (p && p.storeId === myStore())),
   // 「管理工时单价」权限点与工资单价配置 UI 已整体移除（2026-10-18 包活制改造），恒 false
   manageWageConfig: () => false,
@@ -612,7 +614,7 @@ const perm = {
      封存的语义锁的是**原项目的钱**；维修单是封存之后新产生的独立收费项，金额与分成
      单独计算并叠加，不影响原项目，故不受该封存约束。权限点与门店兜底口径完全沿用。 */
   editRepairPay: (p) => can(CAP.PROJECT_EDIT_CONTRACT)
-    && (explicitGrant(CAP.PROJECT_EDIT_CONTRACT) || can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
+    && (can(CAP.REPAIR_ALL) || can(CAP.PROJECT_EDIT_ALL) || isManager() || !myStore() || (p && p.storeId === myStore())),
   // 成本扣项（材料/现场成本/外协工钱）独立权限点：与「工人分成」(editCommission) 分开控制。
   // 默认 manager/store_manager = true、worker = false；门店兜底同口径。
   editCostDeduction: (p) => !isReviewed(p) && can(CAP.PROJECT_EDIT_COST_DEDUCTION)
@@ -29583,29 +29585,47 @@ function renderTimelineInDetail() {
         ${(() => {
           const today = new Date();
           today.setHours(0, 0, 0, 0);
-          // 轮休（周末轮流休息）与请假分开展示，避免把休息的人标成"请假"
-          const restInfo = [];
-          const leaveInfo = [];
-          for (let i = 0; i < 3; i++) {
-            const d = new Date(today.getTime() + i * 24 * 60 * 60 * 1000);
-            const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-            const dayRecs = cache.leaveRecords.filter((lr) => {
-              if (lr.status === LEAVE_STATUS.REJECTED) return false;
-              const sd = new Date(lr.startDate);
-              sd.setHours(0, 0, 0, 0);
-              const ed = new Date(lr.endDate);
-              ed.setHours(0, 0, 0, 0);
-              return d >= sd && d <= ed;
-            });
-            const rests = dayRecs.filter((lr) => lr.leaveType === "rotational");
-            const leaves = dayRecs.filter((lr) => lr.leaveType !== "rotational");
-            if (rests.length > 0) {
-              restInfo.push(`<div class="tl-leave-item"><span class="tl-rest-date">${dateStr}</span><span class="tl-leave-workers">${rests.map(l => esc(l.workerName)).join("、")}</span></div>`);
+          const horizon = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
+          const relevant = cache.leaveRecords.filter((lr) => {
+            if (lr.status === LEAVE_STATUS.REJECTED) return false;
+            const sd = new Date(lr.startDate); sd.setHours(0, 0, 0, 0);
+            const ed = new Date(lr.endDate); ed.setHours(0, 0, 0, 0);
+            return ed >= today && sd <= horizon;
+          });
+          // 按请假记录去重，按人+起始日期分组（同个人同一天多次请假合并一行）
+          const restInfo = [], leaveInfo = [];
+          relevant.forEach(lr => {
+            const sd = new Date(lr.startDate), ed = new Date(lr.endDate);
+            sd.setHours(0, 0, 0, 0); ed.setHours(0, 0, 0, 0);
+            const sameDay = dateKey(sd) === dateKey(ed);
+            const days = Math.round((ed - sd) / 86400000) + 1;
+            // 短日期格式：省略年份（timeline 里都是近期，年份冗余）
+            const shortS = `${sd.getMonth() + 1}/${sd.getDate()}`;
+            const shortE = `${ed.getMonth() + 1}/${ed.getDate()}`;
+
+            if (lr.leaveType === "rotational") {
+              restInfo.push(`<div class="tl-leave-item"><span class="tl-rest-date">${sameDay ? shortS : shortS + " ~ " + shortE}</span><span class="tl-leave-workers">${esc(lr.workerName)}${days > 1 ? `（${days}天）` : ""}</span></div>`);
+            } else {
+              let rangeText;
+              if (sameDay) {
+                if (lr.startTime || lr.endTime) {
+                  rangeText = `${lr.startTime || ""} ~ ${lr.endTime || ""}`.trim();
+                } else {
+                  const typeLabel = { all: "全天", morning: "上午", afternoon: "下午" }[lr.startType] || "全天";
+                  rangeText = `${shortS} ${typeLabel}`;
+                }
+              } else {
+                if (lr.startTime || lr.endTime) {
+                  // 跨天有精确时间：完整时段 + 天数
+                  rangeText = `${shortS} ${lr.startTime || ""} ~ ${shortE} ${lr.endTime || ""}（${days}天）`.trim();
+                } else {
+                  // 跨天全天：日期范围 + 天数
+                  rangeText = `${shortS} ~ ${shortE}（${days}天）`;
+                }
+              }
+              leaveInfo.push(`<div class="tl-leave-item"><span class="tl-leave-date">${rangeText}</span><span class="tl-leave-workers">${esc(lr.workerName)}${lr.status === LEAVE_STATUS.PENDING ? '<span class="home-leave-pop__pending">（待审批）</span>' : ""}</span></div>`);
             }
-            if (leaves.length > 0) {
-              leaveInfo.push(`<div class="tl-leave-item"><span class="tl-leave-date">${dateStr}</span><span class="tl-leave-workers">${leaves.map(l => `${esc(l.workerName)} ${formatLeaveTime(l)}`).join("、")}</span></div>`);
-            }
-          }
+          });
           let html = "";
           if (restInfo.length > 0) {
             html += `<div class="tl-rest-section"><div class="tl-rest-header">🌴 近期轮休（休息）</div><div class="tl-leave-list">${restInfo.join("")}</div></div>`;
@@ -31915,7 +31935,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v2135fe15";
+  const APP_VERSION = "v052d2813";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
