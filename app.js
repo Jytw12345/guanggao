@@ -29041,6 +29041,7 @@ function renderCalDay() {
       return ls <= dk && le >= dk;
     })());
     const easyCapacity = Math.max(onDutyWorkers, 1) * DAILY_WORK_HOURS_EASY;
+    const leaveNames = leaveOnDay.map(r => getWorker(r.workerId)?.name || r.workerId).filter(Boolean);
     const isHolidayDate = isHoliday(calSelectedDate);
     const dow = new Date(calSelectedDate).getDay();
     const isWeekend = dow === 0 || dow === 6;
@@ -29053,11 +29054,10 @@ function renderCalDay() {
         <div class="cal-summary-bar">
           <span>👷 在岗 <b>${onDutyWorkers}</b> 人</span>
           <span>·</span>
-          <span>请假 <b>${leaveOnDay.length}</b> 人</span>
+          <span>请假 <b>${leaveOnDay.length}</b> 人${leaveNames.length ? `（${leaveNames.join("、")}）` : ""}</span>
           <span>·</span>
           <span>轻松容量 <b>${fmtHours(easyCapacity)}h</b></span>
         </div>
-        ${leaveOnDay.length > 0 ? `<div style="margin-top:6px;font-size:13px;color:#64748b;">请假人员：${leaveOnDay.map(r => { const w = getWorker(r.workerId); return w ? w.name : r.workerId; }).join("、")}</div>` : ""}
         ${generateSmartAlertsHtml(calSelectedDate, [])}
       </div>`;
     return;
@@ -29362,6 +29362,7 @@ function renderTimelineInDetail() {
     const weekendLabel = isWeekend ? " · 周末" : "";
     const holidayName = (cache.holidays.find(h => h.date === calSelectedDate) || {}).name;
     const holidayLabel = isHolidayDate ? ` · ${holidayName || "节假日"}` : "";
+    const leaveNames = leaveOnDay.map(r => getWorker(r.workerId)?.name || r.workerId).filter(Boolean);
     timelineHtml = `
       <div class="timeline-container">
         <div class="timeline-empty">
@@ -29370,7 +29371,7 @@ function renderTimelineInDetail() {
           <div class="cal-summary-bar" style="margin-top:12px">
             <span>👷 在岗 <b>${onDutyWorkers}</b> 人</span>
             <span>·</span>
-            <span>请假 <b>${leaveOnDay.length}</b> 人</span>
+            <span>请假 <b>${leaveOnDay.length}</b> 人${leaveNames.length ? `（${leaveNames.join("、")}）` : ""}</span>
             <span>·</span>
             <span>轻松容量 <b>${fmtHours(easyCapacity)}h</b></span>
           </div>
@@ -29580,14 +29581,15 @@ function renderTimelineInDetail() {
           </div>
         </div>
         ${(() => {
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          const horizon = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
+          // 请假/轮休池跟「所选日」走，而不是跟今天 —— 否则选未来日期时
+          // 还会显示过去的请假（比如选 20 号还能看到 17-18 号的请假，不合理）
+          const base = new Date(calSelectedDate + "T00:00:00");
+          const horizon = new Date(base.getTime() + 3 * 24 * 60 * 60 * 1000);
           const relevant = cache.leaveRecords.filter((lr) => {
             if (lr.status === LEAVE_STATUS.REJECTED) return false;
             const sd = new Date(lr.startDate); sd.setHours(0, 0, 0, 0);
             const ed = new Date(lr.endDate); ed.setHours(0, 0, 0, 0);
-            return ed >= today && sd <= horizon;
+            return ed >= base && sd <= horizon;
           });
           // 按请假记录去重，按人+起始日期分组（同个人同一天多次请假合并一行）
           const restInfo = [], leaveInfo = [];
@@ -31932,7 +31934,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v45579e51";
+  const APP_VERSION = "ve921ad4b";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
