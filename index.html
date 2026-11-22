@@ -79,6 +79,7 @@
           <input type="text" id="globalSearch" class="gs-input" placeholder="搜索项目 / 员工 / 门店..." />
           <div id="globalSearchResults" class="search-results"></div>
         </div>
+        <button type="button" id="btnEstimateTool" class="estimate-tool-btn" onclick="switchTab('estimate')" title="施工费测算">🧮 <span>测算</span></button>
         <span id="syncStatus" class="sync-status" title="本地模式 · 点击立即同步" onclick="manualSync()">💻</span>
         <button id="userMenu" class="user-menu-btn hidden" aria-label="用户菜单">
           👤
@@ -163,13 +164,9 @@
       <span class="bnav-icon">🚚</span>
       <span class="bnav-label">车辆</span>
     </button>
-    <button class="bottom-nav-item" data-tab="workers" title="人员">
-      <span class="bnav-icon">👷</span>
-      <span class="bnav-label">人员</span>
-    </button>
-    <button class="bottom-nav-item" data-tab="stats" title="提成统计">
-      <span class="bnav-icon">💰</span>
-      <span class="bnav-label">提成</span>
+    <button class="bottom-nav-item" data-tab="estimate" title="费用测算">
+      <span class="bnav-icon">🧮</span>
+      <span class="bnav-label">测算</span>
     </button>
     <button class="bottom-nav-item" data-tab="mine" title="我的">
       <span class="bnav-icon">👤</span>
@@ -502,6 +499,7 @@
     <div class="modal">
       <div class="modal-head">
         <h3 id="modalTitle">标题</h3>
+        <button class="modal-close modal-min-btn" id="modalMin" onclick="modalMinimizeForm()" title="最小化到右下角，稍后可恢复继续填写" style="display:none;">–</button>
         <button class="modal-close" id="modalClose">✕</button>
       </div>
       <div class="modal-body" id="modalBody"></div>
@@ -513,6 +511,9 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
+
+  <!-- 弹窗最小化胶囊坞（右下角）：预约表单 / 测算器收起后点这里恢复 -->
+  <div id="modalMinDock" class="modal-min-dock hidden"></div>
 
   <!-- 安装引导横幅（可安装到桌面/主屏时显示） -->
   <div id="installBar" class="install-bar hidden">
@@ -607,6 +608,7 @@
   <script src="./vendor/jszip.min.js"></script>
   <script src="./vendor/heic2any.min.js"></script>
   <script src="config.js"></script>
+  <script src="estimate.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

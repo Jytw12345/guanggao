@@ -292,6 +292,7 @@ const CAP = {
   REPAIR_COMPLETE: "repair_complete",
   REPAIR_ALL: "repair_all",
   REWORK_PROJECT: "rework_project",
+  ESTIMATE_MANAGE: "estimate_manage",
   PROJECT_EDIT_APPOINTMENT_OWN: "project_edit_appointment_own",
   PROJECT_EDIT_APPOINTMENT_ALL: "project_edit_appointment_all",
   PROJECT_EDIT_CONTRACT: "project_edit_contract",
@@ -363,6 +364,7 @@ const CAP_LABEL = {
   view_stats_store: "查看本门店统计",
   manage_stores: "管理门店",
   manage_outsourced: "管理外协人员",
+  estimate_manage: "管理测算参数与单价（施工费测算）",
   project_edit_appointment_own: "修改自己项目预约时间",
   project_edit_appointment_all: "修改所有项目预约时间",
   // 命名口径（2026-11-15）：权限项叫「修改全部项目金额」，避免用户误以为只管"包活"这一种
@@ -408,6 +410,7 @@ const CAP_LABEL = {
 const CAP_GROUPS = [
   { label: "项目预约", caps: ["project_create","project_edit_own","project_edit_all","project_edit_appointment_own","project_edit_appointment_all","project_delete_own","project_delete_all","project_view_all","project_delay","project_cancel"] },
   { label: "包活结算", caps: ["project_edit_contract","project_edit_cost_deduction","project_edit_commission"] },
+  { label: "费用测算", caps: ["estimate_manage"] },
   { label: "施工管理", caps: ["construction_start","construction_pause","construction_resume","construction_complete","worklog_delete","worker_assign","worker_unassign"] },
   { label: "人员管理", caps: ["worker_add","worker_edit","worker_delete","worker_view","manage_outsourced"] },
   { label: "休假管理", caps: ["leave_apply","leave_approve","leave_reject","leave_view_all","leave_delete","leave_withdraw","leave_batch_rotational"] },
@@ -437,6 +440,7 @@ const DEFAULT_ROLE_PERMS = {
     view_stats_global: false, view_stats_store: true,
     manage_stores: false,
     manage_outsourced: true,
+    estimate_manage: false,
     project_edit_appointment_own: true, project_edit_appointment_all: true,
     project_edit_contract: true, project_edit_cost_deduction: true, project_edit_commission: true,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
@@ -464,6 +468,7 @@ const DEFAULT_ROLE_PERMS = {
     repair_create: false, repair_reschedule: false, repair_assign: false, repair_complete: true, rework_project: false,
     photo_upload_site: true, photo_delete_site: true, photo_upload_pm: true, photo_delete_pm: true, photo_upload_completion: true, photo_delete_completion: true, photo_download: true,
     manage_outsourced: false,
+    estimate_manage: false,
     project_edit_appointment_own: false, project_edit_appointment_all: false,
     project_edit_contract: false, project_edit_cost_deduction: false, project_edit_commission: false,
     export_projects: false, export_worklogs: false, export_leaves: false, export_workers: false, export_stores: false, export_all: false,
@@ -894,15 +899,26 @@ function isProjectTimeModified(p) {
   return cur !== orig;
 }
 
-/* 点击「已改期」标记：弹出原预约时间 / 现预约时间对比 */
+/* 点击「已改期」标记：弹出原预约时间 / 现预约时间对比 + 逐次修改记录（谁改的、何时、改成了什么）。
+   scheduleHistory 每条记 { original_time(改前), changed_at, changed_by, reason }；
+   第 i 条的"改后时间" = 第 i+1 条的 original_time（末条 = 当前预约时间）。 */
 function showRescheduleInfo(projectId) {
   const p = getProject(projectId);
   if (!p || !p.originalAppointmentTime) return;
-  const orig = fmtDateTime(p.originalAppointmentTime);
   const cur = fmtDateTime(p.appointmentTime || p.startTime);
-  const latest = p.scheduleHistory && p.scheduleHistory.length > 0 ? p.scheduleHistory[p.scheduleHistory.length - 1] : null;
-  const operator = latest && latest.changed_by ? latest.changed_by : (p.createdBy || "未知");
-  const changedAt = latest && latest.changed_at ? fmtDateTime(latest.changed_at) : "";
+  const hist = Array.isArray(p.scheduleHistory) ? p.scheduleHistory : [];
+  const orig = fmtDateTime(hist.length && hist[0].original_time ? hist[0].original_time : p.originalAppointmentTime);
+  const changeRows = hist.map((h, i) => {
+    const to = (i + 1 < hist.length && hist[i + 1].original_time) ? hist[i + 1].original_time : (p.appointmentTime || p.startTime);
+    const by = h.changed_by || "未记录";
+    const at = h.changed_at ? fmtDateTime(h.changed_at) : "时间未知";
+    const reason = h.reason ? `<span class="reschedule-info__reason">（${esc(h.reason)}）</span>` : "";
+    return `
+      <div class="reschedule-info__meta reschedule-info__change">
+        <span class="reschedule-info__meta-dot"></span>
+        <span>改为 <b>${esc(fmtDateTime(to))}</b> · 由 <b>${esc(by)}</b> 于 ${esc(at)}${reason}</span>
+      </div>`;
+  }).join("");
   const content = `
     <div class="reschedule-info">
       <div class="reschedule-info__item reschedule-info__item--old">
@@ -914,11 +930,8 @@ function showRescheduleInfo(projectId) {
         <span class="reschedule-info__label">现预约时间</span>
         <span class="reschedule-info__time reschedule-info__time--new">${esc(cur)}</span>
       </div>
-      ${changedAt ? `
-      <div class="reschedule-info__meta">
-        <span class="reschedule-info__meta-dot"></span>
-        由 <b>${esc(operator)}</b> 于 ${esc(changedAt)} 修改
-      </div>` : ""}
+      ${changeRows ? `<div class="reschedule-info__changes">${changeRows}</div>` : `
+      <div class="reschedule-info__meta"><span class="reschedule-info__meta-dot"></span>修改于 ${esc(orig)} 之后（未记录操作人）</div>`}
     </div>`;
   modal.open("改期信息", content, { titleHtml: svgCal(18) + " 改期信息" });
 }
@@ -1308,27 +1321,32 @@ function buildProjectMenu(p) {
   return items;
 }
 
-// 非项目区域的通用右键菜单
+// 非项目区域的通用右键菜单（只保留 App 能可靠执行的项；剪切/复制/粘贴交给浏览器原生菜单）
 function buildAppMenu() {
-  const items = [];
-  const ae = document.activeElement;
-  const editable = ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable);
-  if (editable) {
-    items.push({ label: "剪切", icon: "✂️", onClick: () => document.execCommand("cut") });
-    items.push({ label: "复制", icon: "📋", onClick: () => document.execCommand("copy") });
-    items.push({ label: "粘贴", icon: "📥", onClick: () => document.execCommand("paste") });
-    items.push({ separator: true });
-  }
-  items.push({ label: "刷新数据", icon: "🔄", onClick: () => {
-    if (repo && repo.loadAll) { repo.loadAll().then(() => renderAll()).catch(() => {}); toast("已刷新"); }
-  } });
-  items.push({ label: "回到顶部", icon: "⬆️", onClick: () => window.scrollTo({ top: 0, behavior: "smooth" }) });
-  return items;
+  return [
+    { label: "刷新数据", icon: "🔄", onClick: () => {
+      if (repo && repo.loadAll) { repo.loadAll().then(() => renderAll()).catch(() => {}); toast("已刷新"); }
+    } },
+    { label: "回到顶部", icon: "⬆️", onClick: () => window.scrollTo({ top: 0, behavior: "smooth" }) }
+  ];
 }
 
-// 全局绑定：屏蔽浏览器默认右键菜单，改为 App 自己的菜单
+/* 输入框/文本域/可编辑区：右键一律用浏览器原生菜单。
+   原生菜单的剪切/复制/粘贴（含 Chrome 的安全策略、输入法、拼写检查）才可靠；
+   document.execCommand("paste") 在现代浏览器被禁用，自己画菜单只会让粘贴失效。 */
+function isEditableTarget(el) {
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName.toUpperCase();
+  if (tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable) return true;
+  return !!(el.closest && el.closest("input, textarea, [contenteditable='true'], [contenteditable='']"));
+}
+
+// 全局绑定：非输入区域屏蔽浏览器默认菜单，改为 App 自己的菜单
 function bindContextMenu() {
   document.addEventListener("contextmenu", (e) => {
+    // 输入框、可编辑区、以及已选中文字时，保留原生菜单（复制/粘贴/搜索都更可靠）
+    const sel = (window.getSelection && String(window.getSelection().toString() || "").trim()) || "";
+    if (isEditableTarget(e.target) || sel) { hideContextMenu(); return; }
     e.preventDefault();
     const cardEl = e.target.closest(".card[data-id], [data-project-id]");
     if (cardEl) {
@@ -3324,7 +3342,7 @@ function toastType(msg) {
   return "info";
 }
 
-function toast(msg) {
+function toast(msg, ms) {
   // 云端写操作成功提示 → 刷新顶部同步时间戳，让用户明确看到「同步完成」且时间变动。
   // 本地模式（离线）不刷新，避免误导；「保存失败」等提示不匹配正则，不会误触发。
   if (MODE === "cloud" && /(已保存|保存成功|已删除|已添加|已更新|已修改|已创建|已生成)/.test(msg)) {
@@ -3336,7 +3354,8 @@ function toast(msg) {
   el.classList.add("toast-" + toastType(msg));
   el.classList.remove("hidden");
   clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.add("hidden"), 2200);
+  // 诊断类长文案（权限/建表提示）给更长时间，默认 2.2s 看不完
+  el._t = setTimeout(() => el.classList.add("hidden"), Number(ms) > 0 ? Number(ms) : 2200);
 }
 
 function showNotificationAlert(msg) {
@@ -3604,6 +3623,7 @@ const mapProject = (r) => ({
   status: r.status,
   note: r.note,
   workContent: (r.work_content && typeof r.work_content === "string" ? safeJsonParse(r.work_content, []) : r.work_content) || r.workContent || [],
+  costEstimate: (r.cost_estimate && typeof r.cost_estimate === "string" ? safeJsonParse(r.cost_estimate, null) : r.cost_estimate) || r.costEstimate || null,
   acceptance: r.acceptance || null,
   storeId: r.store_id || r.storeId || "",
   createdBy: r.created_by || r.createdBy || null,
@@ -3613,6 +3633,7 @@ const mapProject = (r) => ({
   originalStartedAt: r.original_started_at || r.originalStartedAt || "",
   finishedAt: r.finished_at || r.finishedAt || "",
   createdAt: r.created_at,
+  updatedAt: r.updated_at || null, // 供测算快照过期提示比较（只读附加字段，写入链路沿用 patchProject 的 updated_at）
   workLogs: r.workLogs || [],
   timeModified: modifiedProjectIds.has(r.id),
   repairOrders: (() => {
@@ -3693,6 +3714,7 @@ const projectToRow = (p) => ({
   status: p.status,
   note: p.note || null,
   work_content: p.workContent && Array.isArray(p.workContent) && p.workContent.length > 0 ? JSON.stringify(p.workContent) : null,
+  cost_estimate: p.costEstimate ? (typeof p.costEstimate === "string" ? p.costEstimate : JSON.stringify(p.costEstimate)) : null,
   acceptance: p.acceptance || null,
   store_id: p.storeId || null,
   assigned_workers: p.assignedWorkerIds || [],
@@ -11443,11 +11465,490 @@ function updateProjectStatusIndicator(items) {
   });
 }
 
-/* 施工内容可选项（广告安装类常用项，可在自定义中输入补充） */
-const WORK_CONTENT_OPTIONS = [
-  "门头安装", "发光字", "LED屏", "灯箱", "背景墙",
-  "写真喷绘", "展架展具", "拆除", "维修", "其他",
-];
+/* 施工内容：2026-11-22 起取消预设快捷 chips，直接填写实际施工内容（、或空格分隔）。
+   旧项目的 WORK_CONTENT_OPTIONS 值（门头安装/发光字等）随 workContent 原样回填文本框，保存不丢。 */
+
+/* ===== 施工明细（结构化：内容 / 数量 / 单位 / 工时 / 备注）=====
+ * 2026-11-19：明细存 projects.cost_estimate.items，不动 work_content（仍是字符串数组），
+ * 因此卡片/导出/通知等十余处 join("、") 展示点零改动；也不写 projectAmount/laborFee/分成池。
+ * 测算结果并入时用 mergeEstimateRowsIntoItems，把内核算出的「数量 + 工时」一并带进来。 */
+function costEstimateObject(ce) {
+  if (!ce) return null;
+  if (typeof ce === "string") return safeJsonParse(ce, null);
+  return (ce && typeof ce === "object") ? ce : null;
+}
+/* 单条明细字段归一化（**不**过滤空名称）。渲染必须用它：明细行的 data-i 就是状态数组下标，
+   一旦渲染层把空行滤掉，下标整体前移 —— 用户点「添加明细」看不到新行（行被滤掉），
+   而且改/删任意一行都会作用到相邻的另一行（2026-11-22 修的 bug）。 */
+function wcNormalizeItem(x, i) {
+  const o = (x && typeof x === "object") ? x : {};
+  return {
+    id: String(o.id || ("wi_" + Date.now().toString(36) + "_" + i)),
+    n: String(o.n || "").slice(0, 80),
+    u: String(o.u || "").slice(0, 12),
+    q: Math.max(0, Number(o.q) || 0),
+    h: Math.round(Math.max(0, Number(o.h) || 0) * 10) / 10,
+    note: String(o.note || "").slice(0, 120),
+  };
+}
+/* 落库/合计用：空名称行（点了添加没填内容）不落库，避免存一堆空条目 */
+function normalizeWorkItems(raw) {
+  let arr = raw;
+  if (typeof arr === "string") arr = safeJsonParse(arr, []);
+  if (!Array.isArray(arr)) return [];
+  return arr.filter((x) => x && typeof x === "object").map(wcNormalizeItem).filter((x) => !!x.n);
+}
+function getWorkItems(p) {
+  const ce = costEstimateObject(p && p.costEstimate);
+  return ce ? normalizeWorkItems(ce.items) : [];
+}
+function withWorkItems(ce, items) {
+  const base = costEstimateObject(ce) || {};
+  base.items = normalizeWorkItems(items);
+  return base;
+}
+function workItemsHours(items) {
+  return Math.round((items || []).reduce((s, x) => s + (Number(x.h) || 0), 0) * 10) / 10;
+}
+/* 测算 rows → 明细：同名项覆盖数量/工时（不累加，避免重复插入翻倍） */
+function mergeEstimateRowsIntoItems(items, rows) {
+  const out = normalizeWorkItems(items);
+  (rows || []).forEach((r) => {
+    if (!r || !r.n) return;
+    const q = Math.max(0, Number(r.q) || 0);
+    const h = Math.round(Math.max(0, Number(r.hours) || 0) * 10) / 10;
+    const idx = out.findIndex((x) => x.n === r.n);
+    if (idx >= 0) {
+      out[idx].q = q || out[idx].q;
+      out[idx].h = h;
+      if (r.u) out[idx].u = String(r.u).slice(0, 12);
+      if (r.isMat) out[idx].note = "材料";
+    } else {
+      out.push({
+        id: "wi_" + Date.now().toString(36) + "_" + out.length,
+        n: String(r.n).slice(0, 80), u: String(r.u || "").slice(0, 12),
+        q, h, note: r.isMat ? "材料" : String(r.note || "").slice(0, 120),
+      });
+    }
+  });
+  return out;
+}
+function workItemsHoursText(items) {
+  const h = workItemsHours(items);
+  return (Math.round(h * 10) / 10).toFixed(1);
+}
+/* 明细逐行 HTML。api 为全局对象名（wcForm / wcEdit），所有输入就地改状态不重绘，避免焦点丢失 */
+function workItemsHtml(items, api, editable = true) {
+  // 渲染层不过滤空行：下标必须与 window[cfg.key] 一一对应（空行是用户正在填的新行）
+  const list = Array.isArray(items) ? items.filter((x) => x && typeof x === "object").map(wcNormalizeItem) : [];
+  if (!list.length) return `<div class="est-empty">还没有明细。点「＋ 添加明细」逐行填写内容、数量与工时。</div>`;
+  const ro = editable ? "" : "disabled";
+  return list.map((it, i) => `
+    <div class="wc-item-row" data-i="${i}">
+      <input class="wc-item-n" type="text" maxlength="80" value="${esc(it.n)}" placeholder="施工内容" ${editable ? `onchange="${api}.change(${i},'n',this.value)" oninput="${api}.change(${i},'n',this.value)"` : ""} ${ro} />
+      <div class="wc-item-qcell">
+        <input class="wc-item-q" type="number" min="0" step="0.1" value="${it.q}" title="数量" ${editable ? `onchange="${api}.change(${i},'q',this.value)" oninput="${api}.change(${i},'q',this.value)"` : ""} ${ro} />
+        <input class="wc-item-u" type="text" maxlength="12" value="${esc(it.u)}" placeholder="单位" ${editable ? `onchange="${api}.change(${i},'u',this.value)" oninput="${api}.change(${i},'u',this.value)"` : ""} ${ro} />
+      </div>
+      <input class="wc-item-h" type="number" min="0" step="0.1" value="${it.h}" title="工时（小时）" ${editable ? `onchange="${api}.change(${i},'h',this.value)" oninput="${api}.change(${i},'h',this.value)"` : ""} ${ro} />
+      <button type="button" class="wc-item-del" onclick="${api}.remove(${i})" title="删除这一条" ${ro}>×</button>
+      <input class="wc-item-note" type="text" maxlength="120" value="${esc(it.note)}" placeholder="备注（可选）" ${editable ? `onchange="${api}.change(${i},'note',this.value)" oninput="${api}.change(${i},'note',this.value)"` : ""} ${ro} />
+    </div>`).join("");
+}
+function wcNewItem() {
+  return { id: "wi_" + Date.now().toString(36) + "_" + Math.floor(Math.random() * 1000), n: "", u: "项", q: 1, h: 0, note: "" };
+}
+function wcState(scope) {
+  return scope === "wcForm"
+    ? { key: "_wcFormItems", list: "pWorkItemsList", total: "pWorkItemsTotal" }
+    : { key: "_wcEditItems", list: "wcEditList", total: "wcEditTotal" };
+}
+function wcRender(scope) {
+  const cfg = wcState(scope);
+  const box = document.getElementById(cfg.list);
+  if (box) box.innerHTML = workItemsHtml(window[cfg.key] || [], scope);
+  wcUpdateTotal(scope);
+}
+function wcUpdateTotal(scope) {
+  const el = document.getElementById(wcState(scope).total);
+  if (!el) return;
+  // 明细编辑器（wcEdit）只关心工时：不显示金额、也没有可填的工程金额框
+  el.innerHTML = scope === "wcEdit"
+    ? wcSummaryHtml("wcEdit", { canFill: false, money: false, tip: "仅记录施工量与工时，不改变工程金额与分成" })
+    : wcSummaryHtml(scope);
+}
+
+/* ---------- 施工明细汇总条：合计工时 + 测算金额 + 「填入工程金额」 ----------
+   2026-11-22 用户反馈：测算出来的金额原来只塞在灰字尾部（「参考 ¥177」），又小又不显眼，
+   而且没法直接用。改成两块 KPI 卡 + 右侧蓝色按钮，一眼能看见工时与金额。
+   金额链隔离不变：这里只**读取**工时与测算快照，只有用户点按钮才写 #pProjectAmount；
+   保存时照旧由 saveProject 用「有效金额 − 有效扣项」重算 laborFee（金额链铁律）。 */
+function wcMoneyText(n) {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  return "¥" + v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+/* 预约表单里的测算快照：优先读隐藏域 #pCostEstimate；
+   模板刚拼字符串时 DOM 里还没有这个域，用 fallback（项目自带的 cost_estimate）兜底。
+   明细编辑器（wcEdit）没有快照，返回 null。 */
+function wcEstSnapshot(scope, fallback) {
+  if (scope !== "wcForm") return null;
+  const el = document.getElementById("pCostEstimate");
+  const ce = (el && el.value) ? safeJsonParse(el.value, null) : costEstimateObject(fallback);
+  return ce && Number(ce.grand) > 0 ? ce : null;
+}function wcContractIsMaterial() {
+  const t = document.querySelector('input[name="contractType"]:checked');
+  return !!(t && t.value === "包工包料");
+}
+/* 当前该填进「工程金额」的数：
+   · 有测算快照 → 包工=施工费（人工+设备+运输，不含材料）；包工包料=含料合计（grand）
+   · 无快照 → 工时 × 普通工单价，只作人工参考（不含材料/设备/运输） */
+function wcAmountPlan(scope, ceIn) {
+  const items = window[wcState(scope).key] || [];
+  const h = workItemsHours(items);
+  const ce = wcEstSnapshot(scope, ceIn);
+  if (ce) {
+    const isMat = wcContractIsMaterial();
+    const grand = Number(ce.grand) || 0;
+    const matTotal = Number(ce.matTotal) || 0;
+    const cons = Number(ce.construction) || Math.max(0, grand - matTotal);
+    return {
+      h, ce, kind: "est", isMat,
+      amt: Math.round((isMat ? grand : cons) * 100) / 100,
+      mat: isMat ? Math.round(matTotal * 100) / 100 : 0,
+      label: isMat ? "含料合计" : "施工费",
+      stale: Math.abs((Number(ce.totalHours) || 0) - h) > 0.05,
+    };
+  }
+  const rate = Number(estCfg().params && estCfg().params.rateNormal) || 0;
+  return {
+    h, kind: "hours", rate,
+    amt: h > 0 && rate > 0 ? Math.round(h * rate * 100) / 100 : 0,
+    label: "人工参考",
+  };
+}
+function wcSummaryHtml(scope, opts) {
+  const o = opts || {};
+  const plan = wcAmountPlan(scope, o.snapshot);
+  const hrs = workItemsHoursText(window[wcState(scope).key] || []);
+  let canFill = typeof o.canFill === "boolean" ? o.canFill : null;
+  if (canFill === null) {
+    const a = document.getElementById("pProjectAmount");
+    canFill = scope === "wcForm" && !!a && !a.disabled;
+  }
+  const kpiId = scope === "wcForm" ? "pWorkItemsHours" : "wcEditHours";
+  const kpiId2 = scope === "wcForm" ? "pWorkItemsMoney" : "wcEditMoney";
+  const showMoney = o.money !== false;
+  const moneyKpi = showMoney && plan.amt > 0
+    ? `<span class="wc-sum-kpi ${plan.kind === "est" ? "is-money" : "is-ref"}"><span class="wc-sum-lb">${plan.label}</span><b class="wc-sum-val" id="${kpiId2}">${wcMoneyText(plan.amt)}</b></span>`
+    : "";
+  // 说明行：把口径写清楚（含/不含材料、是否与当前工时一致），避免看得见数字看不懂算法
+  let tip = o.tip || "", stale = false;
+  if (tip) { /* 调用方指定了说明就以它为准 */ }
+  else if (plan.kind === "est" && plan.stale) {
+    stale = true;
+    tip = `测算时 ${(Number(plan.ce.totalHours) || 0).toFixed(1)}h，明细现为 ${hrs}h — 金额仍是测算快照，改完请再点「🧮 施工费测算」重算`;
+  } else if (plan.kind === "est") {
+    tip = plan.isMat
+      ? `人工 ${wcMoneyText(plan.ce.labor)} + 材料/辅材 ${wcMoneyText(plan.ce.matTotal)}（填入时同步记材料扣项）`
+      : `不含材料：材料/辅材 ${wcMoneyText(plan.ce.matTotal)} 未计入（包工口径）`;
+  } else if (plan.kind === "hours") {
+    tip = `仅人工：${hrs}h × 普通工 ¥${plan.rate}/时；要含材料/设备/运输，点「🧮 施工费测算」`;
+  } else {
+    tip = `填施工内容与工时后自动给出参考金额。点「🧮 施工费测算」可得含材料的完整报价`;
+  }
+  const btn = canFill && plan.amt > 0
+    ? `<button type="button" class="btn small wc-sum-fill" onclick="wcFillProjectAmount()" title="把${plan.label}写到左侧「工程金额」，保存前还能改">↗ 填入工程金额</button>`
+    : "";
+  return `<div class="wc-sum-kpis">
+      <span class="wc-sum-kpi"><span class="wc-sum-lb">合计工时</span><b class="wc-sum-val" id="${kpiId}">${hrs}</b><span class="wc-sum-unit">h</span></span>
+      ${moneyKpi}
+    </div>${btn}
+    <span class="wc-sum-tip${stale ? " is-stale" : ""}">${tip}</span>`;
+}
+/* 一键填入「工程金额」：包工填施工费、包工包料填含料合计并同步记材料扣项（否则工费会被算高） */
+function wcFillProjectAmount() {
+  const inp = document.getElementById("pProjectAmount");
+  if (!inp) { toast("当前表单没有「工程金额」输入框"); return; }
+  if (inp.disabled) { toast("没有修改工程金额的权限"); return; }
+  const plan = wcAmountPlan("wcForm");
+  const amt = Math.round(Number(plan.amt) * 100) / 100;
+  if (!(amt > 0)) { toast("还没有可填入的金额：先填施工内容与工时，或用「🧮 施工费测算」"); return; }
+  const cur = Number(inp.value) || 0;
+  const what = plan.kind === "est"
+    ? (plan.isMat ? "含料合计（人工+材料+辅材+设备+运输）" : "施工费（人工+设备+运输，不含材料）")
+    : `人工参考（工时 × 普通工 ¥${plan.rate}/时）`;
+  if (cur > 0 && Math.abs(cur - amt) > 0.005
+    && !confirm(`工程金额现在是 ¥${cur.toFixed(2)}，替换为${what} ¥${amt.toFixed(2)}？`)) return;
+  // 只有工时、没测算过快照时，这个数只是人工参考（不含材料/设备/运输），通常远低于真实报价 → 再确认一次
+  if (plan.kind !== "est"
+    && !confirm(`填入的是人工参考 ¥${amt.toFixed(2)}（${workItemsHoursText(window._wcFormItems)}h × 普通工 ¥${plan.rate}/时）。\n\n它不含材料、设备、运输，通常远低于真实报价。\n建议先点「🧮 施工费测算」拿到完整金额。\n\n仍要填入吗？`)) return;
+  inp.value = amt;
+  let matNote = "";
+  if (plan.kind === "est" && plan.isMat && plan.mat > 0) matNote = wcWriteMaterialDeduction(plan.mat);
+  if (typeof onContractTypeChange === "function") onContractTypeChange();
+  else if (typeof updateContractCalc === "function") updateContractCalc();
+  // 黄色闪烁定位到工程金额框，让人知道钱填到哪去了
+  inp.classList.remove("wc-amount-flash");
+  void inp.offsetWidth;
+  inp.classList.add("wc-amount-flash");
+  setTimeout(() => { if (inp && inp.classList) inp.classList.remove("wc-amount-flash"); }, 1800);
+  toast(`已填入工程金额 ¥${amt.toFixed(2)}${matNote}，核对后保存`);
+}
+/* 包工包料填「含料合计」时，把测算材料费（含辅材）写成一条成本扣项并展开扣项区。
+   同名扣项已存在则改金额，不重复加行；返回给 toast 的补充说明。 */
+function wcWriteMaterialDeduction(amount) {
+  const wrap = document.getElementById("pfCostDeductions");
+  const amt = Math.round((Number(amount) || 0) * 100) / 100;
+  if (!wrap || !(amt > 0) || typeof readCostDeductions !== "function") return "";
+  const rows = readCostDeductions("pf");
+  const NAME = "材料费（测算）";
+  const hit = rows.find((r) => (r.name || "") === NAME);
+  if (hit) hit.amount = amt;
+  else rows.push({ id: "cd_" + Date.now().toString(36) + Math.floor(Math.random() * 1000), name: NAME, amount: amt, note: "", kind: "material" });
+  renderCostDeductionEditor("pf", rows, false);
+  const row = document.getElementById("pMaterialFeeRow");
+  if (row) row.style.display = "";
+  return `，材料费 ¥${amt.toFixed(2)} 已记入成本扣项`;
+}
+function wcItemChange(scope, i, field, v) {
+  const cfg = wcState(scope);
+  const it = (window[cfg.key] || [])[i];
+  if (!it) return;
+  if (field === "q" || field === "h") {
+    const num = Number(v);
+    if (!isFinite(num) || num < 0) return;
+    it[field] = field === "h" ? Math.round(num * 10) / 10 : Math.round(num * 100) / 100;
+  } else {
+    it[field] = String(v || "").slice(0, field === "u" ? 12 : field === "note" ? 120 : 80);
+  }
+  wcUpdateTotal(scope);
+}
+function wcItemRemove(scope, i) {
+  const cfg = wcState(scope);
+  const arr = window[cfg.key] || [];
+  if (!isFinite(i) || i < 0 || i >= arr.length) return;
+  arr.splice(i, 1);
+  wcRender(scope);
+}
+function wcItemAdd(scope) {
+  const cfg = wcState(scope);
+  if (!window[cfg.key]) window[cfg.key] = [];
+  window[cfg.key].push(wcNewItem());
+  wcRender(scope);
+  const box = document.getElementById(cfg.list);
+  const inputs = box ? box.querySelectorAll(".wc-item-n") : [];
+  const last = inputs.length ? inputs[inputs.length - 1] : null;
+  if (last) {
+    last.focus();
+    if (last.scrollIntoView) last.scrollIntoView({ block: "nearest" });
+  }
+}
+/* 预约表单固定 chip → 内核定额 id 映射：chip 名与定额名措辞不同，模糊匹配对不上，
+   显式指定最贴近的定额项；映射外的输入仍走名称模糊匹配（精确 → 包含 → 反向包含）。 */
+const WC_CHIP_ALIASES = {
+  "门头安装": "i_door",       // 门头/招牌整体安装
+  "写真喷绘": "i_banner",     // 喷绘布张拉
+  "展架展具": "i_xstand",     // 易拉宝/X展架/门型展架
+  "拆除": "i_remove",         // 旧字/旧招牌拆除（模糊会命中钢架拆除，显式纠正）
+};
+/* 按名称在测算内核定额库中找匹配项。返回 { it, perH }：perH 已含 WH 校准覆盖
+  （改过标准工时的项用校准值）；找不到返回 null。
+  隐藏项（hiddenItems）不参与匹配，与常用施工项抽屉口径一致。 */
+function wcResolveKernelItem(name) {
+  if (!window.Estimate || !Array.isArray(Estimate.WORK_ITEMS)) return null;
+  const kw = String(name || "").trim();
+  if (!kw) return null;
+  const cfg = estCfg();
+  const hidden = new Set(cfg.hiddenItems || []);
+  const pool = Estimate.WORK_ITEMS.filter((x) => x && x.n && !hidden.has(x.id));
+  const aliasId = WC_CHIP_ALIASES[kw];
+  const it = (aliasId ? pool.find((x) => x.id === aliasId) : null)
+    || pool.find((x) => x.n.toLowerCase() === kw.toLowerCase())
+    || pool.find((x) => x.n.toLowerCase().includes(kw.toLowerCase()))
+    || pool.find((x) => kw.toLowerCase().includes(x.n.toLowerCase()));
+  if (!it) return null;
+  const perH = (cfg.WH && cfg.WH[it.id] != null) ? Number(cfg.WH[it.id]) : (Number(it.h) || 0);
+  return { it, perH: Math.max(0, perH) };
+}
+/* ---------- 施工内容 → 施工明细：与「施工费测算」共用同一套拆解内核 ----------
+   2026-11-22 用户反馈：点「按上方内容生成」出来的是「3」「室内引导牌画面尺寸A3」「3张」
+   一类的碎片，跟测算里拆出来的完全不一样。根因：这里原来只按 [、,，\s] 切词、一个词一行，
+   既不认行首序号（「3 室内引导牌…」被拆成「3」+「室内引导牌…」+「3张」），
+   也没走内核（不认数量/尺寸/多件同句）。
+   现在：按行/分号切段 → 段内按「数字+量词」切块 → 每块交给 Estimate.parseSpec（与测算同源）；
+   内核认不出的块保留为自定义项（原文 + 数量），工时留 0 由用户补。 */
+
+// 行首序号：`3.` `3、` `(3)` `3 室内…`；后面紧跟数字/尺寸时不当序号（3.5米、3×4 不剥）。
+// aggressive：整段是「1xxx / 2xxx」这种编号列表时（序号和名称之间没空格、粘在一起），
+// 允许把行首 1~2 位数字直接剥掉——只在多行都带编号时启用，避免「2米高围挡」被误剥。
+function wcStripOrdinal(s, aggressive) {
+  let t = String(s || "").trim();
+  t = t.replace(/^[（(]\s*\d{1,3}\s*[）)]\s*/, "");
+  t = t.replace(/^\d{1,3}\s*[.．、)）:：]\s*(?=\D)/, "");
+  t = t.replace(/^\d{1,3}\s+(?=\D)/, "");
+  if (aggressive) t = t.replace(/^\d{1,2}(?=[\u4e00-\u9fa5])/, "");
+  return t.trim();
+}
+// 段内按「数字+量词」切块（一行里写多件不同物品时各带各的数量）：
+// 「胸牌证件8x12cm工作人员(20个)技术指导(10个)监督(5个)」→ 3 块
+function wcQtyChunks(seg) {
+  const re = /(\d+(?:\.\d+)?)\s*(个|块|张|面|根|套|幅|条|件|处|片|只|支|台|组)/g;
+  const cuts = []; let m;
+  while ((m = re.exec(seg)) !== null) cuts.push({ i: m.index, end: m.index + m[0].length });
+  if (!cuts.length) return [{ s: seg, q: null }];
+  const out = []; let prev = 0;
+  cuts.forEach((c) => {
+    let end = c.end;
+    // 数量后紧跟的尺寸串留在本块（「贴画面5张60X90CM」），否则面积算不出来
+    // 数量后紧跟的尺寸/字高串留在本块（「贴画面5张60X90CM」「发光字5个60厘米」），
+    // 否则后面的字高会被切成下一块当成新物品
+    const tail = seg.slice(end).match(/^\s*\d+(?:\.\d+)?\s*(?:[×x*＊]\s*\d+(?:\.\d+)?\s*(?:cm|mm|厘米|毫米|米|m)?|厘米|公分|cm|mm|毫米)/i);
+    if (tail) end += tail[0].length;
+    // 数量后紧跟的右括号收进本块，否则下一块会以「)技术指导」开头
+    const br = seg.slice(end).match(/^\s*[)）]/);
+    if (br) end += br[0].length;
+    const q = parseFloat(seg.slice(c.i, c.end));
+    out.push({ s: seg.slice(prev, end).trim(), q: isNaN(q) ? null : q });
+    prev = end;
+  });
+  // 末尾残留（数量词后还跟着说明文字）并回上一块，否则会单列成「60厘米」这种孤儿行
+  const rest = seg.slice(prev).trim();
+  if (rest) {
+    if (out.length) out[out.length - 1].s = (out[out.length - 1].s + " " + rest).trim();
+    else out.push({ s: rest, q: null });
+  }
+  return out.filter((x) => x.s);
+}
+// 块内原文名称：去掉末尾括号段、数量、尺寸，剩下的就是用户写的物品名
+// （「室外指引牌80x120cm」→「室外指引牌」），比直接套定额名更贴近现场说法
+function wcRawName(piece) {
+  return String(piece || "")
+    .replace(/[（(][^（()）]*[)）]\s*$/, "")
+    .replace(/\d+(?:\.\d+)?\s*[×x*＊]\s*\d+(?:\.\d+)?\s*(?:cm|mm|厘米|毫米|米|m)?\s*$/i, "")
+    .replace(/(\d+(?:\.\d+)?)\s*(个|块|张|面|根|套|幅|条|件|处|片|只|支|台|组)\s*$/, "")
+    .replace(/[（(]\s*$/, "")
+    .replace(/[\s、,，:：·\-]+$/, "")
+    .trim();
+}
+// 内核命中 → 明细行（工时 = 定额工时/单位 × 数量；与测算「按定额比例」口径一致）
+function wcItemFromHit(h, chunkQ, piece) {
+  const cfg = estCfg();
+  const custom = (cfg.customItems || []).find((x) => x && x.id === h.id) || null;
+  const it = custom || ((window.Estimate && Estimate.WORK_ITEMS) || []).find((x) => x && x.id === h.id) || null;
+  let q = Number(h.q) > 0 ? Number(h.q) : 0;
+  if (!(q > 0)) q = (chunkQ > 0 ? chunkQ : 1);            // 自定义项名命中时内核只给 q=1，用块内数量
+  if (custom && q === 1 && chunkQ > 0) q = chunkQ;
+  const perH = custom
+    ? (Number(custom.h) || 0)
+    : (cfg.WH && cfg.WH[h.id] != null ? Number(cfg.WH[h.id]) : (Number(it && it.h) || 0));
+  const raw = wcRawName(piece);
+  return {
+    ...wcNewItem(),
+    // 明细名优先用原文（室内/室外指引牌要能分开看），认不出原文才退回定额名
+    n: String(raw || h.n || "").slice(0, 80),
+    u: String(h.u || (it && it.u) || "项").slice(0, 12),
+    q: Math.round(q * 100) / 100,
+    h: Math.round(Math.max(0, perH) * q * 10) / 10,
+    note: String(h.calc || "").slice(0, 120),
+  };
+}
+// 内核认不出 → 保留原文当自定义项，工时留 0
+function wcItemFromRaw(piece, chunkQ) {
+  const name = wcRawName(piece) || String(piece || "").trim();
+  const q = chunkQ > 0 ? chunkQ : 1;
+  return { ...wcNewItem(), n: name.slice(0, 80), u: "项", q, h: 0, note: "未匹配定额，工时请手动填" };
+}
+function wcMergeSameItems(rows) {
+  const norm = (s) => String(s || "").replace(/\s+/g, "");
+  const out = [];
+  rows.forEach((r) => {
+    const k = norm(r.n) + "|" + (r.u || "");
+    const hit = out.find((x) => norm(x.n) + "|" + (x.u || "") === k);
+    if (hit) {
+      hit.q = Math.round((Number(hit.q) + Number(r.q)) * 100) / 100;
+      hit.h = Math.round((Number(hit.h) + Number(r.h)) * 10) / 10;
+      if (!hit.note && r.note) hit.note = r.note;
+    } else out.push({ ...r });
+  });
+  return out;
+}
+// 把整段施工内容拆成明细行：返回 { rows, unknown }
+function wcItemsFromText(text) {
+  const rows = [];
+  let unknown = 0;
+  const lines = String(text || "").split(/[\n\r；;。]+/).map((s) => s.trim()).filter(Boolean);
+  // 编号列表判定：多数行以「数字」开头（1桁架 / 2室外 / 3 室内…）就整体按序号处理
+  const numbered = lines.filter((s) => /^[（(]?\d{1,3}[）)]?\s*[.．、)）:：]?\s*\S/.test(s)).length;
+  const aggressive = lines.length >= 2 && numbered >= Math.ceil(lines.length / 2);
+  lines.forEach((line) => {
+    // 一行里用逗号/顿号并列多件 → 先切开；空格并列留给内核（「搭桁架 绷喷绘布 3.5*4米」）
+    line.split(/[，,、]+/).map((s) => s.trim()).filter(Boolean).forEach((seg0) => {
+      const seg = wcStripOrdinal(seg0, aggressive);
+      if (!seg) return;
+      let prev = null; // 上一块生成的明细行
+      wcQtyChunks(seg).forEach((c) => {
+        // 「… 2套」这种纯数量块没有物品词：当套数乘到上一件上（门头 12㎡ × 2 套），
+        // 不能再单列成一行「2套」，否则明细里全是碎片
+        const bare = c.s.replace(/[\d.\s个块张面根套幅条条件处片只支台组米c㎡m2厘毫㎝]/gi, "") === "";
+        if (bare && c.q > 0) {
+          if (prev && prev.length) prev.forEach((r) => {
+            if (/^(㎡|平方米|米|m)$/.test(r.u || "")) {
+              r.q = Math.round(r.q * c.q * 100) / 100;
+              r.h = Math.round(r.h * c.q * 10) / 10;
+              r.note = (r.note ? r.note + " · " : "") + c.q + "套";
+            }
+          });
+          return;
+        }
+        // 「发光字5个60厘米」的 5 是字的个数，不是门头/发光字的数量：解析前先摘掉，
+        // 否则「门头 6×2米 发光字5个」会被算成 5 个门头（60㎡，工时翻五倍）
+        const parseText = c.s.replace(/([\u4e00-\u9fa5])字\s*\d+(?:\.\d+)?\s*个/g, "$1字");
+        let hits = estParseWithCustom(parseText) || [];
+        // 整体项（门头/展板/灯箱/舞台…）与它的部件同现时只留整体：内核按段做这件事，
+        // 但「门头招牌 6×2米 发光字60厘米」会被空格拆成两段，明细里就成了两行各算一遍。
+        const HOL = { i_door: 1, i_board: 1, i_lb: 1, i_lightbox: 1, i_stage: 1, i_bgt: 1, i_softfilm: 1, i_suctionlb: 1 };
+        if (hits.length > 1) {
+          const hol = hits.filter((h) => HOL[h.id]);
+          if (hol.length) hits = [hol[0]];
+        }
+        const added = [];
+        // 一块里拆出多件（「搭桁架 绷喷绘布」）时原文名不能共用，改成各用定额名
+        if (hits.length) hits.forEach((h) => {
+          const row = wcItemFromHit(h, c.q, hits.length > 1 ? "" : c.s);
+          rows.push(row); added.push(row);
+        });
+        else { unknown++; const row = wcItemFromRaw(c.s, c.q); rows.push(row); added.push(row); }
+        prev = added;
+      });
+    });
+  });
+  return { rows: wcMergeSameItems(rows), unknown };
+}
+
+window.wcForm = {
+  change: (i, f, v) => wcItemChange("wcForm", i, f, v),
+  remove: (i) => wcItemRemove("wcForm", i),
+  add: () => wcItemAdd("wcForm"),
+  fill: () => {
+    // chips 取消后施工内容文本框是唯一来源；拆解走 Estimate.parseSpec（与施工费测算同源）
+    const raw = (document.getElementById("pWorkContentCustom")?.value || "").trim();
+    if (!raw) { toast("先填写施工内容"); return; }
+    const { rows, unknown } = wcItemsFromText(raw);
+    if (!rows.length) { toast("没从施工内容里认出东西，换一种写法或点「施工费测算 → 智能拆解」"); return; }
+    const had = (window._wcFormItems || []).filter((x) => String(x.n || "").trim()).length;
+    if (had && !confirm(`将按施工内容重新生成 ${rows.length} 行明细，现有 ${had} 行会被替换。\n\n确定继续吗？`)) return;
+    window._wcFormItems = rows.map((r, i) => ({ ...r, id: "wi_" + Date.now().toString(36) + "_" + i }));
+    wcRender("wcForm");
+    const ok = rows.length - unknown;
+    const tail = unknown ? `；${unknown} 行没匹配到定额，已按原文保留、工时需手填` : "";
+    toast(`已按施工内容拆出 ${rows.length} 行（${ok} 行带定额单位与工时）${tail}`, 5200);
+  },
+};
+window.wcEdit = {
+  change: (i, f, v) => wcItemChange("wcEdit", i, f, v),
+  remove: (i) => wcItemRemove("wcEdit", i),
+  add: () => wcItemAdd("wcEdit"),
+};
 
 function projectForm(p = {}, opts = {}) {
   // isNew=true 时处于「新建预约」流程：预约人只填工程金额，成本扣项不展示（费用是施工管理阶段填写）
@@ -11482,13 +11983,20 @@ function projectForm(p = {}, opts = {}) {
     pmDelete: isNewForm || perm.photoDeletePm(p) || isManager(),
     canDownload: perm.photoDownload() || isManager(),
   };
+  // 施工明细会话状态：每次打开表单从项目快照重置，避免上一单残留
+  window._wcFormItems = getWorkItems(p);
   const selectedStore = p.storeId || (storeLocked ? myStore() : "");
   const storeOpts = `<option value="">未指定门店</option>` +
     cache.stores.map((s) =>
       `<option value="${s.id}" ${s.id === selectedStore ? "selected" : ""}>${esc(s.name)}</option>`).join("");
   const startDate = p.appointmentTime ? new Date(p.appointmentTime) : (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d; })();
   return `
-    <div style="display:flex;align-items:flex-start;gap:10px;width:100%;">
+    <!-- pform-cols：超宽档(.modal--xl)左右分栏——左=项目信息+预约时间，右=施工内容+明细+注意事项；
+         照片区在 xl 下 display:contents 拆开，现场图落左列底、施工图落右列底。
+         680/手机档 pform-cols 是普通块流，顺序与原单列完全一致。 -->
+    <div class="pform-cols">
+    <div class="pform-left">
+    <div class="pform-col" style="display:flex;align-items:flex-start;gap:10px;width:100%;">
       <div style="flex-shrink:0;">
         <label style="display:block;margin-bottom:4px;"><span style="color:var(--primary)">🏪</span> 所属门店</label>
         <select class="input" id="pStore" ${storeLocked || basicDisabled ? "disabled" : ""} style="width:auto;max-width:160px;">
@@ -11500,7 +12008,7 @@ function projectForm(p = {}, opts = {}) {
         <input class="input" id="pName" value="${esc(p.name || "")}" placeholder="如：某某商场门头广告安装" style="width:100%;" ${basicDisabled ? "disabled" : ""} />
       </div>
     </div>
-    <div class="form-grid">
+    <div class="form-grid pform-col">
       <div class="form-row">
         <label><span style="color:#0891b2">👤</span> 客户名称</label>
         <input class="input" id="pCustomer" value="${esc(p.customer || "")}" placeholder="客户 / 单位" list="customerDatalist" oninput="onCustomerInput()" onblur="fillCustomerInfo()" ${basicDisabled ? "disabled" : ""} />
@@ -11513,12 +12021,12 @@ function projectForm(p = {}, opts = {}) {
         <input class="input" id="pPhone" value="${esc(p.phone || "")}" placeholder="客户电话" ${basicDisabled ? "disabled" : ""} />
       </div>
     </div>
-    <div class="form-row">
+    <div class="form-row pform-col">
       <label><span style="color:#0891b2">📍</span> 安装地址</label>
       <input class="input" id="pAddress" value="${esc(p.address || "")}" placeholder="施工现场地址" />
     </div>
     <!-- 包活制（2026-10-18）：预约施工时填写包活方式与工程金额 -->
-    <div class="form-row" style="grid-column:1/-1;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;margin-bottom:4px;">
+    <div class="form-row pform-col" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;margin-bottom:4px;">
       <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:8px;">
         <label style="font-weight:500;margin:0;display:flex;align-items:center;gap:6px;"><span style="color:#16a34a;">💰</span> 包活方式</label>
         <label class="radio-inline"><input type="radio" name="contractType" value="包工" ${p.contractType !== "包工包料" ? "checked" : ""} onchange="onContractTypeChange()" ${contractDisabled ? "disabled" : ""}> 包工</label>
@@ -11548,6 +12056,9 @@ function projectForm(p = {}, opts = {}) {
            准确值请看「✏️改金额」弹窗（money-chain 面板）与项目详情页费用管理。 -->
       <div id="pContractCalc" style="display:none;"></div>
     </div>
+    <!-- pform-timegrp：预约时间整组（时间行/跨天/快捷键/时长卡）。
+         超宽档(.modal--xl)下整体占左列，与右侧施工内容组并排——避免通栏控件被拉成超长条。 -->
+    <div class="pform-timegrp">
     <div class="form-row">
       <!-- 2026-10-23：跨天时在标题后补一个「共N天」（只加天数，小时统计仍看下方施工时长卡）。
            单天不显示（"共1天"无意义）；id 与快速编辑弹窗共用，两个表单不会同时打开。 -->
@@ -11583,13 +12094,13 @@ function projectForm(p = {}, opts = {}) {
         ? p.workSegments.slice(1).map((s) => segRowHtml(s.date, s.start, s.end, apptDisabled)).join("")
         : ""}
     </div>
-    <div style="display:flex;align-items:center;gap:6px;margin:4px 0 8px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:6px;margin:4px 0 8px;flex-wrap:wrap;" class="pform-col">
       <button type="button" class="btn small seg-sync-btn" onclick="toggleSegTargetDay()" ${apptDisabled ? "disabled" : ""} title="快捷键作用范围：点击在 各天→第1天→第2天→… 之间循环切换">🔁 各天</button>
       <span id="pSegTargetHint" class="seg-target-hint is-all">同时改所有天</span>
       <span style="font-size:11px;color:#94a3b8;">·</span>
       <span style="font-size:11px;color:#64748b;">跨天施工：每天各填一段</span>
     </div>
-    <div class="form-row">
+    <div class="form-row pform-col">
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
         <button class="btn small" onclick="setPTimeRange('twohour')" ${apptDisabled ? "disabled" : ""} style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:4px;padding:3px 8px;font-size:12px;">⏱️ 2小时</button>
         <button class="btn small" onclick="setPTimeRange('morning')" ${apptDisabled ? "disabled" : ""} style="background:#e0f2fe;color:#0891b2;border-color:#7dd3fc;border-radius:4px;padding:3px 8px;font-size:12px;">🌅 上午</button>
@@ -11607,22 +12118,37 @@ function projectForm(p = {}, opts = {}) {
         </div>
       </div>
     </div>
-    <div class="form-row">
-      <label><span style="color:#0ea5e9;">🛠️</span> 施工内容</label>
-      <div class="work-content-chips" id="pWorkContent">
-        ${WORK_CONTENT_OPTIONS.map((opt) => `
-          <label class="work-chip ${((p.workContent || []).includes(opt)) ? "work-chip--on" : ""}">
-            <input type="checkbox" value="${esc(opt)}" ${(p.workContent || []).includes(opt) ? "checked" : ""} onchange="toggleWorkChip(this)" ${basicDisabled ? "disabled" : ""} />
-            <span>${esc(opt)}</span>
-          </label>`).join("")}
+    </div><!-- /pform-timegrp -->
+    </div><!-- /pform-left -->
+    <div class="pform-right">
+    <div class="form-row pform-contentgrp">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <label style="margin:0;"><span style="color:#0ea5e9;">🛠️</span> 施工内容</label>
+        <button type="button" class="btn small outline" onclick="estFromProjectForm()" title="按施工内容自动测算工时与费用">🧮 施工费测算</button>
       </div>
-      <input class="input" id="pWorkContentCustom" placeholder="可补充自定义内容，用、或空格分隔" value="${esc((p.workContent || []).filter((c) => !WORK_CONTENT_OPTIONS.includes(c)).join("、"))}" style="width:100%;font-size:13px;margin-top:6px;" onkeydown="if(event.key==='Enter'){event.preventDefault();}" ${basicDisabled ? "disabled" : ""} />
+      <input type="hidden" id="pCostEstimate" value="${p.costEstimate ? esc(typeof p.costEstimate === 'string' ? p.costEstimate : JSON.stringify(p.costEstimate)) : ''}" />
+      <textarea class="input" id="pWorkContentCustom" rows="2" placeholder="填写实际施工内容，用、或空格分隔；也可直接粘贴测算清单文本，点「按上方内容生成」转明细" style="width:100%;font-size:13px;" ${basicDisabled ? "disabled" : ""}>${esc((p.workContent || []).join("、"))}</textarea>
+    </div>
+    <div class="form-row wc-items-row">
+      <div class="wc-items-head">
+        <label style="margin:0;"><span style="color:#0ea5e9;">📝</span> 施工明细 <span class="est-tip">内容 · 数量 · 工时，可逐行增减</span></label>
+        <div class="wc-items-actions">
+          <button type="button" class="btn small outline" onclick="estFromProjectForm('scenes')" ${basicDisabled ? "disabled" : ""} title="打开测算方案库：整套方案 / 专项测算，选完带回数量与工时">🧩 方案库</button>
+          <button type="button" class="btn small outline" onclick="estFromProjectForm('quick')" ${basicDisabled ? "disabled" : ""} title="打开常用施工项：点选 / 联想多选 / 批量，自动带定额工时">＋ 常用项</button>
+          <button type="button" class="btn small outline" onclick="wcForm.fill()" ${basicDisabled ? "disabled" : ""} title="与「施工费测算」同一套拆解：认行首序号、数量、尺寸，自动带定额单位与工时；认不出的按原文保留">按上方内容生成</button>
+          <button type="button" class="btn small outline" onclick="wcForm.add()" ${basicDisabled ? "disabled" : ""}>＋ 添加明细</button>
+        </div>
+      </div>
+      <div id="pWorkItemsList" class="wc-items-list">${workItemsHtml(window._wcFormItems, "wcForm", !basicDisabled)}</div>
+      <div id="pWorkItemsTotal" class="wc-items-foot">${wcSummaryHtml("wcForm", { canFill: !contractDisabled, snapshot: p.costEstimate })}</div>
     </div>
     <div class="form-row">
       <label><span style="color:#6b7280;">💬</span> 注意事项</label>
       <textarea class="input" id="pNote" placeholder="施工注意事项、特殊要求等" style="min-height:50px;" ${basicDisabled ? "disabled" : ""}>${esc(p.note || "")}</textarea>
     </div>
+    </div><!-- /pform-right -->
     <div id="pPhotosWrap" style="margin-top:10px;"></div>
+    </div><!-- /pform-cols -->
     <input type="hidden" id="pStatus" value="${p.status || STATUS.BOOKED}" />
     <div class="form-actions">
       <button class="btn" onclick="modal.close()">取消</button>
@@ -11639,6 +12165,8 @@ function onContractTypeChange() {
   // 成本扣项为多行编辑器（含材料/现场成本/外协工钱），标题随包活方式切换用语
   if (label) label.innerHTML = `<span style="color:#16a34a;">📦</span> ${isMaterial ? "材料费与成本扣项（多行）" : "现场成本与外协工钱（多行）"}`;
   updateContractCalc();
+  // 汇总条口径随包活方式变（包工=施工费，包工包料=含料合计），切完要重算金额与按钮文案
+  if (document.getElementById("pWorkItemsTotal")) wcUpdateTotal("wcForm");
 }
 
 /* 实时计算工费与工人分成池（工费÷2），写入表单提示。
@@ -12145,31 +12673,43 @@ function renderQuickAllocPreview(id, newType, amt, cdSum) {
   box.innerHTML = `<div class="qc-alloc-preview__title">分成变化预览（验收后才计入统计）</div><div class="qc-alloc-preview__list">${rowsHtml}</div>${doneHint}`;
 }
 
-function toggleWorkChip(el) {
-  el.closest(".work-chip").classList.toggle("work-chip--on", el.checked);
-}
-
 /* 渲染「施工内容 + 注意事项 + 图片资料」只读预览块，供施工管理页、进度跟踪展开详情复用 */
 function renderProjectContentPreview(p) {
   const hasWC = p.workContent && p.workContent.length;
+  const items = getWorkItems(p);
   const note = (p.note || "").trim();
   const photos = normalizePhotos(p);
   const photoCount = photos.plan.length + photos.material.length + photos.site.length + photos.completion.length;
-  if (!hasWC && !note && !photoCount) return "";
+  if (!hasWC && !note && !photoCount && !items.length) return "";
   const photoBadge = photoCount ? `<span class="proj-content-preview__badge">📷 ${photoCount}张</span>` : "";
+  const itemBadge = items.length ? `<span class="proj-content-preview__badge">📝 ${items.length}项明细</span>` : "";
   return `
-    <div class="proj-content-preview" onclick="event.stopPropagation(); showProjectContent('${p.id}')" title="点击查看完整施工内容、注意事项与图片资料">
-      <div class="proj-content-preview__title">🛠️ 施工内容 ${photoBadge}</div>
+    <div class="proj-content-preview" onclick="event.stopPropagation(); showProjectContent('${p.id}')" title="点击查看完整施工内容、明细、注意事项与图片资料">
+      <div class="proj-content-preview__title">🛠️ 施工内容 ${itemBadge}${photoBadge}</div>
       ${hasWC ? `<div class="proj-content-preview__chips">${p.workContent.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("")}</div>` : `<div class="proj-content-preview__empty">未填写施工内容</div>`}
+      ${items.length ? `<div class="proj-content-preview__detail">明细合计 ${workItemsHoursText(items)} 工时</div>` : ""}
       ${note ? `<div class="proj-content-preview__note">💬 ${esc(note)}</div>` : ""}
     </div>
   `;
+}
+
+/* 施工明细只读表（施工内容弹窗 / 详情复用） */
+function workItemsDetailHtml(items) {
+  if (!items || !items.length) return `<div class="hint">未填写施工明细。可在编辑项目或施工内容弹窗中逐行添加内容、数量与工时。</div>`;
+  return `<div class="wc-detail-table">${items.map((it) => `
+    <div class="wc-detail-row">
+      <div class="wc-detail-n">${esc(it.n || "未命名")}${it.note ? `<span class="wc-detail-note">${esc(it.note)}</span>` : ""}</div>
+      <div class="wc-detail-q">${it.q || ""}${esc(it.u || "")}</div>
+      <div class="wc-detail-h">${workItemsHoursText([it])} h</div>
+    </div>`).join("")}</div>`;
 }
 
 function showProjectContent(id) {
   const p = getProject(id);
   if (!p) return;
   const wc = p.workContent || [];
+  const items = getWorkItems(p);
+  const canEditItems = typeof perm.editProject !== "function" || perm.editProject(p);
   const photos = normalizePhotos(p);
   const hasAnyPhoto =
     photos.plan.length || photos.material.length || photos.site.length || photos.completion.length;
@@ -12183,6 +12723,11 @@ function showProjectContent(id) {
         <div class="proj-content-detail__tags">
           ${wc.map((c) => `<span class="badge" style="background:#e0f2fe;color:#0369a1;border-color:#7dd3fc;">${esc(c)}</span>`).join("")}
         </div>` : `<div class="hint">未填写施工内容</div>`}
+      <div class="wc-detail-head" style="margin-top:16px;">
+        <div class="proj-content-detail__label" style="margin:0;">📝 施工明细 <span class="est-tip">${items.length} 项 · 合计 ${workItemsHoursText(items)} 工时</span></div>
+        ${canEditItems ? `<button type="button" class="btn small outline" onclick="modal.close(); openWorkItemsEditor('${esc(p.id)}')">✏️ 编辑明细</button>` : ""}
+      </div>
+      ${workItemsDetailHtml(items)}
       <div class="proj-content-detail__label" style="margin-top:16px;">💬 注意事项</div>
       <div class="proj-content-detail__note">${linkifyPhones(p.note)}</div>
       <div class="proj-content-detail__label" style="margin-top:18px;">📷 图片资料</div>
@@ -12190,6 +12735,47 @@ function showProjectContent(id) {
     </div>`;
   modal.open(`${p.name} · 施工内容`, html, { closeOnMask: true });
   if (hasAnyPhoto) fillProjectContentPhotos(p);
+}
+
+/* 独立明细编辑器：从施工内容弹窗进入，只写 cost_estimate.items，不动工程金额/工费/分成 */
+function openWorkItemsEditor(pid) {
+  const p = getProject(pid);
+  if (!p) { toast("项目不存在"); return; }
+  if (typeof perm.editProject === "function" && !perm.editProject(p)) { toast("没有该项目的编辑权限"); return; }
+  window._wcEditPid = pid;
+  window._wcEditItems = getWorkItems(p);
+  modal.open("✏️ 编辑施工明细", `
+    <div class="wc-items-row">
+      <div class="wc-items-head">
+        <label style="margin:0;">施工明细 <span class="est-tip">内容 · 数量 · 单位 · 工时，逐行填写</span></label>
+        <button type="button" class="btn small outline" onclick="wcEdit.add()">＋ 添加明细</button>
+      </div>
+      <div id="wcEditList" class="wc-items-list">${workItemsHtml(window._wcEditItems, "wcEdit")}</div>
+      <div id="wcEditTotal" class="wc-items-foot">${wcSummaryHtml("wcEdit", { canFill: false, money: false, tip: "仅记录施工量与工时，不改变工程金额与分成" })}</div>
+      <div class="wc-edit-actions">
+        <button class="btn" onclick="modal.close()">取消</button>
+        <button class="btn primary" id="wcEditSave" onclick="saveWorkItemsEditor()">保存明细</button>
+      </div>
+    </div>`, { closeOnMask: false });
+}
+
+async function saveWorkItemsEditor() {
+  const pid = window._wcEditPid;
+  const p = getProject(pid);
+  if (!p) { toast("项目不存在"); return; }
+  if (typeof perm.editProject === "function" && !perm.editProject(p)) { toast("没有该项目的编辑权限"); return; }
+  const items = normalizeWorkItems(window._wcEditItems || []);
+  const ce = withWorkItems(p.costEstimate, items);
+  const btn = document.getElementById("wcEditSave");
+  if (btn) { btn.disabled = true; btn.textContent = "保存中…"; }
+  const ok = await repo.patchProject(pid, { cost_estimate: JSON.stringify(ce) });
+  if (btn && document.contains(btn)) { btn.disabled = false; btn.textContent = "保存明细"; }
+  if (ok === false) return; // patchProject 自带冲突提示
+  const p2 = getProject(pid);
+  if (p2) p2.costEstimate = ce;
+  modal.close();
+  toast("施工明细已保存（未改变工程金额）");
+  if (typeof renderAll === "function") renderAll();
 }
 
 // 在项目卡片「施工内容 + 注意事项」弹窗内渲染只读照片画廊
@@ -12659,12 +13245,12 @@ function switchAssignType(btn) {
 }
 
 function newProject() {
-  modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED }, { isNew: true }));
+  modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED }, { isNew: true }), { wide: true });
   setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); refreshSegTargetMark(); }, 100);
 }
 function editProject(id) {
   const _ep = getProject(id);
-  modal.open("编辑项目", projectForm(_ep));
+  modal.open("编辑项目", projectForm(_ep), { wide: true });
   setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", (_ep && _ep.costDeductions) || []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); refreshSegTargetMark(); }, 100);
 }
 
@@ -12740,13 +13326,13 @@ function quickEditProjectTimeForm(p = {}) {
         ? p.workSegments.slice(1).map((s) => segRowHtml(s.date, s.start, s.end, apptDisabled)).join("")
         : ""}
     </div>
-    <div style="display:flex;align-items:center;gap:6px;margin:4px 0 8px;flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;gap:6px;margin:4px 0 8px;flex-wrap:wrap;" class="pform-col">
       <button type="button" class="btn small seg-sync-btn" onclick="toggleSegTargetDay()" ${apptDisabled ? "disabled" : ""} title="快捷键作用范围：点击在 各天→第1天→第2天→… 之间循环切换">🔁 各天</button>
       <span id="pSegTargetHint" class="seg-target-hint is-all">同时改所有天</span>
       <span style="font-size:11px;color:#94a3b8;">·</span>
       <span style="font-size:11px;color:#64748b;">跨天施工：每天各填一段</span>
     </div>
-    <div class="form-row">
+    <div class="form-row pform-col">
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
         <button class="btn small" onclick="setPTimeRange('twohour')" ${apptDisabled ? "disabled" : ""} style="background:#fce7f3;color:#db2777;border-color:#fbcfe8;border-radius:4px;padding:3px 8px;font-size:12px;">⏱️ 2小时</button>
         <button class="btn small" onclick="setPTimeRange('morning')" ${apptDisabled ? "disabled" : ""} style="background:#e0f2fe;color:#0891b2;border-color:#7dd3fc;border-radius:4px;padding:3px 8px;font-size:12px;">🌅 上午</button>
@@ -12891,7 +13477,7 @@ async function saveQuickEditProjectTime(id) {
         original_time: p.appointmentTime,
         changed_at: new Date().toISOString(),
         reason: "快速编辑预约时间",
-        changed_by: currentUser && currentUser.name ? currentUser.name : "系统",
+        changed_by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "系统",
       },
     ];
   }
@@ -13009,10 +13595,8 @@ async function saveProject(id) {
   const durationHours = totalBookedHours; // 总预约时长（各段之和）
   const estimatedHours = Math.round(totalBookedHours * workerCount * 10) / 10;
   
-  const wcChecks = Array.from(document.querySelectorAll("#pWorkContent input:checked")).map((c) => c.value);
-  const wcCustom = (document.getElementById("pWorkContentCustom").value || "")
+  const workContent = (document.getElementById("pWorkContentCustom").value || "")
     .split(/[、,，\s]+/).map((s) => s.trim()).filter(Boolean);
-  const workContent = [...new Set([...wcChecks, ...wcCustom])];
 
   // 包活制字段。成本扣项两种模式都有效：包工包料=材料费；包工=吊车/运费等现场成本。
   // 统一公式：工费 = 工程金额 − 扣项（例：包工 1100 = 工费 350 + 吊车 800 → 池 175）
@@ -13039,6 +13623,17 @@ async function saveProject(id) {
     status: document.getElementById("pStatus").value,
     note: document.getElementById("pNote").value.trim(),
     workContent,
+    costEstimate: (() => {
+      const el = document.getElementById("pCostEstimate");
+      let ce = null;
+      if (el && el.value) {
+        try { ce = JSON.parse(el.value); } catch (_) { ce = null; }
+      } else {
+        ce = (id && getProject(id) || {}).costEstimate || null;
+      }
+      // 结构化明细与测算快照同存 cost_estimate.items；无测算也能单独保存明细
+      return withWorkItems(ce, window._wcFormItems || []);
+    })(),
     storeId,
     contractType,
     projectAmount,
@@ -13092,6 +13687,7 @@ async function saveProject(id) {
       payload.status = _ex.status;
       payload.note = _ex.note;
       payload.workContent = _ex.workContent;
+      payload.costEstimate = _ex.costEstimate;
       payload.storeId = _ex.storeId;
       payload.workerCount = _ex.workerCount;
       // 包活字段由独立权限「修改全部项目金额」保护（2026-10-18 拆分），无权者保持原值
@@ -13137,7 +13733,7 @@ async function saveProject(id) {
         original_time: preExisting.appointmentTime,
         changed_at: new Date().toISOString(),
         reason: "编辑项目预约时间",
-        changed_by: currentUser && currentUser.name ? currentUser.name : "系统",
+        changed_by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "系统",
       },
     ];
   }
@@ -16533,6 +17129,325 @@ function renderConstruction() {
   }
   // 验收照片：详情页验收信息区补签名 URL（无照片时静默跳过）
   try { fillAcceptancePhotos(); } catch (e) { console.warn("验收照片渲染失败:", e); }
+  // 🧮 测算参考卡片（施工费测算快照，纯参考、不进金额链）
+  try { renderEstimateCard(); } catch (e) { console.warn("测算参考卡片渲染失败:", e); }
+}
+
+/* 详情页「🧮 测算参考」卡片：展示 cost_estimate 快照，可重新测算。
+   挂在 #constructionDetail 末尾，纯 append 不侵入巨型模板字面量。
+   快照只读展示，绝不写回工程金额/工费/分成池。 */
+function renderEstimateCard() {
+  const box = document.getElementById("constructionDetail");
+  if (!box) return;
+  let card = document.getElementById("estRefCard");
+  if (card) card.remove();
+  const p = getProject(currentProjectId);
+  const ce = p ? (typeof costEstimateObject === "function" ? costEstimateObject(p.costEstimate) : p.costEstimate) : null;
+  card = document.createElement("div");
+  card.id = "estRefCard";
+  card.className = "est-ref-card";
+  if (!ce || !ce.rows || !ce.rows.length) {
+    card.innerHTML = `
+      <div class="est-ref-head"><h3>🧮 施工费测算参考</h3>
+        <button class="btn small outline" onclick="estFromProjectDetail('${esc(currentProjectId || '')}')">去测算</button></div>
+      <div class="est-ref-empty">尚未测算。可点「去测算」按施工内容估算工时与费用，作为与工程部结算的参考。</div>`;
+  } else {
+    const rowsHtml = (ce.rows || []).map((r) => `<div class="est-ref-row"><span>${esc(r.n)}</span><span>${r.q || ''}${esc(r.u || '')}</span><span>${r.isMat ? '材料' : fmtEstHours(r.hours) + 'h'}</span><b>${fmtEstMoney(r.fee)}</b></div>`).join("");
+    const crewTxt = ce.crew ? `${ce.crew.people}人 · 约${ce.crew.planDays}天` : "—";
+    // 测算 vs 实际：完工项目才有意义（实际工时尚在累计的不做误判）
+    let accHtml = "";
+    const finished = [STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status);
+    const actHours = (finished && typeof calcProjectActualPersonHours === "function") ? calcProjectActualPersonHours(p) : 0;
+    const estHours = Number(ce.totalHours) || 0;
+    if (finished && actHours > 0 && estHours > 0) {
+      const dev = (actHours - estHours) / estHours * 100;
+      const cls = Math.abs(dev) <= 15 ? "ok" : (dev > 0 ? "over" : "under");
+      const verdict = Math.abs(dev) <= 15 ? "测算准确" : (dev > 0 ? "实际超出测算（测算偏乐观）" : "实际少于测算（测算偏保守）");
+      accHtml = `<div class="est-ref-acc ${cls}">🎯 测算 <b>${fmtEstHours(estHours)}h</b> · 实际 <b>${fmtEstHours(actHours)}h</b> · 偏差 <b>${dev > 0 ? "+" : ""}${dev.toFixed(0)}%</b>（${verdict}）</div>`;
+    }
+    // 快照时效提示：生成距今 + 项目在快照之后是否有更新（金额/内容变了别拿旧参考谈价）
+    const atMs = ce.at ? new Date(ce.at).getTime() : 0;
+    const ageDays = atMs ? Math.floor((Date.now() - atMs) / 86400000) : -1;
+    const ageTxt = ageDays === 0 ? "今天生成" : (ageDays > 0 ? `${ageDays} 天前生成` : "");
+    const updMs = p.updatedAt ? new Date(p.updatedAt).getTime() : 0;
+    const stale = atMs && updMs && updMs > atMs + 60000; // 项目更新晚于快照 1 分钟以上视为过期
+    const staleHtml = stale ? `<div class="est-ref-stale">⚠️ 快照${ageTxt ? `（${ageTxt}）` : ""}之后项目有更新，金额/内容可能已变化，建议重新测算</div>`
+      : (ageDays >= 7 ? `<div class="est-ref-stale">ℹ️ 快照 ${ageTxt}，仅供参考</div>` : "");
+    const canFill = typeof perm.editContract === "function" && perm.editContract(p);
+    card.innerHTML = `
+      <div class="est-ref-head"><h3>🧮 施工费测算参考 <span class="est-ref-time">${esc((ce.at || "").slice(0, 16).replace("T", " "))}</span></h3>
+        <span class="est-ref-btns">
+          ${canFill ? `<button class="btn small outline" onclick="estFillAmountFromEstimate('${esc(currentProjectId || '')}')">💰 按此填金额</button>` : ""}
+          ${estCanManage() ? `<button class="btn small outline" onclick="estOpenAccuracy()" title="按已完工项目统计测算偏差，一键校准工时">🎯 校准建议</button>` : ""}
+          <button class="btn small outline" onclick="estFromProjectDetail('${esc(currentProjectId || '')}')">重新测算</button>
+        </span></div>
+      <div class="est-ref-rows">${rowsHtml}</div>
+      <div class="est-ref-totals">
+        <span>总工时 <b>${fmtEstHours(ce.totalHours)}h</b></span>
+        ${ce.transportFee ? `<span>运输费 <b>${fmtEstMoney(ce.transportFee)}（${ce.distanceKm || 0}km${ce.roundTrip ? ' 往返' : ''}）</b></span>` : ''}
+        <span>施工费 <b>${fmtEstMoney(ce.construction)}</b></span>
+        ${ce.matFee ? `<span>材料费 <b>${fmtEstMoney(ce.matFee)}</b></span>` : ''}
+        ${ce.auxFee ? `<span>辅材费 <b>${fmtEstMoney(ce.auxFee)}</b></span>` : ''}
+        <span>合计 <b>${fmtEstMoney(ce.grand)}</b></span>
+        <span>建议 <b>${crewTxt}</b></span>
+      </div>
+      ${accHtml}
+      ${staleHtml}
+      <div class="est-ref-note">仅作结算参考，未计入工程金额与提成</div>`;
+  }
+  box.appendChild(card);
+}
+
+/* ===== 测算准确度 / 校准建议（2026-11-22）=====
+   闭环：把已完工项目的「测算工时」与「实际工时（workLogs）」对比，
+   统计中位偏差，给出建议的工时缩放系数，一键写回 WH（按项基础定额×系数）。
+   数据粒度只能到项目级（workLogs 不按施工项拆分），因此建议系数是全局口径。 */
+function estAccuracyRows() {
+  const out = [];
+  (cache.projects || []).forEach((p) => {
+    const ce = p ? (typeof costEstimateObject === "function" ? costEstimateObject(p.costEstimate) : p.costEstimate) : null;
+    if (!ce || !(Number(ce.totalHours) > 0)) return;
+    if (![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) return;
+    const act = typeof calcProjectActualPersonHours === "function" ? calcProjectActualPersonHours(p) : 0;
+    if (!(act > 0)) return;
+    out.push({ p, est: Number(ce.totalHours), act, ratio: act / Number(ce.totalHours) });
+  });
+  return out;
+}
+function estMedian(arr) {
+  const a = (arr || []).filter((x) => isFinite(x)).slice().sort((x, y) => x - y);
+  if (!a.length) return 0;
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+function estOpenAccuracy() {
+  if (!window.Estimate) return;
+  const rows = estAccuracyRows();
+  if (!rows.length) {
+    estShowDrawer("🎯 测算准确度 · 校准建议", `<div class="est-cfg-tip">还没有可用于对比的数据。需要：① 项目做过测算并保存快照；② 项目已完工且有实际工时。满足后再来这里看。</div>`);
+    return;
+  }
+  const medianRatio = estMedian(rows.map((r) => r.ratio));
+  const suggest = Math.round(medianRatio * 100) / 100;
+  const avgDev = (medianRatio - 1) * 100;
+  const list = rows
+    .slice()
+    .sort((a, b) => Math.abs(b.ratio - 1) - Math.abs(a.ratio - 1))
+    .map((r) => {
+      const dev = (r.ratio - 1) * 100;
+      const cls = Math.abs(dev) <= 15 ? "ok" : (dev > 0 ? "over" : "under");
+      return `<div class="est-acc-row ${cls}">
+        <span class="est-acc-name">${esc(r.p.name || "(未命名)")}</span>
+        <span class="est-acc-num">测算 ${fmtEstHours(r.est)}h / 实际 ${fmtEstHours(r.act)}h</span>
+        <b>${dev > 0 ? "+" : ""}${dev.toFixed(0)}%</b>
+      </div>`;
+    }).join("");
+  const advice = Math.abs(avgDev) <= 10
+    ? `<div class="est-acc-advice ok">中位偏差 ${avgDev > 0 ? "+" : ""}${avgDev.toFixed(0)}%，测算已经比较准（±10% 内），暂不建议调整。</div>`
+    : `<div class="est-acc-advice ${avgDev > 0 ? "over" : "under"}">
+         中位偏差 <b>${avgDev > 0 ? "+" : ""}${avgDev.toFixed(0)}%</b>：
+         ${avgDev > 0 ? "实际工时高于测算，说明定额偏低或现场效率偏低。" : "实际工时低于测算，说明定额偏高。"}
+         建议把所有定额工时 × <b>${suggest}</b>（已校准项保持原值不动）。
+       </div>
+       <button class="btn primary" style="width:100%;margin-top:8px;" onclick="estApplyCalibFactor(${suggest})">按 ×${suggest} 校准全部定额工时</button>`;
+  // 按项反推：把实际工时按测算占比分摊到施工项，跨项目取中位数 → 项级定额建议
+  const rev = (() => {
+    try { return estReverseSuggest(); }
+    catch (e) { console.warn("estReverseSuggest failed:", e); return { rows: [], projects: [], mismatch: 0 }; }
+  })();
+  _estRevCache = rev.rows;
+  const revRows = rev.rows.map((x) => {
+    const up = x.f > 1;
+    return `<div class="est-rev-row ${up ? "over" : "under"}">
+      <span class="est-rev-n" title="${esc(x.n)}">${esc(x.n)}</span>
+      <span class="est-rev-d">${fmtEstHours(x.curH)} → <b>${fmtEstHours(x.newH)}</b> 工时/${esc(x.u || "单位")}</span>
+      <span class="est-rev-f">×${x.f.toFixed(2)}</span>
+      <span class="est-rev-d">${x.n0} 单 · ${x.qty}${esc(x.u || "")}</span>
+      <button class="linkbtn" onclick="estApplyReverseItem('${escJsAttr(x.id)}',${x.newH})" title="把本项定额改成建议值（写入全员共享配置）">采纳</button>
+    </div>`;
+  }).join("");
+  const revHtml = rev.rows.length
+    ? `<h5 class="est-sec-t">按项反推 <span class="est-rev-sub">${rev.projects.length} 个完工单 · 按定额比例分摊</span></h5>
+       <div class="est-cfg-tip">实际工时只到「项目级」，先按各项测算工时的占比分摊，再跨项目按工程量加权取中位数得到项级系数；高空/墙面系数在比值里自然抵消。样本 ≥3 单更可信，系数已夹在 0.7–1.4。</div>
+       <div class="est-rev-list">${revRows}</div>
+       <button class="btn small outline" style="margin-top:8px;width:100%;" onclick="estApplyReverseAll()">全部采纳（${rev.rows.length} 项）</button>`
+    : `<h5 class="est-sec-t">按项反推</h5>
+       <div class="est-cfg-tip">暂无可反推的项。需要 ≥2 个「已完工 + 做过测算 + 有实际工时」的项目，且某项偏差 ≥8% 才会提示。${rev.mismatch ? `另有 ${rev.mismatch} 单是老快照（结果行与清单对不齐），已跳过。` : ""}</div>`;
+  estShowDrawer("🎯 测算准确度 · 校准建议", `
+    <div class="est-cfg-tip">基于 ${rows.length} 个已完工项目，对比测算工时与实际工时（人·小时）。下面分两层：整体口径给一个缩放系数，按项反推给单项定额建议。</div>
+    ${advice}
+    <div class="est-acc-list">${list}</div>
+    ${revHtml}`);
+}
+async function estApplyCalibFactor(factor) {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  const f = Number(factor);
+  if (!(f > 0)) { toast("系数无效"); return; }
+  if (!confirm(`把所有定额项的标准工时 × ${f}？\n\n已手工校准（WH）过的项保持不动；工资单价不变。保存后全员生效。`)) return;
+  const c = estCfg();
+  (Estimate.WORK_ITEMS || []).forEach((it) => {
+    if (c.WH && c.WH[it.id] != null) return; // 已校准项尊重人工判断，不二次缩放
+    const base = Number(it.h) || 0;
+    if (!(base > 0)) return;
+    c.WH[it.id] = Math.round(base * f * 1000) / 1000;
+  });
+  const ok = await saveEstimateConfig(c);
+  if (ok) { estCloseDrawer(); estRenderAdvanced(); estRecalc(); toast(`已按 ×${f} 校准全部定额工时`); }
+}
+
+/* ===== 按项反推工时（2026-11-22）=====
+   现场实际工时只到「项目级」（workLogs 是一人一天），没有按施工项拆分，
+   所以用工程造价里的「按定额比例分摊实际成本」做反推：
+     ① 每个完工项目：实际人·小时 × 本项测算工时 ÷ 全项测算工时 = 本项实际工时；
+     ② 本项实际工时 ÷ 本项测算工时 = 本项偏差比（高空/墙面系数在比值里自然抵消）；
+     ③ 跨项目按工程量加权取中位数 → 该项定额建议乘的系数；
+     ④ 样本 <2 单、偏差 <8% 不提；系数夹在 0.7–1.4，防单个异常单把定额带歪。
+   固有局限（必须知道）：同一个项目分摊后每项偏差比**完全相同**（都等于 实际/测算），
+   只有多个「项目构成不同」的单子才可能得出不同的项级系数，样本 ≥3 单才较可信。
+   采纳后写入 estimate_config.WH，与手工校准同一条链路，不影响历史快照。 */
+const EST_REV_MIN_DEV = 0.08;   // 偏差小于 8% 不动（避免噪声）
+const EST_REV_MIN_SAMPLES = 2;  // 至少 2 单才给建议
+const EST_REV_CLAMP = [0.7, 1.4];
+let _estRevCache = [];
+
+function estReverseSuggest() {
+  const map = new Map(); // id -> { id, samples: [{r,q}] }
+  const projects = [];
+  let mismatch = 0;
+  (cache.projects || []).forEach((p) => {
+    const ce = p ? (typeof costEstimateObject === "function" ? costEstimateObject(p.costEstimate) : p.costEstimate) : null;
+    if (!ce || !(Number(ce.totalHours) > 0)) return;
+    if (![STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status)) return;
+    const act = typeof calcProjectActualPersonHours === "function" ? calcProjectActualPersonHours(p) : 0;
+    if (!(act > 0)) return;
+    const rows = (ce.rows || []).filter((r) => !r.isMat && Number(r.hours) > 0);
+    if (!rows.length) return;
+    const works = (ce.work || []).filter((w) => !w.isMat && w.id);
+    if (!works.length) { mismatch++; return; }
+    // 对齐两条路：新快照行带 id → 按 id 取量；老快照没 id → 按顺序取，且要求行数一致（宁缺不错）
+    const byId = new Map();
+    works.forEach((w) => { if (!byId.has(w.id)) byId.set(w.id, w); });
+    const idOk = rows.every((r) => r.id) && rows.every((r) => byId.has(r.id));
+    if (!idOk && rows.length !== works.length) { mismatch++; return; }
+    const sum = rows.reduce((a, r) => a + (Number(r.hours) || 0), 0);
+    if (!(sum > 0)) return;
+    const ratio = act / sum; // 分摊后每项统一是本比值
+    projects.push(p.name || "(未命名)");
+    rows.forEach((r, i) => {
+      const id = idOk ? r.id : (works[i] ? works[i].id : "");
+      const w = idOk ? byId.get(r.id) : works[i];
+      const q = Number(w && w.q) || 0;
+      const it = id ? Estimate.getWorkItem(id) : null;
+      if (!id || !it || !(q > 0)) return;
+      const o = map.get(id) || { id, samples: [] };
+      o.samples.push({ r: ratio, q });
+      map.set(id, o);
+    });
+  });
+
+  const c = estCfg();
+  const out = [];
+  map.forEach((o) => {
+    if (o.samples.length < EST_REV_MIN_SAMPLES) return;
+    // 按工程量加权中位数：大单更能代表真实效率
+    const s = o.samples.slice().sort((a, b) => a.r - b.r);
+    const totQ = s.reduce((a, x) => a + x.q, 0) || s.length;
+    let acc = 0, med = s[s.length - 1].r;
+    for (const x of s) { acc += x.q || 1; if (acc >= totQ / 2) { med = x.r; break; } }
+    const f = Math.min(EST_REV_CLAMP[1], Math.max(EST_REV_CLAMP[0], Math.round(med * 100) / 100));
+    if (Math.abs(f - 1) < EST_REV_MIN_DEV) return;
+    const it = Estimate.getWorkItem(o.id);
+    const curH = (c.WH && c.WH[o.id] != null) ? Number(c.WH[o.id]) : Number(it.h);
+    const newH = Math.round(curH * f * 100) / 100;
+    if (!(curH > 0) || !(newH > 0) || Math.abs(newH - curH) < 0.01) return;
+    out.push({
+      id: o.id, n: it.n, u: it.u || "", curH, newH, f,
+      n0: o.samples.length, qty: Math.round(o.samples.reduce((a, x) => a + (x.q || 0), 0) * 100) / 100,
+    });
+  });
+  out.sort((a, b) => Math.abs(b.f - 1) - Math.abs(a.f - 1));
+  return { rows: out, projects, mismatch };
+}
+
+/* 采纳单项：写入 WH（改回默认值就删覆盖，与手工校准一致） */
+async function estApplyReverseItem(id, hours) {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  const it = Estimate.getWorkItem(id);
+  const v = Math.round(Number(hours) * 100) / 100;
+  if (!it || !(v > 0)) return;
+  const c = estCfg();
+  c.WH = c.WH || {};
+  if (Math.abs(v - Number(it.h)) < 0.001) delete c.WH[id]; else c.WH[id] = v;
+  const ok = await saveEstimateConfig(c);
+  if (ok) { estRenderAdvanced(); estRecalc(); estOpenAccuracy(); toast(`「${it.n}」定额改为 ${v} 工时/${it.u || "单位"}`); }
+}
+/* 采纳全部：一次保存，避免逐项请求打到 429 */
+async function estApplyReverseAll() {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  const list = (_estRevCache || []).filter((x) => x && x.id);
+  if (!list.length) { toast("没有可采纳的建议"); return; }
+  if (!confirm(`采纳 ${list.length} 项的「按项反推」建议写入定额工时？\n\n已手工校准过的项会被新值覆盖；历史快照不受影响。`)) return;
+  const c = estCfg();
+  (Estimate.WORK_ITEMS || []).forEach((it) => {
+    const hit = list.find((x) => x.id === it.id);
+    if (!hit) return;
+    if (Math.abs(hit.newH - Number(it.h)) < 0.001) { if (c.WH[it.id] != null) delete c.WH[it.id]; }
+    else c.WH[it.id] = hit.newH;
+  });
+  const ok = await saveEstimateConfig(c);
+  if (ok) { estRenderAdvanced(); estRecalc(); estOpenAccuracy(); toast(`已采纳 ${list.length} 项定额工时`); }
+}
+
+/* 拍板桥（2026-11-22）：把测算合计一键预填进「修改项目金额」弹窗。
+   不直接落库——openQuickContractEdit 里走完整金额链（laborFee 重算/留痕/分成预览），预填后由人确认保存。 */
+function estFillAmountFromEstimate(pid) {
+  const p = getProject(pid);
+  const ce = p ? (typeof costEstimateObject === "function" ? costEstimateObject(p.costEstimate) : p.costEstimate) : null;
+  if (!p || !ce || !(Number(ce.grand) > 0)) { toast("没有可用的测算快照"); return; }
+  if (typeof perm.editContract === "function" && !perm.editContract(p)) { toast("无修改金额权限"); return; }
+  if (!confirm(`把工程金额预填为测算合计 ${fmtEstMoney(ce.grand)}？\n\n将打开「修改项目金额」弹窗并自动填入，请核对后自行保存。`)) return;
+  openQuickContractEdit(pid);
+  setTimeout(() => {
+    if (!document.getElementById("qcProjectId")) return; // 弹窗被关/被顶掉则不填
+    qcUnlockAmount();
+    const inp = document.getElementById("qcAmount");
+    if (inp) { inp.value = Math.round(Number(ce.grand) * 100) / 100; onQuickContractChange(); toast("已预填测算合计，请核对后保存"); }
+  }, 150);
+}
+
+/* 从详情页打开测算器：带入施工内容，测算完把快照 patch 到项目（不动金额链） */
+async function estFromProjectDetail(pid) {
+  if (!pid) { toast("未定位到项目"); return; }
+  if (!window.Estimate) { toast("测算内核未加载"); return; }
+  const p = getProject(pid);
+  const prefill = (p && p.workContent && p.workContent.length) ? p.workContent.join(" ") : "";
+  openEstimateModal({
+    mode: "insert",
+    projectId: pid,
+    prefill,
+    items: getWorkItems(p),
+    onInsert: async ({ snapshot, workNames, result }) => {
+      const cur = getProject(pid);
+      const canEditBasic = !cur || (typeof perm.editProject !== "function" || perm.editProject(cur));
+      snapshot.items = canEditBasic
+        ? mergeEstimateRowsIntoItems(snapshot.items || getWorkItems(cur), result && result.rows)
+        : getWorkItems(cur);
+      const patch = { cost_estimate: JSON.stringify(snapshot) };
+      if (canEditBasic && Array.isArray(workNames) && workNames.length) {
+        // 有「编辑项目」权限时，把测算施工项并入施工内容（去重）；无权限只存快照
+        patch.work_content = JSON.stringify([...new Set([...(cur.workContent || []), ...workNames])]);
+      }
+      const ok = await repo.patchProject(pid, patch);
+      if (ok === false) { toast("保存失败，请刷新后重试"); return; }
+      const p2 = getProject(pid);
+      if (p2) {
+        p2.costEstimate = snapshot;
+        if (patch.work_content) p2.workContent = safeJsonParse(patch.work_content, p2.workContent || []);
+      }
+      renderEstimateCard();
+      toast(patch.work_content ? "测算快照与施工内容已保存到项目（未改变工程金额）" : "测算快照已保存到项目（未改变工程金额）");
+    }
+  });
 }
 
 /* 找出某安装人员已被分配、且与本项目时间段重叠的其它项目 */
@@ -18124,7 +19039,7 @@ function delayProject(id) {
         original_time: p.appointmentTime,
         changed_at: new Date().toISOString(),
         reason: reason,
-        changed_by: currentUser?.name || "系统"
+        changed_by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "系统"
       }];
       
       const delayCount = (p.delayCount || 0) + 1;
@@ -26176,6 +27091,222 @@ async function requireAdminPassword(actionName) {
   return true;
 }
 
+/* ===== 宽表单弹窗（项目预约）桌面端：标题栏拖动移动 + 右下角拖拽缩放 =====
+   手机端不启用（保持全宽居中）。位置/尺寸存 localStorage 沿用；双击标题栏恢复默认居中；
+   清理时复位内联样式，避免复用同一 .modal 的其他弹窗继承浮窗尺寸。 */
+let _modalWinCleanup = null;
+function initModalWindowControls(box) {
+  if (typeof _modalWinCleanup === "function") { _modalWinCleanup(); _modalWinCleanup = null; }
+  if (!box || window.innerWidth <= 768) return;
+  const popup = document.getElementById("modal");
+  if (!popup) return;
+  // key 换 v2：老版本存的是 560 窄窗，若沿用会让「默认两栏宽窗」永远不生效（一次性迁移）
+  const KEY = "project_form_win_geom_v2";
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (_) {}
+  const vw0 = window.innerWidth, vh0 = window.innerHeight;
+  // 初始默认＝两栏宽窗（2026-11-22 用户要求）：≥680 自动分栏、≥940 左列封顶。
+  // 900 是「左右两列都不挤」的实测宽度；视口不够就按 vw-48 收，最低 560。
+  const defW = Math.max(560, Math.min(900, vw0 - 48));
+  const defH = Math.round(vh0 * 0.9);
+  // 最小宽度 440：允许拖到单列窄窗；再窄时间行/明细行会被压成一列字
+  const clamp = (x) => {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const w = Math.max(440, Math.min(Number(x.w) || defW, vw - 24));
+    const h = Math.max(360, Math.min(Number(x.h) || defH, vh - 24));
+    return {
+      w, h,
+      left: Math.max(8, Math.min(Number(x.left) || Math.round((vw - w) / 2), vw - w - 8)),
+      top: Math.max(8, Math.min(Number(x.top) || Math.round((vh - h) / 2), vh - h - 8)),
+    };
+  };
+  let g = (saved && saved.w) ? clamp(saved) : clamp({});
+  const apply = () => {
+    box.style.position = "fixed";
+    box.style.margin = "0";
+    box.style.left = g.left + "px"; box.style.top = g.top + "px";
+    box.style.width = g.w + "px"; box.style.height = g.h + "px";
+    box.style.maxWidth = "none"; box.style.maxHeight = "none";
+  };
+  apply();
+  box.classList.add("modal--floating");
+  // 分栏两档：按弹窗真实宽度（非视口）切换——≥680px 挂 .modal--xl 按比例
+  // 左右分栏（1fr:1.1fr，两列都不至于太窄）；≥940px 再挂 .modal--xl2，
+  // 左列封顶 540px、多余宽度全给右列（见 styles.css .modal--xl 段）。
+  const syncXl = () => {
+    const w = box.getBoundingClientRect().width;
+    box.classList.toggle("modal--xl", w >= 680);
+    box.classList.toggle("modal--xl2", w >= 940);
+  };
+  syncXl();
+  const handle = document.createElement("div");
+  handle.className = "est-win-handle modal-win-handle";
+  handle.title = "拖动调整窗口大小（双击标题栏恢复默认）";
+  box.appendChild(handle);
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(g)); } catch (_) {} };
+
+  let drag = null, resizing = null;
+  const onDown = (e) => {
+    if (e.button !== 0) return;
+    if (!e.target.closest(".modal-head") || e.target.closest("button")) return;
+    drag = { x: e.clientX, y: e.clientY, left: g.left, top: g.top };
+    e.preventDefault();
+  };
+  const onMove = (e) => {
+    if (!drag) return;
+    g = clamp({ ...g, left: drag.left + e.clientX - drag.x, top: drag.top + e.clientY - drag.y });
+    apply();
+  };
+  const onUp = () => { if (drag) { drag = null; save(); } };
+  const onResizeDown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    resizing = { x: e.clientX, y: e.clientY, w: g.w, h: g.h };
+  };
+  const onResizeMove = (e) => {
+    if (!resizing) return;
+    g = clamp({ ...g, w: resizing.w + e.clientX - resizing.x, h: resizing.h + e.clientY - resizing.y });
+    apply(); syncXl();
+  };
+  const onResizeUp = () => { if (resizing) { resizing = null; save(); } };
+  const onDbl = (e) => {
+    if (!e.target.closest(".modal-head") || e.target.closest("button")) return;
+    g = clamp({ left: Math.round((window.innerWidth - defW) / 2), top: Math.round((window.innerHeight - defH) / 2), w: defW, h: defH });
+    apply(); save(); syncXl();
+  };
+  const onWinResize = () => { g = clamp(g); apply(); syncXl(); };
+
+  popup.addEventListener("pointerdown", onDown);
+  popup.addEventListener("dblclick", onDbl);
+  handle.addEventListener("pointerdown", onResizeDown);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointermove", onResizeMove);
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointerup", onResizeUp);
+  window.addEventListener("resize", onWinResize);
+  _modalWinCleanup = () => {
+    popup.removeEventListener("pointerdown", onDown);
+    popup.removeEventListener("dblclick", onDbl);
+    handle.removeEventListener("pointerdown", onResizeDown);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointermove", onResizeMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointerup", onResizeUp);
+    window.removeEventListener("resize", onWinResize);
+    handle.remove();
+    box.classList.remove("modal--floating", "modal--xl", "modal--xl2");
+    box.style.cssText = "";
+  };
+}
+
+/* ===== 弹窗最小化（2026-11-22）=====
+   预约表单（#modal 单例）与施工费测算器（#estimateModal 独立 DOM）都可收起到右下角胶囊，
+   点胶囊恢复继续操作。
+   表单停泊（park）= 把 modalBody 内容移入隐藏容器 + 保存标题/回调/几何信息——
+   防止其他 modal.open 复用 #modal 时 innerHTML 覆盖销毁表单状态；恢复时原样放回。
+   测算器是独立 DOM，隐藏即保活，无需停泊。 */
+let _parkedForm = null;
+let _estMinimized = false;
+function getModalParking() {
+  let p = document.getElementById("modalParking");
+  if (!p) { p = document.createElement("div"); p.id = "modalParking"; p.style.display = "none"; document.body.appendChild(p); }
+  return p;
+}
+function modalMinimizeForm(silent) {
+  if (window.innerWidth <= 768) return; // 手机端弹窗全屏，最小化无意义
+  const mask = document.getElementById("modal");
+  const body = document.getElementById("modalBody");
+  if (!mask || !body || !body.firstElementChild) return;
+  if (_parkedForm) {
+    // 已有停泊的旧表单（期间又开过新表单）：旧实例已被取代，丢弃后停泊当前表单
+    _parkedForm = null;
+    getModalParking().innerHTML = "";
+  }
+  const box = mask.firstElementChild;
+  const parking = getModalParking();
+  const frag = document.createDocumentFragment();
+  while (body.firstChild) frag.appendChild(body.firstChild);
+  parking.appendChild(frag);
+  _parkedForm = {
+    nodes: parking,
+    title: document.getElementById("modalTitle").innerHTML,
+    boxClass: box.className,
+    boxCss: box.style.cssText,
+    footerHidden: document.getElementById("modalFooter").classList.contains("hidden"),
+    confirmText: document.getElementById("modalConfirm").textContent,
+    cancelText: document.getElementById("modalCancel").textContent,
+    onConfirm: (typeof modalOnConfirm === "function") ? modalOnConfirm : null,
+    onClose: (typeof modalOnClose === "function") ? modalOnClose : null,
+    closeOnMask: modalCloseOnMask,
+  };
+  mask.classList.add("hidden");
+  mask.style.display = "";
+  document.body.classList.remove("modal-open");
+  document.documentElement.classList.remove("modal-open");
+  renderModalMinDock();
+  if (!silent) toast("表单已最小化：右下角「📋 预约表单」随时恢复");
+}
+function modalRestoreForm() {
+  if (!_parkedForm) return;
+  const mask = document.getElementById("modal");
+  const body = document.getElementById("modalBody");
+  // 其他弹窗正占着 #modal 时先不恢复（避免覆盖），提示用户先关
+  if (mask && !mask.classList.contains("hidden") && body && body.firstElementChild) {
+    toast("请先关闭当前弹窗，再恢复预约表单");
+    return;
+  }
+  const d = _parkedForm;
+  while (body.firstChild) body.removeChild(body.firstChild);
+  Array.from(d.nodes.childNodes).forEach((n) => body.appendChild(n));
+  document.getElementById("modalTitle").innerHTML = d.title;
+  const box = mask.firstElementChild;
+  if (box) { box.className = d.boxClass; box.style.cssText = d.boxCss; }
+  document.getElementById("modalFooter").classList.toggle("hidden", d.footerHidden);
+  const confirmBtn = document.getElementById("modalConfirm");
+  const cancelBtn = document.getElementById("modalCancel");
+  if (!d.footerHidden) {
+    confirmBtn.textContent = d.confirmText;
+    cancelBtn.textContent = d.cancelText;
+  }
+  modalOnConfirm = d.onConfirm;
+  modalOnClose = d.onClose;
+  modalCloseOnMask = d.closeOnMask;
+  window._modalConfirmLock = false;
+  if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.style.opacity = ""; }
+  mask.classList.remove("hidden");
+  mask.style.display = "";
+  document.body.classList.add("modal-open");
+  document.documentElement.classList.add("modal-open");
+  _parkedForm = null;
+  // 期间若开过其他弹窗，窗口控制（拖动/缩放）监听已被 cleanup 移除 → 重新挂
+  if (typeof _modalWinCleanup !== "function" && box && box.classList.contains("modal--wide") && window.innerWidth > 768) initModalWindowControls(box);
+  renderModalMinDock();
+}
+function modalMinDiscard(key) {
+  if (key === "form") {
+    if (!_parkedForm) return;
+    if (!confirm("丢弃最小化的预约表单？未保存的内容将丢失。")) return;
+    _parkedForm = null;
+    getModalParking().innerHTML = "";
+    window._estFormModal = null;
+    toast("已丢弃最小化的表单");
+  } else {
+    if (!_estMinimized) return;
+    if (!confirm("关闭最小化的施工费测算？（测算清单已自动存过历史，可从「历史」找回）")) return;
+    closeEstimateModal();
+  }
+  renderModalMinDock();
+}
+function renderModalMinDock() {
+  const dock = document.getElementById("modalMinDock");
+  if (!dock) return;
+  const pills = [];
+  if (_parkedForm) pills.push(`<div class="modal-min-pill" onclick="modalRestoreForm()" title="点击恢复预约表单"><span>📋</span><b>预约表单</b><button class="modal-min-x" onclick="event.stopPropagation();modalMinDiscard('form')" title="丢弃">×</button></div>`);
+  if (_estMinimized) pills.push(`<div class="modal-min-pill" onclick="estRestore()" title="点击恢复施工费测算"><span>🧮</span><b>施工费测算</b><button class="modal-min-x" onclick="event.stopPropagation();modalMinDiscard('est')" title="关闭">×</button></div>`);
+  dock.innerHTML = pills.join("");
+  dock.classList.toggle("hidden", !pills.length);
+}
+
 const modal = {
   open(title, bodyHtml, options = {}) {
     // 标题默认按纯文本转义，避免调用方传入用户数据造成 XSS。
@@ -26191,8 +27322,15 @@ const modal = {
     modalOnClose = options.onClose || null;
     modalCloseOnMask = options.closeOnMask === true;
     // 窄弹窗选项：.modal--narrow 比默认 420px 更窄，手机端更聚焦（小而精），关闭/开其他弹窗时自动移除
+    // 宽弹窗选项：.modal--wide 电脑端 680px + 可拖动/缩放（项目预约表单），手机端不变
     const modalBox = document.getElementById("modal").firstElementChild;
-    if (modalBox) modalBox.classList.toggle("modal--narrow", !!(options && options.narrow));
+    if (modalBox) {
+      modalBox.classList.toggle("modal--narrow", !!(options && options.narrow));
+      modalBox.classList.toggle("modal--wide", !!(options && options.wide));
+    }
+    // 最小化按钮只对宽弹窗（预约表单）显示，手机端不显示
+    const modalMinBtn = document.getElementById("modalMin");
+    if (modalMinBtn) modalMinBtn.style.display = (options && options.wide && window.innerWidth > 768) ? "" : "none";
 
     if (options.hideFooter) {
       modalFooter.classList.add("hidden");
@@ -26219,11 +27357,14 @@ const modal = {
     document.body.classList.add("modal-open");
     document.documentElement.classList.add("modal-open");
     initCustomSelects(document.getElementById("modalBody"));
+    if (options && options.wide && modalBox) initModalWindowControls(modalBox);
+    else if (typeof _modalWinCleanup === "function") { _modalWinCleanup(); _modalWinCleanup = null; }
     if (typeof options.onOpen === "function") {
       try { options.onOpen(); } catch (e) { console.warn("modal.onOpen failed:", e); }
     }
   },
   close() {
+    if (typeof _modalWinCleanup === "function") { _modalWinCleanup(); _modalWinCleanup = null; }
     const closeBtn = document.getElementById("modalClose");
     if (closeBtn) closeBtn.style.display = "";  // 复位强制改密弹窗隐藏的 ✕
     document.getElementById("modal").classList.add("hidden");
@@ -26236,6 +27377,8 @@ const modal = {
       modalOnClose = null;
     }
     modalOnConfirm = null;
+    // 最小化的表单还在停泊区时保留其与测算器的关联；否则清掉悬空引用
+    if (!_parkedForm) window._estFormModal = null;
   },
 };
 
@@ -27157,12 +28300,13 @@ function renderMine() {
   // 功能中心菜单项（业务类入口，根据权限过滤；系统管理类见下方「系统管理」分组）
   const featureItems = [
     { tab: "workers", icon: "👷", label: "施工人员", color: "#eff6ff", show: perm.viewWorker() || perm.manageOutsourced() },
+    { tab: "stats", icon: "💰", label: "提成统计", color: "#fef2f2", show: perm.viewStats() },
     { tab: "notifications", icon: "🔔", label: "消息中心", color: "#fef2f2", badge: unreadNotifCount, show: MODE === "cloud" && cloudConfigured() },
     { tab: "leaves", icon: "🏥", label: "休假管理", color: "#fff7ed", badge: pendingLeaveCount, show: !isStoreManager() || !myStore() },
     { tab: "schedules", icon: svgCal(18), label: "个人日程", color: "#fef3c7", show: perm.viewSchedule() },
     { tab: "stores", icon: "🏪", label: "门店管理", color: "#f0fdf4", show: perm.manageStores() },
     { tab: "storeStats", icon: "📊", label: "店面统计", color: "#eff6ff", show: perm.viewStoreStats() },
-    // 「提成统计」已升入底部主菜单（2026-10-27）
+    // 「提成统计」已从底部主菜单移回本页（2026-11-19），按 viewStats 权限显示
     // 「内部任务」菜单项已随功能下线移除（2026-10-18）
     { tab: "help", icon: "❓", label: "使用帮助", color: "#fef3c7", show: true },
   ].filter(i => i.show);
@@ -27527,6 +28671,12 @@ function viewNotifToast(id) {
 }
 
 function switchTab(name) {
+  // 🧮 费用测算：独立工具入口，打开测算弹窗但不切换当前 tab
+  if (name === "estimate") {
+    if (window.Estimate) openEstimateModal({ mode: "standalone" });
+    else toast("测算内核未加载，请刷新页面");
+    return;
+  }
   updateLeavesTabBadge();
   const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
   if (btn && btn.classList.contains("hidden")) return;
@@ -27826,6 +28976,7 @@ async function doPullRefresh() {
     await loadWorkTimeoutSetting();
     await loadAutoReviewSetting();
     await loadFakeMileageKmhSetting();
+    if (typeof loadEstimateConfig === "function") await loadEstimateConfig();
     renderActiveTabOnly(); // 仅重绘当前可见 Tab，不重绘全部
     return synced;
   })();
@@ -27883,6 +29034,7 @@ async function forceFullRefresh() {
     await loadWorkTimeoutSetting();
     await loadAutoReviewSetting();
     await loadFakeMileageKmhSetting();
+    if (typeof loadEstimateConfig === "function") await loadEstimateConfig();
     renderActiveTabOnly(); // 仅重绘当前可见 Tab，与下拉刷新一致
     if (ok) {
       recordSyncTime();
@@ -28017,9 +29169,9 @@ function applyPermissions() {
     construction: role != null,
     vehicleTrips: perm.viewVehicle(),
     internalTasks: perm.viewTask(),
-    workers: (perm.viewWorker() || perm.manageOutsourced()) && role != null,
-    // 提成统计升入底部主菜单（2026-10-27）：原「消息」入口移入「我的」页功能中心
-    stats: perm.viewStats(),
+    // 菜单调整（2026-11-19）：费用测算升入底部主菜单，全员可见；
+    // 施工人员 / 提成统计移入「我的」页功能中心，仍按各自权限显示。
+    estimate: true,
     mine: role != null,
     // 消息中心仅云端模式存在（消息存 Supabase）；本地模式无消息，隐藏入口
     notifications: MODE === "cloud" && cloudConfigured(),
@@ -30550,7 +31702,7 @@ async function saveTimelineTaskTime(projectId, newStart, newEnd) {
         original_time: p.appointmentTime,
         changed_at: new Date().toISOString(),
         reason: "时间线拖动调整",
-        changed_by: currentUser && currentUser.name ? currentUser.name : "系统",
+        changed_by: (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "系统",
       },
     ];
   }
@@ -31005,6 +32157,7 @@ async function startCloudSession() {
       loadWorkTimeoutSetting(), // 全局部署的「连续施工超时阈值」（多人统一标准）
       loadAutoReviewSetting(),  // 全局部署的「验收后自动审核（小时）」
       loadFakeMileageKmhSetting(), // 全局部署的「用车记录虚假里程阈值（km/h）」
+      typeof loadEstimateConfig === "function" ? loadEstimateConfig() : Promise.resolve(), // 🧮 测算参数/定额（全员共享）
     ]);
     if (!canInstantRender) {
       // 首次无缓存 / 无缓存角色：此时才有数据或权限可渲染
@@ -31934,7 +33087,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "ve921ad4b";
+  const APP_VERSION = "v27bbc1db";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -34259,3 +35412,4089 @@ repo.deleteMeasurement = async function (id) {
   }
   return true;
 };
+
+/* ============================================================
+ * 🧮 施工费测算器（阶段③，2026-11-19）
+ *   内核：window.Estimate（estimate.js，纯计算无 DOM）
+ *   配置：云端 app_settings 的 estimate_config key（manager 可写、全员可读）
+ *   快照：projects.cost_estimate jsonb（与金额链完全隔离，绝不写工程金额/工费/池）
+ * ============================================================ */
+
+// 内存中的当前配置（云端覆盖内核默认值）；初始为内核默认，登录后被 loadEstimateConfig 覆盖
+let _estimateCfg = null;
+// 配置来源与保存时间（只用于界面提示，不参与计算）：cloud=云端 app_settings / local=本机 / default=内核默认
+let _estimateCfgMeta = { source: "default", at: "" };
+function estCfgSavedText() {
+  const m = _estimateCfgMeta || {};
+  if (m.source === "cloud" && m.at) {
+    const d = new Date(m.at);
+    const p = (n) => String(n).padStart(2, "0");
+    return `上次保存：${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} · 云端（全员共享）`;
+  }
+  if (m.source === "local") return "本机保存（云端未读到 estimate_config，当前用本机副本）";
+  return "服务器上还没有保存过配置，现在显示的是默认值";
+}
+function estCfg() {
+  if (!_estimateCfg) {
+    const d = (window.Estimate && Estimate.defaultConfig) ? Estimate.defaultConfig() : null;
+    _estimateCfg = d || { params: {}, WH: {}, prices: {}, mat: {}, door: {}, expInfo: {}, history: [], qmem: {} };
+  }
+  return _estimateCfg;
+}
+
+/* 从 app_settings 拉取全局测算配置（定额/参数/校准/单价库）。
+   本地模式降级到 localStorage，仅本机生效。失败静默用内核默认。 */
+async function loadEstimateConfig() {
+  if (typeof window === "undefined" || !window.Estimate) return;
+  if (MODE === "cloud" && sb) {
+    try {
+      const { data, error } = await sb.from("app_settings").select("value, updated_at").eq("key", "estimate_config").maybeSingle();
+      if (!error && data && data.value && typeof data.value === "object") {
+        _estimateCfg = normalizeEstimateConfig(data.value);
+        _estimateCfgMeta = { source: "cloud", at: data.updated_at || "" };
+        estSyncCustomItems();
+        return;
+      }
+      // 查询成功但没这行 = 服务器上还没存过（首次使用），保持默认值
+      if (!error && !data) _estimateCfgMeta = { source: "default", at: "" };
+      // 有 error（表不存在 / 无读权限）也按默认，但把原因留在控制台，便于排查「改了存不住」
+      if (error) console.warn("[测算] 读取 estimate_config 失败（用默认值）：", error.message || error);
+    } catch (e) { console.warn("[测算] 读取云端配置失败，用默认：", e); }
+  }
+  // 本地模式 / 云端无该 key：尝试 localStorage
+  try {
+    const raw = localStorage.getItem("estimate_config");
+    if (raw) { _estimateCfg = normalizeEstimateConfig(safeJsonParse(raw, null)); _estimateCfgMeta = { source: "local", at: "" }; }
+  } catch (_) {}
+  estSyncCustomItems();
+}
+
+/* 把云端/缓存配置与内核默认合并，防止缺字段导致测算崩溃 */
+function normalizeEstimateConfig(cfg) {
+  const d = (window.Estimate && Estimate.defaultConfig) ? Estimate.defaultConfig() : { params: {}, WH: {}, prices: {}, mat: {}, door: {}, expInfo: {}, history: [], qmem: {} };
+  if (!cfg || typeof cfg !== "object") return d;
+  // 配置版本（2026-11-22 引入）：一次性迁移只看 ver<2，迁完写 v:2 并落库。
+  // 以前每次 normalize 都硬改 rateNormal=30→36，用户主动设 30 元/时会"改了存不住"，
+  // 表现为"单价明明改了，价格还是默认"。——迁移必须只跑一次。
+  const ver = Number(cfg.v) || 1;
+  return {
+    v: 2,
+    params: (() => {
+      const p = { ...d.params, ...(cfg.params || {}) };
+      // 普通工 30 元/时是旧默认（≈240 元/天，低于市场 280–350/天），仅首次迁移抬到 36
+      if (ver < 2 && Number(p.rateNormal) === 30) p.rateNormal = 36;
+      return p;
+    })(),
+    WH: (cfg.WH && typeof cfg.WH === "object") ? cfg.WH : {},
+    prices: (() => {
+      const p = { ...d.prices, ...(cfg.prices || {}) };
+      // 2026-11-22 运输费单位由「元/趟」改为「元/公里」：老配置 ≥50 必是旧口径，首次迁移重置为 2，
+      // 否则老用户会按 200 元/公里计费。用户之后自己填 ≥50（不现实）也不再多管。
+      if (ver < 2 && Number(p.transport) >= 50) p.transport = 2;
+      return p;
+    })(),
+    mat: (cfg.mat && typeof cfg.mat === "object") ? cfg.mat : {},
+    // 门头工艺参数：侧包深度 0=贴墙平面（省侧包料）；非法值回默认，避免坏配置算出天价
+    door: (() => {
+      const src = { ...d.door, ...(cfg.door || {}) };
+      const num = (v, def, min, max) => { const n = Number(v); return Number.isFinite(n) && n >= min ? Math.min(n, max) : def; };
+      // 工艺增项：只保留 true 的勾选（空对象=新装默认全不勾，老单金额不变）
+      const ex = {};
+      if (src.extras && typeof src.extras === "object") {
+        Object.keys(src.extras).forEach((k) => { if (src.extras[k] === true) ex[String(k)] = true; });
+      }
+      return {
+        depth: num(src.depth, (d.door || {}).depth, 0, 2),
+        gap: num(src.gap, (d.door || {}).gap, 0.2, 2),
+        thick: num(src.thick, (d.door || {}).thick, 0, 1),
+        shape: ["rect", "slant", "arc"].includes(src.shape) ? src.shape : "rect",
+        // 灯箱灯条行距（米）：行业 15–25cm，默认 20cm；只影响「灯箱布/拉布灯箱」配方
+        lampGap: num(src.lampGap, 0.2, 0.1, 1),
+        // 铝方通/格栅中心间距（米）：行业 8–15cm，默认 12cm；只影响「铝方通/格栅门头」配方
+        lvfGap: num(src.lvfGap, 0.12, 0.05, 0.5),
+        extras: ex,
+      };
+    })(),
+    // 门头工艺增项：自定义工艺 + 被隐藏的内置工艺 key（空数组=没隐藏）
+    doorEx: Array.isArray(cfg.doorEx) ? cfg.doorEx.filter((x) => x && x.key).map((x) => {
+      const w = x.work && typeof x.work === "object" ? x.work : null;
+      const m = x.mat && typeof x.mat === "object" ? x.mat : null;
+      const byOk = (v) => ["area", "perim", "perimDepth", "canopy", "scaffold", "fixed"].includes(v) ? v : "perimDepth";
+      return {
+        key: String(x.key).slice(0, 24),
+        n: String(x.n || "未命名工艺").slice(0, 16),
+        icon: String(x.icon || "").slice(0, 4),
+        work: w && w.id ? { id: String(w.id), by: byOk(w.by), k: Math.max(0, Number(w.k) || 0), note: String(w.note || "").slice(0, 40) } : undefined,
+        mat: m && String(m.n || "").trim() ? {
+          n: String(m.n).trim().slice(0, 20), u: String(m.u || "㎡"), by: byOk(m.by),
+          k: Math.max(0, Number(m.k) || 0), p: Math.max(0, Number(m.p) || 0), sheet: !!m.sheet,
+        } : undefined,
+      };
+    }) : [],
+    doorExHide: Array.isArray(cfg.doorExHide) ? cfg.doorExHide.map(String) : [],
+    expInfo: { ...d.expInfo, ...(cfg.expInfo || {}) },
+    history: Array.isArray(cfg.history) ? cfg.history : [],
+    qmem: (cfg.qmem && typeof cfg.qmem === "object") ? cfg.qmem : {},
+    // 整套方案模板：用户可增删改，存云端全员共享；首次为空时用内核默认 7 套做骨架
+    combos: Array.isArray(cfg.combos) ? cfg.combos.map((c) => {
+      const o = {
+        n: String(c.n || "未命名模板"),
+        ids: Array.isArray(c.ids) ? c.ids.filter(Boolean) : [],
+        q: (c.q && typeof c.q === "object") ? { ...c.q } : {},
+      };
+      // 计价口径（2026-11-22）：m[id]='area'|'perim' 按面积/周长，缺省=固定数量；f[id]=系数（1 省略）
+      if (c.m && typeof c.m === "object") {
+        const m = {};
+        Object.keys(c.m).forEach((k) => { if (c.m[k] === "area" || c.m[k] === "perim") m[k] = c.m[k]; });
+        if (Object.keys(m).length) o.m = m;
+      }
+      if (c.f && typeof c.f === "object") {
+        const f = {};
+        Object.keys(c.f).forEach((k) => { const v = Number(c.f[k]); if (v > 0 && v !== 1) f[k] = v; });
+        if (Object.keys(f).length) o.f = f;
+      }
+      return o;
+    }) : JSON.parse(JSON.stringify((window.Estimate && Estimate.SCENE_COMBOS) || [])),
+    // 自定义施工项（总经理可增删改）+ 被隐藏的内置项 id（空数组=没隐藏，不能回退）
+    customItems: Array.isArray(cfg.customItems) ? cfg.customItems.filter((x) => x && String(x.n || "").trim()).map((x, i) => ({
+      id: String(x.id || ("uc_" + i + "_" + Date.now())),
+      n: String(x.n).trim(),
+      u: String(x.u || "项"),
+      h: Math.max(0, Number(x.h) || 0),
+      hf: !!x.hf,
+      wf: !!x.wf,
+      // 工种（2026-11）：老自定义项没有该字段 → 按普工，保证历史金额一分不变
+      tr: (window.Estimate && Estimate.TRADES && Estimate.TRADES[x.tr]) ? x.tr : "pg",
+      // 施工方式：说明性字段，只在导入/导出里保留，不参与算钱
+      m: String(x.m || "").slice(0, 40),
+    })) : [],
+    // 单价库（CATALOG 参考价目表）：用户可增删改，存云端全员共享。
+    // null/缺省 = 用内核默认（老用户零变化，配置不膨胀）；一旦保存过即完整快照接管。
+    catalog: Array.isArray(cfg.catalog) ? cfg.catalog
+      .filter((g) => g && typeof g === "object" && Array.isArray(g.rows))
+      .map((g) => ({
+        cat: String(g.cat || "未分类").slice(0, 40),
+        desc: String(g.desc || "").slice(0, 80),
+        rows: g.rows.map((r) => {
+          if (Array.isArray(r)) r = { id: r[0], n: r[1], p: r[2], u: r[3], note: r[4] }; // 兼容内核数组行
+          const row = {
+            id: String((r && r.id) || ("u_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6))),
+            n: String((r && r.n) || "").slice(0, 60),
+            p: Math.max(0, Number(r && r.p) || 0),
+            u: String((r && r.u) || "").slice(0, 12),
+            note: String((r && r.note) || "").slice(0, 80),
+          };
+          // 老单价库快照里的「市内运输 200元/趟 / 跨区 300元/趟」同步迁到按公里口径（首次迁移）
+          if ((row.id === "calc:transport" || row.id === "t_cross") && (row.u === "元/趟" || (ver < 2 && row.p >= 50))) {
+            row.u = "元/公里"; row.p = 2;
+            row.note = row.id === "calc:transport"
+              ? "按实际公里数×单价；测算器填里程自动算，勿与手加运输项重复"
+              : "同市内口径，夜间加价30%–50%";
+          }
+          return row;
+        }).filter((r) => r.n),
+      })) : null,
+    hiddenItems: Array.isArray(cfg.hiddenItems) ? cfg.hiddenItems.filter(Boolean).map(String) : [],
+    // 内置定额项覆盖（2026-11-22）：{id:{n?,u?,tr?,m?,hf?,wf?}}，只留白名单字段，空对象/非法值直接丢。
+    // 与默认值相同的字段在 estItemOvSet 里已剔除，这里再兜一层，防导入坏配置把内置项改乱。
+    itemOverrides: (() => {
+      const src = (cfg.itemOverrides && typeof cfg.itemOverrides === "object" && !Array.isArray(cfg.itemOverrides)) ? cfg.itemOverrides : {};
+      const out = {};
+      Object.keys(src).forEach((id) => {
+        const o = src[id];
+        if (!o || typeof o !== "object") return;
+        const v = {};
+        const n = String(o.n == null ? "" : o.n).trim();
+        const u = String(o.u == null ? "" : o.u).trim();
+        const m = String(o.m == null ? "" : o.m).trim();
+        if (n) v.n = n.slice(0, 40);
+        if (u) v.u = u.slice(0, 8);
+        if (m) v.m = m.slice(0, 40);
+        if (window.Estimate && Estimate.TRADES && Estimate.TRADES[o.tr]) v.tr = o.tr;
+        if (o.hf === true || o.hf === false) v.hf = o.hf;
+        if (o.wf === true || o.wf === false) v.wf = o.wf;
+        if (Object.keys(v).length) out[String(id).slice(0, 40)] = v;
+      });
+      return out;
+    })(),
+    // 同义词映射（2026-11-22）：{词: 定额项id}，未识别词一键绑定后全员共享，优先于内核 SMART_DICT。
+    // 只做基本清洗，不校验 id 是否存在——自定义项可能随后才同步进内核，误删映射就是丢学习成果。
+    synonyms: (cfg.synonyms && typeof cfg.synonyms === "object" && !Array.isArray(cfg.synonyms))
+      ? Object.keys(cfg.synonyms).reduce((m, k) => {
+          const key = String(k).trim().slice(0, 24);
+          const id = String(cfg.synonyms[k] || "").trim();
+          if (key && id) m[key] = id;
+          return m;
+        }, {}) : {},
+  };
+}
+
+/* ===== 施工项增删：把用户自定义项/隐藏项同步进内核数组（内核 estimate.js 一行不改）=====
+   内核导出的 WORK_ITEMS / WORK_GROUPS 是数组引用，getWorkItem 闭包内读的就是同一份，
+   因此 push/splice 即可让自定义项走完整定额计价（高度/墙面系数、WH 校准全部生效）。 */
+let _estBuiltinItems = null;   // 内核原始定额项快照，供“隐藏/恢复内置项”使用
+let _estBuiltinGroups = null;  // 内核原始工作组快照（同上）
+function estBuiltinItems() {
+  if (!_estBuiltinItems && window.Estimate && Array.isArray(Estimate.WORK_ITEMS)) {
+    _estBuiltinItems = Estimate.WORK_ITEMS.filter((x) => !x._ggCustom).map((x) => ({ ...x }));
+    _estBuiltinGroups = (Estimate.WORK_GROUPS || []).filter((g) => !g._ggCustom)
+      .map((g) => ({ ...g, rows: (g.rows || []).map((r) => [...r]) }));
+  }
+  return _estBuiltinItems || [];
+}
+function estSyncCustomItems() {
+  if (!window.Estimate || !Array.isArray(Estimate.WORK_ITEMS)) return;
+  const builtins = estBuiltinItems(); // 快照必须在重建之前抓（首次调用时内核数组还是完整的）
+  const c = estCfg();
+  const hide = new Set(c.hiddenItems || []);
+  const ovs = c.itemOverrides || {};
+  // 每次从原始快照重建：否则隐藏项被 splice 掉后，取消隐藏时无法在同一会话内恢复
+  const wi = Estimate.WORK_ITEMS;
+  wi.length = 0;
+  builtins.forEach((it) => {
+    if (hide.has(it.id)) return;
+    const ov = ovs[it.id];
+    wi.push(ov ? { ...it, ...ov } : { ...it });
+  });
+  const groups = Estimate.WORK_GROUPS;
+  if (Array.isArray(groups) && _estBuiltinGroups) {
+    groups.length = 0;
+    _estBuiltinGroups.forEach((g) => {
+      const rows = (g.rows || []).filter((r) => !hide.has(r[0]));
+      if (!rows.length) return;
+      groups.push({
+        ...g,
+        // 行格式 [id,名,单位,工时,hf,wf,工种,施工方式]：覆盖名称/单位/工种，让常用项/下拉也显示改后的值
+        rows: rows.map((r) => {
+          const ov = ovs[r[0]];
+          if (!ov) return [...r];
+          const rr = [...r];
+          if (ov.n) rr[1] = ov.n;
+          if (ov.u) rr[2] = ov.u;
+          if (ov.tr) rr[6] = ov.tr;
+          return rr;
+        }),
+      });
+    });
+  }
+  const custom = (c.customItems || []).filter((x) => !hide.has(x.id));
+  custom.forEach((it) => wi.push({
+    id: it.id, n: it.n, u: it.u, h: it.h,
+    hf: !!it.hf, wf: !!it.wf, tr: it.tr || "pg", m: it.m || "",
+    g: it.g || "自定义施工项", _ggCustom: true,
+  }));
+  if (custom.length && Array.isArray(groups)) {
+    groups.push({
+      g: "自定义施工项", _ggCustom: true,
+      rows: custom.map((it) => [it.id, it.n, it.u, it.h, it.hf ? 1 : 0, it.wf ? 1 : 0, it.tr || "pg", it.m || ""]),
+    });
+  }
+}
+/* 智能拆解/批量文本也要认自定义项名称 */
+function estParseWithCustom(txt) {
+  const hits = (window.Estimate && Estimate.parseSpec)
+    ? (Estimate.parseSpec(txt, { synonyms: estCfg().synonyms }) || []) : [];
+  const custom = (estCfg().customItems || []);
+  custom.forEach((it) => {
+    if (String(txt).includes(it.n) && !hits.some((h) => h.n === it.n)) {
+      hits.push({ type: "lib", id: it.id, n: it.n, u: it.u, q: 1 });
+    }
+  });
+  return hits;
+}
+
+/* 智能拆解模糊候选（2026-11-22）：输入分词 → 与定额/自定义项名双向包含匹配，取最接近的给点选。
+   内核 parseSpec 认不出的词（如「围挡」「桁架」的非标准写法）不再静默丢弃。 */
+function estFuzzyCandidates(txt) {
+  const stops = /^(安装|施工|制作|更换|调试|固定|运输|清运|搬运|处理|人工|材料|现场|需要|要|先|再|然后|做|进行|全部|都|及|和|的|了)$/;
+  const toks = String(txt || "").split(/[,，、；;。！!？?\s]+/)
+    .map((s) => s.replace(/^\d+(?:\.\d+)?\s*(?:个|块|张|面|根|套|幅|条|件|处|片|只|支|台|组|米|㎡)?/, "").replace(/^(?:需要|要先|要|先|再|然后|做|进行|全部)+/, "").trim())
+    .filter((s) => s.length >= 2 && !stops.test(s));
+  const items = (window.Estimate && Estimate.WORK_ITEMS) || [];
+  const scored = new Map();
+  toks.forEach((t) => {
+    items.forEach((it) => {
+      const n = String(it.n || "");
+      let sc = 0;
+      if (n === t) sc = 100;
+      else if (n.includes(t)) sc = 60 + Math.min(n.length, 20);
+      else if (t.includes(n) && n.length >= 2) sc = 50 + n.length;
+      if (!sc) return;
+      const cur = scored.get(it.id);
+      if (!cur || cur.sc < sc) scored.set(it.id, { it, sc, token: t });
+    });
+  });
+  return Array.from(scored.values()).sort((a, b) => b.sc - a.sc).slice(0, 12)
+    .map((x) => ({ id: x.it.id, n: x.it.n, u: x.it.u, token: x.token }));
+}
+function estOpenCandidates(cands) {
+  estShowDrawer("没直接认出施工项，有接近的吗？", `
+    <div class="est-cfg-tip">按输入词语模糊匹配的最接近项（右侧是命中的词）。勾选后点下方按钮加入清单，数量/单价可再改。</div>
+    ${cands.map((c) => `<label class="est-item-bi"><input type="checkbox" data-fc="${esc(c.id)}" checked/><span>${esc(c.n)}</span><em>${esc(c.u)} · 「${esc(c.token)}」</em></label>`).join("")}
+    <div class="est-cfg-save">
+      <button class="btn primary" onclick="estAddCandidates()">加入清单</button>
+      <button class="btn outline" onclick="estCloseDrawer()">取消</button>
+    </div>`);
+}
+/* 未识别词收集（本机 localStorage）：智能拆解没直接认出时记整句+次数，
+   管理页可查看/复制/清空——积累实际语料后批量整理成同义词映射，识别率数据驱动提升。 */
+const EST_UNKNOWN_KEY = "gg_est_unknown_v1";
+function estUnknownLoad() {
+  try { const a = safeJsonParse(localStorage.getItem(EST_UNKNOWN_KEY), []); return Array.isArray(a) ? a : []; }
+  catch (_) { return []; }
+}
+function estUnknownLog(txt, hadCands) {
+  const t = String(txt || "").trim().slice(0, 120);
+  if (!t) return;
+  try {
+    const list = estUnknownLoad();
+    const hit = list.find((x) => x.t === t);
+    if (hit) { hit.n = (Number(hit.n) || 1) + 1; hit.at = new Date().toISOString(); hit.c = !!hadCands; }
+    else list.unshift({ t, n: 1, at: new Date().toISOString(), c: !!hadCands });
+    localStorage.setItem(EST_UNKNOWN_KEY, JSON.stringify(list.slice(0, 200)));
+  } catch (_) {}
+}
+/* 定额项下拉（未识别词绑定 / 同义词管理共用），按内核分组 optgroup，含自定义项 */
+function estItemOptionsHtml(selected) {
+  const E = window.Estimate;
+  const groups = (E && E.WORK_GROUPS) || [];
+  const used = new Set();
+  let html = groups.map((g) => {
+    const rows = (g.rows || []).filter((r) => r && r[0] && r[1] && !used.has(r[0]));
+    rows.forEach((r) => used.add(r[0]));
+    if (!rows.length) return "";
+    return `<optgroup label="${esc(g.g || "施工项")}">${rows.map((r) => `<option value="${esc(r[0])}"${r[0] === selected ? " selected" : ""}>${esc(r[1])}（${esc(r[0])}）</option>`).join("")}</optgroup>`;
+  }).join("");
+  const rest = ((E && E.WORK_ITEMS) || []).filter((it) => it && it.id && !used.has(it.id));
+  if (rest.length) html += `<optgroup label="其他">${rest.map((it) => `<option value="${esc(it.id)}"${it.id === selected ? " selected" : ""}>${esc(it.n)}（${esc(it.id)}）</option>`).join("")}</optgroup>`;
+  return html;
+}
+function estSynItemName(id) {
+  const it = ((window.Estimate && Estimate.WORK_ITEMS) || []).find((x) => x.id === id);
+  return it ? it.n : id;
+}
+function estOpenUnknownDrawer() {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  const list = estUnknownLoad();
+  const synN = Object.keys(estCfg().synonyms || {}).length;
+  const items = list.length ? list.map((x, i) => `
+    <div class="est-unk-item">
+      <div class="est-unk-meta">
+        <span class="est-unk-n">${esc(x.t)}</span>
+        <em>${Number(x.n) || 1} 次 · ${esc((x.at || "").slice(0, 10))}${x.c ? " · 有候选" : ""}</em>
+        <button class="hl" onclick="estUnknownDel(${i})">删</button>
+      </div>
+      <div class="est-unk-bind">
+        <input class="input est-unk-word" id="estUkW${i}" maxlength="24" value="${esc(String(x.t || "").slice(0, 24))}" title="实际要绑定的词，可改短（如「指引牌」）" />
+        <select class="input est-unk-sel" id="estUnS${i}" title="绑定到哪个施工项"><option value="">选择施工项…</option>${estItemOptionsHtml("")}</select>
+        <button class="btn small primary" onclick="estUnknownBind(${i})">绑定</button>
+      </div>
+    </div>`).join("") : `<div class="est-result-empty">暂无记录。智能拆解没认出输入时会自动记到这里（仅存本机，最多 200 条）。</div>`;
+  estShowDrawer("🧾 未识别词记录", `
+    <div class="est-cfg-tip">智能拆解「没直接认出施工项」时自动记录的原始输入（含走了模糊候选的）。每行填要识别的词、选对应施工项，点「绑定」后立即全员生效，下次直接识别。</div>
+    <div class="est-cfg-save" style="margin-bottom:10px;">
+      <button class="btn small outline" onclick="estOpenSynonyms()">🔗 同义词管理 (${synN})</button>
+      <button class="btn small outline" onclick="estUnknownCopy()">📋 复制全部</button>
+      <button class="btn small outline" onclick="estUnknownClear()">清空</button>
+    </div>
+    <div>${items}</div>`);
+}
+/* 一键绑定：词 → 定额项，写进 estimate_config.synonyms（云端全员共享），并从本机未识别词里移除 */
+async function estUnknownBind(i) {
+  const list = estUnknownLoad();
+  if (!list[i]) return;
+  const word = String(document.getElementById("estUkW" + i)?.value || "").trim().slice(0, 24);
+  const id = document.getElementById("estUnS" + i)?.value || "";
+  if (!word || !id) { toast("填写词语并选择施工项"); return; }
+  const syn = { ...(estCfg().synonyms || {}) };
+  syn[word] = id;
+  estCfg().synonyms = syn;
+  const ok = await saveEstimateConfig(estCfg());
+  if (!ok) return;
+  list.splice(i, 1);
+  try { localStorage.setItem(EST_UNKNOWN_KEY, JSON.stringify(list)); } catch (_) {}
+  toast("已绑定「" + word + "」→ " + estSynItemName(id) + "，下次直接识别");
+  estOpenUnknownDrawer();
+}
+/* 同义词可视化管理：查看/新增/删除全员共享的 词→定额项 映射 */
+function estOpenSynonyms() {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  const syn = estCfg().synonyms || {};
+  const keys = Object.keys(syn);
+  const items = keys.length ? keys.map((k, i) => `
+    <div class="est-syn-row">
+      <span title="${esc(k)}">${esc(k)}</span>
+      <em>→ ${esc(estSynItemName(syn[k]))}</em>
+      <button class="hl" onclick="estSynDel(${i})">删</button>
+    </div>`).join("") : `<div class="est-result-empty">还没有自定义同义词。在「未识别词」里一键绑定，或在下面直接添加。</div>`;
+  estShowDrawer("🔗 同义词管理（全员共享）", estCfgHubTabs("syn") + `
+    <div class="est-cfg-tip">智能拆解优先匹配这里的词，命中即直接出定额项；多个词可指向同一项。只学词语映射，不改金额、工时单价。</div>
+    <div class="est-syn-add">
+      <input class="input" id="estSynWord" maxlength="60" placeholder="词语（多个用空格/逗号分隔）" />
+      <select class="input" id="estSynItem"><option value="">选择施工项…</option>${estItemOptionsHtml("")}</select>
+      <button class="btn primary" onclick="estSynAdd()">添加</button>
+    </div>
+    <div class="est-syn-list">${items}</div>
+    <div class="est-cfg-save" style="margin-top:12px;">
+      <button class="btn small outline" onclick="estOpenUnknownDrawer()">返回未识别词</button>
+    </div>`);
+}
+async function estSynAdd() {
+  const raw = String(document.getElementById("estSynWord")?.value || "");
+  const id = document.getElementById("estSynItem")?.value || "";
+  if (!id) { toast("先选施工项"); return; }
+  const words = raw.split(/[,，、\s]+/).map((s) => s.trim().slice(0, 24)).filter(Boolean);
+  if (!words.length) { toast("先填词语"); return; }
+  const syn = { ...(estCfg().synonyms || {}) };
+  words.forEach((w) => { syn[w] = id; });
+  estCfg().synonyms = syn;
+  const ok = await saveEstimateConfig(estCfg());
+  if (ok) { toast("已添加 " + words.length + " 条同义词"); estOpenSynonyms(); }
+}
+async function estSynDel(i) {
+  const syn = { ...(estCfg().synonyms || {}) };
+  const keys = Object.keys(syn);
+  if (!keys[i]) return;
+  const word = keys[i];
+  delete syn[word];
+  estCfg().synonyms = syn;
+  const ok = await saveEstimateConfig(estCfg());
+  if (ok) { toast("已删除「" + word + "」"); estOpenSynonyms(); }
+}
+function estUnknownDel(i) {
+  const list = estUnknownLoad();
+  if (!list[i]) return;
+  list.splice(i, 1);
+  try { localStorage.setItem(EST_UNKNOWN_KEY, JSON.stringify(list)); } catch (_) {}
+  estOpenUnknownDrawer();
+}
+function estUnknownCopy() {
+  const list = estUnknownLoad();
+  if (!list.length) { toast("暂无记录"); return; }
+  copyText(list.map((x) => `${x.t}（${Number(x.n) || 1}次${x.c ? "，有候选" : ""}）`).join("\n"), () => toast("已复制 " + list.length + " 条"));
+}
+function estUnknownClear() {
+  if (!confirm("清空全部未识别词记录？")) return;
+  try { localStorage.removeItem(EST_UNKNOWN_KEY); } catch (_) {}
+  estOpenUnknownDrawer();
+}
+
+function estAddCandidates() {
+  if (!_estUI) return;
+  const ids = [];
+  document.querySelectorAll("#estDrawer [data-fc]").forEach((cb) => { if (cb.checked) ids.push(cb.dataset.fc); });
+  if (!ids.length) { toast("没勾选任何项"); return; }
+  let n = 0;
+  ids.forEach((id) => {
+    const it = ((window.Estimate && Estimate.WORK_ITEMS) || []).find((x) => x.id === id);
+    if (!it) return;
+    estAddWork({ type: "lib", id: it.id, n: it.n, u: it.u, q: 1 });
+    n++;
+  });
+  if (n) { renderEstimateWorkList(); estRecalc(); estCloseDrawer(); toast("已加入 " + n + " 项，数量可改"); }
+}
+
+/* 保存全局测算配置：仅 manager / 被授予 estimate_manage 的用户可写（RLS 也拦一层）。
+   value 是 jsonb，整包存一个对象。其他成员下次刷新后生效。
+   2026-11-22 加两道诊断：①失败按错误码给出人话原因；②成功后**回读一次**确认真的落库，
+   避免 upsert "看起来成功、实际读不到"（RLS 只写不读）时用户以为存住了。 */
+async function saveEstimateConfig(cfg) {
+  const merged = normalizeEstimateConfig(cfg);
+  _estimateCfg = merged;
+  estSyncCustomItems();
+  if (MODE === "cloud" && sb) {
+    const nowIso = new Date().toISOString();
+    const { error } = await sb.from("app_settings").upsert(
+      { key: "estimate_config", value: merged, updated_at: nowIso, updated_by: currentUser ? currentUser.id : null },
+      { onConflict: "key" }
+    );
+    if (error) {
+      console.error("[测算] 保存云端配置失败：", error);
+      const msg = String(error.message || "");
+      const code = String(error.code || "");
+      let why = msg || "请重试";
+      if (code === "42501" || /row-level security|permission denied/i.test(msg)) {
+        why = "没有写入权限：estimate_config 只有总经理（或被授予「测算管理 estimate_manage」的账号）能存";
+      } else if (code === "42P01" || /relation .*app_settings.* does not exist/i.test(msg)) {
+        why = "app_settings 表不存在，请先在 Supabase SQL Editor 执行建表语句（supabase_schema.sql）";
+      } else if (code === "23505") {
+        why = "主键冲突：app_settings 里存在重复的 estimate_config 行";
+      }
+      toast("保存失败：" + why, 6000);
+      return false;
+    }
+    // 回读校验：确认这条真的在服务器上、且时间就是刚才那次
+    let at = nowIso, readBack = true;
+    try {
+      const { data, error: e2 } = await sb.from("app_settings").select("updated_at").eq("key", "estimate_config").maybeSingle();
+      if (e2 || !data) readBack = false;
+      else at = data.updated_at || nowIso;
+    } catch (_) { readBack = false; }
+    _estimateCfgMeta = { source: readBack ? "cloud" : "default", at };
+    estCfgDirtyClear();
+    if (!readBack) {
+      toast("已提交保存，但读不回这条配置（可能只有写权限、没有读权限）。刷新后如仍显示默认值，请检查 app_settings 的 RLS 策略", 7000);
+      return true;
+    }
+    const t = new Date(at);
+    const hh = String(t.getHours()).padStart(2, "0"), mm = String(t.getMinutes()).padStart(2, "0");
+    toast(`测算参数已保存到云端（${hh}:${mm}），全员下次刷新生效`);
+    return true;
+  }
+  try { localStorage.setItem("estimate_config", JSON.stringify(merged)); } catch (_) {}
+  _estimateCfgMeta = { source: "local", at: new Date().toISOString() };
+  estCfgDirtyClear();
+  toast("测算参数已保存到本机（当前是本地单机模式，未连 Supabase）");
+  return true;
+}
+
+/* 运输里程单价唯一真源（2026-11-22）：单价库「市内运输」行的单价（元/公里）。
+   以前里程读 prices.transport（¥2），单价库里却显示另一价（如 ¥3），两处打架。
+   现在单价库行优先，参数面板的「运输（元/公里）」在保存时与它双向同步；
+   单价库未保存过/删掉该行时回退 prices.transport。 */
+function estTransportRate() {
+  const cats = estCatalog() || [];
+  for (const g of cats) {
+    const row = (g.rows || []).find((r) => r && r.id === "calc:transport");
+    if (row && /公里/.test(row.u || "") && Number(row.p) > 0) return Number(row.p);
+  }
+  return Number((estCfg().prices || {}).transport) || 0;
+}
+
+/* 构造传给内核 calculate 的 ctx（从当前配置读取 params/WH + 本次高度/墙面/里程） */
+function estCalcCtx(height, wall) {
+  const c = estCfg();
+  return {
+    params: c.params, WH: c.WH, height: height || "low", wall: wall || "flat",
+    distanceKm: _estUI ? (_estUI.distanceKm || 0) : 0,
+    transportRate: estTransportRate(), // 单价库「市内运输」元/公里（见上）
+    roundTrip: _estUI ? !!_estUI.roundTrip : false,            // 往返（里程×2）
+    equipDays: _estUI ? (Number(_estUI.equipDays) || 0) : 0,   // 本单设备天数覆盖（0=按自动/配置）
+  };
+}
+
+/* 生成测算快照（写入 projects.cost_estimate，纯参考，不进金额链） */
+function buildCostEstimate(work, result, ctx, items) {
+  return {
+    v: 1,
+    at: new Date().toISOString(),
+    by: currentProfile ? (currentProfile.id || null) : null,
+    items: normalizeWorkItems(items), // 施工明细（内容/数量/单位/工时/备注），与测算 work/rows 同快照
+    work: (work || []).map((w) => ({ n: w.n, u: w.u, q: w.q, id: w.id || "", calc: w.calc || "", isMat: !!w.isMat, kind: w.kind || "", p: w.p, cid: w.cid || "", mode: w.mode || "", h: w.h, tr: w.tr })),
+    // id 带上定额项 id：完工后「按项反推工时」要按 id 把实际工时分摊回具体项
+    // （老快照没有 id，反推时按 work/rows 顺序对齐并校验行数，对不齐就跳过该单）
+    rows: (result && result.rows || []).map((r) => ({ id: (r.it && r.it.id) || "", n: r.n, u: r.u, q: r.q, hours: r.hours, fee: r.fee, isMat: !!r.isMat, note: r.note || "" })),
+    totalHours: result ? Math.round(result.totalHours * 100) / 100 : 0,
+    labor: result ? Math.round(result.labor * 100) / 100 : 0,
+    equip: result ? Math.round(result.equip * 100) / 100 : 0,
+    equipDays: result ? (result.equipDays || 1) : 1,
+    transportFee: result ? Math.round((result.transportFee || 0) * 100) / 100 : 0,
+    distanceKm: ctx ? (Number(ctx.distanceKm) || 0) : 0,
+    roundTrip: ctx ? !!ctx.roundTrip : false,
+    matFee: result ? Math.round(result.matFee * 100) / 100 : 0,
+    auxFee: result ? Math.round((result.auxFee || 0) * 100) / 100 : 0,
+    auxRatio: result ? (result.auxRatio || 0) : 0,
+    construction: result ? Math.round(result.construction * 100) / 100 : 0,
+    grand: result ? Math.round(result.grand * 100) / 100 : 0,
+    crew: result && result.crew ? { people: result.crew.people, planDays: result.crew.planDays, level: result.crew.level } : null,
+    // rate 保留旧字段（normal/high）不删，新增 trades 记录本单各工种单价，便于事后复核"为什么这么算"
+    params: {
+      height: ctx && ctx.height, wall: ctx && ctx.wall,
+      rate: ctx && ctx.params ? { normal: ctx.params.rateNormal, high: ctx.params.rateHigh } : null,
+      trades: (ctx && ctx.params && window.Estimate && Estimate.TRADES)
+        ? Object.keys(Estimate.TRADES).reduce((m, k) => { m[k] = Number(ctx.params[Estimate.TRADES[k].k]) || 0; return m; }, {})
+        : null,
+    },
+  };
+}
+
+/* ---------- 测算器 UI（独立弹窗，不占 modal 单例，避免覆盖项目表单） ----------
+ * 调用：openEstimateModal({ projectId, mode:'standalone'|'insert', onInsert(result,snapshot) })
+ *   mode='insert'：从项目表单/详情进入，底部显示「插入到项目」按钮
+ *   mode='standalone'：菜单独立入口，底部显示「复制报价单」
+ */
+/* ========== 测算历史（存本机 localStorage，不入全员共享的 estimate_config）==========
+   原因：estimate_config 仅 manager 可写、全员共享；历史属个人临时报价，写入会冲突且施工人员无权限。
+   原测算器也是存本机。每条含完整清单 work + 高度/墙面/报价，载入即原样复原。 */
+const EST_HISTORY_KEY = "gg_estimate_history_v1";
+const EST_HISTORY_MAX = 30;
+function estHistoryLoad() {
+  try {
+    const arr = safeJsonParse(localStorage.getItem(EST_HISTORY_KEY), []);
+    return Array.isArray(arr) ? arr : [];
+  } catch (_) { return []; }
+}
+function estHistorySave(list) {
+  try {
+    localStorage.setItem(EST_HISTORY_KEY, JSON.stringify((list || []).slice(0, EST_HISTORY_MAX)));
+    return true;
+  } catch (_) { toast("历史保存失败：本机存储空间不足"); return false; }
+}
+/* 保存当前测算为一条历史 */
+function estSaveHistory() {
+  if (!_estUI || !_estUI.work || !_estUI.work.length) { toast("清单是空的，先加施工项"); return; }
+  if (!_estUI.result) estRecalc();
+  const r = _estUI.result;
+  const defName = "测算 " + new Date().toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const name = prompt("给这份测算起个名字：", defName);
+  if (name === null) return;
+  const rec = {
+    id: Date.now(),
+    name: (name.trim() || defName).slice(0, 40),
+    at: new Date().toLocaleString("zh-CN"),
+    total: r ? Math.round(r.grand * 100) / 100 : 0,
+    hours: r ? Math.round(r.totalHours * 10) / 10 : 0,
+    work: JSON.parse(JSON.stringify(_estUI.work)),
+    height: _estUI.height,
+    wall: _estUI.wall,
+    distanceKm: _estUI.distanceKm || 0,
+  };
+  const list = estHistoryLoad();
+  list.unshift(rec);
+  if (estHistorySave(list)) {
+    if (_estUI) _estUI.autoHistId = null; // 手动命名保存后，后续编辑开新的自动记录，不覆盖手动命名条
+    toast("已保存到测算历史"); estOpenHistory();
+  }
+}
+
+/* 自动保存（防抖）：清单变化且出结果后 1.2s 写入一条「自动·时间」历史；
+   同一会话持续编辑只更新同一条（_estUI.autoHistId），手动保存/载入/清空后重置开新条。
+   自动条最多保留 10 条，防止挤掉手动命名的历史。 */
+let _estAutoTimer = null;
+function scheduleEstAutoSave() {
+  if (_estAutoTimer) clearTimeout(_estAutoTimer);
+  _estAutoTimer = setTimeout(() => { _estAutoTimer = null; estAutoSaveCommit(); }, 1200);
+}
+function estAutoSaveCommit() {
+  if (!_estUI) return;
+  const list = estHistoryLoad();
+  if (!_estUI.work.length || !_estUI.result) {
+    // 清空后：把本会话的自动记录也删掉，避免留一份过时快照
+    if (_estUI.autoHistId) {
+      const rest = list.filter((x) => x.id !== _estUI.autoHistId);
+      if (rest.length !== list.length) estHistorySave(rest);
+      _estUI.autoHistId = null;
+    }
+    return;
+  }
+  const r = _estUI.result;
+  const nowName = "自动·" + new Date().toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const pack = () => ({
+    total: Math.round(r.grand * 100) / 100,
+    hours: Math.round(r.totalHours * 10) / 10,
+    work: JSON.parse(JSON.stringify(_estUI.work)),
+    height: _estUI.height, wall: _estUI.wall,
+    distanceKm: _estUI.distanceKm || 0,
+  });
+  let rec = _estUI.autoHistId ? list.find((x) => x.id === _estUI.autoHistId) : null;
+  if (rec) { Object.assign(rec, { name: nowName, at: new Date().toLocaleString("zh-CN") }, pack()); }
+  else {
+    rec = { id: Date.now() + "_" + Math.random().toString(36).slice(2, 5), name: nowName, at: new Date().toLocaleString("zh-CN"), ...pack() };
+    list.unshift(rec);
+    _estUI.autoHistId = rec.id;
+  }
+  // 自动条限流：超过 10 条删最旧自动条（不动手动命名条）
+  const autos = list.filter((x) => String(x.name || "").startsWith("自动"));
+  if (autos.length > 10) {
+    const drop = new Set(autos.slice(10).map((x) => x.id));
+    if (_estUI.autoHistId && drop.has(_estUI.autoHistId)) _estUI.autoHistId = rec.id;
+    estHistorySave(list.filter((x) => !drop.has(x.id)));
+  } else estHistorySave(list);
+}
+
+/* 历史抽屉：搜索 + 列表 + 保存当前按钮 */
+let _estHistKw = "";
+function estFilterHistory(v) { _estHistKw = v || ""; estRenderHistList(); }
+function estRenderHistList() {
+  const box = document.getElementById("estHistList");
+  if (!box) return;
+  const kw = (_estHistKw || "").trim().toLowerCase();
+  const all = estHistoryLoad();
+  const list = all.filter((h) => !kw || [h.name, h.at].filter(Boolean).join(" ").toLowerCase().includes(kw));
+  const items = list.length ? list.map((h) => {
+    // 必须从同一份 all 数组取索引：estHistoryLoad() 每次重新 JSON.parse，跨调用 indexOf 恒为 -1（2026-11-22 载入/复制无反应根因）
+    const i = all.indexOf(h);
+    const cnt = (h.work || []).length;
+    const hn = { low: "低空", mid: "中空", high: "高空" }[h.height] || "低空";
+    const wn = { flat: "平整墙", tile: "保温墙", glass: "幕墙" }[h.wall] || "平整墙";
+    return `<div class="est-hist-item">
+      <div class="est-hist-top"><span class="est-hist-name">${esc(h.name || "未命名测算")}</span><span class="est-hist-amt">${fmtEstMoney(h.total)}</span></div>
+      <div class="est-hist-meta">${esc(h.at || "")} · ${cnt} 项 · ${hn}/${wn} · ${fmtEstHours(h.hours)}</div>
+      <div class="est-hist-acts">
+        <button class="hl" onclick="estLoadHistory(${i})">载入</button>
+        <button onclick="estCopyHistory(${i})">复制</button>
+        <button class="del" onclick="estDelHistory(${i})">删除</button>
+      </div>
+    </div>`;
+  }).join("") : `<div class="est-result-empty">${kw ? "没有匹配的历史" : "还没有保存过测算。改清单后会自动存一条「自动·时间」记录，也可点「💾 保存当前测算」命名保存。"}</div>`;
+  box.innerHTML = items;
+}
+function estOpenHistory() {
+  estShowDrawer("🕒 测算历史（本机保存）", `
+    <div class="est-cfg-tip">历史仅存这台设备，可载入复用整份清单（施工项 / 单价 / 高度墙面都还原），不影响项目金额链。改清单后自动保存，也可命名保存。</div>
+    <input class="input" placeholder="搜索名称 / 日期…" value="${esc(_estHistKw)}" oninput="estFilterHistory(this.value)" style="margin-bottom:10px;"/>
+    <button class="btn primary" style="width:100%;margin-bottom:10px;" onclick="estSaveHistory()">💾 保存当前测算</button>
+    <div id="estHistList"></div>`);
+  estRenderHistList();
+}
+
+/* 载入历史：原样恢复清单 + 高度/墙面/报价，重算。当前清单非空时先确认，避免误覆盖 */
+function estLoadHistory(i) {
+  const h = estHistoryLoad()[i];
+  if (!h) return;
+  if (_estUI && _estUI.work.length && !confirm("载入会替换当前清单，确定？")) return;
+  if (!_estUI) openEstimateModal({ mode: "standalone" });
+  _estUI.work = Array.isArray(h.work) ? JSON.parse(JSON.stringify(h.work)) : [];
+  _estUI.autoHistId = null; // 载入的历史条不被自动保存覆盖，后续编辑开新自动条
+  _estUI.height = h.height || "low";
+  _estUI.wall = h.wall || "flat";
+  _estUI.distanceKm = Number(h.distanceKm) || 0;
+  _estUI.equipDays = 0; // 历史不存设备天数覆盖，载入后回到自动
+  _estUI.lastParsedText = ""; // 载入历史是全新会话，原文可再拆解
+  const eh = document.getElementById("estHeight"), ew = document.getElementById("estWall");
+  const ed = document.getElementById("estDistanceKm");
+  if (eh) eh.value = _estUI.height;
+  if (ew) ew.value = _estUI.wall;
+  if (ed) ed.value = _estUI.distanceKm;
+  estRenderAdvanced(); // 高度/墙面是 chips：状态改了要重画
+  const ti = document.getElementById("estInput"); if (ti) ti.value = "";
+  const gh = document.getElementById("estGlowHint"); if (gh) gh.hidden = true;
+  _estUI.doorExtras = {}; // 历史清单里已带工艺项，勾选状态清空避免再叠一次
+  estRenderDoorExtras();
+  renderEstimateWorkList();
+  estRecalc();
+  estUpdateDistCalc();
+  toast("已载入：" + (h.name || "测算"));
+}
+
+/* 复制历史清单为文本 */
+function estCopyHistory(i) {
+  const h = estHistoryLoad()[i];
+  if (!h) return;
+  const lines = [`【${h.name || "测算"}】`, `${h.at || ""} · ${fmtEstHours(h.hours)}`, ""];
+  (h.work || []).forEach((w) => {
+    if (!w) return;
+    if (w.isMat || w.kind === "mat") lines.push(`[材料] ${w.n || "材料"}  ${w.q}${w.u || ""} × ${fmtEstMoney(w.p || 0)}`);
+    else if (w.cid) lines.push(`${w.n || "专项项"}  ${w.q}${w.u || ""} × ${fmtEstMoney(w.p || 0)}`);
+    else lines.push(`${w.n || w.id || "施工项"}  ${w.q}${w.u || ""}`);
+  });
+  lines.push("——————", `施工费合计 ${fmtEstMoney(h.total)}`);
+  copyText(lines.join("\n"), () => toast("已复制测算清单"));
+}
+
+/* 删除一条历史 */
+function estDelHistory(i) {
+  if (!confirm("删除这条测算历史？")) return;
+  const list = estHistoryLoad();
+  if (!list[i]) return;
+  list.splice(i, 1);
+  if (estHistorySave(list)) { toast("已删除"); estOpenHistory(); }
+}
+
+let _estUI = null; // 当前测算器会话状态
+
+function openEstimateModal(opts) {
+  opts = opts || {};
+  const isMobile = window.innerWidth <= 768;
+  _estUI = {
+    projectId: opts.projectId || "",
+    mode: opts.mode || "standalone",
+    onInsert: opts.onInsert || null,
+    items: normalizeWorkItems(opts.items || []), // 带入来源项目的施工明细，测算插入时保留并补数量/工时
+    work: [],
+    height: "low",
+    wall: "flat",
+    distanceKm: 0, // 本单运输里程（公里），按单价库 transport 元/公里自动算车费
+    roundTrip: false,   // 运输是否往返（里程×2）
+    equipDays: 0,       // 本单设备天数覆盖（0=自动跟随建议工期/配置）
+    lastParsedText: "", // 上次已成功拆解的原文；原文保留供查看/修改，但相同文本不重复累加
+    doorExtras: { ...((estCfg().door || {}).extras || {}) }, // 门头工艺勾选（本单；默认值来自配置）
+    result: null,
+    ctx: null,
+    expInfo: (() => {
+      let saved = null;
+      try { saved = safeJsonParse(localStorage.getItem("estimate_expinfo"), null); } catch (_) {}
+      return { ...(estCfg().expInfo || {}), ...(saved || {}) };
+    })(),
+  };
+  // 若从项目带入施工内容文本，预填到输入框
+  const prefill = opts.prefill || "";
+  let old = document.getElementById("estimateModal");
+  if (old) old.remove();
+  if (_estMinimized) { _estMinimized = false; window._estFormModal = null; renderModalMinDock(); } // 重开=弃掉最小化实例
+  const popup = document.createElement("div");
+  popup.id = "estimateModal";
+  popup.className = "modal-mask";
+  popup.style.zIndex = "150"; // 低于 #modal(200)：导出信息面板用 modal.open 弹在测算器之上
+  popup.innerHTML = `
+    <div class="est-shell" onclick="event.stopPropagation()" style="width:100%;max-width:${isMobile ? '100%' : '1000px'};max-height:${isMobile ? '82vh' : '90vh'};">
+      <div class="est-head">
+        <h3>🧮 施工费测算</h3>
+        <span class="est-head-btns">${isMobile ? "" : `<button class="modal-close" onclick="estMinimize()" title="最小化到右下角，稍后可恢复">–</button>`}<button class="modal-close" onclick="closeEstimateModal()" title="关闭">×</button></span>
+      </div>
+      <div class="est-body" id="estBody">
+        <div class="est-main">
+          <div class="est-section">
+            <label class="est-label">施工内容 <span class="est-tip">写一句话自动拆解，或手动添加施工项</span></label>
+            <textarea id="estInput" class="input est-input" placeholder="例：5个1.2×2.4米无框画，门头 6米×2米，20个门牌" style="min-height:58px;" oninput="estDoorExtrasTyping()">${esc(prefill)}</textarea>
+            <div class="est-btnrow">
+              <button class="btn small est-parse-btn" onclick="estSmartParse()" title="按施工内容自动拆解：识别尺寸/数量/材质，匹配定额工时与材料"><span class="est-parse-ico" aria-hidden="true">✨</span>智能拆解</button>
+              <button class="btn small ghost" onclick="estOpenScenes('combo')" title="整套方案 + 专项测算（脚手架 / 土建 / 精神堡垒）">方案库</button>
+              <button class="btn small ghost" onclick="estOpenQuickAdd()" title="从常用施工项里勾选加入清单">常用施工项</button>
+              <button class="btn small ghost" onclick="estOpenHistory()" title="最近的测算记录">历史</button>
+            </div>
+            <div class="est-dist-row">
+              <label for="estDistanceKm">🚚 运输里程</label>
+              <input class="input" id="estDistanceKm" type="number" min="0" step="0.5" value="${Number(_estUI.distanceKm) || 0}" oninput="estDistanceChange(this.value)" title="按实际单程公里数填写；单价取单价库「运输」元/公里" />
+              <span>公里</span>
+              <label class="est-rt"><input type="checkbox" id="estRoundTrip" onchange="estDistanceChange(document.getElementById('estDistanceKm').value)" ${_estUI.roundTrip ? "checked" : ""}/> 往返</label>
+              <span id="estDistCalc"></span>
+              <span class="est-tip">填了这里就别再手加「运输费」清单项，避免重复</span>
+            </div>
+            <div id="estDoorExtras" class="est-door-extras" hidden></div>
+            <div id="estGlowHint" class="est-glow-hint" hidden></div>
+          </div>
+          <div class="est-section">
+              <div class="est-section-head">
+                <label class="est-label">施工项清单 <span class="est-tip" id="estWorkCount">0 项</span></label>
+                <span class="est-list-ops"><button class="btn small ghost" onclick="estAddCustomWork()" title="定额里没有的活：加一条自定义施工项，按「工时/单位 × 工种单价」计价">＋ 施工项</button><button class="btn small ghost" onclick="estAddMat()" title="加一条材料，按「数量 × 单价」计入材料费">＋ 材料</button><button class="btn small ghost" id="estClearBtn" onclick="estClearWork()">清空</button></span>
+              </div>
+            <div id="estWorkList" class="est-worklist"></div>
+          </div>
+          <details class="est-adv" id="estAdv">
+            <summary>
+              <span class="est-adv-sum-lb">⚙️ 施工条件</span>
+              <span class="est-adv-sum-txt" id="estAdvSumTxt"></span>
+              <span class="est-adv-sum-eff" id="estAdvSumEff"></span>
+            </summary>
+            <div class="est-adv-body" id="estAdvBody">
+              <div id="estCond" class="est-cond"></div>
+              <div class="est-adv-note" id="estAdvNote"></div>
+            </div>
+          </details>
+        </div>
+        <div class="est-side">
+          <div id="estResult" class="est-result"></div>
+        </div>
+      </div>
+      <div class="est-foot" id="estFoot"></div>
+    </div>`;
+  document.body.appendChild(popup);
+  estInitWindowControls(popup);
+  estRenderDoorExtras(); // 预填的是门头就直接显示工艺勾选区
+  document.body.classList.add("modal-open");
+  document.documentElement.classList.add("modal-open");
+  renderEstimateWorkList();
+  estRenderAdvanced();
+  estRecalc();
+  estUpdateDistCalc(); // 里程为 0 时隐藏「= ¥0.00」算式
+  // 直达抽屉：从预约表单「🧩 方案库 / ＋ 常用项」进来时自动弹对应抽屉，少点一步
+  if (opts.autoDrawer === "scenes") estOpenScenes("combo");
+  else if (opts.autoDrawer === "quick") estOpenQuickAdd();
+}
+
+/* ===== 测算弹窗桌面端：标题栏拖动移动 + 右下角拖拽缩放（手机端不启用，保持贴底全宽） =====
+   位置/尺寸存 localStorage，下次打开沿用；窗口尺寸变化时自动夹回可视区，不会跑出屏幕。 */
+let _estWindowCleanup = null;
+let _estShellEmpty = null; // 上次渲染时清单是否为空：空态按内容收高，避免大面积留白
+function estInitWindowControls(popup) {
+  if (typeof _estWindowCleanup === "function") { _estWindowCleanup(); _estWindowCleanup = null; }
+  if (window.innerWidth <= 768) return;
+  const shell = popup.querySelector(".est-shell");
+  if (!shell) return;
+  const KEY = "estimate_win_geom";
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (_) {}
+  const vw0 = window.innerWidth, vh0 = window.innerHeight;
+  const defW = Math.min(1000, vw0 - 32), defH = Math.round(vh0 * 0.9);
+  const clamp = (x) => {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const w = Math.max(520, Math.min(Number(x.w) || defW, vw - 24));
+    const h = Math.max(360, Math.min(Number(x.h) || defH, vh - 24));
+    return {
+      w, h,
+      left: Math.max(8, Math.min(Number(x.left) || 0, vw - w - 8)),
+      top: Math.max(8, Math.min(Number(x.top) || 0, vh - h - 8)),
+    };
+  };
+  let g;
+  if (saved && saved.w) g = clamp(saved);
+  else {
+    const r = shell.getBoundingClientRect(); // 初次沿用居中位置，视觉不跳变
+    g = clamp({ left: r.left, top: r.top, w: r.width, h: r.height });
+  }
+  const apply = () => {
+    shell.style.position = "fixed";
+    shell.style.margin = "0";
+    shell.style.left = g.left + "px"; shell.style.top = g.top + "px";
+    shell.style.width = g.w + "px"; shell.style.height = g.h + "px";
+    shell.style.maxWidth = "none"; shell.style.maxHeight = "none";
+    shell._estFullH = g.h; // 用户期望的完整高度（有结果时恢复用）
+  };
+  apply();
+  _estShellEmpty = null; // 新窗口重新判断空态
+  shell.classList.add("est-win-floating");
+  const handle = document.createElement("div");
+  handle.className = "est-win-handle";
+  handle.title = "拖动调整窗口大小（双击标题栏恢复默认）";
+  shell.appendChild(handle);
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(g)); } catch (_) {} };
+
+  let drag = null;
+  const onDown = (e) => {
+    if (e.button !== 0) return;
+    if (!e.target.closest(".est-head, .est-drawer-head") || e.target.closest("button")) return;
+    drag = { x: e.clientX, y: e.clientY, left: g.left, top: g.top };
+    e.preventDefault();
+  };
+  const onMove = (e) => {
+    if (!drag) return;
+    g = clamp({ ...g, left: drag.left + e.clientX - drag.x, top: drag.top + e.clientY - drag.y });
+    apply();
+  };
+  const onUp = () => { if (drag) { drag = null; save(); } };
+
+  let resizing = null;
+  const onResizeDown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    // 从当前可见高度起算（空态窗口已按内容收高，不能用记忆的完整高度，否则一拖就跳）
+    const r = shell.getBoundingClientRect();
+    resizing = { x: e.clientX, y: e.clientY, w: g.w, h: r.height };
+  };
+  const onResizeMove = (e) => {
+    if (!resizing) return;
+    g = clamp({ ...g, w: resizing.w + e.clientX - resizing.x, h: resizing.h + e.clientY - resizing.y });
+    apply();
+  };
+  const onResizeUp = () => { if (resizing) { resizing = null; save(); } };
+
+  const onDbl = (e) => {
+    if (!e.target.closest(".est-head, .est-drawer-head") || e.target.closest("button")) return;
+    g = clamp({ left: (window.innerWidth - defW) / 2, top: (window.innerHeight - defH) / 2, w: defW, h: defH });
+    apply(); save();
+  };
+  const onWinResize = () => { g = clamp(g); apply(); };
+
+  popup.addEventListener("pointerdown", onDown);
+  popup.addEventListener("dblclick", onDbl);
+  handle.addEventListener("pointerdown", onResizeDown);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointermove", onResizeMove);
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointerup", onResizeUp);
+  window.addEventListener("resize", onWinResize);
+  _estWindowCleanup = () => {
+    popup.removeEventListener("pointerdown", onDown);
+    popup.removeEventListener("dblclick", onDbl);
+    handle.removeEventListener("pointerdown", onResizeDown);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointermove", onResizeMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointerup", onResizeUp);
+    window.removeEventListener("resize", onWinResize);
+  };
+}
+
+/* 空态自适应高度：清单为空时窗口收到内容高度（最多用户记忆高度），
+   一旦有测算结果恢复记忆高度；手机上不处理（保持 82vh 贴底卡片）。 */
+function estSyncShellHeight(force) {
+  const shell = document.querySelector("#estimateModal .est-shell");
+  if (!shell || window.innerWidth <= 768 || !shell._estFullH) return;
+  const empty = !(_estUI && _estUI.work.length);
+  if (!force && empty === _estShellEmpty) return; // 状态没变不重复量高度，避免拖拽时跳动
+  _estShellEmpty = empty;
+  if (!empty) { shell.style.height = shell._estFullH + "px"; return; }
+  shell.style.height = "auto";
+  const need = Math.ceil(shell.getBoundingClientRect().height);
+  shell.style.height = Math.max(360, Math.min(need, shell._estFullH, window.innerHeight - 24)) + "px";
+}
+
+function closeEstimateModal() {
+  const m = document.getElementById("estimateModal");
+  if (typeof _estWindowCleanup === "function") { _estWindowCleanup(); _estWindowCleanup = null; }
+  if (m) m.remove();
+  _estMinimized = false;
+  document.body.classList.remove("modal-open");
+  document.documentElement.classList.remove("modal-open");
+  // 从预约表单进入时，表单弹窗只是临时隐藏（保留 DOM 供回填）；关闭测算器后恢复。
+  // 表单若已停泊（最小化保护中），不能把空壳 #modal 显示出来
+  const formMask = window._estFormModal;
+  if (formMask && !_parkedForm && document.contains(formMask)) {
+    formMask.style.display = "";
+    document.body.classList.add("modal-open");
+    document.documentElement.classList.add("modal-open");
+  }
+  window._estFormModal = null;
+  _estUI = null;
+  renderModalMinDock();
+}
+/* 测算器最小化/恢复（2026-11-22）：独立 DOM 隐藏即保活；从表单进入时顺带把表单停泊保护 */
+function estMinimize() {
+  if (!_estUI || window.innerWidth <= 768) return;
+  const m = document.getElementById("estimateModal");
+  if (!m) return;
+  m.style.display = "none";
+  _estMinimized = true;
+  // 从预约表单进入：表单此刻是 display:none 的裸 DOM，停泊保护防其他弹窗复用 #modal 时销毁
+  if (window._estFormModal && !_parkedForm) modalMinimizeForm(true);
+  document.body.classList.remove("modal-open");
+  document.documentElement.classList.remove("modal-open");
+  renderModalMinDock();
+}
+function estRestore() {
+  if (!_estMinimized) return;
+  const mask = document.getElementById("modal");
+  const body = document.getElementById("modalBody");
+  // 其他弹窗正占着 #modal（在测算器上层）时先不恢复，避免两层叠着互相挡
+  if (mask && !mask.classList.contains("hidden") && body && body.firstElementChild) {
+    toast("请先关闭当前弹窗，再恢复施工费测算");
+    return;
+  }
+  const m = document.getElementById("estimateModal");
+  if (!m) { _estMinimized = false; renderModalMinDock(); return; }
+  m.style.display = "";
+  _estMinimized = false;
+  document.body.classList.add("modal-open");
+  document.documentElement.classList.add("modal-open");
+  renderModalMinDock();
+}
+
+/* 画面/板材类定额项只算安装人工、不含材料 → 拆解后按面积从单价库补一条材料项。
+   只覆盖「材料价在单价库可查」的常见项；查不到价不猜，保持原样。 */
+const EST_AUTO_MAT = {
+  i_wallsticker: { n: "画面制作（写真裱板）", cat: "室内写真裱KT板", u: "㎡" }, // 无框画/装饰画/文化墙/墙贴
+  i_banner:      { n: "喷绘布画面", cat: "喷绘布画面", u: "㎡" },
+  i_uvboard:     { n: "UV喷绘硬板", cat: "UV喷绘（硬板/软膜）", u: "㎡" },
+  i_kt:          { n: "写真裱KT板", cat: "室内写真裱KT板", u: "㎡" },
+  i_softfilm:    { n: "软膜画面", cat: "UV喷绘（硬板/软膜）", u: "㎡" },
+  // 灯箱布门头的布/灯条：单项录入时按单价库补材料，避免只报了张拉人工（2026-11-22）
+  i_lightcloth:  { n: "灯箱布（3M/透光布）", cat: "灯箱布（3M/透光布）", u: "㎡" },
+  i_lightbar:    { n: "LED漫反射灯条（12V）", cat: "LED漫反射灯条（12V）", u: "米" },
+  // 「灯箱 12㎡」会被内核切到按㎡的门头灯箱安装项（2026-11-22），材料按整箱 400/㎡ 带出
+  i_lightbox:    { n: "灯箱（单面）", cat: "灯箱（单面）", u: "㎡" },
+  // 桁架（2026-11-22）：背景架通常租不买。数量取内核给的 matQ（框架+后斜撑的总长），
+  // 不是人工口径的周长——少了后斜撑就会少租 40%。
+  i_truss:       { n: "桁架租赁", cat: "桁架租赁（含底座/横杆）", u: "米" },
+};
+
+/* ===== 门头工艺增项（2026-11-22）=====
+   配方只定主干（骨架/面板/字/接线），包边、檐口、雨棚这些收口工艺按需勾选：
+   勾上就按周长/侧包深度/面积自动算量，追加人工+材料行；取消即整组移除。 */
+function estDoorExtraDefs() {
+  const c = estCfg();
+  if (Estimate && Estimate.doorExtraDefs) return Estimate.doorExtraDefs(c.doorEx, c.doorExHide);
+  return (Estimate && Estimate.DOOR_EXTRAS) || [];
+}
+function estDoorExtraText() {
+  const el = document.getElementById("estInput");
+  return (el && el.value) || "";
+}
+let _estExTypingT = null;
+/* 输入框打字时按内容决定是否露出工艺勾选区（不必等拆解） */
+function estDoorExtrasTyping() {
+  if (_estExTypingT) clearTimeout(_estExTypingT);
+  _estExTypingT = setTimeout(() => { _estExTypingT = null; estRenderDoorExtras(); }, 180);
+}
+function estRenderDoorExtras() {
+  const box = document.getElementById("estDoorExtras");
+  if (!box || !_estUI) return;
+  const txtEx = estDoorExtraText();
+  const isDoorNow = (Estimate && Estimate.isDoorText) ? Estimate.isDoorText(txtEx) : /门头|店招|门脸/.test(txtEx);
+  if (!isDoorNow) { box.hidden = true; box.innerHTML = ""; return; }
+  const defs = estDoorExtraDefs();
+  if (!defs.length) { box.hidden = true; box.innerHTML = ""; return; }
+  // 主干里已经含底板的配方（灯箱布的内打光底板、真石漆的水泥压力板），再勾「底板/封底」＝重复计价 → 不列出来
+  const rk = (Estimate && Estimate.matchDoorRecipe) ? Estimate.matchDoorRecipe(txtEx).key : "";
+  const hasBack = rk === "lightbox" || rk === "coat";
+  const list = hasBack ? defs.filter((ex) => ex.key !== "backplate") : defs;
+  const METHODS = (Estimate && Estimate.DOOR_EXTRA_METHODS) || [];
+  const mName = (v) => (METHODS.find((x) => x.v === v) || {}).n || v;
+  box.hidden = false;
+  let sum = 0, onCnt = 0, highCnt = 0;
+  const chips = list.map((ex) => {
+    const on = !!((_estUI.doorExtras || {})[ex.key]);
+    const wIt = (ex.work && ex.work.id && Estimate.getWorkItem) ? Estimate.getWorkItem(ex.work.id) : null;
+    const bits = [];
+    if (wIt) bits.push('人工：' + wIt.n + '（' + mName(ex.work.by) + '×' + ex.work.k + '）');
+    if (ex.mat) bits.push('材料：' + ex.mat.n + ' ' + fmtEstMoney(ex.mat.p) + '/' + ex.mat.u);
+    // 勾前试算：当前尺寸下这一项多少钱、折合单价、行业上限；超上限标 ⚠ 且染红
+    const prev = estExtraPreview(txtEx, ex.key);
+    const over = !!(prev && prev.over);
+    if (on) { onCnt++; sum += prev ? prev.amt : 0; if (over) highCnt++; }
+    const tail = prev
+      ? `≈${fmtEstMoney(prev.amt)}` + (prev.bench && prev.unit > 0 ? `（${Math.round(prev.unit)}${prev.perLabel}，行业上限 ${Math.round(prev.bench.hi)}${prev.perLabel}）` : '')
+      : '';
+    if (tail) bits.push('当前尺寸 ' + tail + (over ? ' ⚠ 偏高，核对系数/单价/计量方式' : ''));
+    return '<label class="est-door-ex-chip' + (on ? ' is-on' : '') + (over ? ' is-high' : '') + '" title="' + esc(bits.join(' · ')) + '">'
+      + '<input type="checkbox" ' + (on ? 'checked' : '') + ' onchange="estToggleDoorExtra(\'' + esc(ex.key) + '\',this.checked)"/>'
+      + '<span>' + (over ? '⚠ ' : '') + (ex.icon ? esc(ex.icon) + ' ' : '') + esc(ex.n) + '</span>'
+      + (prev ? '<em class="est-door-ex-amt">' + fmtEstMoney(prev.amt) + '</em>' : '')
+      + '</label>';
+  }).join('');
+  const head = '<div class="est-door-ex-head">门头工艺<span class="est-door-ex-sub">勾选即按尺寸自动算量，可改数量</span>'
+    + (onCnt ? '<b class="est-door-ex-sum">已选 ' + onCnt + ' 项 ≈' + fmtEstMoney(sum) + (highCnt ? ' ⚠' : '') + '</b>' : '')
+    + '</div>';
+  const tip = highCnt ? '<div class="est-door-ex-warn">⚠ 有 ' + highCnt + ' 项折合单价超过行业上限：多半是系数/单价填错或计量方式选错，点「⚙️ 配置管理 → 门头工艺」核对。</div>' : '';
+  box.innerHTML = head + '<div class="est-door-ex-chips">' + chips + '</div>' + tip;
+}
+function estDoorExtraHits(txt, key) {
+  if (!Estimate || !Estimate.tryDoorRecipe) return [];
+  const c = estCfg();
+  const cfg = { ...(c.door || {}), synonyms: c.synonyms, params: c.params, extraDefs: c.doorEx, extraHidden: c.doorExHide, extras: { [key]: true } };
+  const r = Estimate.tryDoorRecipe(txt, cfg);
+  return ((r && r.hits) || []).filter((h) => h.extraKey === key);
+}
+/* 工艺项试算：金额 + 折合单价（金额 ÷ 该项对照量），用于「勾选前就知道多少钱」和
+   「超行业上限就标红」——参数填歪（系数 5 倍、单价 999）在勾的瞬间就能看出来。
+   折合按 ≤6 米平整墙算，避免高空系数把正常的项误判成偏高。 */
+function estExtraStat(hits) {
+  const list = (hits || []).filter((h) => Number(h.q) > 0);
+  if (!list.length || !window.Estimate || !Estimate.resolveItem) return null;
+  const c = estCfg();
+  const ctx = { params: c.params, WH: c.WH, height: "low", wall: "flat" };
+  let amt = 0;
+  list.forEach((h) => {
+    if (h.type === "mat") { amt += (Number(h.q) || 0) * (Number(h.p) || 0); return; }
+    const r = Estimate.resolveItem(h, ctx);
+    if (r) amt += Number(r.fee) || 0;
+  });
+  const bench = (list.find((h) => h.bench) || {}).bench || null;
+  const perLabel = bench ? ({ m: "元/米", edge: "元/米", area: "元/㎡", canopy: "元/㎡", group: "元/组" }[bench.per] || "") : "";
+  const unit = (bench && bench.qty > 0) ? amt / bench.qty : 0;
+  return { amt, bench, unit, perLabel, over: !!(bench && bench.hi > 0 && unit > bench.hi * 1.001) };
+}
+function estExtraPreview(txt, key) { return estExtraStat(estDoorExtraHits(txt, key)); }
+/* 勾选/取消一个工艺。包边与不锈钢包边是同一位置的材质二选一，勾一个自动撤另一个，
+   否则同一圈侧包会被收两遍（异常翻倍的常见来源）。 */
+function estToggleDoorExtra(key, on) {
+  if (!_estUI) return;
+  const txt = estDoorExtraText();
+  _estUI.doorExtras = _estUI.doorExtras || {};
+  const def = estDoorExtraDefs().find((x) => x.key === key);
+  const name = def ? def.n : key;
+  const twin = key === "edge" ? "ssedge" : (key === "ssedge" ? "edge" : "");
+  if (on) {
+    _estUI.doorExtras[key] = true;
+    const usable = estDoorExtraHits(txt, key).filter((h) => Number(h.q) > 0);
+    if (!usable.length) {
+      delete _estUI.doorExtras[key];
+      toast('「' + name + '」没算出量：请确认门头写了尺寸（如 6米×2米）');
+      estRenderDoorExtras();
+      return;
+    }
+    let twinOff = "";
+    if (twin && _estUI.doorExtras[twin]) {
+      delete _estUI.doorExtras[twin];
+      _estUI.work = _estUI.work.filter((w) => w.extraKey !== twin);
+      const tdef = estDoorExtraDefs().find((x) => x.key === twin);
+      twinOff = "，已自动取消「" + (tdef ? tdef.n : twin) + "」（同位置二选一）";
+    }
+    usable.forEach((h) => estAddWork(h));
+    renderEstimateWorkList(); estRecalc();
+    toast('已加「' + name + '」' + usable.length + ' 项，数量可在清单里改' + twinOff);
+  } else {
+    delete _estUI.doorExtras[key];
+    const before = _estUI.work.length;
+    _estUI.work = _estUI.work.filter((w) => w.extraKey !== key);
+    renderEstimateWorkList(); estRecalc();
+    toast(before === _estUI.work.length ? '「' + name + '」已取消勾选' : '已移除「' + name + '」' + (before - _estUI.work.length) + ' 项');
+  }
+  estRenderDoorExtras();
+}
+
+/* 智能拆解：调内核 parseSpec */
+function estSmartParse() {
+  if (!_estUI) return;
+  const txt = (document.getElementById("estInput").value || "").trim();
+  if (!txt) { toast("请先输入施工内容"); return; }
+  if (!window.Estimate) { toast("测算内核未加载"); return; }
+  // 原文拆解后保留在输入框，方便核对/继续改；但相同文本重复点会静默把数量翻倍，
+  // 所以用 lastParsedText 拦一道——改过文字后仍可再拆（累加视为新一次拆解）。
+  if (_estUI.lastParsedText === txt) { toast("这段文字已拆解过，改一下内容再点，避免数量重复累加"); return; }
+
+  let parsed = [];
+  let doorInfo = "";
+  let autoInfo = "";
+  let transInfo = "";   // 自动识别到的运输里程说明
+  let transHint = "";   // 有运输需求但没写公里数时的提示
+  let glowGuess = 0;    // 门头只写尺寸、没写字数时：发光字面积按门头 40% 暂估，需提示用户补字数
+  // 门头/店招：先按材质配方展开（骨架/面板/焊点/材料逐项），这是原测算器的核心能力（2026-11-19 补接入）
+  // 判定统一走内核 isDoorText（2026-11-22）：门头/店招/门脸 + 带尺寸的「招牌」，纯拆除不展开
+  const isDoorText = (Estimate && Estimate.isDoorText) ? Estimate.isDoorText(txt) : /门头|店招|门脸/.test(txt);
+  if (isDoorText && Estimate.tryDoorRecipe) {
+    const doorCfg = { ...((estCfg().door) || {}), synonyms: estCfg().synonyms, params: estCfg().params,
+      extras: _estUI.doorExtras || {}, extraDefs: estCfg().doorEx, extraHidden: estCfg().doorExHide };
+    const door = Estimate.tryDoorRecipe(txt, doorCfg);
+    if (door && door.hits && door.hits.length) {
+      parsed = door.hits;
+      const wc = door.hits.filter((h) => h.type !== "mat").length;
+      const mc = door.hits.filter((h) => h.type === "mat").length;
+      doorInfo = `（${door.recipe.label}：${wc}项施工+${mc}项材料）`;
+      // 灯箱布门头是内打光灯箱：底板/灯条/12V 电源已在主干里，避免用户以为漏项再手动加一遍
+      if (door.recipe.key === "lightbox") doorInfo += " 含底板+灯条+12V电源";
+      // 铝方通/石材/真石漆/镀锌板门头主干不含字：文字里没提发光字时提醒一句，免得漏报
+      if (door.recipe.autoGlow && !/发光字|LED字|灯字/i.test(txt)) doorInfo += "（未含发光字，要的话补一句「发光字N个」）";
+      // P0：没写「发光字N个 / 字高X」时内核按门头面积×0.4 暂估字面积，金额影响最大，必须显式提醒
+      if (!door.charQty) {
+        const led = door.hits.find((h) => h.id === "i_led");
+        glowGuess = Math.round((Number(led && led.q) || 0) * 100) / 100;
+      }
+    } else if (!Estimate.parseSize || !Estimate.parseSize(txt)) {
+      toast("识别到门头，请写清尺寸再拆解，例：2.8米×4米铝塑板门头");
+      return;
+    }
+  }
+  // 非门头：先按整套方案名识别（方案库全部模板含自定义，2026-11-20 修复「桁架舞台会场」只拆出单项——
+  // 此前只硬编码识别楼顶大字一套），再试专项，最后退回定额关键词
+  if (!parsed.length) {
+    let spKey = null, combo = null;
+    const combos = estCombos();
+    // ① 输入包含整套方案核心名（去掉「整套」后缀）：「桁架舞台会场」「灯箱广告牌」等
+    combo = combos.find((c) => {
+      const core = String(c.n || "").replace(/整套$/, "").trim();
+      return core.length >= 2 && txt.includes(core);
+    // ② 反向：输入是方案名的子串（≥4 字防误触，如「桁架舞台」→ 桁架舞台会场；「拆除」两个字不触发整套）
+    }) || combos.find((c) => {
+      const core = String(c.n || "").replace(/整套$/, "").trim();
+      return core && txt.length >= 4 && core.includes(txt);
+    });
+    // ③ 内容覆盖识别：输入没点名方案，但施工内容覆盖某套模板 ≥2 项且 ≥50% 时展开整套；
+    //    取覆盖最多的一套，并列不猜（退回逐项识别），避免误触。
+    if (!combo) {
+      const scored = combos.map((c) => ({ c, ...estComboCoverScore(c, txt) }))
+        .filter((x) => x.hits >= 2 && x.total > 0 && x.hits / x.total >= 0.5)
+        .sort((a, b) => b.hits - a.hits || (b.hits / b.total) - (a.hits / a.total));
+      if (scored.length && (scored.length === 1 || scored[0].hits > scored[1].hits || scored[0].hits / scored[0].total > scored[1].hits / scored[1].total)) {
+        combo = scored[0].c;
+      }
+    }
+    if (combo) {
+      // 输入里的尺寸（6米*3米 / 6000mm*3000mm / 18㎡）驱动「按面积/周长」计价项自动算量
+      const dims = Estimate.parseDims ? Estimate.parseDims(txt) : null;
+      parsed = estComboHits(combo, dims);
+      if (parsed.length) {
+        // 覆盖识别路径下，输入里有且仅有一个数量词（如「5个…」）→ 按整套×N 乘上（与 parseSpec globalQty 同语义）
+        if (!combos.some((c) => {
+          const core = String(c.n || "").replace(/整套$/, "").trim();
+          return core.length >= 2 && txt.includes(core);
+        })) {
+          const qa = txt.match(/\d+(?:\.\d+)?\s*(?:个|块|张|面|根|套|幅|条|件|处|片|只|支|台|组)/g) || [];
+          if (qa.length === 1) {
+            const gq = parseFloat(qa[0]);
+            if (gq > 0) parsed.forEach((h) => {
+              h.q = Math.round((Number(h.q) || 1) * gq * 1000) / 1000;
+              h.calc = "整套×" + gq + " → " + h.q + h.u;
+            });
+          }
+        }
+        const dimCount = parsed.filter((h) => h.dim).length;
+        autoInfo = `（命中整套方案「${combo.n}」 ${parsed.length} 项`
+          + (dims && dimCount ? `，尺寸 ${dims.desc}：${dimCount} 项已按面积/周长自动算量，单价取自单价库` : "")
+          + (!dims && dimCount ? `，其中 ${dimCount} 项按面积/周长计价——补上尺寸（如 6米*3米）可自动算量` : "")
+          + `，可到「🧩 方案库」改数量）`;
+      } else combo = null;
+    }
+    if (!combo) {
+      if (/精神堡垒|立式标识/.test(txt)) spKey = "monument";
+      else if (/脚手架|架子工/.test(txt)) spKey = "scaffold";
+      else if (/土建基础|混凝土基础|基坑|地笼/.test(txt)) spKey = "civil";
+      if (spKey) {
+        const r = estSpecialHits(spKey);
+        if (r && r.hits.length) {
+          parsed = r.hits;
+          autoInfo = `（${r.spec.label}专项 ${r.hits.length} 项，可在「专项测算」调参数）`;
+        }
+      }
+    }
+  }
+  if (!parsed.length) parsed = estParseWithCustom(txt);
+  if (!parsed || !parsed.length) {
+    // 没直接认出 → 模糊候选（2026-11-22）：给最接近的施工项点选补充，比"请手动添加"少一步翻列表
+    const cands = estFuzzyCandidates(txt);
+    estUnknownLog(txt, !!cands.length); // 未识别词收集：整句记录供批量整理同义词映射
+    if (cands.length) { estOpenCandidates(cands); return; }
+    toast("没识别出施工项，请手动添加");
+    return;
+  }
+
+  // 重拆前先移除上一轮勾选产生的工艺项，避免「包边」每拆一次多一行
+  if (isDoorText && _estUI.work.some((w) => w.extraKey)) _estUI.work = _estUI.work.filter((w) => !w.extraKey);
+  parsed.forEach((w) => estAddWork(w));
+  if (isDoorText) estRenderDoorExtras();
+  // 画面/板材类补材料：会明显改变合计，先确认再补，避免用户误以为系统乱加钱
+  let matInfo = "";
+  const autoMats = estAutoMaterialHits(parsed);
+  if (autoMats.length) {
+    const matSum = autoMats.reduce((s, m) => s + m.q * m.p, 0);
+    if (confirm(`检测到 ${autoMats.length} 项只算了安装/搭建工时（画面·板材·桁架租赁），是否按单价库补上材料费（约 ${fmtEstMoney(matSum)}）？\n\n补上后可在清单里改名称/单价，或点 × 删除。`)) {
+      autoMats.forEach((w) => estAddWork(w));
+      matInfo = `，补材料 ${autoMats.length} 项（${fmtEstMoney(matSum)}）`;
+    }
+  }
+  renderEstimateWorkList();
+  // 运输里程识别（2026-11-22）：施工内容里写了「拉货 20公里 / 送货15km / 来回」时自动带出运输费。
+  // 此前只认施工项，把「去拉货 X 公里」整段忽略，用户还得手填里程才不会漏车费。
+  const kmM = txt.match(/(\d+(?:\.\d+)?)\s*(?:公里|千米|km|KM|Km|ＫＭ)/);
+  if (kmM) {
+    const km = Math.round((parseFloat(kmM[1]) || 0) * 10) / 10;
+    if (km > 0) {
+      const hadKm = Number(_estUI.distanceKm) > 0;
+      if (!hadKm) {
+        _estUI.distanceKm = km;
+        const dm = document.getElementById("estDistanceKm");
+        if (dm) dm.value = km;
+      }
+      if (/往返|来回|双程|回去再来/.test(txt)) {
+        _estUI.roundTrip = true;
+        const rt = document.getElementById("estRoundTrip");
+        if (rt) rt.checked = true;
+      }
+      if (!hadKm) {
+        transInfo = `，运输 ${km} 公里` + (_estUI.roundTrip ? "（往返）" : "");
+        estDistanceChange(km);   // 由它刷新里程金额显示 + 重算
+      } else {
+        estRecalc();
+      }
+    } else estRecalc();
+  } else {
+    // 桁架/舞台这类大件：就算没写「运输」也一定要车，漏填里程就漏车费（2026-11-22）
+    const bigStuff = (parsed || []).some((h) => h && (h.id === "i_truss" || h.id === "i_stage" || h.id === "i_trussrm"));
+    if (/拉货|送货|运输|货运|物流|取货|提货|拉物料/.test(txt)) {
+      transHint = "；检测到运输需求，请在「运输里程」填公里数，否则会漏车费";
+    } else if (bigStuff) {
+      transHint = "；桁架/舞台要车拉，在「运输里程」填公里数才会算运费（租赁费已在材料里）";
+    }
+    estRecalc();
+  }
+  // 原文保留在输入框（2026-11-22 用户反馈）：只记 lastParsedText 防重复累加，不再清空。
+  // 直接清空会让人以为输入丢了；保留后既能核对来源文字，改几个字还能继续拆解。
+  _estUI.lastParsedText = txt;
+  toast("已拆解 " + parsed.length + " 项" + doorInfo + autoInfo + transInfo + matInfo
+    + (glowGuess ? "，⚠️发光字按门头面积40%暂估，请补字数/字高" : "")
+    + "，数量/单价可改；原文已保留（改字后可再拆）" + transHint);
+  const gh = document.getElementById("estGlowHint");
+  if (gh) {
+    gh.hidden = !glowGuess;
+    if (glowGuess) gh.innerHTML = `⚠️ 发光字 <b>${glowGuess}㎡</b> 是按门头面积 40% 暂估的占位量。`
+      + `实际请写「发光字4个 字高60厘米」重拆，否则这一项可能多报几千元（可直接在清单改数量）。`;
+  }
+}
+
+/* 添加一个施工项到清单（同 id/cid/名称合并数量）。
+   材料项(type='mat')必须带 kind:'mat'，否则内核 resolveItem 不认、材料费算不出来（2026-11-19 门头修复）。
+   专项测算项用 cid+mode:'qty'（按量×单价），走内核 resolveItem 的 cid 分支（2026-11-19 专项接入）。 */
+function estAddWork(w) {
+  if (!_estUI) return;
+  const isMat = !!(w.isMat || w.type === "mat" || w.kind === "mat");
+  const ident = w.cid || w.id || ("x_" + w.n);
+  const key = (isMat ? "mat_" : "") + ident;
+  const exist = w.extraKey ? null : _estUI.work.find((x) => ((x.kind === "mat" ? "mat_" : "") + (x.cid || x.id || ("x_" + x.n))) === key);
+  if (exist) {
+    exist.q = (Number(exist.q) || 0) + (Number(w.q) || 0);
+  } else {
+    const item = { type: w.type || "lib", id: w.id || "", n: w.n, u: w.u || "", q: Number(w.q) || 0, calc: w.calc || "", isMat, p: w.p };
+    if (w.sheets) item.sheets = w.sheets; // 板材整张数：结果行注明「约N张」，金额已按整张面积计
+    if (isMat) item.kind = "mat"; // 内核计价入口：材料费 = 量 × 单价
+    if (w.cid) { item.cid = w.cid; item.mode = w.mode || "qty"; } // 专项项：按量×单价计入施工费
+    if (w.custom) item.custom = true;   // 手动加的自定义施工项（可切换「按工时 / 按金额」）
+    if (w.h != null) item.h = Number(w.h) || 0; // 自定义施工项：工时/单位
+    if (w.tr) item.tr = w.tr;                    // 自定义施工项：工种（决定单价）
+    if (w.extraKey) item.extraKey = w.extraKey; // 门头工艺增项：取消勾选时整组移除
+    _estUI.work.push(item);
+  }
+}
+
+/* 拆解结果中可补材料的画面/板材项：按 id 合并工程量，单价取单价库；已在清单中的不重复补。
+   返回 [{ n,u,q,p }]，由调用方确认后再 estAddWork。 */
+function estAutoMaterialHits(parsed) {
+  // 配方/整套方案已自带材料行时不再补，避免与已有材料重复计价
+  if ((parsed || []).some((h) => h && (h.type === "mat" || h.kind === "mat" || h.isMat))) return [];
+  const qtyById = new Map(); // 同一项多行输入时面积/长度相加
+  (parsed || []).forEach((h) => {
+    if (!h || h.type === "mat" || h.kind === "mat" || h.isMat) return;
+    if (!EST_AUTO_MAT[h.id]) return;
+    // 桁架这类人工按周长、材料按总长（含后斜撑）的项，材料量以 matQ 为准
+    const q = Number(h.matQ) > 0 ? Number(h.matQ) : Number(h.q);
+    if (!(q > 0)) return;
+    qtyById.set(h.id, (qtyById.get(h.id) || 0) + q);
+  });
+  const out = [];
+  qtyById.forEach((q, id) => {
+    const map = EST_AUTO_MAT[id];
+    const hit = (typeof estCatalogPriceFor === "function") ? estCatalogPriceFor(map.cat) : null;
+    if (!hit || !(Number(hit.p) > 0)) return; // 单价库没有参考价就不猜
+    const exists = (_estUI.work || []).some((x) => (x.isMat || x.kind === "mat") && x.n === map.n);
+    if (exists) return;
+    out.push({ type: "mat", kind: "mat", isMat: true, n: map.n, u: map.u, q: Math.round(q * 100) / 100, p: Number(hit.p) });
+  });
+  return out;
+}
+
+/* 手动添加材料项：材料单价在清单黄色框填，名称点一下可改 */
+function estAddMat() {
+  if (!_estUI) return;
+  estAddWork({ type: "custom", cid: "matm_" + Date.now().toString(36), mode: "qty", kind: "mat", isMat: true, n: "自定义材料", u: "项", q: 1, p: 0 });
+  renderEstimateWorkList(); estRecalc();
+  toast("已添加材料项：名称点输入框直接改（可联想），黄色框填单价");
+}
+/* 材料/自定义/专项项名称行内编辑（2026-11-22：替代 prompt 弹窗，点名称直接改，带单价库名称联想） */
+function estWorkNameChange(i, v) {
+  if (!_estUI || !_estUI.work[i]) return;
+  const item = _estUI.work[i];
+  if (!(item.cid || item.isMat)) return; // 定额项名称由内核按 id 取，不开放改名
+  const n = String(v || "").trim();
+  if (!n || n === item.n) return;
+  item.n = n.slice(0, 40);
+  // 材料项名称命中单价库且单价还是 0 → 自动带出单价（2026-11-22：让单价库真正参与材料计价）
+  if (item.isMat && !(Number(item.p) > 0) && typeof estCatalogPriceFor === "function") {
+    const hit = estCatalogPriceFor(item.n);
+    if (hit && hit.p > 0) {
+      item.p = hit.p;
+      const inp = document.querySelector(`[data-est-price="${i}"]`);
+      if (inp) inp.value = hit.p;
+      if (hit.u) item.u = String(hit.u).replace(/^元\s*\/\s*/, "");
+      toast(`已按单价库带出「${item.n}」单价 ¥${hit.p}/${item.u || "项"}`);
+    }
+  }
+  // 自定义施工项名称命中定额 → 带出单位 / 工时 / 工种（工时手改过就不覆盖，尊重人工校准）
+  if (item.mode === "hours" && window.Estimate && Estimate.WORK_ITEMS) {
+    const lit = Estimate.WORK_ITEMS.find((x) => x.n === item.n);
+    if (lit && !item._hManual) {
+      const TR = Estimate.TRADES || {};
+      item.u = lit.u || item.u;
+      item.h = Number(lit.h) || item.h;
+      item.tr = TR[lit.tr] ? lit.tr : (item.tr || "pg");
+      item.calc = lit.m || item.calc || "";
+      renderEstimateWorkList(); // 行结构变了（单位/工时/工种），要重绘
+      estRecalc();
+      toast(`已按定额带出「${lit.n}」：${lit.h} 工时/${lit.u} · ${TR[item.tr] ? TR[item.tr].n : "普工"}`);
+      return;
+    }
+  }
+  estRecalc(); // 结果表名称同步，清单不重绘（保持输入焦点）
+}
+
+/* 手动添加自定义施工项（定额里没有的活）：默认「按工时/单位 × 工种单价」计价，
+   与定额项同口径参与总工时与人数建议；右侧结果实时给人工费，改工时/工种立刻变。 */
+function estAddCustomWork() {
+  if (!_estUI) return;
+  estAddWork({ type: "custom", cid: "wkm_" + Date.now().toString(36), mode: "hours", custom: true, n: "自定义施工项", u: "项", q: 1, h: 1, tr: "pg" });
+  renderEstimateWorkList(); estRecalc();
+  const rows = document.querySelectorAll("#estWorkList .est-work-row");
+  const row = rows[rows.length - 1];
+  if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+  const inp = row && row.querySelector(".est-work-name-in");
+  if (inp) { inp.focus(); inp.select(); }
+  toast("已加一条施工项：填名称（可联想定额名自动带工时）→ 数量/工时 → 右侧看人工费");
+}
+
+/* 自定义施工项：按工时 ↔ 按金额 互切（两种口径都进施工费，工时口径会额外计入总工时） */
+function estWorkModeToggle(i) {
+  if (!_estUI || !_estUI.work[i]) return;
+  const w = _estUI.work[i];
+  if (!w.custom) return;
+  if (w.mode === "hours") {
+    w.mode = "qty";
+    if (w.h == null) w.h = 1;
+    if (!(Number(w.p) > 0)) w.p = 0;
+  } else {
+    w.mode = "hours";
+    if (w.h == null) w.h = 1;
+    if (!w.tr) w.tr = "pg";
+  }
+  renderEstimateWorkList(); estRecalc();
+  toast(w.mode === "hours" ? "已改成按工时计：工时×工种单价" : "已改成按金额计：数量×单价（工时按普通工单价反推）");
+}
+
+/* 自定义施工项行内合计：量×工时×工种单价（与内核 resolveItem 的 mode:'hours' 同口径） */
+function estCustomHoursInfo(w) {
+  const TR = (window.Estimate && Estimate.TRADES) || {};
+  const trk = TR[w.tr] ? w.tr : "pg";
+  const p = (estCfg().params || {});
+  const rate = Number(p[TR[trk] ? TR[trk].k : "rateNormal"]) || 36;
+  const hours = (Number(w.q) || 0) * (Number(w.h) || 0);
+  return { trk, trName: TR[trk] ? TR[trk].n : "普工", rate, hours, fee: hours * rate };
+}
+/* 按工时项的算式（纯文本）：行内金额的 title 用它，鼠标悬停能看「4.5h × 焊工 ¥60/时 = ¥270」 */
+function estHoursTitle(w) {
+  const i = estCustomHoursInfo(w);
+  return `≈ ${fmtEstHours(i.hours)}h × ${i.trName} ¥${i.rate}/时 = ${fmtEstMoney(i.fee)}`;
+}
+/* 改工时/工种/数量只刷新本行金额，不重绘清单（保住输入焦点与光标） */
+function estWorkRefreshCalc(i) {
+  const w = _estUI && _estUI.work[i];
+  if (!w || w.mode !== "hours") return;
+  const row = document.querySelector(`#estWorkList .est-work-row[data-i="${i}"]`);
+  if (!row) return;
+  const info = estCustomHoursInfo(w);
+  const amt = row.querySelector("[data-est-amt]");
+  if (amt) amt.textContent = "≈ " + fmtEstMoney(info.fee);
+  const sw = row.querySelector(".est-work-switch");
+  if (sw) sw.title = estHoursTitle(w) + "；点这里改成按金额计价";
+  if (amt) amt.title = estHoursTitle(w);
+}
+function estWorkHoursChange(i, v) {
+  if (!_estUI || !_estUI.work[i]) return;
+  const h = Number(v);
+  if (isNaN(h) || h < 0) return;
+  _estUI.work[i].h = h;
+  _estUI.work[i]._hManual = true; // 手改过工时后，再改名不再自动覆盖
+  estWorkRefreshCalc(i);
+  estRecalc();
+}
+function estWorkTradeChange(i, v) {
+  if (!_estUI || !_estUI.work[i]) return;
+  const TR = (window.Estimate && Estimate.TRADES) || {};
+  if (!TR[v]) return;
+  _estUI.work[i].tr = v;
+  estWorkRefreshCalc(i);
+  estRecalc();
+}
+
+function estClearWork() {
+  if (!_estUI) return;
+  if (_estUI.work.length && !confirm("清空所有施工项？")) return;
+  _estUI.work = [];
+  _estUI.autoHistId = null;
+  _estUI.lastParsedText = ""; // 清空后允许把同一段原文再拆一次，不算重复累加
+  _estUI.doorExtras = {}; // 清单都清了，工艺勾选也一并复位
+  estRenderDoorExtras();
+  const gh = document.getElementById("estGlowHint"); if (gh) gh.hidden = true;
+  renderEstimateWorkList();
+  estRecalc();
+}
+
+/* 渲染清单表（数量可改、可删）。三类行：
+   1) 定额项：名称只读（工时/工种在「校准工时」里改）
+   2) 自定义施工项（custom，默认 mode:'hours'）：行内填 数量 / 工时每单位 / 工种，实时出人工费；
+      可一键切「按金额」（数量×单价），两种都进施工费。
+   3) 材料项（kind:'mat'）：数量 × 单价 → 材料费。
+   专项项（方案库带入，cid+mode qty/lump/days）沿用原来的单价输入。 */
+function renderEstimateWorkList() {
+  if (!_estUI) return;
+  const box = document.getElementById("estWorkList");
+  if (!box) return;
+  const cnt = document.getElementById("estWorkCount");
+  if (cnt) cnt.textContent = _estUI.work.length + " 项";
+  const clearBtn = document.getElementById("estClearBtn");
+  if (clearBtn) clearBtn.disabled = !_estUI.work.length; // 空清单时「清空」无意义
+  if (!_estUI.work.length) {
+    box.innerHTML = `<div class="est-empty">还没有施工项：点「＋ 施工项」手加一条，或用「＋ 常用施工项」从定额里选。</div>`;
+    return;
+  }
+  const TRADES = (window.Estimate && Estimate.TRADES) || {};
+  const tradeOptions = (cur) => Object.keys(TRADES)
+    .map((k) => `<option value="${k}" ${((cur || "pg") === k) ? "selected" : ""}>${TRADES[k].n}</option>`).join("");
+  const libNames = (window.Estimate && Estimate.WORK_ITEMS) ? Estimate.WORK_ITEMS.map((x) => x.n) : [];
+  const catNames = estCatalog().flatMap((g) => (g.rows || []).map((r) => r.n));
+  const dlNames = [...new Set([...libNames, ...catNames])].filter(Boolean);
+  const nameDl = `<datalist id="estMatNameDl">${dlNames.map((n) => `<option value="${esc(n)}"/>`).join("")}</datalist>`;
+  box.innerHTML = nameDl + _estUI.work.map((w, i) => {
+    const isHours = w.mode === "hours";
+    const renamable = !!(w.cid || w.isMat);
+    const tag = w.isMat ? '<span class="est-mat-tag">材料</span>'
+      : (w.custom ? '<span class="est-work-tag">施工</span>' : (w.cid ? '<span class="est-work-tag">专项</span>' : ''));
+    const nameHtml = renamable
+      ? `<div class="est-work-name"><input class="est-work-name-in" value="${esc(w.n)}" placeholder="填写名称" list="estMatNameDl" title="点击直接改名称；自定义施工项打定额名会自动带出单位/工时/工种" onchange="estWorkNameChange(${i},this.value)"/>${tag}</div>`
+      : `<div class="est-work-name" title="${esc(w.calc || w.n)}">${esc(w.n)}</div>`;
+    // 数量区：按工时行给「工时/单位 + 工种 + 金额 + 切换」，其余给「单价」
+    const qHtml = isHours
+      ? `<div class="est-work-q est-work-q--hours">
+          <input type="number" min="0" step="0.1" value="${w.q}" data-est-q="${i}" title="工程量" onchange="estWorkQtyChange(${i},this.value)" oninput="estWorkQtyChange(${i},this.value)"/>
+          <span class="est-work-u">${esc(w.u || "项")}</span><span class="est-work-amd">×</span>
+          <input type="number" class="est-work-h" min="0" step="0.1" value="${w.h != null ? w.h : 1}" data-est-h="${i}" title="工时/单位（标准工时；填定额名会自动带出）" onchange="estWorkHoursChange(${i},this.value)" oninput="estWorkHoursChange(${i},this.value)"/>
+          <span>工时</span>
+          <select class="est-work-tr" data-est-tr="${i}" title="工种：决定工时单价" onchange="estWorkTradeChange(${i},this.value)">${tradeOptions(w.tr)}</select>
+          <span class="est-work-amt" data-est-amt="${i}" title="${esc(estHoursTitle(w))}">≈ ${fmtEstMoney(estCustomHoursInfo(w).fee)}</span>
+          <button type="button" class="est-work-switch" data-est-switch="${i}" onclick="estWorkModeToggle(${i})" title="${esc(estHoursTitle(w))}；点这里改成按金额计价">⇄</button>
+        </div>`
+      : `<div class="est-work-q"><input type="number" min="0" step="0.1" value="${w.q}" data-est-q="${i}" onchange="estWorkQtyChange(${i},this.value)" oninput="estWorkQtyChange(${i},this.value)"/>${(w.isMat || w.cid) ? `<input type="number" class="est-work-price" data-est-price="${i}" min="0" step="1" value="${w.p || 0}" title="${w.isMat ? '材料' : '专项'}单价(元)" onchange="estWorkPriceChange(${i},this.value)" oninput="estWorkPriceChange(${i},this.value)"/>` : ''}<span>${w.isMat ? '元/' + esc(w.u || '项') : esc(w.u || '')}</span></div>`;
+    let calcHtml = "";
+    if (w.custom && !isHours) {
+      const amt = (Number(w.q) || 0) * (Number(w.p) || 0);
+      calcHtml = `<div class="est-work-calc"><span class="est-work-calc-txt">≈ <b>${fmtEstMoney(amt)}</b>（数量 × 单价）</span> · <button class="linkbtn" onclick="estWorkModeToggle(${i})" title="改成按「工时 × 工种单价」计价">按工时计</button></div>`;
+    } else if (!isHours && w.calc) {
+      calcHtml = `<div class="est-work-calc">${esc(w.calc)}</div>`;
+    }
+    return `
+    <div class="est-work-row${isHours ? " is-hours" : ""}" data-i="${i}">
+      ${nameHtml}
+      ${qHtml}
+      <button class="est-work-del" onclick="estRemoveWork(${i})" title="删除">×</button>
+      ${calcHtml}
+    </div>`;
+  }).join("");
+}
+
+/* 单价变更：材料项与专项项(cid)都按 q×p 计价，只更新 p 并重算，不重绘清单（避免输入焦点丢失） */
+function estWorkPriceChange(i, v) {
+  if (!_estUI || !_estUI.work[i]) return;
+  const item = _estUI.work[i];
+  if (!item.isMat && !item.cid) return;
+  const p = Number(v);
+  if (isNaN(p) || p < 0) return;
+  item.p = p;
+  if (item.custom) { // 自定义项按金额：行内合计跟着变
+    const txt = document.querySelector(`#estWorkList .est-work-row[data-i="${i}"] .est-work-calc-txt`);
+    if (txt) txt.innerHTML = `≈ <b>${fmtEstMoney((Number(item.q) || 0) * p)}</b>（数量 × 单价）`;
+  }
+  estRecalc();
+}
+
+function estWorkQtyChange(i, v) {
+  if (!_estUI || !_estUI.work[i]) return;
+  const q = Number(v);
+  if (isNaN(q) || q < 0) return;
+  _estUI.work[i].q = q;
+  estWorkRefreshCalc(i); // 按工时行：合计随数量变
+  estRecalc(); // 只更新结果，不重绘清单（避免输入焦点丢失）
+}
+
+function estRemoveWork(i) {
+  if (!_estUI) return;
+  i = Number(i);
+  if (!isFinite(i) || i < 0 || i >= _estUI.work.length) return; // 结果行索引映射异常时防止误删首项
+  _estUI.work.splice(i, 1);
+  renderEstimateWorkList();
+  estRecalc();
+}
+
+/* 重新测算：调内核 calculate 并渲染结果 */
+function estRecalc() {
+  if (!_estUI || !window.Estimate) return;
+  const h = document.getElementById("estHeight"), w = document.getElementById("estWall");
+  const dm = document.getElementById("estDistanceKm");
+  const rt = document.getElementById("estRoundTrip");
+  const eqd = document.getElementById("estEquipDays");
+  if (h) _estUI.height = h.value;
+  if (w) _estUI.wall = w.value;
+  if (dm) _estUI.distanceKm = Math.max(0, Number(dm.value) || 0);
+  if (rt) _estUI.roundTrip = !!rt.checked;
+  if (eqd) { const n = Number(eqd.value); _estUI.equipDays = (isNaN(n) || n <= 0) ? 0 : Math.max(1, Math.round(n)); }
+  const ctx = estCalcCtx(_estUI.height, _estUI.wall);
+  const result = (window.Estimate && Estimate.calculate) ? Estimate.calculate(_estUI.work, ctx) : null;
+  _estUI.result = result;
+  _estUI.ctx = ctx;
+  renderEstimateResult(result, ctx);
+  estUpdateCondHint(); // chips 下的「本单计价」提示（系数/设备费）跟着结果走
+  scheduleEstAutoSave();
+}
+
+/* 运输里程改动：只改本单状态 + 重算，不写配置（每单里程不同） */
+function estDistanceChange(v) {
+  if (!_estUI) return;
+  _estUI.distanceKm = Math.max(0, Number(v) || 0);
+  const rt = document.getElementById("estRoundTrip");
+  if (rt) _estUI.roundTrip = !!rt.checked;
+  estUpdateDistCalc();
+  estRecalc(); // 里程统一由 estRecalc 从输入框读，避免两处写状态
+}
+/* 里程算式：0 公里时只给提示，不显示「= ¥0.00」占位干扰 */
+function estUpdateDistCalc() {
+  const calc = document.getElementById("estDistCalc");
+  if (!calc) return;
+  const km = Math.max(0, Number(_estUI && _estUI.distanceKm) || 0);
+  const rt = document.getElementById("estRoundTrip");
+  const mult = (rt && rt.checked) ? 2 : 1;
+  const rate = estTransportRate();
+  calc.innerHTML = km > 0
+    ? `× <b>${fmtEstMoney(rate)}</b>/公里${mult === 2 ? " ×2（往返）" : ""} = <b>${fmtEstMoney(km * mult * rate)}</b>`
+    : `<span class="est-tip">填里程自动算车费</span>`;
+}
+
+/* 空态示例：填入文本框并立即拆解，降低新手上手门槛 */
+function estUseExample(txt) {
+  const ta = document.getElementById("estInput");
+  if (!ta) return;
+  ta.value = txt;
+  estSmartParse();
+}
+
+function fmtEstMoney(n) { return "¥" + (Number(n) || 0).toFixed(2); }
+function fmtEstHours(n) { return (Math.round((Number(n) || 0) * 10) / 10).toFixed(1); }
+/* 抽屉打开时右侧结果面板被遮住，把合计同步到抽屉标题栏，操作时不关抽屉也能看到变化 */
+function updateDrawerSummary(r) {
+  const sum = document.getElementById("estDrawerSummary");
+  if (sum) sum.textContent = r ? `${fmtEstHours(r.totalHours)}h · ${fmtEstMoney(r.grand)}` : "";
+}
+
+function renderEstimateResult(r, ctx) {
+  const box = document.getElementById("estResult");
+  if (!box) return;
+  const foot = document.getElementById("estFoot");
+  if (!_estUI.work.length) {
+    const c = estCfg();
+    const rateN = c.params.rateNormal, rateH = c.params.rateHigh;
+    const rateT = estTransportRate(), aux = c.params.auxRatio;
+    const ex = ["门头 6米×2米", "5个1.2×2.4米无框画", "发光字 5个", "20个门牌"];
+    box.innerHTML = `
+      <div class="est-guide">
+        <div class="est-guide-hd">三步出报价</div>
+        <ol class="est-guide-steps">
+          <li><b>1</b><div><strong>写清施工内容</strong><span>一句话即可：门头 6米×2米，发光字 5个</span></div></li>
+          <li><b>2</b><div><strong>点「✨ 智能拆解」</strong><span>自动匹配定额工时与材料</span></div></li>
+          <li><b>3</b><div><strong>核对并插入项目</strong><span>可改工程量、填运输里程、调整单价</span></div></li>
+        </ol>
+        <div class="est-guide-ex">试试示例
+          <div class="est-guide-chips">${ex.map((t) => `<button class="est-guide-chip" onclick="estUseExample('${esc(t)}')">${esc(t)}</button>`).join("")}</div>
+        </div>
+        <details class="est-guide-calc"><summary>钱怎么算（测算口径）</summary>
+          <ul>
+            <li>人工费 = 工时 × 工时单价（普通 ${rateN} / 高空 ${rateH} 元/时；受高度影响的项在高空时用高空价）</li>
+            <li>材料费 = 工程量 × 材料参考价（取自「参考价」单价库）</li>
+            <li>运输费 = 公里 × ${fmtEstMoney(rateT)}/公里（勾「往返」×2）</li>
+            <li>${aux > 0 ? `辅材费 = 材料费 × ${aux}%；` : ""}低于起步价时自动补足</li>
+            <li>合计 = 施工费（人工＋设备＋运输＋起步价补足）＋ 材料费${aux > 0 ? "＋ 辅材费" : ""}</li>
+          </ul>
+        </details>
+      </div>`;
+    // 空清单也要保留配置入口：否则新开测算时「参考价 / 配置管理」整排按钮都消失
+    if (foot) {
+      const emptyBtns = [`<button class="btn outline" onclick="estOpenPriceLib()" title="查看材料/画面参考单价">📖 参考价</button>`];
+      if (estCanManage() && _estUI.mode !== "insert") emptyBtns.push(`<button class="btn outline" onclick="estOpenCfgHub()">⚙️ 配置管理</button>`);
+      emptyBtns.push(`<button class="btn secondary" onclick="closeEstimateModal()">关闭</button>`);
+      foot.innerHTML = emptyBtns.join("");
+    }
+    updateDrawerSummary(null);
+    estSyncShellHeight();      // 空态窗口收到内容高度，减少大片留白
+    return;
+  }
+  if (!r) { box.innerHTML = `<div class="est-result-empty">测算内核未加载</div>`; updateDrawerSummary(null); return; }
+  // 结果行 → 清单项索引映射：内核 resolveItem 返回 null 的项不进 rows，跳过才能对齐（不改内核）
+  const validIdx = [];
+  (_estUI.work || []).forEach((w, i) => {
+    if (!window.Estimate || !Estimate.resolveItem || Estimate.resolveItem(w, ctx)) validIdx.push(i);
+  });
+  const rowsHtml = (r.rows || []).map((x, j) => `
+    <tr>
+      <td>${esc(x.n)}${x.isMat ? '<span class="est-mat-tag">材料</span>' : ''}${x.note ? `<div class="est-row-note">${esc(x.note)}</div>` : ''}</td>
+      <td class="est-num">${x.q || ''}${esc(x.u || '')}</td>
+      <td class="est-num">${x.isMat ? '—' : fmtEstHours(x.hours)}</td>
+      <td class="est-num">${fmtEstMoney(x.fee)}</td>
+      <td class="est-row-act"><button class="est-row-del" onclick="estRemoveWork(${validIdx[j]})" title="从清单删掉这一项">×</button></td>
+    </tr>`).join("");
+  const crewTxt = r.crew ? (r.crew.solo ? "1 人即可" : `建议 <b>${r.crew.people} 人</b>，约 <b>${r.crew.planDays} 天</b>（${esc(r.crew.level || '')}）`) : "—";
+  // 工艺增项占比护栏（2026-11-22）：工艺是把双刃剑，全勾能把小门头翻倍。
+  // 单独列一行让用户看到"这笔钱是包边/雨棚加的"，占比 >60% 提醒核对重复勾选。
+  let exFee = 0, baseFee = 0, exCnt = 0;
+  if (window.Estimate && Estimate.resolveItem) {
+    (_estUI.work || []).forEach((w) => {
+      const rr = Estimate.resolveItem(w, ctx);
+      if (!rr) return;
+      if (w.extraKey) { exFee += Number(rr.fee) || 0; exCnt++; } else baseFee += Number(rr.fee) || 0;
+    });
+  }
+  const exRatio = (exFee + baseFee) > 0 ? exFee / (exFee + baseFee) : 0;
+  const exWarn = exFee > 0 && exRatio > 0.6;
+  // 桁架/舞台必须车拉（2026-11-22）：没填里程时明确提示，不然用户以为总额就是全部
+  const needTruck = (_estUI.work || []).some((w) => w && (w.id === "i_truss" || w.id === "i_stage"));
+  const truckWarn = needTruck && !(Number(r.transportFee) > 0);
+  box.innerHTML = `
+    <div class="est-result-title">测算结果 <button class="linkbtn" onclick="estOpenQuickAdd()">＋ 添加项</button> <button class="linkbtn" onclick="estSaveHistory()" title="保存到本机测算历史，可命名">💾 存历史</button></div>
+    <table class="est-rtable">
+      <thead><tr><th>施工项</th><th>工程量</th><th>工时</th><th>费用</th><th></th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+    <div class="est-totals">
+      <div class="est-total-line"><span>总工时</span><b>${fmtEstHours(r.totalHours)} 小时（约 ${fmtEstHours(r.days)} 人天）</b></div>
+      <div class="est-total-line"><span>人工费</span><b>${fmtEstMoney(r.labor)}</b></div>
+      ${r.equip ? `<div class="est-total-line"><span>设备费${r.equipDays > 1 ? `（${r.equipDays} 天）` : ''}</span><b>${fmtEstMoney(r.equip)}</b></div>` : ''}
+      ${r.transportFee ? `<div class="est-total-line"><span>运输费（${r.roundTrip ? r.distanceKm + '公里往返' : r.distanceKm + '公里'} × ${fmtEstMoney(r.transportRate)}/公里）</span><b>${fmtEstMoney(r.transportFee)}</b></div>` : ''}
+      ${truckWarn ? `<div class="est-total-line est-warn"><span>运输</span><b>未填里程＝漏运费（桁架要车拉）</b></div>` : ''}
+      ${r.floor ? `<div class="est-total-line"><span>起步价补足（最低 ${fmtEstMoney(r.floorTarget)}）</span><b>${fmtEstMoney(r.floor)}</b></div>` : ''}
+      <div class="est-total-line"><span>施工费小计</span><b>${fmtEstMoney(r.construction)}</b></div>
+      ${exFee > 0 ? `<div class="est-total-line"><span>其中工艺增项（${exCnt} 项，占主干 ${Math.round(exRatio * 100)}%）</span><b>${fmtEstMoney(exFee)}</b></div>` : ''}
+      ${r.matFee ? `<div class="est-total-line"><span>材料费</span><b>${fmtEstMoney(r.matFee)}</b></div>` : ''}
+      ${r.auxFee ? `<div class="est-total-line"><span>辅材费（材料 ${r.auxRatio}%）</span><b>${fmtEstMoney(r.auxFee)}</b></div>` : ''}
+      <div class="est-total-line grand"><span>合计</span><b>${fmtEstMoney(r.grand)}</b></div>
+      <div class="est-total-line"><span>施工组织建议</span><b>${crewTxt}</b></div>
+      ${exWarn ? `<div class="est-ex-warn">⚠ 工艺增项已占主干 ${Math.round(exRatio * 100)}%：包边/檐口/雨棚/底板这类多为可选项，核对是否重复勾选或计量方式不合适（门头工艺在拆解面板可取消）。</div>` : ''}
+    </div>`;
+
+  if (foot) {
+    const btns = [];
+    if (_estUI.mode === "insert") {
+      btns.push(`<button class="btn primary" onclick="estInsertToProject()">插入到项目</button>`);
+      btns.push(`<button class="btn outline" onclick="estOpenExportPanel()">导出报价单</button>`);
+      btns.push(`<button class="btn outline" onclick="estOpenPriceLib()" title="查看材料/画面参考单价">📖 参考价</button>`);
+    } else {
+      btns.push(`<button class="btn primary" onclick="estOpenInsertPicker()">插入到项目</button>`);
+      btns.push(`<button class="btn outline" onclick="estOpenExportPanel()">导出报价单</button>`);
+      btns.push(`<button class="btn outline" onclick="estOpenPriceLib()" title="查看材料/画面参考单价">📖 参考价</button>`);
+      if (estCanManage()) btns.push(`<button class="btn outline" onclick="estOpenCfgHub()">⚙️ 配置管理</button>`);
+    }
+    btns.push(`<button class="btn secondary" onclick="closeEstimateModal()">关闭</button>`);
+    foot.innerHTML = btns.join("");
+  }
+  updateDrawerSummary(r);
+  estSyncShellHeight();   // 有结果时恢复用户记忆的窗口高度
+}
+
+/* 已移除：第三方报价对比（用户反馈对比意义不大） */
+
+/* 施工条件（安装高度 / 墙面 / 设备天数）：收在底部折叠区「⚙️ 施工条件」里，不再横在
+   施工内容和清单之间。理由：它每单都影响钱（高空系数、设备费），但 90% 的单子是
+   「≤6米 + 平整墙」，常显只是白占地方。折叠标题行就是摘要：非标准条件时整条变黄，
+   并直接写出「6–20米 · 瓷砖/保温 · 高度系数 ×1.15」，不展开也看得见。 */
+const EST_H_TXT = { low: "≤6米", mid: "6–20米", high: ">20米" };
+const EST_W_TXT = { flat: "平整墙", tile: "瓷砖/保温", glass: "玻璃幕墙" };
+
+function estCondIsDefault() {
+  return !!_estUI && _estUI.height === "low" && _estUI.wall === "flat";
+}
+
+function estRenderAdvanced() {
+  if (!_estUI) return;
+  const cond = document.getElementById("estCond");
+  if (cond) {
+    const heights = [["low", "≤6米", "平地/人字梯，不计设备费"], ["mid", "6–20米", "吊篮/高空车，按设备天数计费"], ["high", ">20米", "吊车/蜘蛛人，按台班计费"]];
+    const walls = [["flat", "平整", "系数 1.00"], ["tile", "瓷砖/保温", "打孔难，系数更高"], ["glass", "玻璃幕墙", "需吊篮+专用挂件，系数最高"]];
+    const autoDays = (_estUI.result && _estUI.result.equipDays) || 1;
+    const needEquip = _estUI.height !== "low";
+    cond.innerHTML = `
+      <div class="est-cond-row">
+        <span class="est-cond-lb">安装高度</span>
+        <div class="est-cond-chips">${heights.map(([v, t, s]) => `<button type="button" class="est-cond-chip${_estUI.height === v ? " is-on" : ""}" onclick="estSetCond('height','${v}')" title="${esc(s)}">${t}</button>`).join("")}</div>
+      </div>
+      <div class="est-cond-row">
+        <span class="est-cond-lb">墙面</span>
+        <div class="est-cond-chips">${walls.map(([v, t, s]) => `<button type="button" class="est-cond-chip${_estUI.wall === v ? " is-on" : ""}" onclick="estSetCond('wall','${v}')" title="${esc(s)}">${t}</button>`).join("")}</div>
+        ${needEquip ? `<label class="est-cond-eq" title="留空=按建议工期自动算；填数字=本单固定用这么多天">设备 <input class="input" id="estEquipDays" type="number" min="1" step="1" value="${_estUI.equipDays || ""}" placeholder="自动 ${autoDays}" oninput="estEquipDaysChange(this.value)"/> 天</label>` : ""}
+      </div>
+      <div class="est-cond-hint" id="estCondHint"></div>`;
+  }
+  const note = document.getElementById("estAdvNote");
+  if (note) {
+    const c = estCfg();
+    const TR = (Estimate && Estimate.TRADES) || {};
+    const tradeTxt = Object.keys(TR).map((k) => `${TR[k].n} ¥${c.params[TR[k].k]}/时`).join(" · ");
+    note.innerHTML = `工种单价：${tradeTxt}。人工费＝工时×本项工种单价；标「高」的项在高空时改按高空工单价。自定义施工项按「工时/单位 × 所选工种单价」计，不再叠高度/墙面系数。定额工时与工种单价属全局配置${estCanManage() ? `，<button class="linkbtn" onclick="estOpenCfgHub('items')">去「配置管理」修改</button>` : "，由管理员在「配置管理」维护"}。`;
+  }
+  estUpdateCondHint();
+}
+
+/* 折叠标题行＝条件摘要：标准条件灰字「≤6米 · 平整墙 / 标准」；改过条件则整条变黄 + 系数 */
+function estUpdateAdvSummary() {
+  const adv = document.getElementById("estAdv");
+  if (!adv || !_estUI) return;
+  const isDef = estCondIsDefault();
+  adv.classList.toggle("is-custom", !isDef);
+  const txt = document.getElementById("estAdvSumTxt");
+  const eff = document.getElementById("estAdvSumEff");
+  if (txt) txt.textContent = `${EST_H_TXT[_estUI.height] || "≤6米"} · ${EST_W_TXT[_estUI.wall] || "平整墙"}`;
+  if (eff) {
+    if (isDef) {
+      eff.textContent = (_estUI.equipDays > 0) ? `设备 ${_estUI.equipDays} 天（≤6米不计费）` : "标准条件";
+      eff.className = "est-adv-sum-eff";
+    } else {
+      eff.textContent = "";  // 具体系数由 estUpdateCondHint 填，避免两处各算一遍
+      eff.className = "est-adv-sum-eff is-warn";
+    }
+  }
+}
+
+/* 施工条件切换（chips）：改状态 → 重画 chips → 重算。
+   条件改动后标题行摘要跟着变色（见 estUpdateAdvSummary）。 */
+function estSetCond(kind, v) {
+  if (!_estUI) return;
+  if (kind === "height" && ["low", "mid", "high"].includes(v)) _estUI.height = v;
+  if (kind === "wall" && ["flat", "tile", "glass"].includes(v)) _estUI.wall = v;
+  estRenderAdvanced();
+  estRecalc();
+}
+
+/* 设备天数覆盖：留空/0 = 自动（跟随建议工期），填数字 = 本单固定 */
+function estEquipDaysChange(v) {
+  if (!_estUI) return;
+  const n = Number(v);
+  _estUI.equipDays = (isNaN(n) || n <= 0) ? 0 : Math.max(1, Math.round(n));
+  estRecalc();
+}
+
+/* 条件生效提示：只列真正起作用的系数/费用，默认条件不刷屏。
+   展开区写进 chips 下方（#estCondHint），折叠标题行写进摘要右侧（#estAdvSumEff）。 */
+function estUpdateCondHint() {
+  estUpdateAdvSummary();
+  if (!_estUI || !_estUI.ctx) return;
+  const ctx = _estUI.ctx, r = _estUI.result, p = ctx.params || {};
+  const hf = Number({ low: p.hfLow, mid: p.hfMid, high: p.hfHigh }[ctx.height]) || 1;
+  const wf = Number({ flat: p.wfFlat, tile: p.wfTile, glass: p.wfGlass }[ctx.wall]) || 1;
+  const parts = [];
+  if (hf !== 1) parts.push(`高度系数 ×${hf.toFixed(2)}`);
+  if (wf !== 1) parts.push(`墙面系数 ×${wf.toFixed(2)}`);
+  if (r && r.equip > 0) parts.push(`设备 ${r.equipDays} 天 ${fmtEstMoney(r.equip)}`);
+  if (ctx.height !== "low" && _estUI.equipDays > 0) parts.push(`设备天数已手填（覆盖自动）`);
+  const el = document.getElementById("estCondHint");
+  if (el) el.textContent = parts.length ? "本单计价：" + parts.join(" · ") : "标准条件：≤6米平整墙，不计高空系数与设备费";
+  const eff = document.getElementById("estAdvSumEff");
+  if (eff && parts.length) eff.textContent = parts.join(" · ");  // 非标准条件：标题行直接写系数
+}
+
+/* 测算配置管理权限：总经理恒可；或管理员在「费用测算」组显式授予 estimate_manage。
+   授予者可改参数与单价 / 校准工时 / 管理施工项 / 管理整套模板（RLS 同步放行 estimate_config key 写入）。 */
+function estCanManage() {
+  if (typeof isManager === "function" && isManager()) return true;
+  return typeof can === "function" && can(CAP.ESTIMATE_MANAGE);
+}
+
+/* 常用施工项抽屉：按大类列出定额，支持点选 / 搜索联想多选 / 批量文本一次加入 */
+let _estBatchOpen = false; // 批量加入区默认收起，点标题展开（避免长期占用抽屉顶部空间）
+function estToggleBatch() {
+  _estBatchOpen = !_estBatchOpen;
+  const box = document.querySelector("#estDrawer .est-batch");
+  if (!box) return;
+  box.classList.toggle("is-open", _estBatchOpen);
+  const body = document.getElementById("estBatchBody");
+  if (body) body.hidden = !_estBatchOpen;
+  const arrow = box.querySelector(".est-batch-toggle b");
+  if (arrow) arrow.textContent = _estBatchOpen ? "▴" : "▾";
+  if (_estBatchOpen) { const ta = document.getElementById("estBatchText"); if (ta) ta.focus(); }
+}
+/* 折合人工单价（元/单位）：工时 × 工种单价；工时优先取校准值 WH[id]，保证「常用项/联想/管理页」三处口径一致 */
+function estUnitPrice(it, params, WH) {
+  if (!it) return 0;
+  const p = params || estCfg().params || {};
+  const w = WH && WH[it.id];
+  const h = (w != null && w !== "" && !isNaN(parseFloat(w))) ? parseFloat(w) : (Number(it.h) || 0);
+  const rate = Estimate && Estimate.tradeRate ? Estimate.tradeRate(it, p) : 36;
+  return Math.round(h * rate);
+}
+function estOpenQuickAdd() {
+  if (!window.Estimate) return;
+  const groups = Estimate.WORK_GROUPS || [];
+  const p = estCfg().params || {};
+  const TRADES = Estimate.TRADES || {};
+  // 折合人工单价（工时×工种单价）：直接标在选项上，选的时候就能对照本地市场价
+  const priceOf = (it) => estUnitPrice(it, p, estCfg().WH || {});
+  const rows = groups.map((grp) => `
+    <div class="est-pick-cat">${esc(grp.g)}</div>
+    <div class="est-pick-chips">${grp.rows.map((a) => {
+      const it = Estimate.WORK_ITEMS.find((x) => x.id === a[0]);
+      const tr = it && TRADES[it.tr] ? TRADES[it.tr].n : "";
+      const price = priceOf(it);
+      const tip = (it && it.m ? it.m : "") + (tr ? " ｜ " + tr + " " + price + "元/" + (it ? it.u : "") : "");
+      return `<button class="est-pick-chip" data-id="${esc(a[0])}" title="${esc(tip)}" onclick="estPickAdd('${esc(a[0])}')">${esc(a[1])}<span>${esc(it ? it.u : '')}${price !== "" ? " ≈¥" + price : ""}</span></button>`;
+    }).join("")}</div>`).join("");
+  // 校准 + 施工项增删入口（有测算管理权限者可见）
+  const adminBar = estCanManage()
+    ? `<div class="est-pick-admin"><span>施工项可增删改 / 全员共享</span><span class="est-pick-admin-btns"><button class="btn small outline" onclick="estOpenWhCalib()">✏️ 校准工时</button><button class="btn small outline" onclick="estOpenCfgHub('items')">⚙️ 管理施工项</button></span></div>`
+    : "";
+  const batch = `<div class="est-batch${_estBatchOpen ? " is-open" : ""}">
+    <button type="button" class="est-batch-toggle" onclick="estToggleBatch()" title="粘贴多行文本一次加入多条施工项（每行一项，可带数量）">⚡ 批量加入<span>每行一项，可带数量</span><b>${_estBatchOpen ? "▴" : "▾"}</b></button>
+    <div id="estBatchBody"${_estBatchOpen ? "" : " hidden"}>
+      <textarea id="estBatchText" class="input est-batch-text" rows="2" placeholder="门头安装 3&#10;发光字 5&#10;灯箱×2"></textarea>
+      <div class="est-batch-bar"><label>默认数量 <input type="number" id="estBatchQty" value="1" min="1" step="1"/></label><button class="btn small primary" onclick="estBatchAdd()">批量加入</button></div>
+    </div>
+  </div>`;
+  const search = `<div class="est-pick-search">
+    <input class="input" id="estPickSearch" placeholder="搜索施工项（联想多选）…" oninput="estFilterPick(this.value)"/>
+    <input type="number" id="estPickQty" class="est-qty-input" value="1" min="1" step="1" title="加入数量"/>
+    <button class="btn small" onclick="estAddMatched()">加入匹配</button>
+  </div>
+  <div id="estMatchBar" class="est-match-bar" hidden>
+    <label><input type="checkbox" id="estMatchAll" onchange="estToggleMatchAll(this.checked)"/> 全选</label>
+    <span id="estMatchCount">匹配 0 项</span>
+    <button class="btn small primary" onclick="estAddSelected()">加入已选</button>
+  </div>
+  <div id="estMatchList" class="est-match-list" hidden></div>`;
+  estShowDrawer("常用施工项（点选 / 联想 / 批量）", `${adminBar}${batch}${search}<div id="estPickList">${rows}</div>`);
+}
+
+/* 单项标准工时校准（总经理可改，存 estimate_config.WH；工种单价同页可改） */
+function estOpenWhCalib() {
+  if (!estCanManage()) { toast("无测算管理权限，无法校准定额工时"); return; }
+  const c = estCfg();
+  const items = Estimate.WORK_ITEMS || [];
+  const TRADES = Estimate.TRADES || {};
+  const calcPrice = (it, h) => {
+    const rate = Estimate.tradeRate ? Estimate.tradeRate({ tr: it.tr }, c.params) : 36;
+    return Math.round((Number(h) || 0) * rate);
+  };
+  const rows = items.map((it) => {
+    const cur = (c.WH && c.WH[it.id] != null) ? c.WH[it.id] : it.h;
+    const calibrated = c.WH && c.WH[it.id] != null && Number(c.WH[it.id]) !== Number(it.h);
+    const tr = TRADES[it.tr] ? TRADES[it.tr].n : "普工";
+    return `<label class="est-calib-row" data-wh-label="${esc(it.id)}" data-tr="${esc(it.tr || "pg")}" data-u="${esc(it.u || "")}">
+      <span title="${esc(it.n)} ｜ ${esc(tr)} ｜ ${esc(it.m || "")}">${esc(it.n)}${calibrated ? '<b class="est-calib-dot" title="已校准"></b>' : ''}</span>
+      <em>${esc(it.u || "")}</em>
+      <input type="number" min="0" step="0.01" value="${cur}" data-wh="${esc(it.id)}" data-hd="${it.h}" oninput="estCalibRowInput(this)" title="标准工时/单位（默认 ${it.h}）· 工种 ${esc(tr)}"/>
+      <small title="折合人工（工时×工种单价，材料另计）">≈¥${calcPrice(it, cur)}</small></label>`;
+  }).join("");
+  estShowDrawer("校准 · 单项标准工时", `
+    <div class="est-cfg-tip">改的是「标准工时 / 单位」，保存后全员测算立即生效，不影响历史快照。改回默认值可清掉校准标记。右侧 ≈¥ 是按本项工种单价折出的人工价（工种单价在「⚙️ 参数与单价」改），可与本地市场价对照。</div>
+    <input class="input" id="estWhSearch" placeholder="搜索施工项…" oninput="estFilterWh(this.value)" style="margin-bottom:10px;"/>
+    <div id="estWhList">${rows}</div>
+    <div class="est-cfg-save">
+      <button class="btn small outline est-cfg-save-l" onclick="estOpenItemManage()">← 返回施工项</button>
+      <button class="btn primary" onclick="estSaveWhCalib()">保存校准</button>
+    </div>`);
+}
+/* 校准页单行：改工时 → 本行 ≈¥ 立刻跟着变（不重渲染，避免失焦） */
+function estCalibRowInput(el) {
+  if (!el) return;
+  const row = el.closest(".est-calib-row");
+  const small = row && row.querySelector("small");
+  const v = Number(el.value);
+  const hd = Number(el.dataset.hd);
+  if (small && !isNaN(v) && v >= 0 && el.value !== "") {
+    const rates = estCollectRates();
+    const tk = row.dataset.tr && Estimate.TRADES[row.dataset.tr] ? row.dataset.tr : "pg";
+    const rate = Estimate.tradeRate ? Estimate.tradeRate({ tr: tk }, rates) : 36;
+    small.textContent = `≈¥${Math.round(v * rate)}`;
+  }
+  el.classList.toggle("is-calib", el.value !== "" && !isNaN(v) && v >= 0 && !isNaN(hd) && Math.abs(v - hd) > 0.001);
+}
+/* 工种单价改动 → 校准页所有 ≈¥ 同步重算 */
+function estFilterWh(q) {
+  q = (q || "").trim().toLowerCase();
+  document.querySelectorAll("#estWhList .est-calib-row").forEach((el) => {
+    el.style.display = (!q || el.textContent.toLowerCase().includes(q)) ? "" : "none";
+  });
+}
+async function estSaveWhCalib() {
+  const c = estCfg();
+  document.querySelectorAll('#estDrawer [data-est-param]').forEach((el) => {
+    const v = Number(el.value); if (!isNaN(v) && v >= 0) c.params[el.dataset.estParam] = v;
+  });
+  let changed = 0;
+  const items = Estimate.WORK_ITEMS || [];
+  document.querySelectorAll('#estDrawer [data-wh]').forEach((el) => {
+    const id = el.dataset.wh, v = Number(el.value);
+    const it = items.find((x) => x.id === id);
+    if (!it || isNaN(v) || v < 0) return;
+    if (Math.abs(v - Number(it.h)) < 0.001) { if (c.WH[id] != null) { delete c.WH[id]; changed++; } }
+    else if (c.WH[id] !== v) { c.WH[id] = v; changed++; }
+  });
+  const ok = await saveEstimateConfig(c);
+  if (ok) {
+    estRenderAdvanced();
+    estRecalc();
+    estOpenItemManage();  // 回施工项表，改完的工时/单价直接看在价格上
+    toast("已保存校准" + (changed ? " " + changed + " 项" : ""));
+  }
+}
+
+function estFilterPick(q) {
+  q = (q || "").trim().toLowerCase();
+  let visible = 0;
+  document.querySelectorAll("#estPickList .est-pick-chip").forEach((b) => {
+    const show = !q || (b.textContent || "").toLowerCase().includes(q);
+    b.style.display = show ? "" : "none";
+    if (show) visible++;
+  });
+  const bar = document.getElementById("estMatchBar");
+  const list = document.getElementById("estMatchList");
+  const cnt = document.getElementById("estMatchCount");
+  if (!bar || !list) return;
+  if (!q) { bar.hidden = true; list.hidden = true; list.innerHTML = ""; return; }
+  const matched = (Estimate.WORK_ITEMS || [])
+    .filter((x) => (x.n || "").toLowerCase().includes(q) || (x.id || "").toLowerCase().includes(q) || String(x.m || "").toLowerCase().includes(q))
+    .slice(0, 40);
+  bar.hidden = false; list.hidden = false;
+  if (cnt) cnt.textContent = `匹配 ${matched.length} 项 · 分类区可见 ${visible} 项`;
+  const p = estCfg().params || {};
+  const TRADES = Estimate.TRADES || {};
+  list.innerHTML = matched.length
+    ? matched.map((it) => {
+      const price = estUnitPrice(it, p, estCfg().WH || {});
+      const tr = TRADES[it.tr] ? TRADES[it.tr].n : "";
+      return `<label class="est-match-row" title="${esc((it.m || "") + " ｜ " + tr)}"><input type="checkbox" class="est-match-cb" value="${esc(it.id)}"/><span>${esc(it.n)}</span><em>≈¥${price}/${esc(it.u)} · ${esc(tr)}</em></label>`;
+    }).join("")
+    : `<div class="est-empty">没有匹配项</div>`;
+}
+function estToggleMatchAll(v) {
+  document.querySelectorAll("#estDrawer .est-match-cb").forEach((el) => { el.checked = !!v; });
+}
+function estAddMatched() {
+  const q = Number(document.getElementById("estPickQty")?.value) || 1;
+  const ids = Array.from(document.querySelectorAll("#estPickList .est-pick-chip"))
+    .filter((b) => b.style.display !== "none").map((b) => b.dataset.id);
+  estAddByIds(ids, q);
+}
+function estAddSelected() {
+  const q = Number(document.getElementById("estPickQty")?.value) || 1;
+  const ids = Array.from(document.querySelectorAll("#estDrawer .est-match-cb:checked")).map((el) => el.value);
+  if (!ids.length) { toast("先勾选要加入的施工项"); return; }
+  estAddByIds(ids, q);
+}
+function estAddByIds(ids, q) {
+  if (!ids || !ids.length) { toast("没有可加入的施工项"); return; }
+  let ok = 0;
+  ids.forEach((id) => {
+    const it = (Estimate.WORK_ITEMS || []).find((x) => x.id === id);
+    if (it) { estAddWork({ type: "lib", id: it.id, n: it.n, u: it.u, q }); ok++; }
+  });
+  renderEstimateWorkList(); estRecalc();
+  toast(ok ? `已加入 ${ok} 项（数量×${q}，可在清单里改）` : "没找到对应施工项");
+}
+function estPickAdd(id, qty) {
+  const it = (Estimate.WORK_ITEMS || []).find((x) => x.id === id);
+  if (!it) return;
+  const n = Number(qty) || 1;
+  estAddWork({ type: "lib", id: it.id, n: it.n, u: it.u, q: n });
+  renderEstimateWorkList(); estRecalc();
+  toast("已添加：" + it.n + "×" + n + "（数量可在清单里改）");
+}
+/* 批量文本：每行一项，支持「名称 3」「名称×3」「名称 x3」，未识别的交给智能拆解逐行解析 */
+function estBatchAdd() {
+  const ta = document.getElementById("estBatchText");
+  const lines = (ta ? ta.value : "").split(/[\n\r,，;；]+/).map((s) => s.trim()).filter(Boolean);
+  if (!lines.length) { toast("请每行输入一个施工项"); return; }
+  const all = Estimate.WORK_ITEMS || [];
+  const defQty = Number(document.getElementById("estBatchQty")?.value) || 1;
+  let ok = 0;
+  const fail = [];
+  lines.forEach((line) => {
+    let name = line, q = defQty;
+    const m = line.match(/^(.*?)\s*(?:[×xX*]\s*(\d+(?:\.\d+)?)|[\s，,]+(\d+(?:\.\d+)?))\s*$/);
+    if (m) { name = (m[1] || "").trim(); q = Number(m[2] || m[3]) || defQty; }
+    const it = all.find((x) => x.n === name) || all.find((x) => x.n.includes(name) && name.length >= 2) || all.find((x) => name.includes(x.n) && x.n.length >= 2);
+    let hits = [];
+    if (it) hits = [{ type: "lib", id: it.id, n: it.n, u: it.u, q }];
+    else hits = estParseWithCustom(line); // 整行交给内核/自定义识别（含数量解析）
+    if (!hits.length) { fail.push(line); return; }
+    hits.forEach((h) => { estAddWork(h); ok++; });
+  });
+  renderEstimateWorkList(); estRecalc();
+  if (ta) ta.value = "";
+  toast(`已批量加入 ${ok} 项` + (fail.length ? `；未识别：${fail.slice(0, 3).join("、")}` : ""));
+}
+
+/* ===== 施工项管理：自定义项增删改排序 + 内置项隐藏/恢复（总经理） ===== */
+let _estItemDraft = null;
+let _estItemBuiltinQ = "";
+function estItemDraft() {
+  if (!_estItemDraft) _estItemDraft = JSON.parse(JSON.stringify(estCfg().customItems || []));
+  return _estItemDraft;
+}
+function estOpenItemManage() {
+  if (!estCanManage()) { toast("无测算管理权限，无法管理施工项"); return; }
+  _estItemDraft = null; _estItemBuiltinQ = ""; _estItemOvDraft = null; _estItemOvOpen = new Set();
+  estRenderItemManage();
+}
+/* ===== 内置定额项「直接编辑」（2026-11-22）=====
+   以前内置项只能改工时（校准）或导出 CSV 改完再导入，名称/单位/工种/施工方式都动不了。
+   现在按 id 覆盖：存 estimate_config.itemOverrides，同 id 覆盖内置默认值，内核常量一行不改；
+   工时仍走 WH 校准（两套机制互不影响，「恢复默认」只清覆盖，不动工时校准）。
+   清空/与默认相同即自动删字段 → 配置保持最小，内置升级后仍跟随新默认。 */
+let _estItemOvDraft = null;
+let _estItemOvOpen = new Set();
+function estItemOvDraft() {
+  if (!_estItemOvDraft) _estItemOvDraft = JSON.parse(JSON.stringify(estCfg().itemOverrides || {}));
+  return _estItemOvDraft;
+}
+function estItemOv(id) { return estItemOvDraft()[id] || {}; }
+function estItemEff(base) { return { ...base, ...estItemOv(base.id) }; }
+function estItemOvPanelHtml(id) {
+  const base = (estBuiltinItems() || []).find((x) => x.id === id);
+  if (!base) return "";
+  const it = estItemEff(base);
+  const TRADES = (Estimate && Estimate.TRADES) || {};
+  const TRADE_IDS = (Estimate && Estimate.TRADE_IDS) || ["pg"];
+  const opts = TRADE_IDS.map((k) => `<option value="${k}"${(it.tr || "pg") === k ? " selected" : ""}>${esc(TRADES[k] ? TRADES[k].n : k)}</option>`).join("");
+  return `
+    <div class="est-item-ov-grid">
+      <label>名称<input class="input" value="${esc(it.n)}" data-ov="n" oninput="estItemOvSet('${esc(id)}','n',this.value)"/></label>
+      <label>单位<input class="input" value="${esc(it.u)}" data-ov="u" oninput="estItemOvSet('${esc(id)}','u',this.value)"/></label>
+      <label>工种<select class="input" data-ov="tr" onchange="estItemOvSet('${esc(id)}','tr',this.value)">${opts}</select></label>
+      <label>施工方式<input class="input" value="${esc(it.m || "")}" data-ov="m" placeholder="怎么干（只做说明）" oninput="estItemOvSet('${esc(id)}','m',this.value)"/></label>
+    </div>
+    <div class="est-item-ov-bar">
+      <label class="est-item-ck"><input type="checkbox" ${it.hf ? "checked" : ""} data-ov="hf" onchange="estItemOvSet('${esc(id)}','hf',this.checked)"/>受高度系数</label>
+      <label class="est-item-ck"><input type="checkbox" ${it.wf ? "checked" : ""} data-ov="wf" onchange="estItemOvSet('${esc(id)}','wf',this.checked)"/>受墙面系数</label>
+      <div class="est-item-ov-hint">保存后全员生效，历史快照/项目不受影响；工时单独用右侧工时框校准</div>
+      <button class="btn small outline" onclick="estItemOvReset('${esc(id)}')">↺ 恢复默认</button>
+    </div>`;
+}
+function estItemOvToggle(id) {
+  const p = document.querySelector(`#estDrawer [data-ov-panel="${id}"]`);
+  if (!p) return;
+  const open = p.hidden;
+  if (open && !p.dataset.filled) { p.innerHTML = estItemOvPanelHtml(id); p.dataset.filled = "1"; }
+  p.hidden = !open;
+  if (open) { _estItemOvOpen.add(id); } else { _estItemOvOpen.delete(id); }
+  const btn = document.querySelector(`#estDrawer [data-ov-btn="${id}"]`);
+  if (btn) btn.classList.toggle("is-on", open);
+}
+function estItemOvSet(id, k, v) {
+  const base = (estBuiltinItems() || []).find((x) => x.id === id);
+  if (!base) return;
+  const d = estItemOvDraft();
+  const o = { ...(d[id] || {}) };
+  if (k === "hf" || k === "wf") { if (!!v === !!base[k]) delete o[k]; else o[k] = !!v; }
+  else {
+    const s = String(v == null ? "" : v);
+    if (s.trim() === String(base[k] == null ? "" : base[k])) delete o[k]; else o[k] = s;
+  }
+  if (Object.keys(o).length) d[id] = o; else delete d[id];
+  estItemOvRefreshRow(id);
+}
+function estItemOvReset(id) {
+  delete estItemOvDraft()[id];
+  const base = (estBuiltinItems() || []).find((x) => x.id === id);
+  const p = document.querySelector(`#estDrawer [data-ov-panel="${id}"]`);
+  if (p && base) {
+    p.querySelectorAll("[data-ov]").forEach((el) => {
+      const k = el.dataset.ov;
+      if (k === "hf" || k === "wf") el.checked = !!base[k];
+      else el.value = base[k] == null ? "" : base[k];
+    });
+  }
+  estItemOvRefreshRow(id);
+  toast("已恢复该项默认名称/单位/工种/方式（工时校准不受影响）");
+}
+/* 覆盖改了只做定点更新：不重渲染整行，避免丢掉刚输入的工时 */
+function estItemOvRefreshRow(id) {
+  const row = document.querySelector(`#estDrawer [data-bi-row="${id}"]`);
+  const base = (estBuiltinItems() || []).find((x) => x.id === id);
+  if (!row || !base) return;
+  const it = estItemEff(base);
+  const TRADES = (Estimate && Estimate.TRADES) || {};
+  const tr = TRADES[it.tr] || null;
+  const nameWrap = row.querySelector(".est-item-bi-n");
+  const nameEl = nameWrap && nameWrap.querySelector("b");
+  if (nameEl) nameEl.textContent = it.n;
+  const badge = row.querySelector(".est-item-tr");
+  if (badge) {
+    badge.textContent = (tr ? tr.n : "普工").slice(0, 2);
+    badge.title = "工种：" + (tr ? tr.n + " · " + tr.note : "普工");
+  }
+  const mEl = row.querySelector(".est-item-m");
+  if (mEl) mEl.textContent = it.m || "";
+  const hfb = row.querySelector(".est-item-hfb");
+  if (hfb) hfb.style.display = it.hf ? "" : "none";
+  // 折合价按新工种/新单位重算（estItemRefreshAllPrices 读工时框的 data-tr/data-u）
+  const hEl = row.querySelector("[data-wh]");
+  if (hEl) { hEl.dataset.tr = tr ? it.tr : "pg"; hEl.dataset.u = it.u || ""; }
+  const ovBtn = row.querySelector("[data-ov-btn]");
+  if (ovBtn) ovBtn.classList.toggle("is-edited", Object.keys(estItemOv(id)).length > 0);
+  estItemRefreshAllPrices();
+}
+function estRenderItemManage() {
+  const draft = estItemDraft();
+  const hidden = new Set(estCfg().hiddenItems || []);
+  const TRADES = (Estimate && Estimate.TRADES) || {};
+  const TRADE_IDS = (Estimate && Estimate.TRADE_IDS) || ["pg"];
+  // 下拉用 2 字短名（安装技工→安装），60px 列宽才放得下；完整名与说明在 title
+  const tradeOpts = (cur) => TRADE_IDS.map((k) => {
+    const full = TRADES[k] ? TRADES[k].n : k;
+    return `<option value="${k}" title="${esc(full)}"${(cur || "pg") === k ? " selected" : ""}>${esc(full.slice(0, 2))}</option>`;
+  }).join("");
+  const custParams = estCfg().params || {};
+  // 折合人工单价（元/本项单位）：工时 × 本工种单价，材料另计；改工时/工种时即时重算（2026-11-22）
+  const custPrice = (it) => Math.round((Number(it.h) || 0) * (Estimate && Estimate.tradeRate ? Estimate.tradeRate(it, custParams) : 36));
+  const customRows = draft.map((it, i) => `
+    <div class="est-item-row">
+      <div class="est-item-name">
+        <input class="est-item-n" value="${esc(it.n)}" placeholder="施工项名称" oninput="estItemField(${i},'n',this.value)"/>
+        <i class="est-item-price" data-cprice="${i}" title="折合人工：工时 × 工种单价（材料另计）">≈¥${custPrice(it)}/${esc(it.u || "项")}</i>
+      </div>
+      <input class="est-item-u" value="${esc(it.u)}" placeholder="单位" oninput="estItemField(${i},'u',this.value)"/>
+      <input class="est-item-h" type="number" min="0" step="0.01" value="${it.h}" title="标准工时/单位（工时×工种单价=人工费）" oninput="estItemField(${i},'h',this.value)"/>
+      <select class="est-item-tr-sel" title="工种：决定这一项按哪个工时单价算钱" onchange="estItemField(${i},'tr',this.value)">${tradeOpts(it.tr)}</select>
+      <label class="est-item-ck" title="受高度系数影响"><input type="checkbox" ${it.hf ? 'checked' : ''} onchange="estItemField(${i},'hf',this.checked)"/>高</label>
+      <label class="est-item-ck" title="受墙面系数影响"><input type="checkbox" ${it.wf ? 'checked' : ''} onchange="estItemField(${i},'wf',this.checked)"/>墙</label>
+      <button class="est-item-op" onclick="estItemMove(${i},-1)" title="上移">↑</button>
+      <button class="est-item-op" onclick="estItemMove(${i},1)" title="下移">↓</button>
+      <button class="est-item-op est-item-del" onclick="estItemDel(${i})" title="删除">×</button>
+    </div>`).join("");
+  const q = _estItemBuiltinQ.trim().toLowerCase();
+  const whCfg = estCfg().WH || {};
+  const params = estCfg().params || {};
+  const priceOf = (it, h) => Math.round((Number(h != null ? h : it.h) || 0) * (Estimate && Estimate.tradeRate ? Estimate.tradeRate(it, params) : 36));
+  const ovDraft = estItemOvDraft();
+  const ovCount = Object.keys(ovDraft).length;
+  const builtins = estBuiltinItems().map((x) => ({ ...x, ...(ovDraft[x.id] || {}) }))
+    .filter((x) => !q || (x.n || "").toLowerCase().includes(q) || (x.id || "").toLowerCase().includes(q) || (x.u || "").toLowerCase().includes(q));
+  const builtinRows = builtins.map((it) => {
+    const base = (estBuiltinItems() || []).find((x) => x.id === it.id) || it;  // 原始默认值（工时校准比对基准）
+    const edited = !!ovDraft[it.id];
+    const cur = whCfg[it.id] != null ? whCfg[it.id] : base.h;
+    const calib = whCfg[it.id] != null && Number(whCfg[it.id]) !== Number(base.h);
+    const tr = TRADES[it.tr] || null;
+    const price = priceOf(it, cur);
+    // 一行看清「干什么活 / 按什么工种 / 怎么施工 / 折多少钱」，便于对照本地市场价判断是否离谱
+    const tip = `${it.n} ｜单位 ${it.u} ｜工种 ${tr ? tr.n + "（" + tr.note + "）" : "普工"} ｜施工方式 ${it.m || "—"} ｜标准 ${base.h} 工时/${it.u} ≈ ${price} 元/${it.u}（人工口径，材料另计）`;
+    return `<div class="est-item-bi" data-bi-row="${esc(it.id)}">
+      <input type="checkbox" data-bi="${esc(it.id)}" ${hidden.has(it.id) ? '' : 'checked'} title="勾选=显示，取消勾选=隐藏"/>
+      <span class="est-item-bi-n" title="${esc(tip)}"><b>${esc(it.n)}</b>${tr ? `<i class="est-item-tr" title="工种：${esc(tr.n)} · ${esc(tr.note)}">${esc(tr.n.slice(0, 2))}</i>` : ''}${it.hf ? `<i class="est-item-hf est-item-hfb" title="受高度系数影响：高空时改按高空工单价">高</i>` : '<i class="est-item-hf est-item-hfb" style="display:none" title="受高度系数影响">高</i>'}${calib ? '<i class="est-item-hf est-item-cal" title="工时已校准">校</i>' : ''}${edited ? '<i class="est-item-hf est-item-ovd" title="名称/单位/工种/方式已改，点 ✎ 可改回">改</i>' : ''}${it.m ? `<em class="est-item-m">${esc(it.m)}</em>` : ''}</span>
+      <em class="est-item-bi-p" data-price="${esc(it.id)}" title="折合人工 ${price} 元/${esc(it.u)}（${esc(tr ? tr.n : "普工")} ${Estimate && Estimate.tradeRate ? Math.round(Estimate.tradeRate(it, params)) : ""} 元/时 × ${cur} 工时），材料另计">≈¥${price}/${esc(it.u)}</em>
+      <input class="est-item-bi-h${calib ? ' is-calib' : ''}" type="number" min="0" step="0.01" value="${cur}" data-wh="${esc(it.id)}" data-tr="${esc(it.tr || "pg")}" data-hd="${base.h}" data-u="${esc(it.u)}" oninput="estWhInput(this)" title="标准工时/单位（工时×工种单价）。改即校准，改回 ${base.h} 保存则恢复默认"/>
+      <button class="est-item-ov-btn${edited ? " is-edited" : ""}" data-ov-btn="${esc(it.id)}" onclick="estItemOvToggle('${esc(it.id)}')" title="直接编辑这一项：名称 / 单位 / 工种 / 施工方式 / 高墙系数">✎</button>
+      <div class="est-item-ov" data-ov-panel="${esc(it.id)}" hidden></div>
+    </div>`;
+  }).join("");
+  // 工种单价不在这页显示（2026-11-22）：唯一入口是「⚙️ 参数与单价」，本页只留一句去向提示，
+  // 避免同一组数重复摆两遍；单价数值不影响本页任何计算（≈¥ 直接读 estCfg().params）。
+  estShowDrawer("配置管理 · 施工项（新增 / 隐藏 / 排序）", estCfgHubTabs("items") + `
+    <div class="est-item-manage">
+    <div class="est-cfg-tip est-item-tip" title="人工费 = 标准工时 × 工种单价。工种（普工/安装技工/焊工/电工/高空工/架子工/设计）决定单价，标「高」的项在高空时改按高空工单价，另可叠加墙面系数。右侧「工时」框里的数就是本项校准值，直接改＝校准。">计价口径：<b>工时 × 工种单价</b>（装板/装字按安装技工、焊接按焊工、接线按电工；标「高」的项高空时按高空工单价）＋ 高度/墙面系数。右侧 ≈¥ 是折合人工单价，材料另计。工种单价在「⚙️ 参数与单价」页签改。</div>
+    <div class="est-item-head"><b>自定义施工项（${draft.length}）</b><button class="btn small outline" onclick="estItemNew()">＋ 新增项</button></div>
+    <div class="est-item-cols"><span>名称</span><span>单位</span><span>工时</span><span>工种</span><span>高</span><span>墙</span><span></span><span></span><span></span></div>
+    <div class="est-item-custom-list">${customRows || '<div class="est-empty est-empty-compact">还没有自定义项，点「＋ 新增项」</div>'}</div>
+    <div class="est-item-head est-item-head2"><b>内置定额项（可直接编辑）</b><span class="est-item-muted">已隐藏 ${hidden.size} 项${ovCount ? ` · 改过 ${ovCount} 项` : ""} · 点 ✎ 改名/单位/工种/方式 · 工时框改＝校准</span></div>
+    <div class="est-item-cols est-item-cols-bi"><span>显示</span><span>名称 / 工种 / 施工方式</span><span>折合人工</span><span>工时</span><span></span></div>
+    <input class="input" id="estItemBiSearch" placeholder="搜索内置项（名称 / 工种 / 施工方式）…" value="${esc(_estItemBuiltinQ)}" oninput="estItemBuiltinFilter(this.value)" style="margin-bottom:6px"/>
+    <div id="estItemBuiltinList" class="est-item-bi-list">${builtinRows || '<div class="est-empty est-empty-compact">没有匹配的内置项</div>'}</div>
+    <div class="est-item-io" title="「导出」只含自定义项与隐藏标记；内置项改动存 itemOverrides，随「📤 备份全部」一起备份。">
+      <button class="btn small outline" onclick="estExportItems()" title="导出 CSV（自定义项），Excel/WPS 可直接编辑">📤 导出</button>
+      <button class="btn small outline" onclick="estExportItemsAll()" title="导出全部内置定额（分类/工种/工时/折合人工/施工方式）。可在 Excel 里整表改工时·工种·名称，再用「📥 导入」回填——名称命中内置项会按覆盖处理，不新增重复项">📋 定额表</button>
+      <label class="btn small outline est-import-label" title="导入 CSV 或旧版 JSON：名称命中内置定额项→当成内置覆盖（可整表回填）；其余按名称合并为自定义项">📥 导入<input type="file" accept=".csv,.json,application/json,text/csv" onchange="estImportItems(this)" hidden/></label>
+      <button class="btn small outline" onclick="estOpenUnknownDrawer()" title="智能拆解没认出的输入记录，一键绑定到施工项">🧾 未识别词${(() => { const n = estUnknownLoad().length; return n ? ` (${n})` : ""; })()}</button>
+      <button class="btn small outline" onclick="estOpenSynonyms()" title="查看/新增/删除全员共享的词语→施工项映射">🔗 同义词${(() => { const n = Object.keys(estCfg().synonyms || {}).length; return n ? ` (${n})` : ""; })()}</button>
+      <button class="btn small outline" onclick="estOpenAccuracy()" title="用已完工项目的实际工时反推各项定额（按定额比例分摊真实用时），可单项或全部采纳">🎯 反推工时</button>
+    </div>
+    <div class="est-cfg-save">
+      <button class="btn small outline est-cfg-save-l" onclick="estOpenWhCalib()" title="整表逐项改标准工时：改回默认值即恢复">✏️ 校准工时</button>
+      <button class="btn small outline" onclick="estOpenQuickAdd()">返回</button>
+      <button class="btn primary" onclick="estSaveItems()">保存施工项</button>
+    </div>
+    </div>`);
+  const bd = document.querySelector("#estDrawer .est-drawer-body");
+  if (bd) bd.classList.add("est-drawer-body--fit");
+}
+function estItemField(i, k, v) {
+  const d = estItemDraft()[i]; if (!d) return;
+  if (k === "h") { const n = Number(v); if (!isNaN(n) && n >= 0) d.h = n; }
+  else d[k] = v;
+  if (k === "h" || k === "tr" || k === "u") estItemRefreshPrice(i);
+}
+/* 读取当前生效的工种单价：以「参数与单价」页签里未保存的输入值为准（施工项页只读展示，
+   不提供第二处可编辑的单价，避免两页各改一半） */
+function estCollectRates() {
+  const p = { ...(estCfg().params || {}) };
+  document.querySelectorAll("#estDrawer [data-est-param]").forEach((el) => {
+    const v = Number(el.value);
+    if (!isNaN(v) && v >= 0 && el.value !== "") p[el.dataset.estParam] = v;
+  });
+  return p;
+}
+/* 整表 ≈¥ 重算（改工时/改工种/换单价后调用；不落库，保存时以输入框为准） */
+function estItemRefreshAllPrices() {
+  if (!document.querySelector("#estDrawer .est-item-bi")) return; // 不在施工项页就别碰草稿
+  const p = estCollectRates();
+  const TRADES = (Estimate && Estimate.TRADES) || {};
+  const rateOf = (tk) => (Estimate && Estimate.tradeRate) ? Estimate.tradeRate({ tr: TRADES[tk] ? tk : "pg" }, p) : 36;
+  document.querySelectorAll("#estDrawer .est-item-bi").forEach((row) => {
+    const hEl = row.querySelector("[data-wh]");
+    const priceEl = row.querySelector("[data-price]");
+    if (!hEl || !priceEl) return;
+    const v = Number(hEl.value);
+    if (isNaN(v) || v < 0) return;
+    const tk = TRADES[hEl.dataset.tr] ? hEl.dataset.tr : "pg";
+    const rate = rateOf(tk);
+    const pr = Math.round(v * rate);
+    const tn = TRADES[tk] ? TRADES[tk].n : "普工";
+    priceEl.textContent = `≈¥${pr}/${hEl.dataset.u || ""}`;
+    priceEl.title = `折合人工 ${pr} 元/${hEl.dataset.u || ""}（${tn} ${Math.round(rate)} 元/时 × ${v} 工时），材料另计`;
+  });
+  estItemDraft().forEach((it, i) => {
+    const el = document.querySelector(`#estDrawer [data-cprice="${i}"]`);
+    if (!el) return;
+    const tk = TRADES[it.tr] ? it.tr : "pg";
+    el.textContent = `≈¥${Math.round((Number(it.h) || 0) * rateOf(tk))}/${it.u || "项"}`;
+  });
+}
+/* 自定义项折合人工即时刷新（改工时/工种/单位不用重渲染整页，避免输入框失焦） */
+function estItemRefreshPrice(i) {
+  if (!estItemDraft()[i]) return;
+  const el = document.querySelector(`#estDrawer [data-cprice="${i}"]`);
+  if (!el) return;
+  estItemRefreshAllPrices();
+}
+/* 内置定额项改工时：同行的「≈¥折合人工」立刻跟着变，并即时标记为已校准。
+   保存时仍以输入框最新值为准（estSaveItems 读 data-wh），这里只做显示同步，不落库。 */
+function estWhInput(el) {
+  if (!el) return;
+  estItemRefreshAllPrices();
+  const v = Number(el.value);
+  const hd = Number(el.dataset.hd);
+  el.classList.toggle("is-calib", el.value !== "" && !isNaN(v) && v >= 0 && !isNaN(hd) && Math.abs(v - hd) > 0.001);
+}
+function estItemNew() {
+  estItemDraft().push({ id: "uc_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6), n: "", u: "项", h: 1, hf: false, wf: false, tr: "az" });
+  estRenderItemManage();
+  // 新行在自定义区末尾：聚焦 + 居中滚入视野（抽屉内容可能已超出可视高度）
+  setTimeout(() => {
+    const els = document.querySelectorAll("#estDrawer .est-item-n");
+    const last = els[els.length - 1];
+    if (!last) return;
+    last.focus();
+    if (last.scrollIntoView) last.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, 0);
+}
+function estItemMove(i, d) {
+  const arr = estItemDraft(), j = i + d;
+  if (j < 0 || j >= arr.length) return;
+  const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  estRenderItemManage();
+}
+function estItemDel(i) { estItemDraft().splice(i, 1); estRenderItemManage(); }
+function estItemBuiltinFilter(q) {
+  _estItemBuiltinQ = q || "";
+  const s = _estItemBuiltinQ.trim().toLowerCase();
+  document.querySelectorAll("#estItemBuiltinList .est-item-bi").forEach((el) => {
+    el.style.display = (!s || (el.textContent || "").toLowerCase().includes(s)) ? "" : "none";
+  });
+}
+async function estSaveItems() {
+  const c = estCfg();
+  // 单价唯一入口是「参数与单价」页签；这里调一次 estCollectRates 只是兜底（本页已无单价输入框，
+  // 返回值等于原 params），防止以后有人在别的页签改了单价没落库
+  c.params = estCollectRates();
+  const clean = estItemDraft().filter((x) => String(x.n || "").trim()).map((x) => ({
+    id: x.id, n: String(x.n).trim(), u: String(x.u || "项").trim() || "项",
+    h: Math.max(0, Number(x.h) || 0), hf: !!x.hf, wf: !!x.wf,
+    tr: (Estimate.TRADES && Estimate.TRADES[x.tr]) ? x.tr : "pg",
+    m: String(x.m || "").slice(0, 40),
+  }));
+  const ids = new Set(clean.map((x) => x.id));
+  if (ids.size !== clean.length) { toast("施工项标识冲突，请重新打开管理页"); return; }
+  c.customItems = clean;
+  // 内置项直接编辑（名称/单位/工种/施工方式/高墙系数）：同 id 覆盖，与默认相同已自动剔除
+  const ovClean = JSON.parse(JSON.stringify(estItemOvDraft()));
+  c.itemOverrides = ovClean;
+  const hidden = [];
+  document.querySelectorAll("#estDrawer [data-bi]").forEach((el) => { if (!el.checked) hidden.push(el.dataset.bi); });
+  c.hiddenItems = hidden;
+  // 内置项工时：改了就写 WH（校准），改回默认值则清除校准
+  const builtinById = new Map(estBuiltinItems().map((x) => [x.id, x]));
+  if (!c.WH || typeof c.WH !== "object") c.WH = {};
+  let calibCount = 0;
+  document.querySelectorAll("#estDrawer [data-wh]").forEach((el) => {
+    const id = el.dataset.wh, v = Number(el.value);
+    const it = builtinById.get(id);
+    if (!it || isNaN(v) || v < 0) return;
+    if (Math.abs(v - Number(it.h)) < 0.001) { if (c.WH[id] != null) { delete c.WH[id]; calibCount++; } }
+    else if (c.WH[id] !== v) { c.WH[id] = v; calibCount++; }
+  });
+  const ok = await saveEstimateConfig(c);
+  if (ok) {
+    _estItemDraft = null; _estItemOvDraft = null; _estItemOvOpen = new Set();
+    estSyncCustomItems(); estCloseDrawer(); estRenderAdvanced();
+    estOpenQuickAdd();
+    const ovN = Object.keys(ovClean).length;
+    toast(`施工项已保存：${clean.length} 项自定义，隐藏 ${hidden.length} 项` + (ovN ? `，改内置 ${ovN} 项` : "") + (calibCount ? `，校准 ${calibCount} 项工时` : ""));
+  }
+}
+/* 导出全部内置定额（只读参考表）：工种 / 施工方式 / 工时 / 折合人工，Excel 里逐项对市场价。
+   与上面的「导出」不同，这张表用于核对，不参与导入。 */
+function estExportItemsAll() {
+  if (!estCanManage()) { toast("无测算管理权限，无法导出定额表"); return; }
+  const c = estCfg();
+  const TRADES = (Estimate && Estimate.TRADES) || {};
+  const wh = c.WH || {};
+  const rows = [];
+  const ovs = c.itemOverrides || {};
+  estBuiltinItems().forEach((base) => {
+    const it = { ...base, ...(ovs[base.id] || {}) };   // 导出的应是改过的名称/单位/工种
+    const h = wh[base.id] != null ? Number(wh[base.id]) : Number(base.h);
+    const tr = TRADES[it.tr] || null;
+    const price = Estimate.itemUnitPrice ? Math.round(Estimate.itemUnitPrice({ ...it, h }, c.params)) : "";
+    const mark = [
+      wh[base.id] != null && Number(wh[base.id]) !== Number(base.h) ? "已校准工时" : "",
+      ovs[base.id] ? "已改内容" : "",
+    ].filter(Boolean).join(" / ");
+    rows.push([
+      it.g || "", it.n, it.u, tr ? tr.n : "普工", h, it.hf ? 1 : "", it.wf ? 1 : "",
+      price, it.m || "", mark, base.id,
+    ]);
+  });
+  try {
+    estDownloadCsv("GG测算定额表-" + new Date().toISOString().slice(0, 10) + ".csv",
+      ["分类", "施工项", "单位", "工种", "标准工时", "高系数", "墙系数", "折合人工", "施工方式", "备注", "id"],
+      rows);
+    toast("已导出 " + rows.length + " 项定额，可在 Excel 里对照本地市场价");
+  } catch (e) { toast("导出失败：" + (e.message || "请重试")); }
+}
+/* 施工项列表导出：CSV（名称/单位/工种/工时/高系数/墙系数/折合人工），Excel/WPS 可直接编辑；
+   隐藏内置项标记不在 CSV 里（完整备份请用旧 JSON 或导入后重勾）。
+   折合人工列仅供对照市场价，导入时忽略（以工时×工种单价实时算）。 */
+function estExportItems() {
+  if (!estCanManage()) { toast("无测算管理权限，无法导出施工项配置"); return; }
+  const c = estCfg();
+  const items = c.customItems || [];
+  const TRADES = (Estimate && Estimate.TRADES) || {};
+  try {
+    estDownloadCsv("GG测算施工项-" + new Date().toISOString().slice(0, 10) + ".csv",
+      ["名称", "单位", "工种", "标准工时", "高系数", "墙系数", "折合人工"],
+      items.map((x) => {
+        const it = { id: x.id, h: x.h, tr: x.tr || "pg" };
+        const price = Estimate.itemUnitPrice ? Math.round(Estimate.itemUnitPrice(it, c.params)) : "";
+        return [x.n, x.u || "项", TRADES[x.tr || "pg"] ? TRADES[x.tr || "pg"].n : "普工", x.h, x.hf ? 1 : "", x.wf ? 1 : "", price];
+      }));
+    toast("已导出 " + items.length + " 项施工项 CSV，Excel/WPS 可直接编辑");
+  } catch (e) { toast("导出失败：" + (e.message || "请重试")); }
+}
+/* 施工项列表导入：自动识别 CSV / 旧版 JSON → 校验 → 覆盖或按名称合并 → 保存云端全员生效 */
+async function estImportItems(input) {
+  if (!estCanManage()) { toast("无测算管理权限，无法导入施工项配置"); return; }
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  const TRADES = (Estimate && Estimate.TRADES) || {};
+  // 工种列容错：可填「焊工」中文名，也可填 hg 键；认不出按普工
+  const trKey = (v) => {
+    const s = String(v == null ? "" : v).trim();
+    if (!s) return "pg";
+    if (TRADES[s]) return s;
+    const hit = Object.keys(TRADES).find((k) => TRADES[k].n === s || TRADES[k].n.includes(s) || s.includes(TRADES[k].n));
+    return hit || "pg";
+  };
+  try {
+    const txt = (await estReadTextFile(file)).replace(/^\uFEFF/, "").trim();
+    let items = [], hidden = [], cover = false, fromJson = false, ovHit = 0;
+    if (txt.startsWith("{")) {
+      fromJson = true;
+      const d = JSON.parse(txt);
+      if (!d || typeof d !== "object" || (!Array.isArray(d.customItems) && d.type !== "gg-est-items")) throw new Error("不是有效的施工项配置文件");
+      items = (Array.isArray(d.customItems) ? d.customItems : []).filter((x) => x && String(x.n || "").trim()).map((x) => ({
+        id: String(x.id || ("uc_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6))),
+        n: String(x.n).trim(), u: String(x.u || "项"),
+        h: Math.max(0, Number(x.h) || 0), hf: !!x.hf, wf: !!x.wf, tr: trKey(x.tr), m: String(x.m || "").slice(0, 40),
+      }));
+      hidden = Array.isArray(d.hiddenItems) ? d.hiddenItems.filter(Boolean).map(String) : [];
+      cover = confirm(`导入 ${items.length} 项自定义施工项。\n\n【确定】覆盖当前施工项配置（含隐藏标记）\n【取消】追加到现有列表`);
+    } else {
+      const rows = estParseCsv(txt);
+      const head = rows[0] || [];
+      const ciN = estCsvCol(head, ["名称"]), ciU = estCsvCol(head, ["单位"]), ciH = estCsvCol(head, ["标准工时", "工时"]);
+      const ciHf = estCsvCol(head, ["高系数", "高"]), ciWf = estCsvCol(head, ["墙系数", "墙"]);
+      const ciTr = estCsvCol(head, ["工种"]);
+      const ciM = estCsvCol(head, ["施工方式"]);
+      const ciId = estCsvCol(head, ["id", "标识"]);
+      if (ciN < 0) throw new Error("CSV 缺少「名称」列");
+      const flag = (v) => v != null && String(v).trim() !== "" && Number(v) !== 0;
+      items = rows.slice(1).filter((r) => String(r[ciN] || "").trim()).map((r) => ({
+        id: "uc_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6),
+        n: String(r[ciN]).trim(),
+        u: (ciU >= 0 ? String(r[ciU] || "").trim() : "") || "项",
+        h: Math.max(0, ciH >= 0 ? Number(r[ciH]) || 0 : 0),
+        hf: ciHf >= 0 && flag(r[ciHf]), wf: ciWf >= 0 && flag(r[ciWf]),
+        tr: trKey(ciTr >= 0 ? r[ciTr] : ""),
+        m: ciM >= 0 ? String(r[ciM] || "").trim().slice(0, 40) : "",
+        sid: ciId >= 0 ? String(r[ciId] || "").trim() : "",
+      }));
+      // 名称命中内置定额项（含已改名的）→ 转成「内置覆盖」，不新建重复的自定义项。
+      // 这样「📋 定额表 → Excel 改工时/工种 → 导入」能整表批量改 142 项内置定额。
+      const cc = estCfg();
+      const ovNow = JSON.parse(JSON.stringify(cc.itemOverrides || {}));
+      const ovMerged = { ...ovNow };
+      const whMerged = { ...(cc.WH || {}) };
+      const baseItems = estBuiltinItems();
+      const eqv = (a, b) => String(a == null ? "" : a) === String(b == null ? "" : b);
+      items = items.filter((x) => {
+        const base = (x.sid && baseItems.find((b) => b.id === x.sid))
+          || baseItems.find((b) => b.n === x.n || (ovNow[b.id] && ovNow[b.id].n === x.n));
+        if (!base) return true;
+        ovHit++;
+        const o = { ...(ovNow[base.id] || {}) };
+        if (!eqv(x.n, base.n)) o.n = x.n; else delete o.n;
+        if (!eqv(x.u, base.u)) o.u = x.u; else delete o.u;
+        if (x.tr && x.tr !== (base.tr || "pg")) o.tr = x.tr; else delete o.tr;
+        if (!!x.hf !== !!base.hf) o.hf = !!x.hf; else delete o.hf;
+        if (!!x.wf !== !!base.wf) o.wf = !!x.wf; else delete o.wf;
+        if (x.m && !eqv(x.m, base.m)) o.m = x.m; else delete o.m;
+        if (Object.keys(o).length) ovMerged[base.id] = o; else delete ovMerged[base.id];
+        // 工时列写 WH 校准：与默认不同则记，相同则清（CSV 里空白/0 视为不改）
+        if (ciH >= 0 && Number(x.h) > 0) {
+          if (Math.abs(Number(x.h) - Number(base.h)) > 0.001) whMerged[base.id] = Number(x.h);
+          else delete whMerged[base.id];
+        }
+        return false;
+      });
+      if (ovHit) { cc.itemOverrides = ovMerged; cc.WH = whMerged; }
+      hidden = (estCfg().hiddenItems || []).slice(); // CSV 不含隐藏标记，保持现状
+      cover = confirm(`导入 CSV：新建自定义项 ${items.length} 项` + (ovHit ? `，覆盖内置项 ${ovHit} 项` : "") + `。\n\n【确定】覆盖当前自定义施工项（隐藏标记保留）\n【取消】按名称合并：同名覆盖，新名称追加`);
+    }
+    const c = estCfg();
+    if (cover) {
+      c.customItems = items; c.hiddenItems = hidden;
+    } else if (fromJson) {
+      const map = new Map((c.customItems || []).map((x) => [x.id, x]));
+      items.forEach((x) => map.set(x.id, x)); // 同 id 覆盖，新 id 追加，避免重复
+      c.customItems = Array.from(map.values());
+      c.hiddenItems = Array.from(new Set([...(c.hiddenItems || []), ...hidden]));
+    } else {
+      const map = new Map((c.customItems || []).map((x) => [x.n, x]));
+      items.forEach((x) => map.set(x.n, x)); // 同名覆盖，新名称追加
+      c.customItems = Array.from(map.values());
+    }
+    const ok = await saveEstimateConfig(c);
+    if (ok) {
+      _estItemDraft = null; _estItemOvDraft = null; estSyncCustomItems(); estCloseDrawer(); estOpenQuickAdd();
+      toast("已导入 " + items.length + " 项自定义施工项" + (ovHit ? `，覆盖内置 ${ovHit} 项` : "") + "（" + (cover ? "覆盖" : fromJson ? "追加" : "按名称合并") + "）");
+    }
+  } catch (e) { toast("导入失败：" + (e.message || "文件格式不对")); }
+  finally { if (input) input.value = ""; }
+}
+
+/* 当前单价库：用户配置优先（存 estimate_config.catalog），兜底内核默认（数组行转对象行） */
+function estCatalog() {
+  const c = estCfg();
+  if (Array.isArray(c.catalog)) return c.catalog; // 空数组=用户删光全部，尊重意图不回退
+  return ((window.Estimate && Estimate.CATALOG) || []).map((g) => ({
+    cat: g.cat || "未分类",
+    desc: g.desc || "",
+    rows: (g.rows || []).map((r) => ({ id: r[0], n: r[1], p: Number(r[2]) || 0, u: r[3] || "", note: r[4] || "" })),
+  }));
+}
+let _estCatEdit = false;
+let _estCatDraft = null;   // 编辑草稿：进入编辑模式时从当前单价库快照，保存才落配置（与模板管理同口径，取消不污染内存配置）
+/* 单价库抽屉：全员可看参考价；有测算管理权限者可进编辑模式（改价/改名/增删行/增删分类），存 estimate_config.catalog */
+function estOpenPriceLib() {
+  if (!window.Estimate) return;
+  const canEdit = estCanManage();
+  if (!canEdit) _estCatEdit = false;
+  const isAdmin = canEdit && _estCatEdit && Array.isArray(_estCatDraft);
+  const cat = isAdmin ? _estCatDraft : estCatalog();
+  const body = cat.map((g, ci) => {
+    const head = isAdmin
+      ? `<div class="est-pick-cat est-cat-head">
+           <input class="est-cat-name" value="${esc(g.cat)}" data-est-cat-name="${ci}" placeholder="分类名"/>
+           <input class="est-cat-desc" value="${esc(g.desc)}" data-est-cat-desc="${ci}" placeholder="说明（可选）"/>
+           <button type="button" class="est-cat-del" onclick="estCatDel(${ci})" title="删除整个分类">🗑️</button>
+         </div>`
+      : `<div class="est-pick-cat">${esc(g.cat)}${g.desc ? `<span class="est-pick-desc">${esc(g.desc)}</span>` : ''}</div>`;
+    const rows = g.rows.map((r, ri) => isAdmin
+      ? `<div class="est-cat-row">
+           <input class="est-cat-rn" value="${esc(r.n)}" data-est-row="${ci}.${ri}.n" placeholder="项目名称" list="estCatNameDl" title="可输入施工项名称，联想 142 项定额+自定义项——与定额同名即可被「按面积/周长」项匹配"/>
+           <input class="est-cat-rp" type="number" min="0" step="1" value="${r.p}" data-est-row="${ci}.${ri}.p" title="参考单价"/>
+           <input class="est-cat-ru" value="${esc(r.u)}" data-est-row="${ci}.${ri}.u" placeholder="单位"/>
+           <button type="button" class="est-cat-rowdel" onclick="estCatRowDel(${ci},${ri})" title="删除这一行">×</button>
+         </div>`
+      : `<div class="est-price-row"><span>${esc(r.n)}</span><b>${esc(r.u === '元/㎡' ? '¥' : '')}${esc(r.p)} ${esc(r.u || '')}</b></div>`).join("");
+    return head + `<div class="est-price-rows">${rows}</div>` + (isAdmin
+      ? `<button type="button" class="btn small outline est-cat-addrow" onclick="estCatRowAdd(${ci})">＋ 本分类添加一项</button>`
+      : "");
+  }).join("");
+  const manageBar = canEdit
+    ? (isAdmin
+      ? `<div class="est-pick-admin est-cat-savebar"><span>改动保存后全员共享</span>
+           <span class="est-pick-admin-btns">
+             <button class="btn small primary" onclick="estCatSave()">保存单价库</button>
+             <button class="btn small outline" onclick="estCatCancel()">取消</button>
+             <button class="btn small outline" onclick="estExportCatalog()" title="导出 CSV，Excel/WPS 可直接编辑">📤 导出</button>
+             <label class="btn small outline est-import-label" title="导入 CSV（分类/说明/名称/单价/单位/备注）或旧版 JSON，覆盖或按分类合并">📥 导入<input type="file" accept=".csv,.json,application/json,text/csv" onchange="estImportCatalog(this)" hidden/></label>
+           </span></div>`
+      : `<div class="est-pick-admin"><span>参考价可改可增删，保存后全员共享</span><button class="btn small outline" onclick="estCatEditToggle()">✏️ 编辑单价库</button></div>`)
+    : "";
+  const tip = isAdmin
+    ? `<div class="est-cfg-tip">黄色底为编辑区；空名称行保存时自动忽略；改动保存后全员生效。<br>
+       <b>参与测算的：</b>①「⑨运输/杂费 → 市内运输」按元/公里算车费；② 方案库中<b>按面积/周长计价</b>的项（喷绘画面、灯箱、导视牌等）按名称取本表单价；③ 手动添加的材料项，名称匹配本表时会自动带出单价。<br>
+       <b>不参与测算的：</b>按工时定额计算的安装项（门头骨架、发光字安装、钢架焊接等）——它们按「工时 × 工时单价」算，本表同名单价仅供参考。要调这类项请用「定额校准」。</div>`
+    : (Array.isArray(estCfg().catalog) ? `<div class="est-cfg-tip">已启用自定义单价库（管理员保存的版本）。</div>` : ``);
+  estShowDrawer("配置管理 · 完整单价库", (estCanManage() ? estCfgHubTabs("catalog") : "") + manageBar + tip
+    + (isAdmin ? estCatNameDatalistHtml() : "") + body + (isAdmin
+    ? `<button type="button" class="btn small outline est-cat-addrow" onclick="estCatAdd()" style="margin-top:12px;">＋ 添加分类</button>`
+    : ""));
+}
+/* 名称联想数据源：全部定额 + 自定义施工项名称（与「按面积/周长」匹配同一份清单） */
+function estCatNameDatalistHtml() {
+  const names = [...new Set([((window.Estimate && Estimate.WORK_ITEMS) || []).map((x) => x.n), (estCfg().customItems || []).map((x) => x.n)].flat().filter(Boolean))];
+  return `<datalist id="estCatNameDl">${names.map((n) => `<option value="${esc(n)}"/>`).join("")}</datalist>`;
+}
+/* —— 单价库编辑操作：改动先落草稿 _estCatDraft，重渲染（增删行不丢已填内容）—— */
+function estCatEditToggle() {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  if (_estCatEdit) { estCatCancel(); return; }
+  _estCatDraft = JSON.parse(JSON.stringify(estCatalog()));
+  _estCatEdit = true;
+  estOpenPriceLib();
+}
+function estCatCancel() { _estCatEdit = false; _estCatDraft = null; estOpenPriceLib(); }
+function estCatRenderAndCollect() {
+  if (!Array.isArray(_estCatDraft)) return;
+  document.querySelectorAll("[data-est-cat-name]").forEach((el) => { _estCatDraft[Number(el.dataset.estCatName)].cat = el.value; });
+  document.querySelectorAll("[data-est-cat-desc]").forEach((el) => { _estCatDraft[Number(el.dataset.estCatDesc)].desc = el.value; });
+  document.querySelectorAll("[data-est-row]").forEach((el) => {
+    const [ci, ri, f] = el.dataset.estRow.split(".");
+    const row = (_estCatDraft[Number(ci)] || {}).rows?.[Number(ri)];
+    if (!row) return;
+    if (f === "p") row.p = Math.max(0, Number(el.value) || 0);
+    else if (f === "u") row.u = el.value;
+    else row.n = el.value;
+  });
+}
+function estCatAdd() { estCatRenderAndCollect(); _estCatDraft.push({ cat: "新分类", desc: "", rows: [{ id: "u_" + Date.now().toString(36), n: "新项目", p: 0, u: "元/㎡", note: "" }] }); estOpenPriceLib(); }
+function estCatDel(ci) { if (!confirm("删除整个分类及其所有项目？")) return; estCatRenderAndCollect(); _estCatDraft.splice(ci, 1); estOpenPriceLib(); }
+function estCatRowAdd(ci) { estCatRenderAndCollect(); (_estCatDraft[ci] || { rows: [] }).rows.push({ id: "u_" + Date.now().toString(36), n: "", p: 0, u: "元/㎡", note: "" }); estOpenPriceLib(); }
+function estCatRowDel(ci, ri) { estCatRenderAndCollect(); (_estCatDraft[ci] || { rows: [] }).rows.splice(ri, 1); estOpenPriceLib(); }
+async function estCatSave() {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  estCatRenderAndCollect();
+  estCfg().catalog = _estCatDraft;
+  // 双向同步：单价库「市内运输」行改价后，参数面板的「运输（元/公里）」跟着变
+  const t = (_estCatDraft || []).flatMap((g) => (g.rows || [])).find((r) => r && r.id === "calc:transport");
+  if (t) estCfg().prices.transport = Math.max(0, Number(t.p) || 0);
+  const ok = await saveEstimateConfig(estCfg());
+  if (ok) { _estCatEdit = false; _estCatDraft = null; estOpenPriceLib(); }
+}
+
+/* ===== 测算配置通用导出/导入（施工项 / 方案库模板 / 单价库） =====
+   导出=CSV（UTF-8 BOM，Excel/WPS 双击可编辑）；导入=自动识别 CSV 或旧版 JSON（type: gg-est-*），覆盖或按名称合并 */
+function estDownloadCsv(filename, header, rows) {
+  const csv = "\uFEFF" + [header, ...rows].map((r) => r.map(estCsvField).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+function estCsvField(v) {
+  const s = String(v == null ? "" : v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+async function estReadTextFile(file) {
+  return new Promise((res, rej) => {
+    if (file.text) { file.text().then(res, rej); return; }
+    const fr = new FileReader();
+    fr.onload = () => res(String(fr.result || ""));
+    fr.onerror = () => rej(new Error("读取文件失败"));
+    fr.readAsText(file);
+  });
+}
+/* CSV 解析：支持引号内逗号/换行/转义双引号；跳过全空行 */
+function estParseCsv(text) {
+  const rows = []; let row = [], field = "", inQ = false;
+  const pushRow = () => { row.push(field); field = ""; if (row.some((x) => x !== "")) rows.push(row); row = []; };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQ) {
+      if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ",") { row.push(field); field = ""; }
+    else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; pushRow(); }
+    else field += ch;
+  }
+  pushRow();
+  return rows;
+}
+function estCsvCol(head, names) { return head.findIndex((h) => names.indexOf(String(h).trim()) >= 0); }
+/* 方案库（整套模板）导出/导入：存 estimate_config.combos。
+   CSV 五列=模板/施工项/数量/计价/系数（计价：空=固定数量、按面积、按周长；施工项按名称写，导入时自动转 id） */
+function estExportCombos() {
+  if (!estCanManage()) { toast("无测算管理权限，无法导出方案库"); return; }
+  const combos = estCombos();
+  const rows = [];
+  combos.forEach((c) => estComboHits(c).forEach((h) => rows.push([
+    c.n, h.n, h.q,
+    h.dim === "area" ? "按面积" : h.dim === "perim" ? "按周长" : "",
+    h.dim ? ((c.f && Number(c.f[h.wid])) || 1) : "",
+  ])));
+  estDownloadCsv("GG测算方案库-" + new Date().toISOString().slice(0, 10) + ".csv", ["模板", "施工项", "数量", "计价", "系数"], rows);
+  toast("已导出 " + combos.length + " 套模板 / " + rows.length + " 行，Excel/WPS 可直接编辑");
+}
+async function estImportCombos(input) {
+  if (!estCanManage()) { toast("无测算管理权限，无法导入方案库"); return; }
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  try {
+    const txt = (await estReadTextFile(file)).replace(/^\uFEFF/, "").trim();
+    let combos = [];
+    if (txt.startsWith("{")) {
+      const d = JSON.parse(txt);
+      if (!d || typeof d !== "object" || (!Array.isArray(d.combos) && d.type !== "gg-est-combos")) throw new Error("不是有效的方案库文件");
+      combos = (Array.isArray(d.combos) ? d.combos : []).filter((c) => c && String(c.n || "").trim() && Array.isArray(c.ids) && c.ids.length).map((c) => {
+        const o = { n: String(c.n).trim(), ids: c.ids.map(String), q: (c.q && typeof c.q === "object" && !Array.isArray(c.q)) ? c.q : {} };
+        if (c.m && typeof c.m === "object" && Object.keys(c.m).length) o.m = c.m;
+        if (c.f && typeof c.f === "object" && Object.keys(c.f).length) o.f = c.f;
+        return o;
+      });
+    } else {
+      const rows = estParseCsv(txt);
+      const head = rows[0] || [];
+      const ciT = estCsvCol(head, ["模板", "模板名称"]), ciN = estCsvCol(head, ["施工项"]), ciQ = estCsvCol(head, ["数量"]);
+      const ciM = estCsvCol(head, ["计价", "口径"]), ciF = estCsvCol(head, ["系数"]);
+      if (ciT < 0 || ciN < 0) throw new Error("CSV 需要「模板」「施工项」列");
+      const all = (window.Estimate && Estimate.WORK_ITEMS) || [];
+      const unknown = new Set();
+      const map = new Map();
+      rows.slice(1).forEach((r) => {
+        const tn = String(r[ciT] || "").trim(), inName = String(r[ciN] || "").trim();
+        if (!tn || !inName) return;
+        const exact = all.find((x) => x.n === inName);
+        const it = exact || all.find((x) => x.n.includes(inName) && inName.length >= 2) || all.find((x) => inName.includes(x.n) && x.n.length >= 2);
+        if (!it) { unknown.add(inName); return; }
+        const g = map.get(tn) || { n: tn, ids: [], q: {} };
+        if (!g.ids.includes(it.id)) {
+          g.ids.push(it.id);
+          g.q[it.id] = Number(r[ciQ]) || 1;
+          const modeTxt = ciM >= 0 ? String(r[ciM] || "").trim() : "";
+          const mode = modeTxt.indexOf("周长") >= 0 ? "perim" : (modeTxt.indexOf("面积") >= 0 || modeTxt.indexOf("㎡") >= 0) ? "area" : "";
+          if (mode) {
+            g.m = g.m || {};
+            g.m[it.id] = mode;
+            const f = ciF >= 0 ? Number(r[ciF]) : 0;
+            if (f > 0 && f !== 1) { g.f = g.f || {}; g.f[it.id] = f; }
+          }
+        }
+        map.set(tn, g);
+      });
+      combos = Array.from(map.values());
+      if (unknown.size) toast("未识别施工项（已跳过）：" + Array.from(unknown).slice(0, 3).join("、") + (unknown.size > 3 ? " 等" + unknown.size + "个" : ""));
+    }
+    if (!combos.length) throw new Error("文件里没有有效模板（每套需有名称和施工项）");
+    const cover = confirm(`导入 ${combos.length} 套模板。\n\n【确定】覆盖当前方案库（文件里没有的模板会被删除）\n【取消】按名称合并：同名覆盖，新名称追加`);
+    const c = estCfg();
+    if (cover) c.combos = combos;
+    else {
+      const map = new Map(estCombos().map((x) => [x.n, x]));
+      combos.forEach((x) => map.set(x.n, x));
+      c.combos = Array.from(map.values());
+    }
+    const ok = await saveEstimateConfig(c);
+    if (ok) {
+      if (Array.isArray(_estComboDraft) && _estComboEditIdx === -1) _estComboDraft = estCombos().map(estComboClone);
+      estRenderComboManage();
+      toast("方案库已导入 " + combos.length + " 套（" + (cover ? "覆盖" : "按名称合并") + "），全员生效");
+    }
+  } catch (e) { toast("导入失败：" + (e.message || "文件格式不对")); }
+  finally { if (input) input.value = ""; }
+}
+/* 单价库导出/导入：存 estimate_config.catalog（编辑态导出含未保存草稿改动）。CSV 六列=分类/说明/名称/单价/单位/备注 */
+function estExportCatalog() {
+  if (!estCanManage()) { toast("无测算管理权限，无法导出单价库"); return; }
+  const cat = Array.isArray(_estCatDraft) ? _estCatDraft : estCatalog();
+  const rows = [];
+  cat.forEach((g) => (g.rows || []).forEach((r) => rows.push([g.cat, g.desc || "", r.n, r.p, r.u || "", r.note || ""])));
+  estDownloadCsv("GG测算单价库-" + new Date().toISOString().slice(0, 10) + ".csv", ["分类", "说明", "名称", "单价", "单位", "备注"], rows);
+  toast("已导出 " + rows.length + " 个单价，Excel/WPS 可直接编辑");
+}
+async function estImportCatalog(input) {
+  if (!estCanManage()) { toast("无测算管理权限，无法导入单价库"); return; }
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  try {
+    const txt = (await estReadTextFile(file)).replace(/^\uFEFF/, "").trim();
+    let cat = [];
+    if (txt.startsWith("{")) {
+      const d = JSON.parse(txt);
+      if (!d || typeof d !== "object" || (!Array.isArray(d.catalog) && d.type !== "gg-est-catalog")) throw new Error("不是有效的单价库文件");
+      cat = (Array.isArray(d.catalog) ? d.catalog : []).filter((g) => g && String(g.cat || "").trim()).map((g) => ({
+        cat: String(g.cat).trim(), desc: String(g.desc || ""),
+        rows: (Array.isArray(g.rows) ? g.rows : []).filter((r) => r && String(r.n || "").trim()).map((r, i) => ({
+          id: String(r.id || ("u_" + Date.now().toString(36) + i)),
+          n: String(r.n).trim(), p: Math.max(0, Number(r.p) || 0), u: String(r.u || ""), note: String(r.note || ""),
+        })),
+      }));
+    } else {
+      const rows = estParseCsv(txt);
+      const head = rows[0] || [];
+      const ciCat = estCsvCol(head, ["分类"]), ciDesc = estCsvCol(head, ["说明"]), ciN = estCsvCol(head, ["名称"]);
+      const ciP = estCsvCol(head, ["单价", "参考价"]), ciU = estCsvCol(head, ["单位"]), ciNote = estCsvCol(head, ["备注"]);
+      if (ciCat < 0 || ciN < 0) throw new Error("CSV 需要「分类」「名称」列");
+      const map = new Map();
+      rows.slice(1).forEach((r) => {
+        const gName = String(r[ciCat] || "").trim(), n = String(r[ciN] || "").trim();
+        if (!gName || !n) return;
+        const g = map.get(gName) || { cat: gName, desc: ciDesc >= 0 ? String(r[ciDesc] || "").trim() : "", rows: [] };
+        g.rows.push({
+          id: "u_" + Date.now().toString(36) + map.size + g.rows.length,
+          n, p: Math.max(0, ciP >= 0 ? Number(r[ciP]) || 0 : 0),
+          u: ciU >= 0 ? String(r[ciU] || "").trim() : "", note: ciNote >= 0 ? String(r[ciNote] || "").trim() : "",
+        });
+        map.set(gName, g);
+      });
+      cat = Array.from(map.values());
+    }
+    if (!cat.length) throw new Error("文件里没有有效分类");
+    const rowsTotal = cat.reduce((s, g) => s + g.rows.length, 0);
+    const cover = confirm(`导入 ${cat.length} 个分类 / ${rowsTotal} 个单价。\n\n【确定】覆盖当前单价库\n【取消】按分类名合并：同名覆盖，新分类追加（编辑中的未保存改动会保留）`);
+    if (cover) {
+      estCfg().catalog = cat;
+    } else {
+      const map = new Map((Array.isArray(_estCatDraft) ? _estCatDraft : estCatalog()).map((g) => [g.cat, g]));
+      cat.forEach((g) => map.set(g.cat, g));
+      estCfg().catalog = Array.from(map.values());
+    }
+    _estCatEdit = false; _estCatDraft = null;
+    const ok = await saveEstimateConfig(estCfg());
+    if (ok) { estOpenPriceLib(); toast("单价库已导入（" + (cover ? "覆盖" : "按分类合并") + "），全员生效"); }
+  } catch (e) { toast("导入失败：" + (e.message || "文件格式不对")); }
+  finally { if (input) input.value = ""; }
+}
+
+/* ===== 整套方案 / 专项测算（2026-11-19 补齐移植）=====
+   原测算器的 SCENE_COMBOS / SPECIAL_CALCS 内核数据早已完整移植到 estimate.js，
+   但 GG 的 UI 一直没接入，导致「楼顶大字/精神堡垒」只命中 1 条关键词。
+   这里补齐入口：整套方案一键展开；专项测算填参数→展开施工+材料逐项，勾选加入清单。 */
+
+/* 当前整套方案模板：用户配置优先（存 estimate_config.combos），兜底内核默认 */
+function estCombos() {
+  const c = estCfg();
+  if (Array.isArray(c.combos)) return c.combos; // 用户明确配置（含空数组=删光全部），必须尊重
+  return (window.Estimate && Estimate.SCENE_COMBOS) || [];
+}
+
+/* 模板深拷贝（含计价口径 m/系数 f），模板管理各处统一走它，别再手写 {n,ids,q} 三件套 */
+function estComboClone(c) {
+  const d = { n: c.n, ids: [...(c.ids || [])], q: { ...(c.q || {}) } };
+  if (c.m && Object.keys(c.m).length) d.m = { ...c.m };
+  if (c.f && Object.keys(c.f).length) d.f = { ...c.f };
+  return d;
+}
+/* 按施工项名称查单价库单价（整套方案按面积/周长计价的项从这里取价）：
+   精确名 → 双向包含（短词≥2字）；命中返回 {n,p,u,cat}，查不到返回 null（回退定额计价） */
+function estCatalogPriceFor(name) {
+  const nm = String(name || "").trim();
+  if (!nm) return null;
+  const rows = [];
+  estCatalog().forEach((g) => (g.rows || []).forEach((r) => rows.push({ ...r, cat: g.cat })));
+  const hit = rows.find((r) => r.n === nm)
+    || rows.find((r) => r.n.length >= 2 && nm.includes(r.n))
+    || rows.find((r) => nm.length >= 2 && r.n.includes(nm));
+  return hit ? { n: hit.n, p: Number(hit.p) || 0, u: String(hit.u || ""), cat: hit.cat } : null;
+}
+
+/* 整套方案 → 清单项。dims={area,perim,desc}（智能拆解识别到尺寸时传入）：
+   模板项计价口径 m[id]='area'|'perim'（缺省=固定数量，走定额工时）+ 系数 f[id]（默认1）——
+   设了口径的项：有尺寸→数量=面积/周长×系数，单价从单价库按名称匹配（查不到回退定额计价）；
+   无尺寸→用模板默认数量占位并提示补尺寸。 */
+function estComboHits(combo, dims) {
+  return (combo.ids || []).map((id) => {
+    const it = (Estimate.WORK_ITEMS || []).find((x) => x.id === id);
+    if (!it) return null;
+    // 兼容老配置：早期存进 estimate_config 的「停车场导视牌整套」没有 m 标记，
+    // 画面项吃 q 默认 3㎡/个（写 60×90CM 也会算成 15㎡）——补面积口径，让输入尺寸生效。
+    const mode = (combo.m && combo.m[id])
+      || (id === "i_printchange" && /停车场导视牌/.test(String(combo.n || "")) ? "area" : null);
+    const defQ = Number(combo.q && combo.q[id]) || 1;
+    if (!mode) return { type: "lib", id: it.id, wid: it.id, n: it.n, u: it.u, q: defQ };
+    const factor = (combo.f && Number(combo.f[id])) || 1;
+    const modeTxt = mode === "perim" ? "周长" : "面积";
+    const base = mode === "perim" ? (dims && dims.perim) : (dims && dims.area);
+    let q, calc;
+    if (dims && base > 0) {
+      q = Math.round(base * factor * 100) / 100;
+      calc = modeTxt + (dims.desc ? "(" + dims.desc + ")" : "") + (factor !== 1 ? "×系数" + factor : "") + " → " + q;
+    } else {
+      q = defQ;
+      calc = "按" + modeTxt + "计价" + (mode === "perim" && dims && dims.areaOnly ? "（只写了面积，缺长宽）" : "，输入尺寸（如 6米*3米）后自动算量");
+    }
+    const price = estCatalogPriceFor(it.n);
+    if (price && price.p > 0) {
+      const unit = (mode === "perim" ? "米" : "㎡");
+      const pu = price.u ? String(price.u).replace(/^元\s*\/\s*/, "") : unit;
+      return { type: "custom", cid: "cb_" + it.id, wid: it.id, mode: "qty", n: it.n, u: pu || unit, q, p: price.p, calc: calc + " · 单价库", dim: mode, note: "单价库·" + price.cat };
+    }
+    return { type: "lib", id: it.id, wid: it.id, n: it.n, u: it.u, q, calc, dim: mode };
+  }).filter(Boolean);
+}
+
+/* 整套方案内容覆盖评分：输入没点名方案名，但描述的施工内容覆盖模板多数项目时命中。
+   名称侧按 /、（）或 等拆成词块；输入侧去掉数量词与动词前缀；词块双向包含（短词≥2字且非泛词）算命中。
+   返回 {hits, total}。例：「挖坑 立杆 贴画面」→ 停车场导视牌整套 3/3。 */
+function estComboCoverScore(combo, text) {
+  const stops = /^(安装|施工|制作|更换|调试|固定|运输|清运|搬运|处理|人工|材料|现场|及|和)$/;
+  const nameToks = (n) => String(n || "").split(/[/／、（）()·，,\s]|或/).map((s) => s.trim()).filter((s) => s.length >= 2);
+  const inToks = String(text || "").split(/[,，、；;。！!？?\s]+/)
+    .map((s) => s.replace(/^\d+(?:\.\d+)?\s*(?:个|块|张|面|根|套|幅|条|件|处|片|只|支|台|组)?/, "").replace(/^(需要|要先|要|先|再|然后|做|进行|全部|都|贴|刷|喷|装)/, "").trim())
+    .filter((s) => s.length >= 2);
+  const hits = estComboHits(combo);
+  let n = 0;
+  hits.forEach((h) => {
+    const nts = nameToks(h.n);
+    const ok = inToks.some((b) => nts.some((a) => {
+      const short = a.length <= b.length ? a : b, long = a.length <= b.length ? b : a;
+      return long.includes(short) && short.length >= 2 && !stops.test(short);
+    }));
+    if (ok) n++;
+  });
+  return { hits: n, total: hits.length };
+}
+
+/* 专项测算 → 清单项。施工项转 cid+mode:'qty'（按量×单价），材料项 kind:'mat'，与内核 resolveItem 对齐 */
+function estSpecialHits(key, params) {
+  const spec = (Estimate.SPECIAL_CALCS || {})[key];
+  if (!spec) return null;
+  const p = {};
+  (spec.fields || []).forEach((f) => {
+    const v = params && params[f.k] != null && params[f.k] !== "" ? params[f.k] : f.def;
+    p[f.k] = Number(v) || 0;
+  });
+  const r = spec.compute(p);
+  const hits = [];
+  (r.work || []).forEach((w, i) => {
+    if (w.kind === "lib") hits.push({ type: "lib", id: w.id, n: w.n || "", u: w.u || "", q: w.q, calc: w.calc });
+    else hits.push({ type: "custom", cid: "sp_" + key + "_" + i, mode: "qty", n: w.n, u: w.u || "", q: w.q, p: w.p, calc: w.calc, note: "专项测算" });
+  });
+  (r.mat || []).forEach((m, i) => {
+    hits.push({ type: "custom", cid: "spm_" + key + "_" + i, mode: "qty", kind: "mat", isMat: true, n: m.n, u: m.u || "", q: m.q, p: m.p, calc: m.calc });
+  });
+  return { hits, info: r.info || "", warn: r.warn || "", spec };
+}
+
+/* ===== 方案库：整套方案 + 专项测算 共用一个右侧抽屉（两个页签）=====
+   2026-11-19：原来两个入口各开一个 inset:0 的大抽屉，看着像另开页面、也占满测算结果。
+   现在统一从「🧩 方案库」进入，页签切换；桌面端抽屉只占右侧 600px，左边清单/结果常驻可见。 */
+let _estSceneTab = "combo";
+function estOpenScenes(tab) {
+  _estSceneTab = (tab === "special") ? "special" : "combo";
+  estRenderSceneDrawer();
+}
+function estRenderSceneDrawer() {
+  const tabs = `<div class="est-scene-tabs">
+    <button class="est-scene-tab${_estSceneTab === "combo" ? " active" : ""}" onclick="estSwitchScene('combo')">🧩 整套方案</button>
+    <button class="est-scene-tab${_estSceneTab === "special" ? " active" : ""}" onclick="estSwitchScene('special')">📐 专项测算</button>
+  </div>`;
+  const body = _estSceneTab === "special" ? estSpecialHtml() : estCombosHtml();
+  estShowDrawer("方案库 · 整套 / 专项", tabs + body);
+}
+function estSwitchScene(tab) {
+  if (_estSceneTab === tab) return;
+  _estSceneTab = tab;
+  _estSpPending = null; // 跨页签后旧的专项展开结果失效，避免误加入
+  estRenderSceneDrawer();
+}
+function estOpenCombos() { estOpenScenes("combo"); } // 兼容旧入口
+
+/* 整套方案页签内容（模板可增删改，存 estimate_config.combos） */
+function estCombosHtml() {
+  if (!window.Estimate) return `<div class="est-empty">测算内核未加载</div>`;
+  const combos = estCombos();
+  const adminBar = estCanManage()
+    ? `<div class="est-pick-admin"><span>模板可增删改，保存后全员共享</span><button class="btn small outline" onclick="estOpenCfgHub('combo')">⚙️ 管理模板</button></div>`
+    : "";
+  const html = adminBar + `<div class="est-cfg-tip">点一下整套展开进清单并自动关闭；要叠第二套请再点开本抽屉。各项数量/单价可改，也可写施工内容用「✨ 智能拆解」自动识别。</div>` +
+    combos.map((c, i) => {
+      const items = estComboHits(c);
+      const dimTag = (x) => esc(x.n) + (x.dim === "area" ? "（按㎡）" : x.dim === "perim" ? "（按周长）" : "");
+      return `<button class="est-combo-card" onclick="estAddCombo(${i})">
+        <b>${esc(c.n)}</b><span>${items.length} 项 · ${items.map(dimTag).join(" / ")}</span>
+      </button>`;
+    }).join("");
+  return html;
+}
+function estAddCombo(i) {
+  const c = estCombos()[i];
+  if (!c) return;
+  const hits = estComboHits(c);
+  hits.forEach((h) => estAddWork(h));
+  renderEstimateWorkList();
+  estRecalc();
+  estCloseDrawer(); // 一键展开即收口，直接看到清单与测算结果；要叠第二套再点开本抽屉
+  const dimCount = hits.filter((h) => h.dim).length;
+  toast("已展开「" + c.n + "」" + hits.length + " 项"
+    + (dimCount ? "（含 " + dimCount + " 项按面积/周长计价，默认数量占位；用「✨ 智能拆解」输入尺寸如 6米*3米 可自动算量）" : "")
+    + "，可再点开叠加其它方案");
+}
+
+/* ===== 整套方案模板管理（总经理可增删改，存 estimate_config.combos） ===== */
+let _estComboDraft = null;       // 草稿：改动先落这里，点「保存模板」才写配置
+let _estComboEditIdx = -1;       // -1=列表视图，>=0=编辑第 i 套，-2=新建
+let _estComboItemDraft = null;   // 正在编辑的单套模板
+
+function estOpenComboManage() {
+  if (!estCanManage()) { toast("无测算管理权限，无法管理整套方案模板"); return; }
+  _estComboDraft = estCombos().map(estComboClone);
+  _estComboEditIdx = -1;
+  estRenderComboManage();
+}
+function estRenderComboManage() {
+  if (_estComboEditIdx !== -1) { estRenderComboEdit(); return; }
+  const cards = _estComboDraft.map((c, i) => {
+    const items = estComboHits(c);
+    const dimTag = (x) => esc(x.n) + (x.dim === "area" ? "（按㎡）" : x.dim === "perim" ? "（按周长）" : "");
+    return `<div class="est-tpl-card">
+      <div class="est-tpl-head"><b>${esc(c.n)}</b><em>${items.length} 项</em></div>
+      <div class="est-tpl-items">${items.map(dimTag).join(" / ") || "(空模板)"}</div>
+      <div class="est-tpl-acts">
+        <button class="btn small ghost" onclick="estComboMove(${i},-1)" title="上移">↑</button>
+        <button class="btn small ghost" onclick="estComboMove(${i},1)" title="下移">↓</button>
+        <button class="btn small outline" onclick="estComboEdit(${i})">编辑内容</button>
+        <button class="btn small ghost" onclick="estComboDel(${i})">删除</button>
+      </div>
+    </div>`;
+  }).join("");
+  estShowDrawer("配置管理 · 整套方案模板", estCfgHubTabs("combo") + `
+    <div class="est-cfg-tip">模板里的施工内容来自 142 项定额，可自由勾选并设默认数量。改动先存草稿，点下方「保存模板」后全员生效。</div>
+    <div class="est-tpl-acts" style="margin-bottom:10px">
+      <button class="btn primary small" onclick="estComboNew()">＋ 新建模板</button>
+      <button class="btn small outline" onclick="estExportCombos()" title="导出 CSV，Excel/WPS 可直接编辑">📤 导出</button>
+      <label class="btn small outline est-import-label" title="导入 CSV（模板/施工项/数量/计价/系数 五列）或旧版 JSON，覆盖或按名称合并">📥 导入<input type="file" accept=".csv,.json,application/json,text/csv" onchange="estImportCombos(this)" hidden/></label>
+    </div>
+    ${cards || '<div class="est-empty">还没有模板，点「＋ 新建模板」</div>'}
+    <div class="est-cfg-save">
+      <button class="btn primary" onclick="estSaveComboManage()">保存模板</button>
+      <button class="btn outline" onclick="estComboBack()">返回方案库</button>
+    </div>`);
+}
+function estComboNew() {
+  _estComboItemDraft = { n: "新模板", ids: [], q: {} };
+  _estComboEditIdx = -2;
+  estRenderComboEdit();
+}
+function estComboEdit(i) {
+  const c = _estComboDraft[i]; if (!c) return;
+  _estComboItemDraft = estComboClone(c);
+  _estComboEditIdx = i;
+  estRenderComboEdit();
+}
+function estRenderComboEdit() {
+  const d = _estComboItemDraft;
+  const groups = Estimate.WORK_GROUPS || [];
+  const itemsHtml = groups.map((grp) => `
+    <div class="est-pick-cat">${esc(grp.g)}</div>
+    ${grp.rows.map((a) => {
+      const id = a[0], on = d.ids.includes(id);
+      const it = (Estimate.WORK_ITEMS || []).find((x) => x.id === id);
+      const mode = (d.m && d.m[id]) || "";
+      const factor = (d.f && d.f[id]) || 1;
+      // 口径项单价映射提示：单价库查不到同名/近名行时会回退定额工时计价（数量仍是尺寸值），标 ⚠️ 提醒去单价库加行
+      const noPrice = !!(on && mode && typeof estCatalogPriceFor === "function" && !estCatalogPriceFor(it ? it.n : ""));
+      return `<label class="est-cb-row${noPrice ? " est-cb-row--warn" : ""}">
+        <input type="checkbox" data-cb="${esc(id)}" ${on ? "checked" : ""} onchange="estComboCbToggle('${esc(id)}',this.checked)"/>
+        <span title="${esc(a[1])}">${esc(a[1])}${noPrice ? '<i class="est-cb-warn" title="单价库里没有与该项同名的行，按尺寸算出的量会回退定额工时计价。到「💰 单价库」加一条同名单价即可按单价库计价">⚠️</i>' : ""}</span>
+        <input type="number" class="est-cb-q" data-cq="${esc(id)}" value="${d.q[id] || 1}" min="0" step="0.1" title="默认数量（无尺寸时占位用）" ${on ? "" : "disabled"}/>
+        <em>${esc(it ? it.u : "")}</em>
+        <select class="est-cb-m" data-cm="${esc(id)}" title="计价口径：按面积/周长时数量=尺寸×系数，单价取单价库" ${on ? "" : "disabled"} onchange="estComboModeToggle('${esc(id)}',this)">
+          <option value="">固定数量</option>
+          <option value="area"${mode === "area" ? " selected" : ""}>按面积</option>
+          <option value="perim"${mode === "perim" ? " selected" : ""}>按周长</option>
+        </select>
+        <input type="number" class="est-cb-f" data-cf="${esc(id)}" value="${factor}" min="0" step="0.05" title="系数（面积×系数，默认1；如画面损耗1.05）" ${on && mode ? "" : "disabled"}/>
+      </label>`;
+    }).join("")}`).join("");
+  estShowDrawer("编辑模板 · 勾选施工内容", `
+    <label class="est-tpl-name">模板名称<input class="input" id="estTplName" value="${esc(d.n)}" placeholder="例：广告灯箱整套"/></label>
+    <input class="input" id="estTplSearch" placeholder="搜索施工项…" oninput="estFilterComboItems(this.value)" style="margin-bottom:8px;"/>
+    <div class="est-cfg-tip">勾选要包含的施工项并填默认数量。计价口径选「按面积/按周长」后，智能拆解识别到尺寸（如 6米*3米）自动按 尺寸×系数 算数量、单价取单价库。标 ⚠️ 的项在单价库没有同名单价，会回退定额工时计价——到「💰 单价库」加同名行即可。</div>
+    <div id="estTplItems">${itemsHtml}</div>
+    <div class="est-cfg-save">
+      <button class="btn primary" onclick="estComboSaveEdit()">保存这套模板</button>
+      <button class="btn outline" onclick="estComboCancelEdit()">返回模板列表</button>
+    </div>`);
+}
+function estComboCbToggle(id, on) {
+  const q = document.querySelector('#estDrawer [data-cq="' + id + '"]');
+  if (q) q.disabled = !on;
+  const m = document.querySelector('#estDrawer [data-cm="' + id + '"]');
+  if (m) m.disabled = !on;
+  estComboModeToggle(id, m);
+}
+/* 口径切换：选了按面积/周长才启用系数输入 */
+function estComboModeToggle(id, sel) {
+  const m = sel || document.querySelector('#estDrawer [data-cm="' + id + '"]');
+  const f = document.querySelector('#estDrawer [data-cf="' + id + '"]');
+  if (f) f.disabled = !m || !m.value || m.disabled;
+}
+function estFilterComboItems(v) {
+  const q = (v || "").trim().toLowerCase();
+  document.querySelectorAll("#estTplItems .est-cb-row").forEach((el) => {
+    el.style.display = (!q || el.textContent.toLowerCase().includes(q)) ? "" : "none";
+  });
+  document.querySelectorAll("#estTplItems .est-pick-cat").forEach((cat) => {
+    let el = cat.nextElementSibling, any = false;
+    while (el && !el.classList.contains("est-pick-cat")) {
+      if (el.classList.contains("est-cb-row") && el.style.display !== "none") any = true;
+      el = el.nextElementSibling;
+    }
+    cat.style.display = any ? "" : "none";
+  });
+}
+function estComboSaveEdit() {
+  const nameEl = document.getElementById("estTplName");
+  const name = (nameEl && nameEl.value || "").trim();
+  if (!name) { toast("请填模板名称"); return; }
+  const d = { n: name, ids: [], q: {} };
+  document.querySelectorAll('#estDrawer [data-cb]').forEach((cb) => {
+    if (!cb.checked) return;
+    const id = cb.dataset.cb;
+    const qEl = document.querySelector('#estDrawer [data-cq="' + id + '"]');
+    d.ids.push(id);
+    d.q[id] = Number(qEl && qEl.value) || 1;
+    const mEl = document.querySelector('#estDrawer [data-cm="' + id + '"]');
+    const mode = mEl && mEl.value;
+    if (mode) {
+      d.m = d.m || {};
+      d.m[id] = mode;
+      const fEl = document.querySelector('#estDrawer [data-cf="' + id + '"]');
+      const f = Number(fEl && fEl.value);
+      if (f > 0 && f !== 1) { d.f = d.f || {}; d.f[id] = f; }
+    }
+  });
+  if (!d.ids.length) { toast("至少勾选一个施工项"); return; }
+  if (_estComboEditIdx === -2) _estComboDraft.push(d);
+  else _estComboDraft[_estComboEditIdx] = d;
+  _estComboEditIdx = -1; _estComboItemDraft = null;
+  estRenderComboManage();
+  toast("模板内容已更新，点「保存模板」全员生效");
+}
+function estComboCancelEdit() { _estComboEditIdx = -1; _estComboItemDraft = null; estRenderComboManage(); }
+function estComboDel(i) {
+  const c = _estComboDraft[i]; if (!c) return;
+  if (!confirm("删除模板「" + c.n + "」？保存后生效。")) return;
+  _estComboDraft.splice(i, 1);
+  estRenderComboManage();
+}
+function estComboMove(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= _estComboDraft.length) return;
+  const t = _estComboDraft[i]; _estComboDraft[i] = _estComboDraft[j]; _estComboDraft[j] = t;
+  estRenderComboManage();
+}
+async function estSaveComboManage() {
+  const c = estCfg();
+  c.combos = _estComboDraft.map(estComboClone);
+  const ok = await saveEstimateConfig(c);
+  if (ok) { estOpenScenes("combo"); toast("模板已保存，全员下次刷新生效"); }
+}
+/* 草稿是否与云端配置不一致（有未保存的新建/改动） */
+function estComboDirty() {
+  if (!Array.isArray(_estComboDraft)) return false;
+  const norm = (arr) => JSON.stringify(arr.map(estComboClone));
+  return norm(_estComboDraft) !== norm(estCombos());
+}
+/* 返回方案库：有未保存改动时先问——保存并返回 / 放弃改动（防两步保存漏第二步丢模板） */
+function estComboBack() {
+  if (estComboDirty()) {
+    if (confirm("模板改动还没保存到云端（只点了「保存这套模板」只存草稿）。\n\n【确定】保存并返回方案库\n【取消】放弃改动直接返回")) { estSaveComboManage(); return; }
+  }
+  estOpenScenes("combo");
+}
+
+/* 专项测算抽屉：脚手架 / 土建基础 / 精神堡垒 */
+let _estSpKey = "monument";
+let _estSpPending = null;
+function estOpenSpecial(key) {
+  if (!window.Estimate) return;
+  _estSpKey = key || _estSpKey;
+  _estSpPending = null;
+  estOpenScenes("special");
+}
+/* 专项测算页签内容（脚手架 / 土建基础 / 精神堡垒） */
+function estSpecialHtml() {
+  const specs = Estimate.SPECIAL_CALCS || {};
+  const keys = Object.keys(specs);
+  if (!keys.length) return `<div class="est-empty">暂无专项测算项</div>`;
+  if (!specs[_estSpKey]) _estSpKey = keys[0];
+  const spec = specs[_estSpKey];
+  const tabs = keys.map((k) => `<button class="est-sp-tab${k === _estSpKey ? " active" : ""}" onclick="estSwitchSpecial('${k}')">${esc(specs[k].label)}</button>`).join("");
+  const fields = (spec.fields || []).map((f) => `<label class="est-sp-field"><span>${esc(f.label)}</span><input type="number" class="input" data-spk="${f.k}" value="${f.def}" step="${f.step || 1}" min="0"/></label>`).join("");
+  const presets = (spec.presets || []).length ? `<div class="est-sp-presets">${spec.presets.map((p, i) => `<button class="est-pick-chip" onclick="estSpPreset(${i})">${esc(p.n)}</button>`).join("")}</div>` : "";
+  return `
+    <div class="est-sp-tabs">${tabs}</div>
+    <div class="est-cfg-tip">${esc(spec.hint || "")}</div>
+    ${presets}
+    <div class="est-sp-fields">${fields}</div>
+    <button class="btn primary" onclick="estRunSpecial()">计算展开</button>
+    <div id="estSpOut"></div>`;
+}
+function estRenderSpecialDrawer() { estOpenScenes("special"); } // 兼容旧调用
+function estSwitchSpecial(key) { _estSpKey = key; _estSpPending = null; estRenderSceneDrawer(); }
+function estSpPreset(i) {
+  const presets = ((Estimate.SPECIAL_CALCS || {})[_estSpKey] || {}).presets || [];
+  const v = presets[i] && presets[i].v;
+  if (!v) return;
+  Object.keys(v).forEach((k) => {
+    const inp = document.querySelector('#estDrawer [data-spk="' + k + '"]');
+    if (inp) inp.value = v[k];
+  });
+}
+function estRunSpecial() {
+  const params = {};
+  document.querySelectorAll('#estDrawer [data-spk]').forEach((inp) => { params[inp.dataset.spk] = inp.value; });
+  const r = estSpecialHits(_estSpKey, params);
+  if (!r) { toast("专项未找到"); return; }
+  _estSpPending = r;
+  const box = document.getElementById("estSpOut");
+  if (!box) return;
+  const rowHtml = (h, i) => `<label class="est-sp-row">
+      <input type="checkbox" data-sp-ck="h_${i}" checked/>
+      <span title="${esc(h.calc || "")}">${esc(h.n)}</span>
+      <input type="number" class="est-sp-q" data-sp-q="h_${i}" value="${h.q}" step="0.1" min="0"/>
+      <input type="number" class="est-sp-p" data-sp-p="h_${i}" value="${h.p != null ? h.p : ""}" step="1" min="0" placeholder="单价"/>
+      <em>${esc(h.u || "")}</em></label>`;
+  const works = [], mats = [];
+  r.hits.forEach((h, i) => { (h.isMat ? mats : works).push(rowHtml(h, i)); });
+  box.innerHTML = `<div class="est-sp-info">${r.info}${r.warn ? `<div class="est-sp-warn">⚠ ${esc(r.warn)}</div>` : ""}</div>
+    ${works.length ? `<div class="est-sp-group">施工项 · 计入施工费</div>${works.join("")}` : ""}
+    ${mats.length ? `<div class="est-sp-group">材料项 · 计入材料费</div>${mats.join("")}` : ""}
+    <button class="btn primary" onclick="estSpAdd()">加入清单</button>`;
+}
+function estSpAdd() {
+  if (!_estSpPending) { toast("请先点「计算展开」"); return; }
+  let added = 0;
+  _estSpPending.hits.forEach((h, i) => {
+    const ck = document.querySelector('#estDrawer [data-sp-ck="h_' + i + '"]');
+    if (!ck || !ck.checked) return;
+    const qEl = document.querySelector('#estDrawer [data-sp-q="h_' + i + '"]');
+    const pEl = document.querySelector('#estDrawer [data-sp-p="h_' + i + '"]');
+    estAddWork({ ...h, q: Number(qEl && qEl.value) || 0, p: Number(pEl && pEl.value) || 0 });
+    added++;
+  });
+  if (!added) { toast("没勾选任何项"); return; }
+  renderEstimateWorkList();
+  estRecalc();
+  toast("已加入 " + added + " 项，工程量/单价可改");
+}
+
+/* 参数类改动「未保存」标记：调价/勾选/启用/自定义工艺都只在内存草稿里，
+   不点「保存参数」就丢。标脏后抽屉标题出现「● 未保存」，关闭/切页签会二次确认。 */
+let _estCfgDirty = false;
+function estCfgTouch() {
+  _estCfgDirty = true;
+  const b = document.getElementById("estCfgDirtyBadge");
+  if (b) b.style.display = "";
+}
+function estCfgDirtyClear() {
+  _estCfgDirty = false;
+  const b = document.getElementById("estCfgDirtyBadge");
+  if (b) b.style.display = "none";
+}
+/* 抽屉里只有「参数类」控件算待保存；施工项/单价库/模板页签各有自己的保存按钮，不标脏 */
+function estCfgDelegatedTouch(e) {
+  const t = e.target;
+  if (!t || !t.closest) return;
+  if (t.closest("[data-est-param],[data-est-door],[data-ex-def],[data-ex-use],#estDoorExBox")) estCfgTouch();
+}
+
+/* 通用右侧抽屉（覆盖在测算弹窗内） */
+function estShowDrawer(title, html) {
+  let d = document.getElementById("estDrawer");
+  if (d) d.remove();
+  d = document.createElement("div");
+  d.id = "estDrawer";
+  d.className = "est-drawer";
+  d.innerHTML = `<div class="est-drawer-head"><h4>${esc(title)}</h4><span class="est-dirty-badge" id="estCfgDirtyBadge" style="display:${_estCfgDirty ? "" : "none"}">● 未保存</span><span class="est-drawer-summary" id="estDrawerSummary"></span><button class="modal-close" onclick="estCloseDrawer()">×</button></div><div class="est-drawer-body">${html}</div>`;
+  d.addEventListener("input", estCfgDelegatedTouch);
+  d.addEventListener("change", estCfgDelegatedTouch);
+  const shell = document.querySelector("#estimateModal .est-shell");
+  if (shell) {
+    // 抽屉需要完整高度：空态收高时临时撑回记忆高度，关闭抽屉后再收回去
+    if (shell._estFullH) shell.style.height = shell._estFullH + "px";
+    shell.appendChild(d);
+  }
+  if (typeof updateDrawerSummary === "function") updateDrawerSummary(_estUI && _estUI.result);
+}
+function estCloseDrawer(force) {
+  const d = document.getElementById("estDrawer");
+  if (!force && _estCfgDirty) {
+    // 参数页改的是「待保存」状态：调价/勾选只存在草稿里，关掉就没了
+    if (!confirm("参数/工艺有改动还没点「保存参数」，关闭后会丢掉这些改动。\n\n仍要关闭吗？")) return false;
+  }
+  if (d) d.remove();
+  estCfgDirtyClear();
+  estSyncShellHeight(true); // 关抽屉后若清单为空，窗口重新按内容收高
+  return true;
+}
+
+/* ===== 配置管理中枢（2026-11-22）：参数与单价 / 施工项 / 方案模板 / 单价库 / 同义词 五页签唯一入口 =====
+   全局配置原本散在 advanced 链接、footer 两个按钮、输入区单价库、参数面板内嵌核心价子集；
+   现在统一进一个五页签抽屉（estCfgHubTabs，含备份/恢复全部），页签内容复用原渲染函数。
+   「本单」安装高度/墙面/对比报价仍留在测算面板，不进全局配置。
+   无管理权限者点输入区「单价库」仍走只读 estOpenPriceLib()。 */
+let _estCfgHubTab = "items";
+function estCfgHubTabs(active) {
+  const tab = (k, label) => `<button class="est-scene-tab${active === k ? " active" : ""}" onclick="estOpenCfgHub('${k}')">${label}</button>`;
+  return `<div class="est-scene-tabs est-hub-tabs">
+    ${tab("params", "⚙️ 参数与单价")}${tab("items", "📄 施工项·工时")}${tab("combo", "🧩 方案模板")}${tab("catalog", "💰 单价库")}${tab("syn", "🔗 同义词")}
+    <span class="est-hub-backup">
+      <button class="btn small outline" onclick="estExportAll()" title="一个文件备份施工项+方案模板+单价库+参数工时，换设备/迁移/误操作兜底">📤 备份全部</button>
+      <label class="btn small outline est-import-label" title="恢复备份文件（覆盖当前全部测算配置）">📥 恢复<input type="file" accept=".json,application/json" onchange="estImportAll(this)" hidden/></label>
+    </span>
+  </div>`;
+}
+function estOpenCfgHub(tab) {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  const next = tab || _estCfgHubTab || "items";
+  // 切页签会重绘抽屉：参数页的调价/勾选草稿会被丢掉，先让用户确认
+  if (_estCfgDirty && next !== _estCfgHubTab
+    && !confirm("参数/工艺有改动还没点「保存参数」，切换页签会丢掉这些改动。\n\n仍要切换吗？")) return;
+  _estCfgHubTab = next;
+  if (_estCfgHubTab === "params") estOpenConfig();
+  else if (_estCfgHubTab === "combo") estOpenComboManage();
+  else if (_estCfgHubTab === "catalog") estOpenPriceLib();
+  else if (_estCfgHubTab === "syn") estOpenSynonyms();
+  else estOpenItemManage();
+}
+/* 一键备份/恢复全部测算配置（estimate_config 整包 JSON，与三份日常 CSV 并存） */
+function estDownloadJson(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+function estExportAll() {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  estDownloadJson("GG测算配置备份-" + new Date().toISOString().slice(0, 10) + ".json", {
+    type: "gg-est-backup", v: 1, at: new Date().toISOString(),
+    cfg: JSON.parse(JSON.stringify(estCfg())),
+  });
+  toast("已备份全部测算配置（施工项/方案模板/单价库/参数工时）");
+}
+async function estImportAll(input) {
+  if (!estCanManage()) { toast("无测算管理权限"); return; }
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  try {
+    const d = JSON.parse(await estReadTextFile(file));
+    if (!d || d.type !== "gg-est-backup" || !d.cfg || typeof d.cfg !== "object") throw new Error("不是测算配置备份文件");
+    const c = d.cfg;
+    const parts = [
+      (Array.isArray(c.customItems) ? c.customItems.length : 0) + " 项施工项",
+      (Array.isArray(c.combos) ? c.combos.length : 0) + " 套模板",
+      (Array.isArray(c.catalog) ? c.catalog.reduce((s, g) => s + (g.rows || []).length, 0) : 0) + " 个单价",
+    ];
+    if (!confirm(`恢复备份（${parts.join(" / ")}）？\n\n【确定】覆盖当前全部测算配置\n【取消】放弃`)) return;
+    const ok = await saveEstimateConfig(c);
+    if (ok) {
+      _estItemDraft = null; _estCatEdit = false; _estCatDraft = null;
+      estOpenCfgHub(_estCfgHubTab);
+      toast("备份已恢复，全员下次刷新生效");
+    }
+  } catch (e) { toast("恢复失败：" + (e.message || "文件格式不对")); }
+  finally { if (input) input.value = ""; }
+}
+
+/* ===== 门头工艺增项配置（2026-11-22）=====
+   内置 8 个工艺可「启用/隐藏」「设为新装默认勾选」，也能点「调价」改人工定额项/计量方式/系数/材料单价
+   （改动以同 key 覆盖内置，存进 doorEx）；自定义工艺可增删改。
+   计量方式见 Estimate.DOOR_EXTRA_METHODS；保存后随 estimate_config 全员共享。 */
+let _estExDraft = null;
+let _estExOpen = {};   // 展开「调价」的内置工艺 key
+function estExDraft() {
+  if (!_estExDraft) _estExDraft = JSON.parse(JSON.stringify(estCfg().doorEx || []));
+  return _estExDraft;
+}
+function estExBuiltinKeys() {
+  return new Set(((Estimate && Estimate.DOOR_EXTRAS) || []).map((x) => x.key));
+}
+/* 真正的自定义工艺（不含覆盖内置的同 key 项） */
+function estExCustomList() {
+  const bk = estExBuiltinKeys();
+  return estExDraft().map((ex, i) => ({ ex, i })).filter((x) => x.ex && !bk.has(x.ex.key));
+}
+/* 取某工艺的可编辑副本：已有覆盖就用覆盖，否则从内置复制一份（改什么存什么） */
+function estExEditTarget(key) {
+  const list = estExDraft();
+  let it = list.find((x) => x && x.key === key);
+  if (it) return it;
+  const base = ((Estimate && Estimate.DOOR_EXTRAS) || []).find((x) => x.key === key);
+  if (!base) return null;
+  it = JSON.parse(JSON.stringify(base));
+  it._override = true; // 标记这是覆盖项，界面上仍归在「内置」里
+  list.push(it);
+  return it;
+}
+function estExHasOverride(key) {
+  return estExDraft().some((x) => x && x.key === key && estExBuiltinKeys().has(key));
+}
+/* 内置工艺调价：path 语法同 estExField（work.id/work.by/work.k/mat.n/mat.p/mat.k/mat.u/mat.by/mat.sheet） */
+function estExEdit(key, path, v) {
+  estCfgTouch();
+  const d = estExEditTarget(key);
+  if (!d) return;
+  const bk = estExBuiltinKeys();
+  const base = ((Estimate && Estimate.DOOR_EXTRAS) || []).find((x) => x.key === key);
+  // 名字/图标不允许被内置覆盖改掉，只改价与计量
+  if (path.indexOf("work.") === 0) {
+    if (!d.work) d.work = { id: "i_seal", by: "perimDepth", k: 1, note: "" };
+    const k = path.slice(5);
+    d.work[k] = (k === "by" || k === "id") ? v : Math.max(0, Number(v) || 0);
+  } else if (path.indexOf("mat.") === 0) {
+    if (!d.mat) d.mat = { n: "", u: "㎡", by: "perimDepth", k: 1, p: 0, sheet: false };
+    const k = path.slice(4);
+    if (k === "sheet") d.mat.sheet = !!v;
+    else if (k === "by" || k === "u" || k === "n") d.mat[k] = String(v);
+    else d.mat[k] = Math.max(0, Number(v) || 0);
+  }
+  d.n = (base && base.n) || d.n;
+  d.icon = (base && base.icon) || "";
+  estRenderDoorExCfg();
+  if (document.getElementById("estDoorExBox")) {
+    const keep = _estExOpen[key];
+    if (keep) {
+      const el = document.querySelector('[data-ex-row="' + key + '"]');
+      if (el) el.scrollIntoView({ block: "nearest" });
+    }
+  }
+}
+/* 恢复内置默认：把覆盖项从草稿里删掉 */
+function estExReset(key) {
+  estCfgTouch();
+  _estExDraft = estExDraft().filter((x) => !(x && x.key === key && estExBuiltinKeys().has(key)));
+  estRenderDoorExCfg();
+  const def = ((Estimate && Estimate.DOOR_EXTRAS) || []).find((x) => x.key === key);
+  toast("已恢复「" + (def ? def.n : key) + "」默认价");
+}
+function estExToggleOpen(key) {
+  _estExOpen[key] = !_estExOpen[key];
+  estRenderDoorExCfg();
+}
+function estExField(i, path, v) {
+  const d = estExDraft()[i]; if (!d) return;
+  if (path === "n") { d.n = String(v).slice(0, 16); return; }
+  if (path === "icon") { d.icon = String(v).slice(0, 4); return; }
+  if (path.indexOf("work.") === 0) {
+    if (!d.work) d.work = { id: "i_seal", by: "perimDepth", k: 1, note: "" };
+    const k = path.slice(5);
+    d.work[k] = k === "by" || k === "id" ? v : Math.max(0, Number(v) || 0);
+    return;
+  }
+  if (path.indexOf("mat.") === 0) {
+    if (!d.mat) d.mat = { n: "", u: "㎡", by: "perimDepth", k: 1, p: 0, sheet: false };
+    const k = path.slice(4);
+    if (k === "sheet") d.mat.sheet = !!v;
+    else if (k === "by" || k === "u") d.mat[k] = v;
+    else if (k === "n") d.mat.n = String(v).slice(0, 20);
+    else d.mat[k] = Math.max(0, Number(v) || 0);
+  }
+}
+function estExNew() {
+  estCfgTouch();
+  const t = Date.now().toString(36);
+  estExDraft().push({
+    key: "ux_" + t, n: "新工艺", icon: "",
+    work: { id: "i_seal", by: "perimDepth", k: 1, note: "" },
+    mat: { n: "", u: "㎡", by: "perimDepth", k: 1.15, p: 0, sheet: false },
+  });
+  estRenderDoorExCfg();
+}
+function estExDel(i) { estCfgTouch(); estExDraft().splice(i, 1); estRenderDoorExCfg(); }
+function estRenderDoorExCfg() {
+  const box = document.getElementById("estDoorExBox");
+  if (!box) return;
+  const c = estCfg();
+  // 重渲染（新增/删除自定义工艺）时优先沿用页面上已改的勾选，否则刚勾的"默认勾选"会丢
+  const domUse = document.querySelectorAll("[data-ex-use]");
+  const domDef = document.querySelectorAll("[data-ex-def]");
+  const seen = domDef.length > 0;
+  const hide = new Set();
+  const onMap = {};
+  if (seen) {
+    domUse.forEach((el) => { if (!el.checked) hide.add(el.dataset.exUse); });
+    domDef.forEach((el) => { if (el.checked) onMap[el.dataset.exDef] = true; });
+  } else {
+    (c.doorExHide || []).forEach((k) => hide.add(k));
+    Object.keys((c.door && c.door.extras) || {}).forEach((k) => { onMap[k] = true; });
+  }
+  const METHODS = (Estimate && Estimate.DOOR_EXTRA_METHODS) || [];
+  const WITEMS = (Estimate && Estimate.WORK_ITEMS) || [];
+  const mName = (v) => (METHODS.find((x) => x.v === v) || {}).n || v;
+  const methodOpts = (cur) => METHODS.map((m) => '<option value="' + m.v + '"' + (cur === m.v ? " selected" : "") + ">" + m.n + "</option>").join("");
+  const workOpts = (cur) => WITEMS.map((it) => '<option value="' + esc(it.id) + '"' + (cur === it.id ? " selected" : "") + ">" + esc(it.n) + "（" + esc(it.u) + "）</option>").join("");
+
+  // 内置工艺的「调价」覆盖：同 key 取草稿里的覆盖项做深合并，界面显示改动后的实际值
+  const bk = estExBuiltinKeys();
+  const ovMap = {};
+  estExDraft().forEach((x) => { if (x && x.key && bk.has(x.key)) ovMap[x.key] = x; });
+  const mergeDef = (base) => {
+    const o = ovMap[base.key];
+    if (!o) return base;
+    const m = Object.assign({}, base, o);
+    if (base.work || o.work) m.work = Object.assign({}, base.work || {}, o.work || {});
+    if (base.mat || o.mat) m.mat = Object.assign({}, base.mat || {}, o.mat || {});
+    return m;
+  };
+  const descOf = (ex) => {
+    const wIt = ex.work && ex.work.id && Estimate.getWorkItem ? Estimate.getWorkItem(ex.work.id) : null;
+    return [
+      wIt ? "人工 " + wIt.n + "·" + mName(ex.work.by) + "×" + ex.work.k : "",
+      ex.mat && Number(ex.mat.k) > 0 ? "材料 " + ex.mat.n + fmtEstMoney(ex.mat.p) + "/" + ex.mat.u : "",
+    ].filter(Boolean).join(" ｜ ");
+  };
+  // 内置工艺调价编辑区（人工/材料各一行，与自定义工艺同一套网格）
+  const editBox = (def) => {
+    const w = def.work || {}, m = def.mat || {};
+    const key = def.key;
+    const q = "'" + key + "'";
+    return '<div class="est-ex-edit">'
+      + '<div class="est-ex-l2 est-ex-l2-work"><span class="est-ex-tag">人工</span>'
+      + '<select class="input est-ex-wid" title="定额项（工时×工种单价）" onchange="estExEdit(' + q + ',\'work.id\',this.value)">' + workOpts(w.id) + '</select>'
+      + '<select class="input est-ex-wby" title="计量方式" onchange="estExEdit(' + q + ',\'work.by\',this.value)">' + methodOpts(w.by) + '</select>'
+      + '<input class="input est-ex-wk" type="number" min="0" step="0.1" value="' + (w.k != null ? w.k : 1) + '" title="系数：算出的量 × 系数" onchange="estExEdit(' + q + ',\'work.k\',this.value)"/>'
+      + '</div>'
+      + '<div class="est-ex-l2 est-ex-l2-mat"><span class="est-ex-tag">材料</span>'
+      + '<input class="input est-ex-mn" value="' + esc(m.n || "") + '" placeholder="材料名（留空=不算材料）" onchange="estExEdit(' + q + ',\'mat.n\',this.value)"/>'
+      + '<input class="input est-ex-mu" value="' + esc(m.u || "㎡") + '" title="单位" onchange="estExEdit(' + q + ',\'mat.u\',this.value)"/>'
+      + '<input class="input est-ex-mp" type="number" min="0" step="1" value="' + (m.p != null ? m.p : 0) + '" title="材料单价（元/单位）" onchange="estExEdit(' + q + ',\'mat.p\',this.value)"/>'
+      + '<select class="input est-ex-mby" title="计量方式" onchange="estExEdit(' + q + ',\'mat.by\',this.value)">' + methodOpts(m.by) + '</select>'
+      + '<input class="input est-ex-mk" type="number" min="0" step="0.05" value="' + (m.k != null ? m.k : 1) + '" title="系数：含损耗；填 0 = 不算材料" onchange="estExEdit(' + q + ',\'mat.k\',this.value)"/>'
+      + '<label class="est-ex-msheet" title="按 1220×2440mm 整张买（不足一张按一张）"><input type="checkbox" ' + (m.sheet ? "checked" : "") + ' onchange="estExEdit(' + q + ',\'mat.sheet\',this.checked)"/>整张</label>'
+      + '</div>'
+      + '<div class="est-ex-edit-foot">'
+      + '<span>改任意一项即存为自定义价（不动内置默认）</span>'
+      + (estExHasOverride(key) ? '<button class="linkbtn" onclick="estExReset(' + q + ')">↺ 恢复默认价</button>' : '')
+      + '</div></div>';
+  };
+
+  const builtinRows = ((Estimate && Estimate.DOOR_EXTRAS) || []).map((raw) => {
+    const ex = mergeDef(raw);
+    const over = !!ovMap[raw.key];
+    const desc = descOf(ex);
+    // 6×2 标准门头试算：这一项勾上去大概多少钱 / 折合多少，超行业上限标红（防参数填歪）
+    let stat = null;
+    if (Estimate && Estimate.tryDoorRecipe) {
+      const r0 = Estimate.tryDoorRecipe("门头 6米×2米", { ...(c.door || {}), params: c.params, extras: { [raw.key]: true }, extraDefs: estExDraft(), extraHidden: [] });
+      stat = estExtraStat(((r0 && r0.hits) || []).filter((h) => h.extraKey === raw.key));
+    }
+    const statTxt = stat
+      ? `6×2 试算 ≈${fmtEstMoney(stat.amt)}` + (stat.bench && stat.unit > 0 ? `（折合 ${Math.round(stat.unit)}${stat.perLabel}，上限 ${Math.round(stat.bench.hi)}）` : '')
+        + (stat.over ? ' ⚠ 偏高' : '')
+      : '';
+    const open = !!_estExOpen[raw.key];
+    const row = '<div class="est-ex-row' + (hide.has(ex.key) ? " is-off" : "") + (over ? " is-custom" : "") + '" data-ex-row="' + esc(ex.key) + '">'
+      + '<label class="est-ex-use" title="取消勾选=在拆解面板隐藏这个工艺"><input type="checkbox" data-ex-use="' + esc(ex.key) + '" ' + (hide.has(ex.key) ? "" : "checked") + "/>启用</label>"
+      + '<span class="est-ex-n">' + (ex.icon ? esc(ex.icon) + " " : "") + esc(ex.n) + (over ? '<i class="est-ex-badge" title="人工/材料已自定义，点「调价」可改或恢复默认价">已调价</i>' : '') + '</span>'
+      + '<div class="est-ex-desc"><em title="' + esc(desc) + '">' + esc(desc) + "</em>"
+      + (statTxt ? '<span class="est-ex-stat' + (stat.over ? ' is-high' : '') + '">' + esc(statTxt) + "</span>" : '')
+      + "</div>"
+      + '<button class="est-ex-price" onclick="estExToggleOpen(\'' + esc(ex.key) + '\')" title="修改人工定额项 / 计量方式 / 系数 / 材料单价">' + (open ? "收起" : "调价") + "</button>"
+      + '<label class="est-ex-on" title="勾选后每次拆解自动带上这个工艺"><input type="checkbox" data-ex-def="' + esc(ex.key) + '" ' + (onMap[ex.key] ? "checked" : "") + "/>默认勾选</label>"
+      + "</div>";
+    return row + (open ? editBox(ex) : "");
+  }).join("");
+
+  const custList = estExCustomList();
+  const custRows = custList.map(({ ex, i }) => {
+    const w = ex.work || {}, m = ex.mat || {};
+    return '<div class="est-ex-cust">'
+      + '<div class="est-ex-l1">'
+      + '<input class="input est-ex-ni" value="' + esc(ex.n) + '" placeholder="工艺名称" oninput="estExField(' + i + ',\'n\',this.value)"/>'
+      + '<input class="input est-ex-ic" value="' + esc(ex.icon || "") + '" maxlength="2" title="图标（1-2 个字符）" oninput="estExField(' + i + ',\'icon\',this.value)"/>'
+      + '<button class="est-item-op est-item-del est-ex-del" onclick="estExDel(' + i + ')" title="删除这个工艺">×</button>'
+      + '</div>'
+      + '<div class="est-ex-l2 est-ex-l2-work"><span class="est-ex-tag">人工</span>'
+      + '<select class="input est-ex-wid" onchange="estExField(' + i + ',\'work.id\',this.value)">' + workOpts(w.id) + '</select>'
+      + '<select class="input est-ex-wby" title="计量方式" onchange="estExField(' + i + ',\'work.by\',this.value)">' + methodOpts(w.by) + '</select>'
+      + '<input class="input est-ex-wk" type="number" min="0" step="0.1" value="' + (w.k != null ? w.k : 1) + '" title="系数：算出的量 × 系数" onchange="estExField(' + i + ',\'work.k\',this.value)"/>'
+      + '</div>'
+      + '<div class="est-ex-l2 est-ex-l2-mat"><span class="est-ex-tag">材料</span>'
+      + '<input class="input est-ex-mn" value="' + esc(m.n || "") + '" placeholder="材料名（留空=不算材料）" oninput="estExField(' + i + ',\'mat.n\',this.value)"/>'
+      + '<input class="input est-ex-mu" value="' + esc(m.u || "㎡") + '" title="单位" oninput="estExField(' + i + ',\'mat.u\',this.value)"/>'
+      + '<input class="input est-ex-mp" type="number" min="0" step="1" value="' + (m.p != null ? m.p : 0) + '" title="材料单价（元/单位）" onchange="estExField(' + i + ',\'mat.p\',this.value)"/>'
+      + '<select class="input est-ex-mby" title="计量方式" onchange="estExField(' + i + ',\'mat.by\',this.value)">' + methodOpts(m.by) + '</select>'
+      + '<input class="input est-ex-mk" type="number" min="0" step="0.05" value="' + (m.k != null ? m.k : 1) + '" title="系数：含损耗；填 0 = 不算材料" onchange="estExField(' + i + ',\'mat.k\',this.value)"/>'
+      + '<label class="est-ex-msheet" title="按 1220×2440mm 整张买（不足一张按一张）"><input type="checkbox" ' + (m.sheet ? "checked" : "") + ' onchange="estExField(' + i + ',\'mat.sheet\',this.checked)"/>整张</label>'
+      + '</div></div>';
+  }).join("");
+
+  box.innerHTML = "<h5>门头工艺增项（拆解时可勾选）</h5>"
+    + '<div class="est-cfg-tip">配方只出主干（骨架/面板/字/接线），包边、檐口、雨棚、脚手架这些按需勾选：勾上后按「周长×侧包深度」「宽+两侧返边」「宽高算门架组数」或面积自动算量，加进清单还能改数量。侧包深度填 0 时包边按 0.1 米最小收边。<b>点每行「调价」可直接改人工定额项、计量方式、系数和材料单价</b>（只覆盖这一条，随时能恢复默认）。勾「默认勾选」= 以后每次拆解自动带上。</div>'
+    + '<div class="est-cfg-tip">每行第二行是 <b>6×2 标准门头试算</b>：这一项勾上去大概多少钱、折合多少元/米（或元/㎡、元/组），以及行业成本上限。折合超上限会标红「⚠ 偏高」——多半是系数/单价填歪，或计量方式选错（例：包边选了「面积㎡」就会把整面墙当侧包料）。<b>包边与不锈钢包边同位置二选一</b>，勾一个会自动撤另一个，避免同一圈收两遍。</div>'
+    + '<div class="est-ex-list">' + builtinRows + "</div>"
+    + '<div class="est-item-head"><b>自定义工艺（' + custList.length + "）</b><button class=\"btn small outline\" onclick=\"estExNew()\">＋ 新增工艺</button></div>"
+    + '<div class="est-ex-list">' + (custRows || '<div class="est-empty est-empty-compact">内置 8 个不够用就自己加一条（选定额项 + 计量方式 + 材料）</div>') + "</div>";
+}
+
+/* 参数与单价配置面板（manager 可改，全员只读） */
+function estOpenConfig() {
+  if (!estCanManage()) { toast("无测算管理权限，无法修改测算参数与单价"); return; }
+  _estExDraft = null; // 每次打开都从云端配置重新拉，避免拿着上次未保存的草稿
+  _estExOpen = {};    // 内置工艺「调价」展开态也复位
+  const c = estCfg();
+  const labels = (Estimate && Estimate.WORK_PARAM_LABELS) || [];
+  const ELEC_KEYS = ["ledW", "stripW", "spotW", "psuW", "psuLoad", "stripVolt", "spotVolt"];
+  const rowOf = ([k, label, unit]) => `
+    <label class="est-cfg-row"><span>${esc(label)}</span><input type="number" min="0" step="0.01" value="${c.params[k] != null ? c.params[k] : ''}" data-est-param="${k}"/><em>${esc(unit)}</em></label>`;
+  const baseRows = labels.filter(([k]) => !ELEC_KEYS.includes(k)).map(rowOf).join("");
+  const elecRows = labels.filter(([k]) => ELEC_KEYS.includes(k)).map(rowOf).join("");
+  const whCount = Object.keys(c.WH || {}).length;
+  estShowDrawer("参数与单价（全局共享配置）", estCfgHubTabs("params") + `
+    <div class="est-cfg-saved">🗄 ${estCfgSavedText()}</div>
+    <div class="est-cfg-tip">修改后点底部「保存参数」，全员下次刷新生效。工时单价按工种分开（普工/安装技工/焊工/电工/高空工/架子工/设计），<b>这里是唯一能改的地方</b>（施工项页只显示当前值）——每个施工项按自己声明的工种取价，影响所有测算；定额校准仅影响被校准的单项。施工项/模板/价目表/同义词都在上方页签，不再散落多个入口。</div>
+    <h5>工种工时单价 / 系数 / 设备费</h5>${baseRows}
+    <div class="est-cfg-tip">安装、发光字、钢架、电路、运输（元/公里）等参考价统一在上方「💰 单价库」页签维护；里程单价直接取其中「市内运输」行，改完即刻生效。</div>
+    <h5>电气 / 电线（门头拆解用）</h5>
+    <div class="est-cfg-tip">灯带/射灯电压填 <b>220</b> 表示市电直供、不占 12V 电源；填 <b>12</b> 才计入电源。电源数=12V负载÷(额定功率×负载上限)。电线按「门头周长+每字引线+射灯支线+引下3米」自动估算，单价可在材料行或单价库改。</div>
+    ${elecRows}
+    <h5>门头拆解工艺（侧包 / 骨架）</h5>
+    <div class="est-cfg-tip">侧包深度填 <b>0</b> = 贴墙平面门头，铝塑板只按正面+10%损耗买整张；默认 0.2 米按立体箱体算四周侧包。网格间距越小方管越多；骨架厚度 &gt;0 按双层框架+连接撑。板材按整张购买计价（1220×2440mm≈2.98㎡/张，不足一张按一张）。</div>
+    <label class="est-cfg-row"><span>侧包深度</span><input type="number" min="0" max="2" step="0.05" value="${c.door.depth}" data-est-door="depth"/><em>米 · 0=贴墙</em></label>
+    <label class="est-cfg-row"><span>骨架网格间距</span><input type="number" min="0.2" max="2" step="0.05" value="${c.door.gap}" data-est-door="gap"/><em>米</em></label>
+    <label class="est-cfg-row"><span>骨架厚度</span><input type="number" min="0" max="1" step="0.05" value="${c.door.thick}" data-est-door="thick"/><em>米 · 0=单层</em></label>
+    <label class="est-cfg-row"><span>灯箱灯条行距</span><input type="number" min="0.1" max="1" step="0.05" value="${c.door.lampGap != null ? c.door.lampGap : 0.2}" data-est-door="lampGap"/><em>米 · 灯箱布用</em></label>
+    <label class="est-cfg-row"><span>铝方通间距</span><input type="number" min="0.05" max="0.5" step="0.01" value="${c.door.lvfGap != null ? c.door.lvfGap : 0.12}" data-est-door="lvfGap"/><em>米 · 格栅/方通用</em></label>
+    <label class="est-cfg-row"><span>门头造型</span><select data-est-door="shape" class="input">
+      <option value="rect"${c.door.shape === "rect" ? " selected" : ""}>规则矩形</option>
+      <option value="slant"${c.door.shape === "slant" ? " selected" : ""}>斜边/凹凸</option>
+      <option value="arc"${c.door.shape === "arc" ? " selected" : ""}>圆弧异形</option>
+    </select><em>影响异形降效</em></label>
+    <div id="estDoorExBox"></div>
+    <h5>定额校准</h5>
+    <div class="est-cfg-tip">已校准 ${whCount} 项。逐项改工时：去「📄 施工项·工时」页签看右侧「工时」框（直接改即校准，改回默认值即恢复）；工种单价就在本页上方改。下方「反推校准」可用真实完工数据生成定额。</div>
+    <details class="est-calib"><summary>反推校准 · 用真实完工数据生成定额</summary>
+      <div class="est-calib-grid">
+        <label>施工项<select class="input" id="estCalibItem">${(Estimate.WORK_ITEMS || []).map((it) => `<option value="${esc(it.id)}">${esc(it.n)}（${esc(it.u)}）</option>`).join("")}</select></label>
+        <label>人数<input class="input" type="number" id="estCalibPeople" value="2" min="1" step="1"/></label>
+        <label>天数(8h)<input class="input" type="number" id="estCalibDays" value="0.5" min="0.1" step="0.1"/></label>
+        <label>完成量<input class="input" type="number" id="estCalibQty" min="0.1" step="0.1" placeholder="工程量"/></label>
+      </div>
+      <button class="btn small" onclick="estRunCalib()">反算标准工时</button>
+      <div id="estCalibResult" class="est-calib-result"></div>
+    </details>
+    <div class="est-cfg-save est-cfg-save--sticky"><span class="est-cfg-save-hint">改完点保存才写入云端</span><button class="btn primary" onclick="estSaveConfig()">保存参数</button></div>`);
+  estRenderDoorExCfg();
+}
+
+let _estPendingCalib = null;
+function estRunCalib() {
+  const id = document.getElementById("estCalibItem").value;
+  const people = Number(document.getElementById("estCalibPeople").value) || 1;
+  const days = Number(document.getElementById("estCalibDays").value) || 0;
+  const qty = Number(document.getElementById("estCalibQty").value) || 0;
+  const box = document.getElementById("estCalibResult");
+  if (qty <= 0 || days <= 0) { box.innerHTML = `<span style="color:#dc2626">请填完成量与天数</span>`; return; }
+  const it = (Estimate.WORK_ITEMS || []).find((x) => x.id === id);
+  if (!it) return;
+  const c = estCfg();
+  const dh = (c.params.dayHours > 0 ? c.params.dayHours : 8);
+  const totalH = people * days * dh;
+  const baseH = totalH / qty;
+  // 反推：按当前高度/墙面系数还原基准定额（与测算器口径一致）
+  const hf = { low: c.params.hfLow, mid: c.params.hfMid, high: c.params.hfHigh }[(_estUI && _estUI.height) || "low"] || 1;
+  const wf = { flat: c.params.wfFlat, tile: c.params.wfTile, glass: c.params.wfGlass }[(_estUI && _estUI.wall) || "flat"] || 1;
+  const stdH = Math.round(baseH / (hf * wf) * 100) / 100;
+  _estPendingCalib = { id, h: stdH, name: it.n };
+  box.innerHTML = `<span style="color:#059669">「${esc(it.n)}」反算基准定额 <b>${stdH} 工时/${esc(it.u)}</b>（${people}人×${days}天×${dh}h=${totalH}h ÷ ${qty} → 除以系数 ${(hf * wf).toFixed(2)}）。点「保存参数」后生效。</span>`;
+}
+
+async function estSaveConfig() {
+  const c = estCfg();
+  document.querySelectorAll("[data-est-param]").forEach((el) => { const v = Number(el.value); if (!isNaN(v) && v >= 0) c.params[el.dataset.estParam] = v; });
+  if (!c.door) c.door = {};
+  document.querySelectorAll("[data-est-door]").forEach((el) => {
+    const k = el.dataset.estDoor;
+    if (k === "shape") { c.door.shape = ["rect", "slant", "arc"].includes(el.value) ? el.value : "rect"; return; }
+    const v = Number(el.value);
+    if (!isNaN(v) && v >= 0) c.door[k] = v;
+  });
+  // 门头工艺增项：默认勾选 / 启用（取消=隐藏）/ 自定义工艺。
+  // 只有页面真的渲染了这几块才覆盖云端值，避免某次渲染失败把全员配置清空。
+  if (!c.door) c.door = {};
+  const exDefEls = document.querySelectorAll("[data-ex-def]");
+  if (exDefEls.length) {
+    const exOn = {};
+    exDefEls.forEach((el) => { if (el.checked) exOn[el.dataset.exDef] = true; });
+    c.door.extras = exOn;
+  }
+  const exUseEls = document.querySelectorAll("[data-ex-use]");
+  if (exUseEls.length) {
+    const exHide = [];
+    exUseEls.forEach((el) => { if (!el.checked) exHide.push(el.dataset.exUse); });
+    c.doorExHide = exHide;
+  }
+  if (document.getElementById("estDoorExBox")) {
+    c.doorEx = (estExDraft() || []).filter((x) => String(x.n || "").trim() || (x.mat && String(x.mat.n || "").trim()))
+      .map((x) => ({ key: x.key, n: String(x.n || "未命名工艺").trim(), icon: x.icon || "", work: x.work, mat: x.mat }));
+  }
+  if (_estPendingCalib) { c.WH[_estPendingCalib.id] = _estPendingCalib.h; _estPendingCalib = null; }
+  const ok = await saveEstimateConfig(c);
+  if (ok) { estCloseDrawer(); estRenderAdvanced(); estRecalc(); }
+}
+
+/* 复制报价单文本（内核 quoteText） */
+function estCopyQuote() {
+  if (!_estUI || !_estUI.result) return;
+  const info = { ..._estUI.expInfo, title: "施工费报价单" };
+  const txt = (Estimate && Estimate.quoteText) ? Estimate.quoteText(_estUI.result, info) : "";
+  if (!txt) { toast("暂无可复制的内容"); return; }
+  const done = () => toast("报价单已复制");
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done).catch(() => estFallbackCopy(txt, done));
+  else estFallbackCopy(txt, done);
+}
+function estFallbackCopy(txt, done) {
+  const ta = document.createElement("textarea");
+  ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); done(); } catch (_) { toast("复制失败，请手动选择"); }
+  ta.remove();
+}
+
+/* 独立测算模式：插入到项目 —— 弹项目选择器（仅列出有编辑项目权限的项目），
+   把测算施工项并入该项目 workContent + 写 cost_estimate 快照，不改工程金额。 */
+let _estInsertProjKw = "";
+function estOpenInsertPicker() {
+  if (!_estUI || !_estUI.work.length) { toast("清单是空的，先加施工项"); return; }
+  if (!_estUI.result) estRecalc();
+  _estInsertProjKw = "";
+  modal.open("插入到项目 · 选择项目", `
+    <button class="btn primary" style="width:100%;margin-bottom:10px;" onclick="estInsertNewProject()">＋ 新建项目并插入</button>
+    <input class="input" id="estInsertProjSearch" placeholder="搜索项目名 / 门店 / 客户 / 地址…" value="" oninput="estFilterInsertProj(this.value)" style="margin-bottom:8px;"/>
+    <div class="est-cfg-tip">选已有项目：把测算施工项并入其施工内容并保存快照，不改工程金额。新建：带入施工内容与工时明细后填客户/时间保存。</div>
+    <div id="estInsertProjList" style="max-height:46vh;overflow-y:auto;overscroll-behavior:contain;"></div>`, { hideFooter: true });
+  estRenderInsertProjList();
+}
+/* 新建项目并插入：关测算器 → 打开预约表单 → 回填施工内容/明细/快照（随 saveProject 落库，不改工程金额） */
+function estInsertNewProject() {
+  if (!_estUI || !_estUI.work.length) { toast("清单是空的，先加施工项"); return; }
+  if (!_estUI.result) estRecalc();
+  const snapshot = buildCostEstimate(_estUI.work, _estUI.result, _estUI.ctx, null);
+  const names = (_estUI.work || []).map((w) => w.n).filter(Boolean);
+  closeEstimateModal();
+  newProject();
+  setTimeout(() => {
+    window._wcFormItems = (snapshot.items || []).slice();
+    // 先写快照再渲染：汇总条的金额取自快照，顺序反了会先算成「人工参考」
+    const hidden = document.getElementById("pCostEstimate");
+    if (hidden) hidden.value = JSON.stringify(snapshot);
+    wcRender("wcForm"); // 内含 wcUpdateTotal → 汇总条按快照重算金额
+    const customEl = document.getElementById("pWorkContentCustom");
+    if (customEl) customEl.value = names.join("、");
+    toast("已带入 " + names.length + " 项施工内容与工时明细，填好客户/时间后保存即可");
+  }, 150);
+}
+function estFilterInsertProj(v) { _estInsertProjKw = v || ""; estRenderInsertProjList(); }
+function estRenderInsertProjList() {
+  const box = document.getElementById("estInsertProjList");
+  if (!box) return;
+  const kw = (_estInsertProjKw || "").trim().toLowerCase();
+  let items = (cache.projects || []).filter((p) => p.id && typeof perm.editProject === "function" && perm.editProject(p));
+  if (kw) items = items.filter((p) => [p.name, storeName(p.storeId), p.customer, p.address].filter(Boolean).join(" ").toLowerCase().includes(kw));
+  items.sort((a, b) => new Date(b.appointmentTime || 0) - new Date(a.appointmentTime || 0));
+  if (!items.length) { box.innerHTML = `<div class="est-result-empty">没有可选项目（需有该项目的编辑权限）</div>`; return; }
+  box.innerHTML = items.slice(0, 100).map((p) => {
+    const store = storeName(p.storeId);
+    const label = store ? `${p.name} · ${store}` : p.name;
+    const date = p.appointmentTime ? new Date(p.appointmentTime).toLocaleDateString("zh-CN") : "";
+    return `<button class="est-combo-card" onclick="estInsertIntoProject('${esc(p.id)}')">
+      <b>${esc(label)}</b><span>${esc(date)}${p.customer ? " · " + esc(p.customer) : ""}</span>
+    </button>`;
+  }).join("");
+}
+async function estInsertIntoProject(pid) {
+  if (!_estUI || !_estUI.result) return;
+  const p = getProject(pid);
+  if (!p) { toast("项目不存在"); return; }
+  if (typeof perm.editProject === "function" && !perm.editProject(p)) { toast("没有该项目的编辑权限"); return; }
+  const detailItems = mergeEstimateRowsIntoItems(getWorkItems(p), _estUI.result && _estUI.result.rows);
+  const snapshot = buildCostEstimate(_estUI.work, _estUI.result, _estUI.ctx, detailItems);
+  const workNames = (_estUI.work || []).map((w) => w.n).filter(Boolean);
+  const merged = [...new Set([...(Array.isArray(p.workContent) ? p.workContent : []), ...workNames])];
+  const ok = await repo.patchProject(pid, { work_content: JSON.stringify(merged), cost_estimate: JSON.stringify(snapshot) });
+  if (ok === false) return;
+  const p2 = getProject(pid);
+  if (p2) { p2.workContent = merged; p2.costEstimate = snapshot; }
+  modal.close();
+  toast("已并入施工内容 " + workNames.length + " 项（未改变工程金额）");
+  if (typeof renderAll === "function") renderAll();
+}
+
+/* 插入到项目：回填施工内容 + 生成快照，交回调处理（不改金额链，除非用户明确点填入金额） */
+function estInsertToProject() {
+  if (!_estUI || !_estUI.result) return;
+  if (!(_estUI.work || []).length) { toast("清单是空的，先在方案库 / 常用项里加几项"); return; }
+  const snapshot = buildCostEstimate(_estUI.work, _estUI.result, _estUI.ctx, _estUI.items);
+  const names = (_estUI.work || []).map((w) => w.n).filter(Boolean);
+  if (typeof _estUI.onInsert === "function") {
+    _estUI.onInsert({ snapshot, workNames: names, result: _estUI.result, construction: _estUI.result.construction });
+  }
+}
+
+/* ---------- 项目接入：从预约表单打开测算器 ---------- */
+function estFromProjectForm(kind) {
+  if (!window.Estimate) { toast("测算内核未加载"); return; }
+  // 收集当前表单已填的施工内容作为预填文本（chips 已取消，文本框是唯一来源）
+  const prefill = (document.getElementById("pWorkContentCustom")?.value || "").trim();
+  // 表单弹窗(#modal z-index 200)会盖住测算器(150)：临时隐藏遮罩但保留 DOM，关闭测算器后由 closeEstimateModal 恢复
+  const formMask = document.getElementById("modal");
+  window._estFormModal = formMask && formMask.classList.contains("modal-mask") && formMask.style.display !== "none" ? formMask : null;
+  if (window._estFormModal) window._estFormModal.style.display = "none";
+  openEstimateModal({
+    mode: "insert",
+    prefill,
+    items: window._wcFormItems || [],
+    // kind='scenes' 直达方案库（整套/专项）；'quick' 直达常用施工项；默认智能拆解
+    autoDrawer: kind === "scenes" ? "scenes" : (kind === "quick" ? "quick" : undefined),
+    onInsert: ({ snapshot, workNames, result }) => {
+      // 测算结果并入施工明细：同名覆盖数量/工时，新增项直接进表单明细区
+      window._wcFormItems = mergeEstimateRowsIntoItems(snapshot.items || window._wcFormItems || [], result && result.rows);
+      snapshot.items = window._wcFormItems;
+      // 快照先落隐藏字段，再重绘汇总条——汇总条的金额就取这份快照（含材料/设备/运输）
+      const hidden = document.getElementById("pCostEstimate");
+      if (hidden) hidden.value = JSON.stringify(snapshot);
+      wcRender("wcForm");
+      // 回填施工内容：把测算出的施工项名称合并进 chip/自定义输入
+      const customEl = document.getElementById("pWorkContentCustom");
+      if (customEl) {
+        const existing = (customEl.value || "").split(/[、,，\s]+/).filter(Boolean);
+        const merged = [...new Set([...existing, ...workNames])];
+        customEl.value = merged.join("、");
+      }
+      // 快照已写隐藏字段，随 saveProject 一起落库（不改工程金额）
+      // 详情/表单内即时反馈：明确告诉用户金额已现、点按钮才进报价
+      const amtTxt = snapshot.grand > 0 ? `，测算合计 ${wcMoneyText(snapshot.grand)}（点「填入工程金额」才写进报价）` : "";
+      toast(`已回填 ${workNames.length} 项施工内容与工时明细${amtTxt}`);
+      closeEstimateModal(); // 恢复预约表单，明细已回填到表单状态
+    }
+  });
+}
+
+/* ---------- 导出报价单图片（canvas 离线绘制）----------
+   2026-11-22 重做排版：标题区/信息卡/斑马线表格/金额汇总卡。
+   修复原版「材料费」文字因 textAlign 未复位被画到画布左外侧、只剩 7042.10 的问题；
+   设备费/运输费/辅材费也进入汇总，金额统一千分位。 */
+function estExportImage() {
+  if (!_estUI || !_estUI.result || !_estUI.work.length) { toast("清单是空的，先加施工项"); return; }
+  const r = _estUI.result;
+  const company = (_estUI.expInfo.company || "").trim();
+  const customer = (_estUI.expInfo.customer || "").trim();
+  const no = (_estUI.expInfo.no || "").trim();
+  const date = new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+  const hn = { low: "≤6米", mid: "6–20米", high: ">20米" }[_estUI.height] || "≤6米";
+  const wn = { flat: "平整墙面", tile: "瓷砖/保温", glass: "玻璃幕墙" }[_estUI.wall] || "平整墙面";
+
+  const FONT = '"PingFang SC","Microsoft YaHei",sans-serif';
+  const C = { ink: "#111827", muted: "#6b7280", line: "#e5e7eb", soft: "#f8fafc", accent: "#2563eb", mat: "#0f766e" };
+  const W = 750, pad = 40, right = W - pad;
+  const rowH = 40, thH = 36;
+  const metaTop = 112, metaH = 46;
+  const tableTop = metaTop + metaH + 22;
+  const rows = r.rows || [];
+  const money = (n) => "¥" + (Number(n) || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // 金额汇总只列非零项（设备费随工期、运输费、材料费、辅材费都不再漏掉）
+  const sumItems = [{ k: "人工费", v: r.labor }];
+  if (Number(r.equip) > 0) sumItems.push({ k: "设备费" + (r.equipDays > 1 ? `（${r.equipDays}天）` : ""), v: r.equip });
+  if (Number(r.transportFee) > 0) sumItems.push({ k: "运输费", v: r.transportFee });
+  if (Number(r.matFee) > 0) sumItems.push({ k: "材料费", v: r.matFee });
+  if (Number(r.auxFee) > 0) sumItems.push({ k: "辅材费", v: r.auxFee });
+  const leftH = 34; // 客户版报价不展示工时/人天/人员建议，只保留费用明细
+  const rightH = sumItems.length * 24 + 46;
+  const totalsH = Math.max(leftH, rightH) + 36;
+  const totalsTop = tableTop + thH + rows.length * rowH + 16;
+  const H = totalsTop + totalsH + 30;
+
+  const c = document.createElement("canvas");
+  const dpr = 2; c.width = W * dpr; c.height = H * dpr;
+  const ctx = c.getContext("2d"); ctx.scale(dpr, dpr);
+  const setFont = (size, bold) => { ctx.font = `${bold ? "bold " : ""}${size}px ${FONT}`; };
+  const rr = (x, y, w, h, rad) => {
+    const rad2 = Math.min(rad, h / 2, w / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rad2, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rad2);
+    ctx.arcTo(x + w, y + h, x, y + h, rad2);
+    ctx.arcTo(x, y + h, x, y, rad2);
+    ctx.arcTo(x, y, x + w, y, rad2);
+    ctx.closePath();
+  };
+  const fit = (s, maxW) => {
+    s = String(s == null ? "" : s);
+    if (ctx.measureText(s).width <= maxW) return s;
+    let t = s;
+    while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+    return t + "…";
+  };
+
+  // 背景 + 顶部渐变条
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+  const grad = ctx.createLinearGradient(0, 0, W, 0);
+  grad.addColorStop(0, "#2563eb"); grad.addColorStop(1, "#7c3aed");
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, W, 6);
+
+  // 标题区
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  setFont(26, true); ctx.fillStyle = C.ink;
+  ctx.fillText("施工费报价单", pad, 56);
+  setFont(12); ctx.fillStyle = C.muted;
+  ctx.fillText("QUOTATION · 按标准工时定额测算", pad, 78);
+  ctx.textAlign = "right";
+  if (company) { setFont(15, true); ctx.fillStyle = C.ink; ctx.fillText(fit(company, 260), right, 52); }
+  setFont(12); ctx.fillStyle = C.muted; ctx.fillText("日期 " + date, right, 78);
+
+  // 信息卡：客户 / 单号 / 本单条件
+  rr(pad, metaTop, W - pad * 2, metaH, 10);
+  ctx.fillStyle = C.soft; ctx.fill();
+  ctx.strokeStyle = C.line; ctx.lineWidth = 1; ctx.stroke();
+  let mx = pad + 16;
+  const put = (label, val, maxValW) => {
+    setFont(12); ctx.textAlign = "left"; ctx.fillStyle = C.muted;
+    ctx.fillText(label, mx, metaTop + 29);
+    const lw = ctx.measureText(label).width;
+    setFont(13); ctx.fillStyle = C.ink;
+    const v = maxValW ? fit(val, maxValW) : val;
+    ctx.fillText(v, mx + lw + 6, metaTop + 29);
+    mx += lw + 6 + ctx.measureText(v).width + 24;
+  };
+  if (customer) put("客户", customer, 150);
+  if (no) put("单号", no, 120);
+  put("安装高度", hn, 90);
+  put("墙面", wn, 90);
+
+  // 表头（客户版只展示 项目/工程量/金额，不暴露工时）
+  rr(pad, tableTop, W - pad * 2, thH, 8);
+  ctx.fillStyle = "#eef2ff"; ctx.fill();
+  const colName = pad + 16, colQty = right - 150, colAmt = right - 12;
+  setFont(13, true); ctx.fillStyle = "#3730a3";
+  ctx.textAlign = "left"; ctx.fillText("施工项目", colName, tableTop + 23);
+  ctx.textAlign = "right";
+  ctx.fillText("工程量", colQty, tableTop + 23);
+  ctx.fillText("金额", colAmt, tableTop + 23);
+
+  // 明细行（斑马线 + 细分隔线）
+  let ry = tableTop + thH;
+  rows.forEach((it, i) => {
+    if (i % 2 === 1) { ctx.fillStyle = "#fcfcfd"; ctx.fillRect(pad, ry, W - pad * 2, rowH); }
+    const base = ry + 25;
+    ctx.textAlign = "left"; setFont(14); ctx.fillStyle = C.ink;
+    ctx.fillText(fit(it.n, colQty - colName - 70), colName, base);
+    ctx.textAlign = "right"; setFont(13); ctx.fillStyle = C.muted;
+    ctx.fillText(`${it.q || ""}${it.u || ""}`, colQty, base);
+    setFont(14); ctx.fillStyle = C.ink;
+    ctx.fillText(money(it.fee), colAmt, base);
+    ctx.strokeStyle = "#f1f3f7"; ctx.beginPath();
+    ctx.moveTo(pad, ry + rowH); ctx.lineTo(right, ry + rowH); ctx.stroke();
+    ry += rowH;
+  });
+
+  // 汇总卡：只保留费用明细 + 总计（工时/人天/人员建议属内部信息，不发给客户）
+  rr(pad, totalsTop, W - pad * 2, totalsH, 12);
+  ctx.fillStyle = C.soft; ctx.fill();
+  ctx.strokeStyle = C.line; ctx.stroke();
+  setFont(13, true); ctx.textAlign = "left"; ctx.fillStyle = C.muted;
+  ctx.fillText("费用合计", pad + 18, totalsTop + 30);
+  const bx = right - 18;
+  let by = totalsTop + 30;
+  sumItems.forEach((x) => {
+    setFont(13); ctx.textAlign = "right"; ctx.fillStyle = C.muted;
+    ctx.fillText(x.k, bx - 120, by);
+    ctx.fillStyle = C.ink; ctx.fillText(money(x.v), bx, by);
+    by += 24;
+  });
+  by += 6;
+  ctx.strokeStyle = C.line; ctx.beginPath(); ctx.moveTo(right - 258, by - 16); ctx.lineTo(bx, by - 16); ctx.stroke();
+  setFont(13, true); ctx.textAlign = "left"; ctx.fillStyle = C.muted;
+  ctx.fillText("总计", right - 258, by + 16);
+  setFont(24, true); ctx.textAlign = "right"; ctx.fillStyle = C.accent;
+  ctx.fillText(money(r.grand), bx, by + 16);
+
+  try {
+    const url = c.toDataURL("image/png");
+    const a = document.createElement("a"); a.href = url;
+    a.download = "施工报价单_" + (customer || date) + ".png";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    toast("报价单图片已生成");
+  } catch (e) { toast("生成失败，请截图保存"); }
+}
+
+/* 导出前填写公司/客户/单号（简易三输入框弹窗，写回 _estUI.expInfo 并持久化到配置） */
+function estOpenExportPanel() {
+  if (!_estUI || !_estUI.result) return;
+  const e = _estUI.expInfo || {};
+  modal.open("导出报价单", `
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <label class="modal-label">公司/抬头<input class="input" id="estExCompany" value="${esc(e.company || "")}" placeholder="例：XX广告装饰"/></label>
+      <label class="modal-label">客户<input class="input" id="estExCustomer" value="${esc(e.customer || "")}" placeholder="选填"/></label>
+      <label class="modal-label">单号<input class="input" id="estExNo" value="${esc(e.no || "")}" placeholder="选填"/></label>
+      <div class="est-btnrow"><button class="btn primary" onclick="estConfirmExport()">生成图片</button><button class="btn outline" onclick="estCopyQuote()">复制文本</button></div>
+    </div>`, { closeOnMask: true });
+}
+function estConfirmExport() {
+  if (!_estUI) return;
+  _estUI.expInfo = {
+    company: (document.getElementById("estExCompany")?.value || "").trim(),
+    customer: (document.getElementById("estExCustomer")?.value || "").trim(),
+    no: (document.getElementById("estExNo")?.value || "").trim(),
+  };
+  // 持久化到配置（不改云端，仅本机内存+localStorage，避免每次重填）
+  try { const c = estCfg(); c.expInfo = _estUI.expInfo; localStorage.setItem("estimate_expinfo", JSON.stringify(_estUI.expInfo)); } catch (_) {}
+  modal.close();
+  estExportImage();
+}

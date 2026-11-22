@@ -2732,33 +2732,78 @@ select.input {
   flex: 0 0 auto;
 }
 
-/* 预约表单：施工内容可勾选标签 */
-.work-content-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+/* 预约表单施工内容快捷 chips 已于 2026-11-22 移除（改为直接填写实际施工内容），样式一并删除 */
+
+/* 施工明细：内容 / 数量 / 单位 / 工时 / 备注（与测算清单同口径，但不参与金额链）
+   2026-11-22 用户反馈「有的空太长、有的压缩太厉害」：数量/单位/工时改弹性宽度（宽窗给足、窄窗保底），
+   备注从通栏改为只占施工内容一列，不再拉成超长空条。 */
+.wc-items-row { display: block; }
+.wc-items-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.wc-items-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.wc-items-list { display: flex; flex-direction: column; gap: 6px; }
+.wc-item-row {
+  display: grid; grid-template-columns: minmax(0,1fr) clamp(96px,24%,132px) clamp(60px,14%,80px) 26px; gap: 6px; align-items: center;
+  padding: 7px 8px; border: 1px solid var(--border); border-radius: 8px; background: #fbfcfe; min-width: 0;
 }
-.work-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 13px;
-  padding: 5px 11px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: #fff;
-  color: var(--muted);
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.15s ease;
+.wc-item-row input { min-width: 0; width: 100%; padding: 5px 6px; font-size: 12px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); }
+.wc-item-row input:disabled { background: #f1f5f9; color: var(--muted); }
+.wc-item-qcell { display: flex; gap: 4px; align-items: center; min-width: 0; }
+.wc-item-qcell .wc-item-q { flex: 0 0 52%; width: 52%; text-align: right; }
+.wc-item-qcell .wc-item-u { flex: 1 1 auto; }
+.wc-item-h { text-align: right; }
+.wc-item-del { width: 24px; height: 24px; border: none; border-radius: 6px; background: #fee2e2; color: #dc2626; font-size: 17px; line-height: 1; cursor: pointer; }
+.wc-item-del:hover { background: #fecaca; }
+.wc-item-del:disabled { opacity: .4; cursor: default; }
+.wc-item-note { grid-column: 1 / 3; max-width: 420px; font-size: 11px !important; color: var(--muted) !important; background: #f8fafc !important; }
+/* 明细汇总条（2026-11-22 起）：左=合计工时/测算金额两块 KPI，右=「填入工程金额」按钮，下方一行口径说明。
+   替代原来 11px 灰字「合计工时 Xh · 参考 ¥Y」，用户反馈金额太不显眼。 */
+.wc-items-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.wc-sum-kpis { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.wc-sum-kpi {
+  display: inline-flex; align-items: baseline; gap: 5px; padding: 5px 10px;
+  border-radius: 8px; background: #f1f5f9; border: 1px solid #e2e8f0;
 }
-.work-chip input { display: none; }
-.work-chip:hover { border-color: #7dd3fc; color: #0369a1; }
-.work-chip--on {
-  background: #e0f2fe;
-  border-color: #38bdf8;
-  color: #0369a1;
-  font-weight: 600;
+.wc-sum-kpi.is-money { background: #ecfdf5; border-color: #bbf7d0; }
+/* 无测算快照时只有人工参考（不含材料/设备/运输）→ 用琥珀色，别让人误当成正式报价 */
+.wc-sum-kpi.is-ref { background: #fffbeb; border-color: #fde68a; }
+.wc-sum-lb { font-size: 11px; color: #64748b; white-space: nowrap; }
+.wc-sum-val { font-size: 17px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.wc-items-foot .wc-sum-val { color: var(--primary); }
+.wc-items-foot .wc-sum-kpi.is-money .wc-sum-val { color: #047857; }
+.wc-items-foot .wc-sum-kpi.is-ref .wc-sum-val { color: #b45309; }
+.wc-sum-unit { font-size: 11px; color: #64748b; }
+.wc-sum-fill {
+  flex-shrink: 0; background: #0ea5e9; border: 1px solid #0ea5e9; color: #fff;
+  font-weight: 600; white-space: nowrap; border-radius: 6px; padding: 6px 12px;
+}
+.wc-sum-fill:hover { background: #0284c7; border-color: #0284c7; }
+.wc-sum-tip { flex: 1 1 100%; font-size: 11px; line-height: 1.55; color: #64748b; }
+.wc-sum-tip.is-stale { color: #b45309; }
+/* 填入后闪一下工程金额输入框，告诉用户钱落到哪了 */
+@keyframes wcAmountFlash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(14,165,233,0); background: #fff; }
+  20%, 60% { box-shadow: 0 0 0 3px rgba(14,165,233,.35); background: #f0f9ff; }
+}
+.wc-amount-flash { animation: wcAmountFlash 1.8s ease-out; }
+.wc-edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.wc-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.wc-detail-table { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.wc-detail-row { display: grid; grid-template-columns: minmax(0,1fr) 96px 60px; gap: 8px; align-items: center; padding: 7px 10px; font-size: 12px; border-bottom: 1px solid #f1f5f9; }
+.wc-detail-row:last-child { border-bottom: none; }
+.wc-detail-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.wc-detail-note { display: block; font-size: 10px; color: var(--muted); }
+.wc-detail-q, .wc-detail-h { text-align: right; color: var(--text); white-space: nowrap; }
+.proj-content-preview__detail { font-size: 11px; color: var(--primary); margin-top: 4px; }
+@media (max-width: 480px) {
+  .wc-item-row { grid-template-columns: minmax(0,1fr) clamp(90px,32%,112px) clamp(52px,16%,64px) 24px; gap: 4px; padding: 6px; }
+  .wc-item-qcell .wc-item-q { flex-basis: 52%; width: 52%; }
+  .wc-item-note { grid-column: 1 / 3; max-width: 100%; }
+  .wc-item-row input { font-size: 11.5px; padding: 4px 5px; }
+  .wc-detail-row { grid-template-columns: minmax(0,1fr) 72px 52px; gap: 5px; padding: 6px 8px; }
+  /* 窄屏：金额更值钱，保持可读字号；填入按钮独占一行便于拇指点 */
+  .wc-sum-kpi { padding: 4px 8px; }
+  .wc-sum-val { font-size: 15px; }
+  .wc-sum-fill { flex: 1 1 100%; padding: 8px 10px; }
 }
 
 /* 施工详情弹窗 */
@@ -6103,11 +6148,6 @@ textarea.input { resize: vertical; min-height: 50px; }
   font-weight: 600;
   font-size: 14px;
 }
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.05);
-}
 
 .schedule-progress-percent {
   color: #374151;
@@ -6406,9 +6446,42 @@ body.modal-open {
   }
 }
 
+/* 项目预约表单宽弹窗（modal--wide）：电脑端默认 560px——够放下两列字段行/时间行/明细，
+   再窄会挤；要更宽用右下角拖拽（≥880 自动切两栏 xl 档）。双击标题栏复位到默认宽。
+   拖动/缩放后由 JS 加 modal--floating（fixed 定位 + 内联宽高）。手机端不生效。
+   复用测算弹窗的 .est-win-handle 缩放角标。 */
+@media (min-width: 769px) {
+  .modal--wide { max-width: 560px; }
+  .modal--wide .modal-head { cursor: move; user-select: none; }
+  /* 默认 560 档：单列通栏（2026-11-20 用户反馈两列会把项目名称/工程金额挤太窄）。
+     拉宽（floating）后这两条限宽继续生效，避免通栏控件无限拉长。 */
+  .modal--wide .appt-time-row { max-width: 560px; }
+  .modal--wide .dur-card { max-width: 520px; }
+}
+/* 两栏分栏两档，均由 JS 按弹窗真实宽度（与视口无关）挂：
+   ≥680px 挂 .modal--xl 按比例分栏（1fr:1.1fr，尽早分栏，2026-11-22 用户反馈 880 太晚）；
+   ≥940px 再挂 .modal--xl2，左列封顶 540px、多余宽度全给右列。见下方规则。 */
+.modal--floating { box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35); }
+.modal-win-handle { z-index: 30; }
+/* 分栏（2026-11-20 用户定稿）——
+   左列 pform-left：项目信息（门店/名称/客户/电话/地址/包活）+ 预约时间组 + 现场图；
+   右列 pform-right：施工内容(测算) + 施工明细 + 注意事项 + 施工图及物料。
+   两栏各自独立堆叠高度，互不拉扯；680/手机档 pform-cols 是普通块流，顺序不变。 */
+.modal--xl .pform-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); column-gap: 16px; row-gap: 14px; align-items: start; }
+/* 左列封顶 540px（2026-11-22 用户反馈：窗口拉大时地址/金额/时间输入框不应跟着无限拉长），
+   超出部分全部让给右列；只在 ≥940px 档启用（680–940 区间两列按比例各占一半）。 */
+.modal--xl2 .pform-cols { grid-template-columns: minmax(0, 540px) minmax(0, 1fr); column-gap: 22px; }
+/* 照片区拆开分列：现场图(DOM 第1块)落左列、施工图及物料(第2块)落右列。
+   bothEmpty 时包着 .form-photos-duo，一并 contents 让两个卡直接成为栅格项。 */
+.modal--xl #pPhotosWrap, .modal--xl #pPhotosWrap .form-photos-duo { display: contents; }
+@media (max-width: 768px) {
+  .modal--wide .modal-head { cursor: default; }
+  .modal-win-handle { display: none !important; }
+}
+
 /* 改期信息弹窗：紧凑精致，居中展示原/现预约时间 */
 .modal:has(.reschedule-info) {
-  max-width: 340px;
+  max-width: 360px;
 }
 .reschedule-info {
   padding: 8px 4px;
@@ -6469,19 +6542,36 @@ body.modal-open {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  color: #475569;
   background: #f8fafc;
-  padding: 6px 12px;
+  padding: 7px 12px;
   border-radius: 20px;
   margin-top: 4px;
 }
-.reschedule-info__meta b { color: #334155; font-weight: 600; }
+.reschedule-info__meta b { color: #1e293b; font-weight: 700; }
 .reschedule-info__meta-dot {
   width: 6px; height: 6px;
   border-radius: 50%;
   background: var(--primary);
 }
+/* 逐次修改记录列表：每条一个胶囊行，窄屏不溢出 */
+.reschedule-info__changes {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-top: 8px;
+  width: 100%;
+}
+.reschedule-info__change {
+  border-radius: 12px;
+  margin-top: 0;
+  padding: 7px 11px;
+}
+.reschedule-info__change > span:last-child { min-width: 0; }
+.reschedule-info__reason { color: #64748b; font-size: 12px; }
 @media (max-width: 420px) {
   .modal:has(.reschedule-info) {
     max-width: 92vw;
@@ -9653,7 +9743,6 @@ table.data.project-hours-diff thead th {
   .card-hours__val { font-size: 12px; }
   .card-progress { gap: 6px; }
   .card-content__chip { font-size: 11px; padding: 3px 8px; }
-  .work-chip { font-size: 13px; padding: 6px 12px; }
   .card-progress__pct { font-size: 13px; min-width: 32px; }
   .card-timeline { padding: 6px 8px; font-size: 11px; }
 
@@ -15567,7 +15656,6 @@ table.data.project-hours-diff thead th {
   color: #047857;
   border-color: #86efac;
 }
-}
 .leave-card__conflict {
   margin-top: 8px;
   padding: 6px 8px;
@@ -16010,4 +16098,768 @@ table.data.project-hours-diff thead th {
 .cos-lightbox__img--err { display: none; }
 .cos-lightbox__tip--err {
   color: #fca5a5; font-weight: 500; margin-top: 12px; text-align: center;
+}
+
+/* ============================================================
+   🧮 施工费测算器 UI（阶段③ 2026-11-19）
+   放在文件最末尾：确保窄屏规则不被前面的桌面/媒体查询覆盖。
+   ============================================================ */
+.est-shell {
+  background: #fff; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.25);
+  display: flex; flex-direction: column; overflow: hidden; position: relative;
+  box-sizing: border-box; min-width: 0;
+}
+/* 桌面端测算弹窗：拖动标题栏移动、右下角拖拽缩放（手机端不启用） */
+.est-win-floating > .est-head, .est-win-floating .est-drawer-head { cursor: move; }
+.est-win-handle {
+  position: absolute; right: 2px; bottom: 2px; width: 16px; height: 16px; z-index: 12;
+  cursor: nwse-resize; border-radius: 3px; opacity: .55;
+  background: linear-gradient(135deg, transparent 42%, #64748b 42%, #64748b 52%, transparent 52%, transparent 62%, #64748b 62%, #64748b 72%, transparent 72%);
+}
+.est-win-handle:hover { opacity: 1; }
+.est-shell * { box-sizing: border-box; }
+.est-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+.est-head h3 { margin: 0; font-size: 16px; color: var(--text); }
+.est-head-btns { display: inline-flex; align-items: center; gap: 10px; }
+
+/* ===== 弹窗最小化胶囊坞（2026-11-22）：预约表单/测算器收起到右下角，点胶囊恢复 ===== */
+/* modal-head 是 space-between，三元素时中间的最小化键会落在正中——推到叉号旁（2026-11-22 用户反馈） */
+.modal-min-btn { margin-left: auto; margin-right: 8px; }
+.modal-min-dock {
+  position: fixed; right: 18px; bottom: 18px; z-index: 300;
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+}
+.modal-min-dock.hidden { display: none; }
+.modal-min-pill {
+  display: flex; align-items: center; gap: 8px;
+  background: #1e293b; color: #fff;
+  padding: 9px 12px 9px 15px; border-radius: 999px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
+  cursor: pointer; font-size: 13px; user-select: none;
+}
+.modal-min-pill:hover { background: #334155; }
+.modal-min-pill b { font-weight: 600; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-min-pill .modal-min-x {
+  border: 0; background: rgba(255, 255, 255, 0.18); color: #fff;
+  width: 20px; height: 20px; border-radius: 50%; cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 0; flex: 0 0 auto;
+}
+.modal-min-pill .modal-min-x:hover { background: #ef4444; }
+.est-body { padding: 14px 16px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; flex: 1 1 auto; min-width: 0; }
+.est-section { margin-bottom: 14px; }
+.est-section-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.est-label { font-weight: 600; font-size: 13px; color: var(--text); display: block; margin-bottom: 6px; }
+.est-tip { font-weight: 400; font-size: 11px; color: var(--muted); margin-left: 4px; }
+.est-input { width: 100%; font-size: 13px; resize: vertical; }
+.est-btnrow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+/* 主 CTA「智能拆解」（2026-11-22 视觉升级）：靛蓝渐变 + 内高光 + hover 扫光，
+   同一行其余入口降级为白底灰边，避免四个按钮同权、用户看不出该点哪个 */
+.est-btnrow .est-parse-btn {
+  position: relative;
+  overflow: hidden;
+  padding: 5px 12px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  color: #fff;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 58%, #4338ca 100%);
+  box-shadow: 0 2px 10px rgba(79, 70, 229, .32), inset 0 1px 0 rgba(255, 255, 255, .22);
+}
+.est-parse-ico { display: inline-block; margin-right: 5px; animation: estParseSpark 2.6s ease-in-out infinite; }
+@keyframes estParseSpark {
+  0%, 100% { opacity: .82; transform: scale(1) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1.14) rotate(6deg); }
+}
+/* 顶部高光让渐变不像纯色块 */
+.est-btnrow .est-parse-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 52%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .2), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+/* hover 斜向扫光：一次 0.6s 掠过，不做循环（循环会显得躁） */
+.est-btnrow .est-parse-btn::after {
+  content: "";
+  position: absolute;
+  top: -70%;
+  left: -45%;
+  width: 45%;
+  height: 240%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, .5), rgba(255, 255, 255, 0));
+  transform: rotate(18deg) translateX(-140%);
+  transition: transform .6s ease;
+  pointer-events: none;
+}
+.est-btnrow .est-parse-btn:hover {
+  background: linear-gradient(135deg, #7c7ff7 0%, #5b53ea 58%, #4f46e5 100%);
+  box-shadow: 0 6px 18px rgba(79, 70, 229, .46), inset 0 1px 0 rgba(255, 255, 255, .3);
+}
+.est-btnrow .est-parse-btn:hover::after { transform: rotate(18deg) translateX(340%); }
+.est-btnrow .est-parse-btn:active {
+  transform: translateY(0) scale(.985);
+  box-shadow: 0 2px 8px rgba(79, 70, 229, .34), inset 0 1px 3px rgba(0, 0, 0, .16);
+}
+.est-btnrow .est-parse-btn:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
+/* 次要入口：无边框幽灵按钮，hover 才泛底色——不像 outline 那样跟主 CTA 抢注意力，
+   4 个按钮也能在 ~370px 的左栏里排成一行（outline 版实测 426px 会掉成 3+1 孤行） */
+.est-btnrow .btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: #64748b;
+  font-weight: 500;
+  padding: 5px 7px;
+}
+.est-btnrow .btn.ghost:hover {
+  background: #f1f5f9;
+  border-color: transparent;
+  color: #4338ca;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .est-parse-ico { animation: none; }
+  .est-btnrow .est-parse-btn::after { display: none; }
+}
+/* 窄屏：主 CTA 通栏，三个入口等宽一行（原来 2×2 会让主次同权） */
+@media (max-width: 440px) {
+  .est-btnrow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .est-btnrow .est-parse-btn { grid-column: 1 / -1; }
+  .est-btnrow .btn { width: 100%; }
+}
+/* 发光字面积暂估提示（2026-11-22）：只写门头尺寸时按面积40%占位，金额影响大，常驻提醒 */
+.est-glow-hint { margin-top: 7px; padding: 7px 9px; border-radius: 6px; background: #fffbeb; border: 1px solid #fde68a; color: #92400e; font-size: 11.5px; line-height: 1.5; }
+.est-glow-hint[hidden] { display: none; }
+/* 门头工艺增项（2026-11-22）：拆解后按需勾选包边/檐口/雨棚等，勾上自动算量 */
+.est-door-extras { margin-top: 8px; padding: 8px 9px; border: 1px solid var(--border); border-radius: 7px; background: #f8fafc; }
+.est-door-extras[hidden] { display: none; }
+.est-door-ex-head { display: flex; align-items: baseline; gap: 7px; font-size: 11.5px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.est-door-ex-head span { font-weight: 400; font-size: 10.5px; color: var(--muted); }
+.est-door-ex-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.est-door-ex-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 13px; background: #fff; font-size: 11.5px; color: var(--text); cursor: pointer; user-select: none; white-space: nowrap; }
+.est-door-ex-chip input { margin: 0; }
+.est-door-ex-chip.is-on { border-color: var(--primary); background: var(--primary-light); color: var(--primary); font-weight: 600; }
+/* 勾前试算金额 / 已选合计 / 超行业上限告警（2026-11-22：参数填歪时勾的瞬间就看得见） */
+.est-door-ex-sub { font-weight: 400; font-size: 10.5px; color: var(--muted); }
+.est-door-ex-sum { margin-left: auto; font-size: 10.5px; font-weight: 600; color: var(--primary-dark); white-space: nowrap; }
+.est-door-ex-amt { font-style: normal; font-size: 10px; color: #94a3b8; }
+.est-door-ex-chip.is-on .est-door-ex-amt { color: var(--primary-dark); }
+.est-door-ex-chip.is-high { border-color: #fca5a5; background: #fef2f2; }
+.est-door-ex-chip.is-high span { color: #b91c1c; }
+.est-door-ex-chip.is-high .est-door-ex-amt { color: #dc2626; }
+.est-door-ex-warn { margin-top: 6px; padding: 5px 8px; border: 1px solid #fde68a; border-radius: 6px; background: #fffbeb; color: #b45309; font-size: 10.5px; line-height: 1.5; }
+/* 运输里程（2026-11-22）：按公里×单价库运输价算车费，不进清单 */
+.est-dist-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: var(--text); }
+.est-dist-row label { font-weight: 600; flex-shrink: 0; }
+.est-dist-row input[type=number] { width: 76px; flex-shrink: 0; text-align: right; font-size: 12px; padding: 4px 6px; }
+.est-dist-row b { color: #0369a1; }
+.est-dist-row .est-tip { font-size: 11px; color: var(--muted); }
+.est-empty, .est-result-empty {
+  padding: 14px; text-align: center; color: var(--muted); font-size: 12px;
+  background: #f8fafc; border: 1px dashed var(--border); border-radius: 8px;
+}
+
+/* 结果区空态引导（2026-11-22）：三步上手 + 示例一键拆解 + 快捷入口 + 测算口径 */
+.est-guide-hd { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 10px; }
+.est-guide-steps { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.est-guide-steps li { display: flex; gap: 9px; align-items: flex-start; }
+.est-guide-steps li > b {
+  flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--primary-light); color: var(--primary-dark); font-size: 11px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.est-guide-steps strong { display: block; font-size: 12.5px; color: var(--text); }
+.est-guide-steps span { display: block; font-size: 11px; line-height: 1.5; color: var(--muted); margin-top: 1px; }
+.est-guide-ex { font-size: 11.5px; color: var(--muted); margin-bottom: 10px; }
+.est-guide-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.est-guide-chip {
+  border: 1px dashed #c7d2fe; background: #eef2ff; color: #4338ca;
+  border-radius: 999px; padding: 4px 10px; font-size: 11.5px; cursor: pointer;
+}
+.est-guide-chip:hover { background: #e0e7ff; border-color: var(--primary); }
+.est-guide-calc { border-top: 1px dashed var(--border); padding-top: 8px; }
+.est-guide-calc summary { cursor: pointer; font-size: 12px; color: #475569; }
+.est-guide-calc ul { margin: 8px 0 0; padding-left: 16px; font-size: 11.5px; line-height: 1.65; color: var(--muted); }
+
+.est-list-ops .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 清单行 */
+.est-worklist { display: flex; flex-direction: column; gap: 5px; }
+.est-work-row {
+  display: grid; grid-template-columns: minmax(0,1fr) auto 26px; align-items: center; gap: 8px;
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: #fbfcfe; min-width: 0;
+}
+.est-work-name { display: flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--text); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-work-name-in { flex: 1 1 auto; width: auto; min-width: 0; padding: 4px 6px; font-size: 12.5px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); box-sizing: border-box; }
+.est-work-name-in:focus { border-color: #3b82f6; outline: none; }
+.est-mat-tag { display: inline-block; font-size: 10px; line-height: 1; padding: 2px 4px; margin-left: 4px; border-radius: 3px; background: #fef3c7; color: #b45309; vertical-align: middle; }
+.est-work-q { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); }
+.est-work-q input { width: 62px; padding: 4px 6px; font-size: 12px; border: 1px solid var(--border); border-radius: 6px; text-align: right; background: #fff; color: var(--text); }
+.est-work-q input.est-work-price { width: 58px; border-color: #fcd34d; background: #fffbeb; }
+.est-work-del { width: 24px; height: 24px; border: none; border-radius: 6px; background: #fee2e2; color: #dc2626; font-size: 17px; line-height: 1; cursor: pointer; }
+.est-work-del:hover { background: #fecaca; }
+.est-work-calc { grid-column: 1 / -1; font-size: 10px; color: #94a3b8; padding-left: 1px; }
+.est-work-calc .linkbtn { font-size: 10px; color: #64748b; }
+
+/* 自定义施工项（按工时计）：桌面一行放完 = 名称｜数量×工时×工种｜金额 ⇄｜×；
+   只有窄屏（≤640）才拆成「名称 / 控件」两行，避免 5 个控件挤成一坨。 */
+.est-work-row.is-hours .est-work-q { gap: 3px; }
+.est-work-q--hours { flex: 0 0 auto; flex-wrap: nowrap; }
+.est-work-q--hours input { width: 46px; }
+.est-work-q--hours input.est-work-h { width: 48px; border-color: #bfdbfe; background: #eff6ff; }
+.est-work-q--hours .est-work-u { color: var(--text); font-size: 11.5px; }
+.est-work-q--hours .est-work-amd { color: var(--muted); }
+.est-work-amt { margin-left: 2px; font-size: 11.5px; font-weight: 700; color: var(--text); white-space: nowrap; }
+.est-work-switch {
+  width: 20px; height: 20px; padding: 0; border: 1px solid var(--border); border-radius: 5px;
+  background: #fff; color: var(--muted); font-size: 11px; line-height: 1; cursor: pointer;
+}
+.est-work-switch:hover { border-color: var(--primary); color: var(--primary); }
+.est-work-tr { max-width: 92px; padding: 3px 4px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); }
+
+/* 本单施工条件（安装高度 / 墙面 / 设备天数）：收在底部折叠区「⚙️ 施工条件」里，
+   标题行本身就是摘要（标准条件灰字，改过则整条变黄写系数），不再横在清单上方。 */
+.est-cond { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.est-cond-row { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 8px; }
+.est-cond-lb { flex: 0 0 auto; min-width: 46px; font-size: 11px; color: var(--muted); }
+.est-cond-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.est-cond-chip {
+  border: 1px solid var(--border); background: #fff; color: var(--text);
+  border-radius: 999px; padding: 3px 10px; font-size: 11.5px; line-height: 1.4; cursor: pointer;
+}
+.est-cond-chip:hover { border-color: var(--primary); color: var(--primary-dark); }
+.est-cond-chip.is-on { background: var(--primary-light); border-color: var(--primary); color: var(--primary-dark); font-weight: 600; }
+.est-cond-eq { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.est-cond-eq input { width: 64px; padding: 3px 6px; font-size: 11.5px; text-align: right; }
+.est-cond-hint { font-size: 10.5px; line-height: 1.5; color: #94a3b8; }
+.est-cond-hint:empty { display: none; }
+
+/* 高级设置 */
+.est-adv { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; background: #fbfcfe; }
+.est-adv > summary { display: flex; align-items: center; gap: 7px; padding: 9px 12px; font-size: 12.5px; font-weight: 600; color: var(--text); cursor: pointer; list-style: none; }
+.est-adv > summary::-webkit-details-marker { display: none; }
+.est-adv > summary::after { content: '▾'; margin-left: auto; color: var(--muted); transition: transform .15s; }
+.est-adv[open] > summary::after { transform: rotate(180deg); }
+.est-adv-sum-lb { flex: 0 0 auto; }
+.est-adv-sum-txt { flex: 0 0 auto; font-weight: 600; color: var(--text); }
+.est-adv-sum-eff { flex: 1 1 auto; min-width: 0; font-size: 11px; font-weight: 400; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.est-adv-sum-eff.is-warn { color: #b45309; font-weight: 600; }
+.est-adv.is-custom { border-color: #fcd34d; background: #fffdf5; }
+.est-adv.is-custom > summary { color: #b45309; }
+.est-adv.is-custom .est-adv-sum-txt { color: #b45309; }
+.est-adv-body { padding: 0 12px 12px; }
+.est-adv-note { margin-top: 2px; font-size: 11px; color: var(--muted); line-height: 1.6; }
+.linkbtn { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 11px; padding: 0; text-decoration: underline; }
+
+/* 结果 */
+.est-result-title { font-size: 13px; font-weight: 700; color: var(--text); margin: 4px 0 8px; }
+.est-rtable { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-bottom: 10px; }
+.est-rtable td.est-row-act { text-align: center; padding-left: 0; padding-right: 0; }
+.est-row-del { border: 0; background: transparent; color: #94a3b8; font-size: 16px; line-height: 1; cursor: pointer; padding: 2px; border-radius: 4px; }
+.est-row-del:hover { background: #fee2e2; color: #b91c1c; }
+.est-rtable th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px; border-bottom: 1px solid var(--border); background: #f8fafc; white-space: nowrap; }
+.est-rtable th:nth-child(2), .est-rtable th:nth-child(3), .est-rtable th:nth-child(4) { text-align: right; }
+.est-rtable th:last-child { text-align: center; }
+.est-rtable td { padding: 6px; border-bottom: 1px solid #f1f5f9; color: var(--text); vertical-align: top; }
+.est-rtable .est-num { text-align: right; white-space: nowrap; }
+.est-row-note { font-size: 11px; color: #64748b; margin-top: 2px; }
+.est-totals { background: #f8fafc; border-radius: 8px; padding: 8px 10px; }
+.est-total-line { display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 3px 0; color: var(--muted); }
+.est-total-line b { color: var(--text); font-weight: 600; }
+.est-total-line.grand { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 7px; font-size: 13px; }
+.est-total-line.grand b { color: var(--primary); font-size: 15px; }
+/* 漏项提醒（桁架/舞台没填运输里程）：黄色，跟普通明细区分开 */
+.est-total-line.est-warn { color: #b45309; }
+.est-total-line.est-warn b { color: #b45309; font-weight: 600; }
+
+/* 底部按钮栏 */
+.est-foot {
+  display: flex; gap: 8px; padding: 11px 16px; border-top: 1px solid var(--border);
+  flex: 0 0 auto; background: #fff; justify-content: flex-end; flex-wrap: wrap;
+}
+.est-foot .btn { flex: 0 0 auto; }
+
+/* 右侧抽屉（方案库 / 常用施工项 / 单价库 / 配置）
+   桌面只占右侧 600px，左边清单与测算结果常驻可见；手机端仍全宽（见窄屏适配）。 */
+.est-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0; left: auto; width: min(600px, 100%);
+  background: #fff; z-index: 5; display: flex; flex-direction: column;
+  border-left: 1px solid var(--border); border-radius: 0 12px 12px 0;
+  box-shadow: -12px 0 32px rgba(15,23,42,.14);
+}
+.est-scene-tabs { display: flex; gap: 6px; margin-bottom: 10px; border-bottom: 1px solid var(--border); }
+/* 配置管理中枢页签栏：右侧备份/恢复全部 */
+.est-hub-tabs { flex-wrap: wrap; align-items: center; }
+.est-hub-backup { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; padding-bottom: 4px; }
+.est-scene-tab {
+  flex: 1 1 0; min-width: 0; padding: 8px 6px; border: none; border-bottom: 2px solid transparent;
+  background: transparent; color: var(--muted); font-size: 12.5px; cursor: pointer; white-space: nowrap;
+}
+.est-scene-tab:hover { color: var(--primary); }
+.est-scene-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 700; }
+.est-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.est-drawer-head h4 { margin: 0; font-size: 14px; color: var(--text); }
+.est-drawer-summary { margin-left: auto; margin-right: 8px; font-size: 11px; color: var(--primary); white-space: nowrap; }
+/* 「● 未保存」徽标：参数页改动只在内存草稿里，提醒先点保存（2026-11-22） */
+.est-dirty-badge { margin-left: 8px; font-size: 10.5px; font-weight: 600; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+.est-drawer-body { padding: 12px 16px; overflow-y: auto; flex: 1 1 auto; -webkit-overflow-scrolling: touch; }
+.est-pick-cat { font-size: 12px; font-weight: 700; color: var(--primary); margin: 12px 0 6px; }
+.est-pick-cat:first-child { margin-top: 0; }
+.est-pick-desc { font-weight: 400; color: var(--muted); margin-left: 6px; font-size: 10px; }
+.est-pick-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.est-pick-chip {
+  border: 1px solid var(--border); background: #f8fafc; border-radius: 7px; padding: 5px 8px;
+  font-size: 11.5px; color: var(--text); cursor: pointer;
+}
+.est-pick-chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-light); }
+.est-pick-chip span { color: var(--muted); margin-left: 3px; font-size: 10px; }
+.est-price-rows { display: flex; flex-direction: column; }
+.est-price-row { display: flex; justify-content: space-between; padding: 5px 2px; border-bottom: 1px solid #f1f5f9; font-size: 11.5px; }
+.est-price-row b { color: var(--text); }
+
+/* 单价库编辑模式（estimate_manage 权限）：分类头可改名/说明/删除，行内改名称/单价/单位 */
+.est-cat-head { display: flex; align-items: center; gap: 6px; }
+.est-cat-head input { font-size: 12px; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
+.est-cat-name { width: 150px; font-weight: 600; }
+.est-cat-desc { flex: 1; min-width: 0; color: var(--muted); font-size: 11px; }
+.est-cat-del { flex-shrink: 0; border: none; background: none; cursor: pointer; font-size: 14px; padding: 2px 4px; opacity: .65; }
+.est-cat-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px 64px 26px; gap: 5px; align-items: center; padding: 3px 0; border-bottom: 1px solid #f8fafc; }
+.est-cat-row input { font-size: 11.5px; padding: 4px 7px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fffbeb; min-width: 0; }
+.est-cat-row input:focus { outline: none; border-color: var(--primary); }
+.est-cat-rowdel { border: none; background: none; color: #ef4444; cursor: pointer; font-size: 15px; line-height: 1; padding: 0; }
+.est-cat-addrow { margin-top: 8px; }
+.est-cat-savebar { flex-wrap: wrap; gap: 6px; }
+
+/* 配置面板 */
+.est-cfg-tip { font-size: 12.5px; line-height: 1.65; color: #475569; background: #f8fafc; padding: 8px 10px; border-radius: 7px; margin-bottom: 10px; }
+
+/* 常用施工项抽屉：工时校准入口 + 逐项校准表 */
+.est-pick-admin { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); background: #f5f3ff; border: 1px solid #e0e7ff; padding: 7px 9px; border-radius: 8px; margin-bottom: 10px; }
+.est-calib-price { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+.est-calib-price label { font-size: 11px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.est-calib-price input { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; text-align: right; background: #fff; color: var(--text); }
+.est-calib-row { display: grid; grid-template-columns: 1fr 40px 78px 62px; align-items: center; gap: 6px; padding: 5px 2px; font-size: 11.5px; color: var(--text); border-bottom: 1px solid #f1f5f9; }
+.est-calib-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-calib-row em { font-style: normal; font-size: 10px; color: var(--muted); }
+.est-calib-row input { width: 100%; padding: 4px 5px; border: 1px solid var(--border); border-radius: 5px; text-align: right; font-size: 11.5px; background: #fff; color: var(--text); }
+.est-calib-row small { font-size: 10px; color: #94a3b8; text-align: right; white-space: nowrap; }
+.est-calib-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: #4f46e5; margin-left: 4px; vertical-align: middle; }
+/* 底部操作条里的次要按钮（校准工时 / 返回施工项）靠左，主键靠右 */
+.est-cfg-save-l { margin-right: auto; }
+@media (max-width: 768px) { .est-calib-price { grid-template-columns: 1fr; } .est-calib-row { grid-template-columns: 1fr 34px 64px 54px; } }
+
+/* 常用施工项：批量加入 / 搜索联想多选 / 施工项管理 */
+.est-pick-admin { flex-wrap: wrap; }
+.est-pick-admin-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.est-batch { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 7px 10px; margin-bottom: 8px; }
+/* 批量加入区默认折叠（2026-11-22）：只占一行标题，点开才展开输入区，不长期挤占抽屉列表 */
+.est-batch-toggle { display: flex; align-items: center; gap: 5px; width: 100%; border: none; background: none; padding: 0; text-align: left; cursor: pointer; font-size: 12px; font-weight: 700; color: #15803d; }
+.est-batch-toggle span { font-weight: 400; font-size: 10.5px; color: #65a30d; }
+.est-batch-toggle b { margin-left: auto; font-size: 11px; font-weight: 400; color: #65a30d; }
+.est-batch.is-open .est-batch-toggle { margin-bottom: 6px; }
+.est-batch-text { width: 100%; min-height: 54px; resize: vertical; font-size: 12px; box-sizing: border-box; }
+.est-batch-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.est-batch-bar label { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+.est-batch-bar input { width: 64px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; text-align: right; background: #fff; color: var(--text); }
+.est-pick-search { display: grid; grid-template-columns: minmax(0, 1fr) 60px auto; gap: 6px; align-items: center; margin-bottom: 8px; }
+.est-pick-search .input { margin: 0; }
+.est-qty-input { width: 100%; padding: 7px 5px; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; text-align: right; background: #fff; color: var(--text); box-sizing: border-box; }
+.est-match-bar { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); background: #f5f3ff; border: 1px solid #e0e7ff; border-radius: 7px; padding: 6px 9px; margin-bottom: 6px; }
+.est-match-bar label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.est-match-bar span { flex: 1 1 auto; }
+.est-match-list { max-height: 186px; overflow-y: auto; border: 1px solid var(--border); border-radius: 7px; margin-bottom: 10px; -webkit-overflow-scrolling: touch; }
+.est-match-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) 124px; align-items: center; gap: 6px; padding: 5px 8px; font-size: 11.5px; border-bottom: 1px solid #f1f5f9; cursor: pointer; }
+.est-match-row:last-child { border-bottom: 0; }
+.est-match-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-match-row em { font-style: normal; font-size: 10px; color: var(--muted); text-align: right; white-space: nowrap; }
+.est-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 7px; font-size: 12px; color: var(--text); }
+.est-item-head2 { border-top: 1px dashed var(--border); padding-top: 12px; }
+.est-item-muted { font-size: 11px; color: var(--muted); }
+.est-item-cols, .est-item-row { display: grid; grid-template-columns: minmax(0, 1fr) 38px 50px 60px 30px 30px 20px 20px 20px; gap: 4px; align-items: center; }
+/* 自定义行名称格：左边填名称，右边实时显示折合人工（改工时/工种立刻变） */
+.est-item-name { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.est-item-name .est-item-n { flex: 1 1 auto; min-width: 0; }
+.est-item-price { flex: 0 0 auto; font-style: normal; font-size: 10px; color: var(--muted); white-space: nowrap; }
+.est-item-row > * { min-width: 0; }
+.est-item-cols { font-size: 11px; color: var(--muted); padding: 0 2px 4px; text-align: center; }
+.est-item-cols span:first-child { text-align: left; }
+.est-item-row { margin-bottom: 5px; }
+.est-item-row input { width: 100%; padding: 5px 2px; border: 1px solid var(--border); border-radius: 5px; font-size: 12.5px; background: #fff; color: var(--text); box-sizing: border-box; text-align: center; }
+.est-item-row input.est-item-n { text-align: left; }
+.est-item-ck { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 1px; font-size: 9.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.est-item-ck input { width: auto; }
+.est-item-op { border: 1px solid var(--border); background: #f8fafc; border-radius: 5px; font-size: 11px; line-height: 1; padding: 6px 0; cursor: pointer; color: var(--muted); }
+.est-item-op:hover { color: var(--primary); border-color: var(--primary); }
+.est-item-op.est-item-del { color: #dc2626; }
+/* 施工项管理（2026-11-22）：内容撑满抽屉高度，列表吃掉剩余空间；上方说明压缩，编辑区为主 */
+.est-item-manage { display: flex; flex-direction: column; min-height: 0; }
+.est-drawer-body--fit { display: flex; flex-direction: column; }
+.est-drawer-body--fit .est-item-manage { flex: 1 1 auto; height: auto; min-height: 0; }
+.est-item-manage .est-item-tip { flex: 0 0 auto; font-size: 12px; line-height: 1.45; padding: 6px 9px; margin-bottom: 4px; }
+.est-item-manage .est-item-head { flex: 0 0 auto; margin: 8px 0 5px; }
+.est-item-manage .est-item-head2 { padding-top: 8px; }
+.est-item-manage .est-item-cols, .est-item-manage #estItemBiSearch { flex: 0 0 auto; }
+/* 自定义项区：有几行就占多高（2026-11-22 修「新增项被压扁看不到」）。
+   原来 flex:0 1 auto + max-height:240 + 内滚，内置列表 flex:1 抢空间时它被压到几乎为 0。
+   现在不参与收缩、也不内滚，超高就让外层抽屉整体滚动，新增/编辑行一定完整可见。 */
+.est-item-custom-list { flex: 0 0 auto; overflow: visible; }
+.est-empty-compact { padding: 9px 8px !important; }
+.est-item-bi-list { flex: 1 1 auto; min-height: 160px; max-height: none; overflow-y: auto; border: 1px solid var(--border); border-radius: 7px; -webkit-overflow-scrolling: touch; }
+.est-item-manage .est-item-io { flex: 0 0 auto; margin-top: 8px; padding: 7px 9px; }
+/* 底部操作条随内容走（不吸底）：吸底会盖住内置列表最后一段，实测手机上只剩 60px 可视 */
+.est-item-manage .est-cfg-save { flex: 0 0 auto; padding-top: 8px; }
+.est-item-bi { display: grid; grid-template-columns: 24px minmax(0, 1fr) 86px 58px 22px; align-items: center; gap: 6px; padding: 5px 8px; font-size: 12.5px; border-bottom: 1px solid #f1f5f9; }
+/* 名称行：名称 + 工种/高 徽标 + 施工方式灰字（宽屏时把行内空白利用起来，一眼看出怎么施工） */
+.est-item-bi-n { display: flex; align-items: center; min-width: 0; }
+.est-item-bi-n b { font-weight: 400; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-item-bi-n .est-item-tr, .est-item-bi-n .est-item-hf { flex: 0 0 auto; }
+.est-item-bi-n .est-item-m { flex: 1 1 auto; min-width: 0; margin-left: 7px; font-style: normal; font-size: 10px; line-height: 1.2; color: #7c8ba1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.est-item-bi:last-child { border-bottom: 0; }
+.est-item-bi span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-item-bi em { font-style: normal; font-size: 10px; color: var(--muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 内置项工时输入（可直接校准）：默认态低调，改动后高亮，一眼看出哪些被校准过 */
+.est-item-bi-h { width: 100%; padding: 3px 4px; border: 1px solid var(--border); border-radius: 5px; font-size: 12px; text-align: center; background: #fff; color: var(--text); box-sizing: border-box; }
+.est-item-bi-h.is-calib { border-color: #f59e0b; background: #fffbeb; color: #92400e; font-weight: 700; }
+.est-item-hf { display: inline-block; font-style: normal; font-size: 9px; line-height: 1; padding: 2px 3px; margin-left: 4px; border-radius: 3px; background: #fff7ed; color: #c2410c; vertical-align: middle; }
+.est-item-hf.est-item-cal { background: #fef3c7; color: #b45309; }
+/* 内置项直接编辑（2026-11-22）：行尾 ✎ 展开面板，名称/单位/工种/施工方式/高墙系数都能改，
+   覆盖存 estimate_config.itemOverrides，与「导出改完再导入」相比不用碰 Excel。 */
+.est-item-ov-btn { width: 100%; padding: 4px 0; border: 1px solid transparent; background: none; color: #94a3b8; font-size: 13px; line-height: 1; cursor: pointer; border-radius: 5px; }
+.est-item-ov-btn:hover { color: var(--primary); border-color: var(--border); background: #f8fafc; }
+.est-item-ov-btn.is-on { color: var(--primary); border-color: var(--primary); background: #eef2ff; }
+.est-item-ov-btn.is-edited { color: #b45309; }
+.est-item-ovd { background: #ecfdf5; color: #047857; }
+.est-item-ov { grid-column: 1 / -1; margin: 4px 0 6px; padding: 8px 9px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 7px; }
+.est-item-ov-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) 72px 100px minmax(0, 1.8fr); gap: 6px; align-items: end; }
+.est-item-ov-grid label { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 10.5px; color: var(--muted); }
+.est-item-ov-grid .input { width: 100%; box-sizing: border-box; height: 28px; padding: 3px 6px; font-size: 12px; }
+.est-item-ov-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 7px; }
+.est-item-ov-bar .est-item-ck { font-size: 10.5px; }
+.est-item-ov-hint { flex: 1 1 150px; min-width: 0; font-size: 10px; line-height: 1.4; color: #94a3b8; white-space: normal; overflow: visible; text-overflow: clip; }
+@media (max-width: 768px) {
+  .est-item-ov-grid { grid-template-columns: minmax(0, 1fr); }
+  .est-item-ov-hint { flex: 1 1 100%; order: 9; }
+}
+/* 门头工艺增项配置（2026-11-22）：内置工艺启停 + 自定义工艺增删改 */
+.est-ex-list { margin-bottom: 8px; }
+.est-ex-row { display: grid; grid-template-columns: 52px minmax(0, 118px) minmax(0, 1fr) 42px 60px; align-items: center; gap: 6px; padding: 5px 8px; font-size: 11.5px; border-bottom: 1px solid #f1f5f9; }
+/* 内置工艺「调价」：小按钮 + 已调价徽标 + 展开的编辑区 */
+.est-ex-price { padding: 2px 6px; border: 1px solid var(--border); border-radius: 5px; background: #fff; color: var(--primary); font-size: 10.5px; line-height: 1.5; cursor: pointer; white-space: nowrap; }
+.est-ex-price:hover { background: var(--primary-light); border-color: var(--primary); }
+.est-ex-badge { display: inline-block; margin-left: 4px; padding: 1px 4px; border-radius: 3px; background: #fff7ed; color: #c2410c; font-style: normal; font-size: 9px; line-height: 1.4; vertical-align: middle; }
+.est-ex-row.is-custom em { color: #c2410c; }
+.est-ex-edit { padding: 7px 14px 5px 60px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
+.est-ex-edit .est-ex-l2 { margin-bottom: 5px; }
+.est-ex-edit-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--muted); }
+.est-ex-edit-foot .linkbtn { font-size: 10.5px; }
+.est-ex-row:last-child { border-bottom: 0; }
+.est-ex-row.is-off { opacity: .45; }
+.est-ex-use, .est-ex-on { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.est-ex-on { justify-content: flex-end; }
+.est-ex-n { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-ex-row em { font-style: normal; font-size: 10.5px; color: var(--muted); line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* 工艺试算：6×2 标准门头这一项多少钱 / 折合单价，超行业上限标红 */
+.est-ex-desc { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.est-ex-stat { font-size: 10px; line-height: 1.3; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.est-ex-stat.is-high { color: #dc2626; font-weight: 600; }
+.est-ex-cust { border: 1px solid var(--border); border-radius: 7px; padding: 8px; margin-bottom: 8px; background: #fbfdff; }
+.est-ex-cust .input, .est-ex-edit .input { height: 30px; padding: 3px 6px; font-size: 12px; border-radius: 6px; min-width: 0; }
+.est-ex-l1 { display: grid; grid-template-columns: minmax(0, 1fr) 46px 26px; gap: 5px; align-items: center; margin-bottom: 6px; }
+.est-ex-l1 .est-ex-ic { text-align: center; padding: 4px 0; }
+.est-ex-l2 { display: grid; gap: 5px; align-items: center; margin-bottom: 5px; }
+.est-ex-l2:last-child { margin-bottom: 0; }
+.est-ex-l2-work { grid-template-columns: 30px minmax(0, 1fr) 98px 52px; }
+.est-ex-l2-mat { grid-template-columns: 28px minmax(0, 1fr) 40px 52px 84px 44px 52px; }
+.est-ex-l2 > * { min-width: 0; }
+.est-ex-tag { font-size: 10px; color: #64748b; background: #eef2f7; border-radius: 4px; padding: 3px 0; text-align: center; }
+.est-ex-msheet { display: inline-flex; align-items: center; gap: 2px; font-size: 10px; color: var(--muted); white-space: nowrap; }
+/* 窄屏：两行的固定列会挤，改成按内容换行 */
+@media (max-width: 560px) {
+  .est-ex-l2 { display: flex; flex-wrap: wrap; }
+  .est-ex-l2 .est-ex-tag { flex: 0 0 30px; }
+  .est-ex-l2-work .est-ex-wid { flex: 1 1 120px; }
+  .est-ex-l2-work .est-ex-wby { flex: 1 1 92px; }
+  .est-ex-l2-work .est-ex-wk { flex: 0 0 52px; }
+  .est-ex-l2-mat .est-ex-mn { flex: 1 1 120px; }
+  .est-ex-l2-mat .est-ex-mu { flex: 0 0 44px; }
+  .est-ex-l2-mat .est-ex-mp { flex: 0 0 56px; }
+  .est-ex-l2-mat .est-ex-mby { flex: 1 1 88px; }
+  .est-ex-l2-mat .est-ex-mk { flex: 0 0 50px; }
+  /* 手机：改两行 —— 启用/名称/调价 一行，默认勾选 + 明细一行（明细不再被藏掉） */
+  .est-ex-row { grid-template-columns: 46px minmax(0, 1fr) 42px; gap: 4px 6px; padding: 7px 8px; }
+  .est-ex-use { grid-area: 1 / 1 / 2 / 2; }
+  .est-ex-n { grid-area: 1 / 2 / 2 / 3; }
+  .est-ex-price { grid-area: 1 / 3 / 2 / 4; }
+  .est-ex-row em { display: -webkit-box; white-space: normal; -webkit-line-clamp: 2; }
+  .est-ex-desc { grid-area: 2 / 2 / 3 / 4; }
+  .est-ex-on { grid-area: 3 / 1 / 4 / 4; justify-content: flex-end; }
+  .est-ex-edit { padding-left: 8px; }
+}
+/* 工种徽标（2026-11）：施工项按工种分价，列表里一眼看出这一项按谁的钱算 */
+.est-item-tr { display: inline-block; font-style: normal; font-size: 9px; line-height: 1; padding: 2px 3px; margin-left: 4px; border-radius: 3px; background: #eef2ff; color: #4338ca; vertical-align: middle; }
+.est-item-tr-sel { width: 100%; padding: 4px 0; border: 1px solid var(--border); border-radius: 5px; font-size: 10.5px; background: #fff; color: var(--text); box-sizing: border-box; text-align: center; }
+.est-item-cols-bi { grid-template-columns: 24px minmax(0, 1fr) 86px 58px 22px; gap: 6px; padding: 0 8px 4px; }
+.est-item-cols-bi span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.est-item-cols-bi span:first-child { font-size: 10px; }
+.est-item-cols-bi span:nth-child(2) { text-align: left; }
+.est-item-cols-bi span:first-child { text-align: center; }
+.est-item-io { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 12px; padding: 9px 10px; background: #f8fafc; border: 1px dashed var(--border); border-radius: 8px; }
+.est-item-io > span { flex: 1 1 100%; font-size: 12px; line-height: 1.55; color: #475569; }
+.est-import-label { position: relative; overflow: hidden; display: inline-flex; align-items: center; cursor: pointer; }
+.est-cfg-save { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.est-list-ops { display: flex; gap: 5px; }
+.est-work-renamable { cursor: pointer; border-bottom: 1px dashed #cbd5e1; }
+@media (max-width: 768px) {
+  .est-pick-search { grid-template-columns: minmax(0, 1fr) 52px auto; gap: 4px; }
+  .est-match-row { grid-template-columns: 16px minmax(0, 1fr) 100px; }
+  .est-item-cols, .est-item-row { grid-template-columns: minmax(0, 1fr) 30px 42px 52px 26px 26px 18px 18px 18px; gap: 3px; }
+.est-item-bi, .est-item-cols-bi { grid-template-columns: 22px minmax(0, 1fr) 60px 48px 20px; gap: 4px; padding-left: 6px; padding-right: 6px; }
+  .est-item-bi-n .est-item-m { display: none; }
+}
+
+/* 窄屏自定义施工项：9 列挤不下会溢出，改成「名称+折合价」独占一行 + 参数换行排 */
+@media (max-width: 560px) {
+  .est-item-cols:not(.est-item-cols-bi) { display: none; }
+  .est-item-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 7px 0; border-bottom: 1px dashed var(--border); }
+  .est-item-name { flex: 1 1 100%; }
+  .est-item-row .est-item-u { flex: 0 0 52px; }
+  .est-item-row .est-item-h { flex: 0 0 56px; }
+  .est-item-row .est-item-tr-sel { flex: 0 0 70px; }
+  .est-item-row .est-item-ck { flex: 0 0 28px; }
+  .est-item-row .est-item-op { flex: 0 0 26px; padding: 6px 0; }
+}
+
+/* 专项测算项标签 */
+.est-work-tag { display: inline-block; font-size: 9px; line-height: 1; padding: 2px 4px; margin-left: 4px; border-radius: 3px; background: #ede9fe; color: #5b4dc9; vertical-align: middle; }
+
+/* 整套方案卡片 */
+.est-combo-card { display: block; width: 100%; text-align: left; padding: 9px 11px; margin-bottom: 7px; border: 1px solid var(--border); border-radius: 8px; background: #fff; cursor: pointer; }
+.est-combo-card:hover { border-color: var(--primary); background: var(--primary-light); }
+.est-combo-card b { display: block; font-size: 12.5px; color: var(--text); margin-bottom: 3px; }
+.est-combo-card span { display: block; font-size: 10.5px; line-height: 1.5; color: var(--muted); }
+
+/* 测算历史项 */
+.est-hist-item { border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; margin-bottom: 7px; background: #fff; }
+.est-hist-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.est-hist-name { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-hist-amt { font-size: 12px; font-weight: 700; color: var(--primary); white-space: nowrap; }
+.est-hist-meta { font-size: 10.5px; color: var(--muted); margin: 3px 0 7px; }
+.est-hist-acts { display: flex; gap: 6px; }
+.est-hist-acts button { font-size: 11px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 6px; background: #f8fafc; color: var(--text); cursor: pointer; }
+.est-hist-acts button.hl { border-color: var(--primary); color: var(--primary); }
+.est-hist-acts button.del { margin-left: auto; color: #dc2626; }
+
+/* 整套方案模板管理（总经理） */
+.est-tpl-card { border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; margin-bottom: 8px; background: #fff; }
+.est-tpl-head { display: flex; justify-content: space-between; align-items: center; }
+.est-tpl-head b { font-size: 12.5px; color: var(--text); }
+.est-tpl-head em { font-style: normal; font-size: 10px; color: var(--muted); }
+.est-tpl-items { font-size: 10.5px; color: var(--muted); line-height: 1.5; margin: 5px 0 7px; }
+.est-tpl-acts { display: flex; gap: 5px; flex-wrap: wrap; }
+.est-tpl-name { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); margin-bottom: 9px; }
+.est-tpl-name input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.est-cb-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 54px 26px 62px 46px; align-items: center; gap: 5px; padding: 4px 2px; font-size: 12.5px; color: var(--text); border-bottom: 1px solid #f1f5f9; }
+.est-cb-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-cb-row input[type="checkbox"] { margin: 0; }
+.est-cb-q { width: 100%; padding: 4px 5px; border: 1px solid var(--border); border-radius: 5px; text-align: right; font-size: 12.5px; background: #fff; color: var(--text); box-sizing: border-box; }
+.est-cb-q:disabled { background: #f1f5f9; color: #cbd5e1; }
+/* 计价口径下拉 + 系数（按面积/周长计价项，2026-11-22） */
+.est-cb-m { width: 100%; padding: 3px 2px; border: 1px solid var(--border); border-radius: 5px; font-size: 12px; background: #fff; color: var(--text); box-sizing: border-box; }
+.est-cb-f { width: 100%; padding: 4px 4px; border: 1px solid var(--border); border-radius: 5px; text-align: right; font-size: 12px; background: #fff; color: var(--text); box-sizing: border-box; }
+.est-cb-m:disabled, .est-cb-f:disabled { background: #f1f5f9; color: #cbd5e1; }
+.est-cb-warn { font-style: normal; margin-left: 3px; cursor: help; }
+.est-cb-row--warn > span { color: #b45309; }
+.est-cb-row em { font-style: normal; font-size: 10px; color: var(--muted); }
+@media (max-width: 768px) { .est-cb-row { grid-template-columns: 16px minmax(0, 1fr) 50px 24px 58px 42px; } }
+
+/* 专项测算表单（脚手架 / 土建基础 / 精神堡垒） */
+.est-sp-tabs { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px; }
+.est-sp-tab { padding: 5px 11px; border: 1px solid var(--border); border-radius: 14px; background: #fff; color: var(--muted); font-size: 11.5px; cursor: pointer; }
+.est-sp-tab.active { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.est-sp-presets { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 9px; }
+.est-sp-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 10px; margin-bottom: 11px; }
+.est-sp-field { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.est-sp-field span { font-size: 11px; color: var(--muted); flex: 1 1 auto; }
+.est-sp-field input { width: 74px; flex: 0 0 auto; padding: 5px 6px; font-size: 12px; text-align: right; }
+.est-sp-info { font-size: 11.5px; line-height: 1.6; color: var(--text); background: #f0fdf4; padding: 9px 10px; border-radius: 7px; margin: 10px 0; }
+.est-sp-warn { margin-top: 5px; color: #b45309; }
+.est-sp-group { font-size: 11px; font-weight: 600; color: var(--muted); margin: 10px 0 5px; padding-bottom: 4px; border-bottom: 1px dashed var(--border); }
+.est-sp-row { display: flex; align-items: center; gap: 6px; padding: 5px 0; font-size: 11.5px; color: var(--text); border-bottom: 1px solid #f1f5f9; }
+.est-sp-row > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-sp-row input[type="checkbox"] { flex: 0 0 auto; }
+.est-sp-row .est-sp-q, .est-sp-row .est-sp-p { width: 58px; flex: 0 0 auto; padding: 4px 5px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 5px; text-align: right; background: #fff; color: var(--text); }
+.est-sp-row em { font-style: normal; font-size: 10px; color: var(--muted); width: 34px; flex: 0 0 auto; }
+@media (max-width: 768px) { .est-sp-fields { grid-template-columns: 1fr; } }
+.est-drawer-body h5 { font-size: 12px; color: var(--text); margin: 14px 0 6px; }
+.est-cfg-row { display: grid; grid-template-columns: minmax(0, 1fr) 92px 74px; align-items: center; gap: 6px; padding: 4px 0; font-size: 11.5px; color: var(--text); }
+.est-cfg-row input { width: 100%; padding: 5px 6px; font-size: 12px; border: 1px solid var(--border); border-radius: 6px; text-align: right; }
+.est-cfg-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-cfg-row em { font-style: normal; font-size: 10.5px; color: var(--muted); white-space: nowrap; text-align: left; padding-right: 2px; overflow: hidden; text-overflow: ellipsis; }
+/* 窄屏参数行（必须放在基础规则之后，否则被 3 列模板覆盖）：单位换行右对齐，标签不挤 */
+@media (max-width: 520px) {
+  .est-cfg-row { grid-template-columns: minmax(0, 1fr) 84px 70px; gap: 5px; }
+  .est-cfg-row em { font-size: 10px; }
+}
+.est-calib { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.est-calib > summary { font-size: 12px; font-weight: 600; cursor: pointer; color: var(--text); }
+.est-calib-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 8px 0; }
+.est-calib-grid label { font-size: 10px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+.est-calib-grid label:first-child { grid-column: 1 / -1; }
+.est-calib-grid input, .est-calib-grid select { font-size: 12px; padding: 6px 8px; }
+.est-calib-result { margin-top: 8px; font-size: 11px; line-height: 1.6; }
+.est-cfg-save { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); text-align: right; }
+/* 参数页「保存参数」常驻可见（2026-11-22）：原来贴在长表单最底部，滚到门头工艺区改完价根本看不到，
+   用户以为改了就会自动存，刷新后回到默认。改成 sticky 底条 + 一句说明。 */
+.est-cfg-save--sticky {
+  position: sticky; bottom: 0; z-index: 3; display: flex; align-items: center; gap: 10px;
+  margin: 12px -16px -12px; padding: 10px 16px; background: #fff;
+  box-shadow: 0 -6px 14px rgba(15, 23, 42, .08);
+}
+.est-cfg-save--sticky .btn { flex: 0 0 auto; }
+.est-cfg-save-hint { margin-right: auto; font-size: 10.5px; line-height: 1.4; color: #94a3b8; text-align: left; }
+/* 参数页顶部「上次保存」提示：一眼看出服务器上那份是不是新的 */
+.est-cfg-saved { font-size: 11px; line-height: 1.5; color: #0f766e; background: #ecfdf5; border: 1px solid #bbf7d0; border-radius: 6px; padding: 6px 9px; margin-bottom: 8px; }
+@media (max-width: 520px) {
+  .est-cfg-save--sticky { flex-wrap: wrap; }
+  .est-cfg-save-hint { flex: 1 1 100%; margin-right: 0; }
+  .est-cfg-save--sticky .btn { flex: 1 1 100%; }
+}
+
+/* 详情页测算参考卡片 */
+.est-ref-card { margin: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: #fff; box-shadow: var(--shadow); }
+.est-ref-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.est-ref-head h3 { margin: 0; font-size: 14px; color: var(--text); }
+.est-ref-time { font-weight: 400; font-size: 10px; color: var(--muted); margin-left: 4px; }
+.est-ref-empty { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.est-ref-rows { display: flex; flex-direction: column; }
+.est-ref-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px solid #f1f5f9; font-size: 11.5px; }
+.est-ref-row span { color: var(--muted); }
+.est-ref-row b { color: var(--text); min-width: 62px; text-align: right; }
+.est-ref-totals { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 11.5px; color: var(--muted); }
+.est-ref-totals b { color: var(--text); }
+.est-ref-totals span:last-child b { color: var(--primary); }
+/* 测算 vs 实际 偏差条（2026-11-22） */
+.est-ref-acc { margin-top: 9px; padding: 7px 9px; border-radius: 7px; font-size: 11.5px; }
+.est-ref-acc.ok { background: #f0fdf4; color: #15803d; }
+.est-ref-acc.over { background: #fef2f2; color: #b91c1c; }
+.est-ref-acc.under { background: #eff6ff; color: #1d4ed8; }
+.est-acc-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.est-acc-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 7px; font-size: 12px; background: #f8fafc; }
+.est-acc-row .est-acc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-acc-row .est-acc-num { color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
+.est-acc-row b { flex-shrink: 0; }
+.est-acc-row.ok b { color: #15803d; }
+.est-acc-row.over b { color: #b91c1c; }
+.est-acc-row.under b { color: #1d4ed8; }
+.est-acc-advice { margin-top: 9px; padding: 8px 10px; border-radius: 7px; font-size: 12px; line-height: 1.6; }
+.est-acc-advice.ok { background: #f0fdf4; color: #15803d; }
+.est-acc-advice.over { background: #fef2f2; color: #b91c1c; }
+.est-acc-advice.under { background: #eff6ff; color: #1d4ed8; }
+/* 按项反推（2026-11-22）：项级定额建议行——窄屏也不横滚，说明文字整体换行 */
+.est-sec-t { margin: 16px 0 0; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.est-rev-sub { margin-left: 6px; font-weight: 400; font-size: 11px; color: var(--muted); }
+.est-rev-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.est-rev-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 7px 9px; border-radius: 7px; background: #f8fafc; font-size: 12px; }
+.est-rev-row .est-rev-n { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-rev-row .est-rev-d { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
+.est-rev-row .est-rev-d b { color: var(--text); font-weight: 600; }
+.est-rev-row .est-rev-f { flex: 0 0 auto; font-weight: 600; }
+.est-rev-row.over .est-rev-f { color: #b91c1c; }
+.est-rev-row.under .est-rev-f { color: #1d4ed8; }
+.est-rev-row .linkbtn { margin-left: auto; }
+.est-dist-row .est-rt { display: inline-flex; align-items: center; gap: 3px; font-weight: 400; font-size: 11.5px; color: var(--muted); flex-shrink: 0; }
+.est-dist-row .est-rt input { width: auto; }
+.est-ref-note { margin-top: 8px; font-size: 10px; color: #94a3b8; }
+.est-ref-btns { display: inline-flex; gap: 6px; flex-shrink: 0; }
+.est-ref-stale { margin-top: 8px; padding: 7px 10px; border-radius: 8px; background: #fef3c7; color: #92400e; font-size: 12px; line-height: 1.5; }
+.est-unk-item { padding: 7px 0; border-bottom: 1px solid #f1f5f9; }
+.est-unk-meta { display: flex; align-items: center; gap: 8px; }
+.est-unk-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text); }
+.est-unk-meta em { font-style: normal; font-size: 11px; color: var(--muted); flex-shrink: 0; }
+.est-unk-bind, .est-syn-add { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.25fr) auto; gap: 6px; align-items: center; }
+.est-unk-bind { margin-top: 5px; }
+.est-syn-add { margin: 8px 0 12px; }
+.est-unk-bind .input, .est-syn-add .input { width: 100%; min-width: 0; font-size: 12px; padding: 5px 6px; }
+.est-syn-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-bottom: 1px solid #f1f5f9; font-size: 12.5px; }
+.est-syn-row span { min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.est-syn-row em { flex: 1; min-width: 0; font-style: normal; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 520px) {
+  .est-unk-bind, .est-syn-add { grid-template-columns: 1fr; }
+}
+
+/* 桌面端「测算」工具按钮（右上角，与全量刷新药丸协调；手机走底部菜单故隐藏） */
+.estimate-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid #e0e7ff;
+  border-radius: 8px;
+  background: #f5f3ff;
+  color: #5b4dc9;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(91, 77, 201, 0.08);
+  transition: all .15s ease;
+}
+.estimate-tool-btn:hover { background: #ede9fe; color: #4338ca; }
+.estimate-tool-btn span { font-size: 12px; }
+
+/* 测算弹窗：桌面左右分栏（左输入/右结果各自滚动），手机仍单列整体滚动 */
+@media (min-width: 769px) {
+  #estimateModal .est-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+  #estimateModal .est-main,
+  #estimateModal .est-side {
+    padding: 14px 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    min-width: 0;
+  }
+  #estimateModal .est-side {
+    border-left: 1px solid var(--border);
+    background: #f8fafc;
+  }
+}
+
+/* ---- 窄屏适配 ---- */
+@media (max-width: 768px) {
+  .estimate-tool-btn { display: none !important; }
+  /* 手机端改为居中悬浮弹窗（2026-11-19 用户反馈贴底遮挡底部导航）：四周留白，高度收到 82vh，
+     底部导航完整露出；抽屉挂在 shell 内满宽显示，随之一起悬浮，不压住菜单。 */
+  .est-shell { border-radius: 14px; align-self: center; max-height: 82vh !important; }
+  .est-drawer { left: 0; right: 0; width: 100%; border-left: none; border-radius: 0; box-shadow: none; }
+  .est-win-handle { display: none !important; } /* 手机端悬浮卡片，不需要缩放 */
+  .est-win-floating > .est-head, .est-win-floating .est-drawer-head { cursor: default; }
+  .est-head { padding: 11px 14px; }
+  .est-body { padding: 12px 14px; }
+  .est-foot { padding: 10px 14px; gap: 6px; }
+  .est-foot .btn { flex: 1 1 auto; padding: 8px 6px; font-size: 12px; min-width: 0; white-space: nowrap; }
+  .est-work-q input { width: 56px; }
+  .est-work-q input.est-work-price { width: 46px; }
+  .est-work-q--hours input { width: 44px; }
+  .est-work-q--hours input.est-work-h { width: 46px; }
+  .est-work-tr { max-width: 82px; font-size: 11px; }
+}
+
+/* 自定义施工项：窗口窄于 860px 时一行放不下（名称+数量+工时+工种+金额），拆成两行：
+   第 1 行名称 + 删除，第 2 行控件（可再折行）。宽屏保持一行。 */
+@media (max-width: 860px) {
+  .est-work-row.is-hours { grid-template-columns: minmax(0, 1fr) 26px; row-gap: 5px; }
+  .est-work-row.is-hours .est-work-name { grid-area: 1 / 1; }
+  .est-work-row.is-hours .est-work-del { grid-area: 1 / 2; }
+  .est-work-row.is-hours .est-work-q { grid-area: 2 / 1 / 3 / 3; flex-wrap: wrap; }
 }
