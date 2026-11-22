@@ -33087,7 +33087,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v27bbc1db";
+  const APP_VERSION = "v211bdead";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -33465,9 +33465,28 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   setTimeout(syncLoginInstallBtn, 1200);
 })();
 
-function showHelp() {
+/* 打开使用说明书。anchor 可选：定位到 help.html 内某节（如 'estimate' 施工费测算） */
+function showHelp(anchor) {
   const m = document.getElementById("helpModal");
   if (!m) return;
+  const fr = document.getElementById("helpModalFrame");
+  if (fr) {
+    const jump = () => {
+      try {
+        const w = fr.contentWindow;
+        if (!w || !w.document) return;
+        const el = anchor ? w.document.getElementById(anchor) : null;
+        if (el) el.scrollIntoView({ block: "start" });
+      } catch (_) {}
+    };
+    const want = anchor ? "help.html#" + anchor : "help.html";
+    if (fr.getAttribute("src") !== want) {
+      // iframe 首次加载慢时固定延时可能赶不上，用 load 事件兜底；再补一次延时防缓存命中不触发
+      fr.addEventListener("load", jump, { once: true });
+      fr.setAttribute("src", want);
+      setTimeout(jump, 600);
+    } else jump();
+  }
   m.classList.add("open");
   m.setAttribute("aria-hidden", "false");
 }
@@ -36230,7 +36249,7 @@ function openEstimateModal(opts) {
     <div class="est-shell" onclick="event.stopPropagation()" style="width:100%;max-width:${isMobile ? '100%' : '1000px'};max-height:${isMobile ? '82vh' : '90vh'};">
       <div class="est-head">
         <h3>🧮 施工费测算</h3>
-        <span class="est-head-btns">${isMobile ? "" : `<button class="modal-close" onclick="estMinimize()" title="最小化到右下角，稍后可恢复">–</button>`}<button class="modal-close" onclick="closeEstimateModal()" title="关闭">×</button></span>
+        <span class="est-head-btns">${isMobile ? "" : `<button class="modal-close" onclick="estMinimize()" title="最小化到右下角，稍后可恢复">–</button>`}<button class="est-help-btn" onclick="showHelp('estimate')" title="施工费测算 · 使用说明" aria-label="使用说明">?</button><button class="modal-close" onclick="closeEstimateModal()" title="关闭">×</button></span>
       </div>
       <div class="est-body" id="estBody">
         <div class="est-main">
@@ -36952,6 +36971,40 @@ function estWorkTradeChange(i, v) {
   estRecalc();
 }
 
+/* 清单里手加的自定义施工项 → 存入全局「自定义定额库」(customItems / app_settings)。
+   保存后 estSyncCustomItems 立即把新项注入内核：下次在「＋ 常用施工项」里可直接勾选，
+   智能拆解也能按名称命中。内置定额项是代码预置的定额项（只能改名 / 隐藏 / 校准、不能新增，
+   升级时跟随新默认值），所以自定义项统一进「自定义施工项」池——两池在测算里用法完全一样。 */
+async function estWorkSaveAsLib(i) {
+  const w = _estUI && _estUI.work[i];
+  if (!w || !w.custom || w.mode !== "hours") return;
+  const n = String(w.n || "").trim();
+  if (!n || n === "自定义施工项") { toast("先给这条施工项起个名字，再点行尾「存」"); return; }
+  if (!estCanManage()) { toast("存为定额项是全员共享配置，需要「测算管理」权限，请联系管理员"); return; }
+  const libs = (window.Estimate && Estimate.WORK_ITEMS) || [];
+  if (libs.some((x) => x.n === n && !x._ggCustom)) {
+    toast(`「${n}」本来就是内置定额项，直接在「＋ 常用施工项」里选即可`); return;
+  }
+  const cfg = estCfg();
+  const list = Array.isArray(cfg.customItems) ? cfg.customItems.slice() : [];
+  const dup = list.findIndex((x) => String(x.n || "").trim() === n);
+  const row = {
+    id: dup >= 0 ? list[dup].id : ("uc_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6)),
+    n: n.slice(0, 60), u: (String(w.u || "项").slice(0, 12) || "项"),
+    h: Math.max(0, Number(w.h) || 0), hf: !!w.hf, wf: !!w.wf,
+    tr: (window.Estimate && Estimate.TRADES && Estimate.TRADES[w.tr]) ? w.tr : "pg",
+    m: String(w.calc || "").slice(0, 40),
+  };
+  if (dup >= 0 && !confirm(`定额库里已有「${n}」，用当前这条的单位 / 工时 / 工种覆盖它？`)) return;
+  if (dup >= 0) list[dup] = row; else list.push(row);
+  cfg.customItems = list;
+  const ok = await saveEstimateConfig(cfg);   // 内部已 normalize + estSyncCustomItems
+  if (!ok) return;                            // 失败原因 saveEstimateConfig 已 toast
+  renderEstimateWorkList();                   // 重绘：名称联想里立刻多出这一项
+  toast(dup >= 0 ? `已更新定额库里的「${n}」`
+    : `已把「${n}」存入定额库：下次在「＋ 常用施工项」里直接选，智能拆解也能识别`);
+}
+
 function estClearWork() {
   if (!_estUI) return;
   if (_estUI.work.length && !confirm("清空所有施工项？")) return;
@@ -37017,11 +37070,15 @@ function renderEstimateWorkList() {
     } else if (!isHours && w.calc) {
       calcHtml = `<div class="est-work-calc">${esc(w.calc)}</div>`;
     }
+    // 手加的自定义施工项（按工时口径）可一键存入全局定额库，之后在「＋ 常用施工项」/智能拆解里复用
+    const libBtn = (w.custom && isHours)
+      ? `<button class="est-work-lib" onclick="estWorkSaveAsLib(${i})" title="存为定额项：存入全局自定义定额库，下次在「＋ 常用施工项」里直接选，智能拆解也能按名称识别">存</button>`
+      : "";
     return `
     <div class="est-work-row${isHours ? " is-hours" : ""}" data-i="${i}">
       ${nameHtml}
       ${qHtml}
-      <button class="est-work-del" onclick="estRemoveWork(${i})" title="删除">×</button>
+      <div class="est-work-ops">${libBtn}<button class="est-work-del" onclick="estRemoveWork(${i})" title="删除">×</button></div>
       ${calcHtml}
     </div>`;
   }).join("");
@@ -37422,7 +37479,7 @@ function estOpenWhCalib() {
       <small title="折合人工（工时×工种单价，材料另计）">≈¥${calcPrice(it, cur)}</small></label>`;
   }).join("");
   estShowDrawer("校准 · 单项标准工时", `
-    <div class="est-cfg-tip">改的是「标准工时 / 单位」，保存后全员测算立即生效，不影响历史快照。改回默认值可清掉校准标记。右侧 ≈¥ 是按本项工种单价折出的人工价（工种单价在「⚙️ 参数与单价」改），可与本地市场价对照。</div>
+    <div class="est-cfg-tip">改的是「标准工时 / 单位」，保存后全员测算立即生效，不影响历史快照。改回默认值可清掉校准标记。右侧 ≈¥ 是按本项工种单价折出的人工价（工种单价在「参数与单价」改），可与本地市场价对照。</div>
     <input class="input" id="estWhSearch" placeholder="搜索施工项…" oninput="estFilterWh(this.value)" style="margin-bottom:10px;"/>
     <div id="estWhList">${rows}</div>
     <div class="est-cfg-save">
@@ -37727,13 +37784,14 @@ function estRenderItemManage() {
   }).join("");
   // 工种单价不在这页显示（2026-11-22）：唯一入口是「⚙️ 参数与单价」，本页只留一句去向提示，
   // 避免同一组数重复摆两遍；单价数值不影响本页任何计算（≈¥ 直接读 estCfg().params）。
-  estShowDrawer("配置管理 · 施工项（新增 / 隐藏 / 排序）", estCfgHubTabs("items") + `
+  estShowDrawer("配置管理 · 施工项", estCfgHubTabs("items") + `
     <div class="est-item-manage">
-    <div class="est-cfg-tip est-item-tip" title="人工费 = 标准工时 × 工种单价。工种（普工/安装技工/焊工/电工/高空工/架子工/设计）决定单价，标「高」的项在高空时改按高空工单价，另可叠加墙面系数。右侧「工时」框里的数就是本项校准值，直接改＝校准。">计价口径：<b>工时 × 工种单价</b>（装板/装字按安装技工、焊接按焊工、接线按电工；标「高」的项高空时按高空工单价）＋ 高度/墙面系数。右侧 ≈¥ 是折合人工单价，材料另计。工种单价在「⚙️ 参数与单价」页签改。</div>
+    <div class="est-cfg-tip est-item-tip" title="人工费 = 标准工时 × 工种单价。工种（普工/安装技工/焊工/电工/高空工/架子工/设计）决定单价，标「高」的项在高空时改按高空工单价，另可叠加墙面系数。右侧「工时」框里的数就是本项校准值，直接改＝校准。">计价口径：<b>工时 × 工种单价</b> ＋ 高度/墙面系数，≈¥＝折合人工（材料另计）。工种单价在「参数与单价」页签改。</div>
     <div class="est-item-head"><b>自定义施工项（${draft.length}）</b><button class="btn small outline" onclick="estItemNew()">＋ 新增项</button></div>
     <div class="est-item-cols"><span>名称</span><span>单位</span><span>工时</span><span>工种</span><span>高</span><span>墙</span><span></span><span></span><span></span></div>
     <div class="est-item-custom-list">${customRows || '<div class="est-empty est-empty-compact">还没有自定义项，点「＋ 新增项」</div>'}</div>
-    <div class="est-item-head est-item-head2"><b>内置定额项（可直接编辑）</b><span class="est-item-muted">已隐藏 ${hidden.size} 项${ovCount ? ` · 改过 ${ovCount} 项` : ""} · 点 ✎ 改名/单位/工种/方式 · 工时框改＝校准</span></div>
+    <div class="est-item-pools-hint">两个池：<b>上方「自定义施工项」</b>＝自建（云端全员共享）；<b>下方「内置定额项」</b>＝系统预置（只能改名 / 隐藏 / 校准，不能新增）。用法一样；清单里手加的项，点行尾「存」入上方池。</div>
+    <div class="est-item-head est-item-head2"><b>内置定额项（可直接编辑）</b><span class="est-item-muted">已隐藏 ${hidden.size} 项${ovCount ? ` · 改过 ${ovCount} 项` : ""} · ✎＝编辑 · 工时框改＝校准</span></div>
     <div class="est-item-cols est-item-cols-bi"><span>显示</span><span>名称 / 工种 / 施工方式</span><span>折合人工</span><span>工时</span><span></span></div>
     <input class="input" id="estItemBiSearch" placeholder="搜索内置项（名称 / 工种 / 施工方式）…" value="${esc(_estItemBuiltinQ)}" oninput="estItemBuiltinFilter(this.value)" style="margin-bottom:6px"/>
     <div id="estItemBuiltinList" class="est-item-bi-list">${builtinRows || '<div class="est-empty est-empty-compact">没有匹配的内置项</div>'}</div>
@@ -38547,7 +38605,7 @@ function estRenderComboEdit() {
       const noPrice = !!(on && mode && typeof estCatalogPriceFor === "function" && !estCatalogPriceFor(it ? it.n : ""));
       return `<label class="est-cb-row${noPrice ? " est-cb-row--warn" : ""}">
         <input type="checkbox" data-cb="${esc(id)}" ${on ? "checked" : ""} onchange="estComboCbToggle('${esc(id)}',this.checked)"/>
-        <span title="${esc(a[1])}">${esc(a[1])}${noPrice ? '<i class="est-cb-warn" title="单价库里没有与该项同名的行，按尺寸算出的量会回退定额工时计价。到「💰 单价库」加一条同名单价即可按单价库计价">⚠️</i>' : ""}</span>
+        <span title="${esc(a[1])}">${esc(a[1])}${noPrice ? '<i class="est-cb-warn" title="单价库里没有与该项同名的行，按尺寸算出的量会回退定额工时计价。到「单价库」加一条同名单价即可按单价库计价">⚠️</i>' : ""}</span>
         <input type="number" class="est-cb-q" data-cq="${esc(id)}" value="${d.q[id] || 1}" min="0" step="0.1" title="默认数量（无尺寸时占位用）" ${on ? "" : "disabled"}/>
         <em>${esc(it ? it.u : "")}</em>
         <select class="est-cb-m" data-cm="${esc(id)}" title="计价口径：按面积/周长时数量=尺寸×系数，单价取单价库" ${on ? "" : "disabled"} onchange="estComboModeToggle('${esc(id)}',this)">
@@ -38561,7 +38619,7 @@ function estRenderComboEdit() {
   estShowDrawer("编辑模板 · 勾选施工内容", `
     <label class="est-tpl-name">模板名称<input class="input" id="estTplName" value="${esc(d.n)}" placeholder="例：广告灯箱整套"/></label>
     <input class="input" id="estTplSearch" placeholder="搜索施工项…" oninput="estFilterComboItems(this.value)" style="margin-bottom:8px;"/>
-    <div class="est-cfg-tip">勾选要包含的施工项并填默认数量。计价口径选「按面积/按周长」后，智能拆解识别到尺寸（如 6米*3米）自动按 尺寸×系数 算数量、单价取单价库。标 ⚠️ 的项在单价库没有同名单价，会回退定额工时计价——到「💰 单价库」加同名行即可。</div>
+    <div class="est-cfg-tip">勾选要包含的施工项并填默认数量。计价口径选「按面积/按周长」后，智能拆解识别到尺寸（如 6米*3米）自动按 尺寸×系数 算数量、单价取单价库。标 ⚠️ 的项在单价库没有同名单价，会回退定额工时计价——到「单价库」加同名行即可。</div>
     <div id="estTplItems">${itemsHtml}</div>
     <div class="est-cfg-save">
       <button class="btn primary" onclick="estComboSaveEdit()">保存这套模板</button>
@@ -38791,7 +38849,7 @@ let _estCfgHubTab = "items";
 function estCfgHubTabs(active) {
   const tab = (k, label) => `<button class="est-scene-tab${active === k ? " active" : ""}" onclick="estOpenCfgHub('${k}')">${label}</button>`;
   return `<div class="est-scene-tabs est-hub-tabs">
-    ${tab("params", "⚙️ 参数与单价")}${tab("items", "📄 施工项·工时")}${tab("combo", "🧩 方案模板")}${tab("catalog", "💰 单价库")}${tab("syn", "🔗 同义词")}
+    ${tab("params", "参数与单价")}${tab("items", "施工项·工时")}${tab("combo", "方案模板")}${tab("catalog", "单价库")}${tab("syn", "同义词")}
     <span class="est-hub-backup">
       <button class="btn small outline" onclick="estExportAll()" title="一个文件备份施工项+方案模板+单价库+参数工时，换设备/迁移/误操作兜底">📤 备份全部</button>
       <label class="btn small outline est-import-label" title="恢复备份文件（覆盖当前全部测算配置）">📥 恢复<input type="file" accept=".json,application/json" onchange="estImportAll(this)" hidden/></label>
@@ -39100,7 +39158,7 @@ function estOpenConfig() {
     <div class="est-cfg-saved">🗄 ${estCfgSavedText()}</div>
     <div class="est-cfg-tip">修改后点底部「保存参数」，全员下次刷新生效。工时单价按工种分开（普工/安装技工/焊工/电工/高空工/架子工/设计），<b>这里是唯一能改的地方</b>（施工项页只显示当前值）——每个施工项按自己声明的工种取价，影响所有测算；定额校准仅影响被校准的单项。施工项/模板/价目表/同义词都在上方页签，不再散落多个入口。</div>
     <h5>工种工时单价 / 系数 / 设备费</h5>${baseRows}
-    <div class="est-cfg-tip">安装、发光字、钢架、电路、运输（元/公里）等参考价统一在上方「💰 单价库」页签维护；里程单价直接取其中「市内运输」行，改完即刻生效。</div>
+    <div class="est-cfg-tip">安装、发光字、钢架、电路、运输（元/公里）等参考价统一在上方「单价库」页签维护；里程单价直接取其中「市内运输」行，改完即刻生效。</div>
     <h5>电气 / 电线（门头拆解用）</h5>
     <div class="est-cfg-tip">灯带/射灯电压填 <b>220</b> 表示市电直供、不占 12V 电源；填 <b>12</b> 才计入电源。电源数=12V负载÷(额定功率×负载上限)。电线按「门头周长+每字引线+射灯支线+引下3米」自动估算，单价可在材料行或单价库改。</div>
     ${elecRows}
@@ -39118,7 +39176,7 @@ function estOpenConfig() {
     </select><em>影响异形降效</em></label>
     <div id="estDoorExBox"></div>
     <h5>定额校准</h5>
-    <div class="est-cfg-tip">已校准 ${whCount} 项。逐项改工时：去「📄 施工项·工时」页签看右侧「工时」框（直接改即校准，改回默认值即恢复）；工种单价就在本页上方改。下方「反推校准」可用真实完工数据生成定额。</div>
+    <div class="est-cfg-tip">已校准 ${whCount} 项。逐项改工时：去「施工项·工时」页签看右侧「工时」框（直接改即校准，改回默认值即恢复）；工种单价就在本页上方改。下方「反推校准」可用真实完工数据生成定额。</div>
     <details class="est-calib"><summary>反推校准 · 用真实完工数据生成定额</summary>
       <div class="est-calib-grid">
         <label>施工项<select class="input" id="estCalibItem">${(Estimate.WORK_ITEMS || []).map((it) => `<option value="${esc(it.id)}">${esc(it.n)}（${esc(it.u)}）</option>`).join("")}</select></label>

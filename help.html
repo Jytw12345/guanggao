@@ -232,6 +232,78 @@
       color: var(--muted);
       font-size: 12px;
     }
+    /* ===== 阅读导航：iframe 里也能随时回目录 / 跳章节 / 返回系统 ===== */
+    .help-nav {
+      position: sticky; top: 0; z-index: 50;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+    }
+    .help-nav-in {
+      max-width: 900px; margin: 0 auto; padding: 8px 20px;
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .help-nav-home {
+      border: none; background: transparent; cursor: pointer;
+      font-size: 14px; font-weight: 700; font-family: inherit; color: var(--primary);
+      padding: 5px 4px; white-space: nowrap;
+    }
+    .help-nav-home:hover { color: var(--primary-dark); }
+    .help-nav-jump {
+      flex: 0 1 190px; min-width: 120px; max-width: 210px;
+      padding: 5px 8px; font-size: 13px; font-family: inherit;
+      color: var(--text); background: #f8fafc;
+      border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+    }
+    .help-nav-jump:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+    .help-nav-spacer { flex: 1 1 auto; }
+    .help-nav-cur {
+      font-size: 12px; color: var(--muted); white-space: nowrap;
+      max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+    }
+    .help-nav-btn, .help-nav-back {
+      border: 1px solid var(--border); background: #fff; cursor: pointer;
+      font-size: 12.5px; font-family: inherit; color: var(--muted);
+      padding: 5px 9px; border-radius: 8px; white-space: nowrap;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .help-nav-btn:hover:not(:disabled), .help-nav-back:hover {
+      background: #eef2ff; color: var(--primary); border-color: #c7d2fe;
+    }
+    .help-nav-btn:disabled { opacity: .4; cursor: default; }
+    .help-nav-back {
+      color: #fff; background: var(--primary); border-color: var(--primary); font-weight: 600;
+    }
+    .help-nav-back:hover { background: var(--primary-dark); border-color: var(--primary-dark); color: #fff; }
+    /* 每节末尾的返回条 */
+    .help-back-toc {
+      margin-top: 22px; padding-top: 12px; border-top: 1px dashed var(--border);
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px;
+    }
+    .help-back-toc a { color: var(--primary); text-decoration: none; }
+    .help-back-toc a:hover { text-decoration: underline; }
+    .help-back-toc span { color: var(--border); }
+    .help-back-toc button {
+      border: none; background: transparent; padding: 0; cursor: pointer;
+      font-size: 12.5px; font-family: inherit; color: var(--primary);
+    }
+    .help-back-toc button:hover { text-decoration: underline; }
+    /* 右下浮动：滚远了一键回目录 / 回顶部 */
+    .help-fab {
+      position: fixed; right: 18px; bottom: 18px; z-index: 60;
+      display: none; flex-direction: column; gap: 8px;
+    }
+    .help-fab.show { display: flex; }
+    .help-fab button {
+      width: 42px; height: 42px; border-radius: 50%; cursor: pointer;
+      border: 1px solid var(--border); background: #fff; color: var(--primary);
+      font-size: 17px; line-height: 1; box-shadow: 0 4px 14px rgba(15, 23, 42, .16);
+      transition: transform .15s, background .15s;
+    }
+    .help-fab button:hover { background: #eef2ff; transform: translateY(-2px); }
+    /* 锚点定位留出导航条高度，别让标题被盖住 */
+    .header, .toc, .section { scroll-margin-top: 72px; }
     @media (max-width: 600px) {
       .container {
         padding: 20px 15px;
@@ -254,17 +326,54 @@
       th, td {
         padding: 8px 6px;
       }
+      /* 测算章节表格列多、含长代码串，窄屏改固定布局 + 强制换行，避免整页横向溢出 */
+      #estimate table {
+        table-layout: fixed;
+        width: 100%;
+      }
+      #estimate th, #estimate td {
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+      /* 窄屏导航：章节下拉独占第一行，隐藏翻页/顶部（下拉已能跳章节） */
+      .help-nav-in { padding: 6px 15px; gap: 5px; }
+      .help-nav-home span { display: none; }
+      .help-nav-spacer, .help-nav-cur, .help-nav-btn--step { display: none; }
+      .help-nav-jump { flex: 1 1 100%; max-width: none; order: -1; }
+      .help-nav-back { margin-left: auto; }
+      .help-fab { right: 12px; bottom: 12px; }
+      .help-fab button { width: 38px; height: 38px; font-size: 16px; }
+      .header, .toc, .section { scroll-margin-top: 96px; }
     }
   </style>
 </head>
 <body>
+  <div class="help-nav" id="helpNav">
+    <div class="help-nav-in">
+      <button class="help-nav-home" onclick="helpGoTop()" title="回到说明书首页">📖 <span>使用说明书</span></button>
+      <select class="help-nav-jump" id="helpJump" onchange="helpJumpTo(this.value)" aria-label="快速跳转到章节">
+        <option value="">☰ 快速跳转章节…</option>
+      </select>
+      <span class="help-nav-cur" id="helpCur" title="当前所在章节"></span>
+      <span class="help-nav-spacer"></span>
+      <button class="help-nav-btn" onclick="helpGoToc()" title="回到目录">☰ 目录</button>
+      <button class="help-nav-btn help-nav-btn--step" id="helpPrev" onclick="helpStep(-1)" title="上一节">‹ 上一节</button>
+      <button class="help-nav-btn help-nav-btn--step" id="helpNext" onclick="helpStep(1)" title="下一节">下一节 ›</button>
+      <button class="help-nav-btn help-nav-btn--step" onclick="helpGoTop()" title="回到顶部">↑ 顶部</button>
+      <button class="help-nav-back" onclick="helpBack()" title="关闭说明，回到刚才的界面">✕ 返回系统</button>
+    </div>
+  </div>
+  <div class="help-fab" id="helpFab">
+    <button onclick="helpGoToc()" title="回到目录" aria-label="回到目录">☰</button>
+    <button onclick="helpGoTop()" title="回到顶部" aria-label="回到顶部">↑</button>
+  </div>
   <div class="container">
     <div class="header">
       <h1>🏗️ 广告安装施工预约管理系统</h1>
-      <p>使用说明书 v3.11 · 重点工作流程</p>
+      <p>使用说明书 v3.13 · 重点工作流程</p>
     </div>
 
-    <div class="toc">
+    <div class="toc" id="toc">
       <h3>📋 目录</h3>
       <ul>
         <li><a href="#workflow">核心工作流程</a></li>
@@ -275,6 +384,7 @@
         <li><a href="#workers">人员管理流程</a></li>
         <li><a href="#hours">工时管理流程</a></li>
         <li><a href="#contract">包活制（承包结算）</a></li>
+        <li><a href="#estimate">施工费测算</a></li>
         <li><a href="#review">验收审核流程</a></li>
         <li><a href="#rework">返工管理</a></li>
         <li><a href="#repair">维修单</a></li>
@@ -716,6 +826,164 @@
         <h4>💡 迁移说明</h4>
         <p>老项目（无包活字段）默认按"包工"处理，工程金额为 0 时不参与分成聚合。新字段需先在 Supabase 执行对应迁移后才会持久化（详见部署说明）。</p>
       </div>
+    </div>
+
+    <div class="section" id="estimate">
+      <h2>🧮 施工费测算</h2>
+      <p>测算器把「一句话施工内容」翻译成<strong>工时、材料、人工费</strong>，给出一个可对外的报价参考。它按三四线城市 2026 年行情内置了 145 项施工定额、7 类工种单价和门头配方，<strong>只做测算，不自动改工程金额</strong>——要不要用这个数，由你点「填入工程金额」决定。</p>
+
+      <h3>从哪里进</h3>
+      <table>
+        <thead><tr><th>入口</th><th>位置</th><th>适合</th></tr></thead>
+        <tbody>
+          <tr><td><strong>🧮 测算</strong></td><td>顶部工具条按钮 / 底部导航「测算」</td><td>先算价、再谈单（不影响任何项目）</td></tr>
+          <tr><td><strong>🧮 施工费测算</strong></td><td>新建 / 编辑预约表单，施工内容下方</td><td>已填了施工内容，要算完直接写进这单的工程金额</td></tr>
+          <tr><td><strong>测算参考卡片</strong></td><td>项目详情页（有测算快照时显示）</td><td>回看这单当时怎么算的</td></tr>
+        </tbody>
+      </table>
+
+      <h3>三步出报价</h3>
+      <div class="flow-step">
+        <h4>1. 写施工内容</h4>
+        <p>一句话描述要干的活，<strong>尺寸、数量、材质</strong>有什么写什么，用空格或逗号隔开都行。写得越具体，拆得越准：</p>
+        <div class="code">门头招牌 6×2米 铝塑板 发光字5个60厘米 · 3个1.2×2.4米无框画 · 搭桁架 4.6×3米 5套</div>
+      </div>
+      <div class="flow-step">
+        <h4>2. 点「✨ 智能拆解」</h4>
+        <p>自动拆成清单行：每行带定额<strong>单位</strong>与<strong>标准工时</strong>，门头还会自动展开成骨架、底板、灯条、布面等工序，并列出可选工艺增项。拆错的可以当场改数量、换项、删行。</p>
+      </div>
+      <div class="flow-step">
+        <h4>3. 看结果、填金额</h4>
+        <p>右侧结果面板给出<strong>人工 / 材料 / 辅材 / 设备 / 运输</strong>与合计。确认后用「↗ 填入工程金额」写进表单（或在预约表单的明细汇总条里点同款按钮）。</p>
+      </div>
+
+      <div class="warning">
+        <h4>⚠️ 测算不改金额链</h4>
+        <p>测算结果只存成这单的<strong>测算快照</strong>（随时可重算、可回看），<strong>不会</strong>自动改工程金额、工费或分成池。只有你亲手点「填入工程金额」，金额才会变；保存时工费仍按「工程金额 − 成本扣项」重算。</p>
+      </div>
+
+      <h3>施工内容怎么写才认得准</h3>
+      <table>
+        <thead><tr><th>写法</th><th>例子</th><th>识别结果</th></tr></thead>
+        <tbody>
+          <tr><td><strong>尺寸带单位</strong></td><td><code>6×2米</code> <code>6x2m</code> <code>3*4米</code></td><td>按<strong>米</strong>计算面积 / 周长</td></tr>
+          <tr><td><strong>纯数字</strong></td><td><code>300×600</code></td><td>按<strong>厘米</strong>（1.8㎡）</td></tr>
+          <tr><td><strong>两个个位数</strong></td><td><code>3×2</code></td><td>按<strong>米</strong>（6㎡）——行业习惯</td></tr>
+          <tr><td><strong>数量</strong></td><td><code>5个</code> <code>3张</code> <code>20套</code></td><td>乘到紧邻的那一项上</td></tr>
+          <tr><td><strong>门头一句话</strong></td><td><code>门头招牌 6×2米 不锈钢 发光字5个60厘米</code></td><td>整套配方 + 工艺增项（见下节）</td></tr>
+          <tr><td><strong>桁架</strong></td><td><code>搭桁架 4.6×3米 5套</code></td><td>框架周长 + 后斜撑，折算节数；写 <code>桁架 20米</code> 则按延米</td></tr>
+          <tr><td><strong>拆除</strong></td><td><code>门头拆除 6×2米</code></td><td>只算拆除，不展开新装配方</td></tr>
+          <tr><td><strong>多项并列</strong></td><td><code>搭桁架 绷喷绘布 3.5×4米</code></td><td>拆成两项，尺寸给按面积/周长算的那项</td></tr>
+        </tbody>
+      </table>
+      <div class="note">
+        <h4>📌 认不出来怎么办</h4>
+        <p>认不出的词会原样进清单、工时留 <strong>0</strong>，并标注「未匹配定额」。三种处理：① 手动改数量与工时；② 用「＋ 施工项」按工时计价加一条自定义项；③ 到「参数与单价 → 未识别词」里把它<strong>绑定</strong>到某个定额项，以后全员直接认得。</p>
+      </div>
+
+      <h3>施工项清单的三种行</h3>
+      <table>
+        <thead><tr><th>类型</th><th>怎么加</th><th>计价方式</th></tr></thead>
+        <tbody>
+          <tr><td><strong>定额项</strong></td><td>智能拆解 / 方案库 / 常用施工项</td><td>工程量 × 定额工时/单位 × 该工种单价（高空悬空作业再叠高度系数）</td></tr>
+          <tr><td><strong>材料</strong></td><td>「＋ 材料」</td><td>数量 × 单价，进材料费；辅材按材料费的百分比另计</td></tr>
+          <tr><td><strong>自定义施工项</strong></td><td>「＋ 施工项」，按工时计价</td><td>数量 × 工时/单位 × 工种单价；定额里没有的活（比如甲方临时加的杂活）用它</td></tr>
+        </tbody>
+      </table>
+      <p>每行都能改数量、单位、工时、备注；材料行单价取自<strong>单价库</strong>，没有同名单价时会回退到定额价并提示。</p>
+
+      <h3>门头：配方与工艺增项</h3>
+      <p>写了「门头 / 店招 / 门脸」并带尺寸，就按<strong>材质配方</strong>整套展开——不是只算一块板。识别 10 种材质：</p>
+      <table>
+        <thead><tr><th>材质关键词</th><th>展开的工序（摘要）</th></tr></thead>
+        <tbody>
+          <tr><td>不锈钢 / 拉丝板</td><td>钢架焊接 + 不锈钢板安装 + 剪折 + 包边</td></tr>
+          <tr><td>铝塑板</td><td>钢架 + 铝塑板 + 折边 + 打胶</td></tr>
+          <tr><td>亚克力</td><td>钢架 + 亚克力面板 + 粘贴 / 螺丝固定</td></tr>
+          <tr><td>铝方通 / 格栅</td><td>钢架 + 方管龙骨 + 方通排列（按间距自动算米数）</td></tr>
+          <tr><td>真石漆 / 涂料</td><td>骨架 + 底板 + 批刮 + 喷涂</td></tr>
+          <tr><td>石材 / 瓷砖干挂</td><td>骨架 + 干挂件 + 石材安装</td></tr>
+          <tr><td>镀锌板 / 彩钢板 / 黑白板</td><td>钢架 + 板面 + 铆接 + 收边</td></tr>
+          <tr><td>PVC / 雪弗板</td><td>底板 + PVC 面板 + 粘贴</td></tr>
+          <tr><td>灯箱布（内打光拉布灯箱）</td><td>骨架 + 底板 + LED 灯条 + 电源 + 拉布（灯条按行距自动算米数）</td></tr>
+          <tr><td>喷绘布（不打光）</td><td>骨架 + 喷绘布绷装</td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top:8px;">拆解后清单下方出现<strong>工艺增项</strong>勾选区，默认全不勾（只有写进需求才计费）：</p>
+      <table>
+        <thead><tr><th>工艺</th><th>计量方式</th><th>备注</th></tr></thead>
+        <tbody>
+          <tr><td>包边</td><td>按周长（米）</td><td>与「不锈钢包边」互斥，二选一</td></tr>
+          <tr><td>不锈钢包边</td><td>按周长（米）</td><td>单价高于普通包边</td></tr>
+          <tr><td>檐口</td><td>宽 + 2×返边（米）</td><td>门头上沿挑出部分</td></tr>
+          <tr><td>雨棚</td><td>按面积（㎡）</td><td>挑出深度可调</td></tr>
+          <tr><td>底板</td><td>按面积（㎡）</td><td>配方已含底板的（灯箱布 / 涂料）会自动隐藏，避免重复计价</td></tr>
+          <tr><td>刷漆</td><td>按面积（㎡）</td><td>旧架翻新</td></tr>
+          <tr><td>拆旧</td><td>按面积（㎡）</td><td>拆除原招牌</td></tr>
+          <tr><td>脚手架</td><td>按面积自动折算组数</td><td>2m 以上才计；按 1.8×1.7m 一组折算</td></tr>
+        </tbody>
+      </table>
+      <p>每项勾选旁会显示<strong>试算金额</strong>，折合单价明显高于行情时标黄提醒（防止参数填错导致异常高价）。管理员可在「参数与单价 → 门头工艺」里调价，也能加自定义工艺。</p>
+
+      <h3>施工条件、运输与起步价</h3>
+      <ul>
+        <li><strong>施工条件</strong>收在清单底部的折叠条里（默认收起，标题行显示当前摘要）。安装高度 ≥6m 触发高空设备费（6–20m 约 800 元/天，&gt;20m 约 1200 元/台班），墙面材质按瓷砖 1.2、玻璃 1.3 加成；</li>
+        <li><strong>运输</strong>填<strong>单程公里数</strong>，按单价库「运输」元/公里（默认 2 元）计费，可勾「往返」；填了这里<strong>就不要再手加运输清单项</strong>，否则重复；</li>
+        <li><strong>起步价</strong>默认 300 元，只补施工费（人工 + 设备 + 运输），材料另计——避免小活算出几十块；</li>
+        <li><strong>辅材</strong>默认按材料费的 6% 计入合计（胶、螺丝、扎带等）。</li>
+      </ul>
+
+      <h3>结果面板看什么</h3>
+      <table>
+        <thead><tr><th>分项</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td>人工</td><td>各行工程量 × 定额工时 × 工种单价之和（含高度 / 墙面系数）</td></tr>
+          <tr><td>材料</td><td>材料行数量 × 单价</td></tr>
+          <tr><td>辅材</td><td>材料 × 辅材费率</td></tr>
+          <tr><td>设备</td><td>高空车 / 吊篮 / 吊车台班（按高度与工期自动天数）</td></tr>
+          <tr><td>运输</td><td>公里 × 单价（往返则 ×2）</td></tr>
+          <tr><td><strong>施工费</strong></td><td>人工 + 设备 + 运输（<strong>不含材料</strong>）——「包工」报价用这个</td></tr>
+          <tr><td><strong>合计</strong></td><td>以上全部含材料——「包工包料」报价用这个</td></tr>
+        </tbody>
+      </table>
+      <p>面板还会给出<strong>总工时、人天、建议工期与人员配置</strong>，以及每项的「折合单价」（元/㎡、元/米），方便和同行报价对比。</p>
+
+      <h3>一键填入工程金额</h3>
+      <div class="flow-step">
+        <h4>口径随包活方式自动切换</h4>
+        <p>包工 → 填<strong>施工费</strong>（不含材料，提示写明材料未计入）；包工包料 → 填<strong>含料合计</strong>，并<strong>自动写一条「材料费（测算）」成本扣项</strong>并展开扣项行——这样工费不会被材料费撑大、分成池才不会翻倍。工程金额已有数时会先确认再替换。</p>
+      </div>
+
+      <h3>参数与单价（管理员）</h3>
+      <p>测算器右上「参数与单价」是<strong>全局共享配置</strong>，改完点底部「保存参数」写入云端，<strong>全员下次刷新生效</strong>（页面顶部会显示「上次保存 · 时间」）。只有总经理和被授予「测算管理」权限（系统设置 → 权限 → 费用测算）的账号能改。</p>
+      <table>
+        <thead><tr><th>页签</th><th>改什么</th></tr></thead>
+        <tbody>
+          <tr><td><strong>参数与单价</strong></td><td>7 类工种工时单价、高度/墙面系数、设备费、运输单价、辅材率、起步价、灯条行距等</td></tr>
+          <tr><td><strong>施工项</strong></td><td>内置定额的<strong>工时校准</strong>（只有这一项能被校准影响）、新增自定义施工项、隐藏不用的项</td></tr>
+          <tr><td><strong>单价库</strong></td><td>材料与人工的元/单位单价；保存过即自成一套完整快照，不会被默认价悄悄覆盖</td></tr>
+          <tr><td><strong>方案库</strong></td><td>整套方案（如门头整套、舞台背景）与专项测算（脚手架 / 土建 / 精神堡垒）模板</td></tr>
+          <tr><td><strong>同义词</strong></td><td>把客户的口语词绑到定额项（「绷布」→ 喷绘布张拉），优先于内置词库</td></tr>
+          <tr><td><strong>未识别词</strong></td><td>拆解没认出的原始输入（本机记录），一键绑定成定额项</td></tr>
+        </tbody>
+      </table>
+      <div class="note">
+        <h4>📌 反推工时</h4>
+        <p>用<strong>已完工项目</strong>的实际人工（考勤人·小时）反推各项定额工时是否偏松/偏紧：按各项测算工时占比把项目实际工时摊到每项，跨项目按工程量加权取中位数，只给<strong>≥2 单、偏差 ≥8%</strong> 的项提系数建议（夹在 0.7–1.4 倍），采纳后才写入校准值。<strong>单项目分摊出来的各项比值恒等</strong>，样本 ≥3 单以上才有项级区分度——它是纠偏参考，不是实测数据。</p>
+      </div>
+
+      <h3>常见问题</h3>
+      <table>
+        <thead><tr><th>现象</th><th>原因与处理</th></tr></thead>
+        <tbody>
+          <tr><td>金额明显偏高</td><td>看清单里是否有重复项（整体项和它的部件同时出现）、工艺是否重复勾（底板 / 包边）、施工条件高度是否填错；每项右侧的折合单价标黄就是超标信号</td></tr>
+          <tr><td>金额明显偏低</td><td>多数是材料没识别出来（写成材料行或加「＋ 材料」）；或运输/设备没填；或用了「包工」口径看含料比较</td></tr>
+          <tr><td>套数不对 / 面积翻倍</td><td>数量要写在物品后面（<code>4.6×3米 5套</code>）；「发光字5个」的 5 按<strong>字数</strong>处理，不是 5 个门头</td></tr>
+          <tr><td>参数改了刷新又变默认</td><td>没点底部「保存参数」，或账号没有「测算管理」权限（保存会明确报错）。顶部绿条显示「从未保存」说明确实没写进云端</td></tr>
+          <tr><td>「填入工程金额」是灰的</td><td>没有该项目的改金额权限，或明细还没有工时；先补工时或找管理员授权</td></tr>
+          <tr><td>明细与测算对不上</td><td>明细工时被手工改过，或施工内容改了没重算。汇总条会黄字提示「测算时 X h，明细现为 Y h」，点「施工费测算」重算即可</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <div class="section" id="review">
@@ -1287,8 +1555,108 @@
     </div>
 
     <div class="footer">
-      <p>文档版本：v3.12 | 更新日期：2026年10月18日</p>
+      <p>文档版本：v3.13 | 更新日期：2026年10月18日</p>
     </div>
   </div>
+  <script>
+  /* 阅读导航：目录/章节跳转、上一节/下一节、回顶部、关闭返回系统。
+     本页被 index.html 以 iframe 嵌入；返回按钮优先调父窗口 closeHelp()。 */
+  (function () {
+    "use strict";
+    var links = Array.prototype.slice.call(document.querySelectorAll(".toc a"));
+    var secs = [];
+    var jump = document.getElementById("helpJump");
+    links.forEach(function (a) {
+      var id = (a.getAttribute("href") || "").replace(/^#/, "");
+      var el = id && document.getElementById(id);
+      if (!el) return;
+      secs.push({ id: id, n: a.textContent.trim(), el: el });
+      var op = document.createElement("option");
+      op.value = id; op.textContent = a.textContent.trim();
+      jump.appendChild(op);
+    });
+    var toc = document.getElementById("toc");
+    var cur = document.getElementById("helpCur");
+    var fab = document.getElementById("helpFab");
+    var prev = document.getElementById("helpPrev");
+    var next = document.getElementById("helpNext");
+    var navH = 96;
+
+    window.helpGoTop = function () { window.scrollTo({ top: 0, behavior: "smooth" }); };
+    window.helpGoToc = function () {
+      if (toc) toc.scrollIntoView({ block: "start", behavior: "smooth" });
+      else window.helpGoTop();
+    };
+    window.helpJumpTo = function (id) {
+      if (!id) return;
+      var el = document.getElementById(id);
+      if (el) el.scrollIntoView({ block: "start", behavior: "smooth" });
+      if (jump) jump.value = id;
+    };
+    window.helpStep = function (d) {
+      if (!secs.length) return;
+      var i = helpCurrent();
+      var t = Math.max(0, Math.min(secs.length - 1, (i < 0 ? -1 : i) + d));
+      window.helpJumpTo(secs[t].id);
+    };
+    window.helpBack = function () {
+      try {
+        if (window.parent && window.parent !== window && typeof window.parent.closeHelp === "function") {
+          window.parent.closeHelp(); return;
+        }
+      } catch (e) {}
+      try {
+        var m = window.parent && window.parent.document && window.parent.document.getElementById("helpModal");
+        if (m) { m.classList.remove("open"); m.setAttribute("aria-hidden", "true"); return; }
+      } catch (e2) {}
+      alert("请点右上角的 ✕ 关闭说明书");
+    };
+    function helpCurrent() {
+      if (!secs.length) return -1;
+      if (secs[0].el.getBoundingClientRect().top > navH) return -1; /* 还在封面 / 目录 */
+      var idx = 0;
+      for (var i = 0; i < secs.length; i++) {
+        if (secs[i].el.getBoundingClientRect().top <= navH) idx = i; else break;
+      }
+      return idx;
+    }
+    /* 每节末尾统一加「返回目录 / 回到顶部 / 返回系统」，滚到哪都能一键回去 */
+    secs.forEach(function (s) {
+      var d = document.createElement("div");
+      d.className = "help-back-toc";
+      d.innerHTML = '<a href="#toc">↑ 返回目录</a><span>·</span>'
+        + '<button type="button" onclick="helpGoTop()">↑ 回到顶部</button><span>·</span>'
+        + '<button type="button" onclick="helpBack()">✕ 返回系统</button>';
+      s.el.appendChild(d);
+    });
+    var tick = false;
+    function onScroll() {
+      if (tick) return; tick = true;
+      (window.requestAnimationFrame || function (f) { setTimeout(f, 16); })(function () {
+        tick = false;
+        var i = helpCurrent();
+        var y = window.scrollY || document.documentElement.scrollTop || 0;
+        if (jump && document.activeElement !== jump) jump.value = i >= 0 ? secs[i].id : "";
+        if (cur) cur.textContent = i >= 0 ? "当前：" + secs[i].n : "目录 / 首页";
+        if (prev) prev.disabled = i <= 0;
+        if (next) next.disabled = i >= secs.length - 1;
+        if (fab) fab.classList.toggle("show", y > 260);
+      });
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    onScroll();
+    /* 带 #hash 打开、或父页面切换章节（showHelp 改 iframe src）时自己定位。
+       file:// 下父页面访问 iframe 内部 DOM 会被同源策略拦截，所以定位必须由本页完成。 */
+    function jumpToHash() {
+      var id0 = (location.hash || "").slice(1);
+      if (!id0) return;
+      var el = document.getElementById(id0);
+      if (el) { el.scrollIntoView({ block: "start" }); if (jump) jump.value = id0; }
+    }
+    window.addEventListener("hashchange", jumpToHash);
+    if (location.hash) window.setTimeout(jumpToHash, 80);
+  })();
+  </script>
 </body>
 </html>
