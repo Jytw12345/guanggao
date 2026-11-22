@@ -78,11 +78,11 @@ const CATALOG = [
   ]},
   {cat:'④ 光源电气', desc:'发光字的灯与电源，多为隐形增项来源', rows:[
     ['calc:led','LED模组/光源',80,'元/㎡','60–120/㎡（模组）；贴片灯珠 0.5–3 元/颗'],
-    ['e_power','LED防水电源',90,'元/个','70–100/个；标准款/蓝景款档位不同'],
+    ['e_power','LED电源',90,'元/个','防水款 70–100/个；标准款/蓝景款档位不同（配方按此价）'],
     ['e_strip','LED灯带',12,'元/米','按亮度/防水等级'],
     ['e_lightbar','LED漫反射灯条（12V）',6,'元/米','4–8；灯箱布/拉布灯箱用，20cm 行距≈5 米/㎡'],
     ['e_timecontrol','时控开关',60,'元/套',''],
-    ['e_wire','阻燃线缆（2.5mm²单芯）',6,'元/米','国标 4–8/米；三芯电缆 10–25/米'],
+    ['e_wire','电线/线缆（2.5mm²）',6,'元/米','国标阻燃 4–8/米；三芯电缆 10–25/米（配方按此价）'],
     ['e_conduit','线管/桥架/防水盒',12,'元/米','含防水接线盒'],
   ]},
   {cat:'⑤ 钢结构/基层', desc:'门头与楼顶字的骨架，最易漏报', rows:[
@@ -110,7 +110,7 @@ const CATALOG = [
     ['h_lifeline','防坠生命线架设',1800,'元/次','1500–2500，强规要求'],
   ]},
   {cat:'⑧ 辅材耗材', desc:'零星但常被漏报', rows:[
-    ['a_glue','结构胶/玻璃胶',18,'元/支','国产胶约12元/米，进口约25元/米'],
+    ['a_glue','结构胶',25,'元/支','玻璃胶约12；耐候结构胶/云石胶 20–30（配方按此价）'],
     ['a_screw','螺丝/膨胀辅料',15,'元/㎡','按单核算'],
     ['a_waterproof','防水电源盒/灌胶',25,'元/个','户外必备'],
     ['a_pad','耐候缓冲垫',6,'元/处','玻璃幕墙必加，防自爆'],
@@ -128,6 +128,30 @@ const CATALOG = [
     ['x_repair','维修上门费',150,'元/次',''],
     ['x_clean','外墙清洗',15,'元/㎡',''],
     ['x_warranty','延保服务',0,'元/项','通常1–2年免费，延保另议']
+  ]},
+  /* ⑪ 配方在用的材料价（2026-11-23）：与配方/工艺材料行「精确同名」，改价即改变对应配方材料费。
+     价格 = 配方预置价，一行不差——默认测算零变化，只是把旋钮摆上台面。
+     （灯箱布/LED漫反射灯条/灯箱底板在 ③④ 组已有同名行，不重复。）*/
+  {cat:'⑪ 门头配方材料', desc:'改价即改配方材料费（同名精确匹配）；含面板/字/电气/辅料', rows:[
+    ['dm:alp','铝塑板',95,'元/㎡','3mm/4mm 板材进价；面板/包边/背板配方同用，损耗×1.1 在配方里'],
+    ['dm:acr','亚克力面板',280,'元/㎡',''],
+    ['dm:ssp','不锈钢板包边',320,'元/㎡','201/304 差价大'],
+    ['dm:word','发光字',500,'元/㎡','配方通用价；具体字种（吸塑/迷你/冲孔…）见②'],
+    ['dm:pvc','PVC字',180,'元/㎡',''],
+    ['dm:steel','热镀锌方管(骨架)',20,'元/米','40×40 方管进价；网格间距在「参数与单价」调'],
+    ['dm:strip220','LED灯条',12,'元/米','220V 灯带/软灯条（发光字门头轮廓用）'],
+    ['dm:spot','LED射灯',30,'元/个',''],
+    ['dm:stone','石材/瓷砖板',200,'元/㎡',''],
+    ['dm:hang','不锈钢干挂件',10,'元/个','干挂约 5 个/㎡（配方）'],
+    ['dm:cement','水泥压力板/硅酸钙板',32,'元/㎡','真石漆门头底板'],
+    ['dm:coat','真石漆/涂料',28,'元/㎡','含损耗×1.2 在配方里'],
+    ['dm:putty','外墙腻子/底漆',8,'元/㎡',''],
+    ['dm:sheetp','镀锌板/彩钢板',42,'元/㎡',''],
+    ['dm:lvf','铝方通（U型槽）',16,'元/米','间距 lvfGap 在「参数与单价」调'],
+    ['dm:clip','方通卡件/角码',2,'元/个',''],
+    ['dm:screw','自攻钉/铆钉（含密封胶）',0.4,'元/个','约 20 个/㎡'],
+    ['dm:drip','檐口铝板(成型)',55,'元/米','含折 U 加工'],
+    ['dm:canopy','雨棚板（阳光板）',120,'元/㎡','出挑 0.8 米（配方）']
   ]}
 ];
 const STORE_KEY='adQuotePrices_v1';
@@ -631,7 +655,7 @@ const DOOR_RECIPES = {
     mat:[
       {n:'热镀锌方管(骨架)',u:'米', by:'grid', gridDir:'both', k:1, p:20},
       {n:'不锈钢板包边',   u:'㎡', by:'area',  k:0.5, p:320, sheet:true, wrap:true},
-      {n:'不锈钢发光字',   u:'㎡', by:'area',  k:0.4, p:750},
+      {n:'不锈钢包边发光字', u:'㎡', by:'area',  k:0.4, p:600},
       {n:'LED灯条',        u:'米', by:'perim', k:1.5, p:12},
       {n:'LED电源',        u:'个', by:'fixed', k:1,   p:90}
     ]
@@ -643,7 +667,7 @@ const DOOR_RECIPES = {
       {id:'i_glue',   by:'perim',k:1, u:'米', note:'打胶密封'}
     ],
     mat:[
-      {n:'热镀锌方管(骨架)',u:'米', by:'grid', gridDir:'both', k:1, p:24},
+      {n:'热镀锌方管(骨架)',u:'米', by:'grid', gridDir:'both', k:1, p:20},
       {n:'亚克力面板',  u:'㎡', by:'area',  k:1.05,p:280, sheet:true, wrap:true},
       {n:'结构胶',      u:'支', by:'perim', k:0.3, p:25}
     ]
@@ -686,8 +710,8 @@ const DOOR_RECIPES = {
       {id:'i_banner',by:'area', k:1, u:'㎡', note:'喷绘布张拉'}
     ],
     mat:[
-      {n:'热镀锌方管', u:'米', by:'perim', k:2,   p:20},
-      {n:'喷绘布',     u:'㎡', by:'area',  k:1.1, p:22}
+      {n:'热镀锌方管(骨架)', u:'米', by:'perim', k:2,   p:20},
+      {n:'喷绘布画面',       u:'㎡', by:'area',  k:1.1, p:12}
     ]
   },
   /* ===== 2026-11-22 第二批门头配方 =====
@@ -712,10 +736,10 @@ const DOOR_RECIPES = {
       {id:'i_glue',  by:'perim',k:1, u:'米', note:'填缝打胶'}
     ],
     mat:[
-      {n:'热镀锌方管(骨架)', u:'米', by:'grid',  gridDir:'both', k:1, p:24},
+      {n:'热镀锌方管(骨架)', u:'米', by:'grid',  gridDir:'both', k:1, p:20},
       {n:'石材/瓷砖板',       u:'㎡', by:'area',  k:1.08, p:200},
       {n:'不锈钢干挂件',      u:'个', by:'area',  k:5,    p:10},
-      {n:'结构胶/云石胶',     u:'支', by:'perim', k:0.4,  p:25}
+      {n:'结构胶',            u:'支', by:'perim', k:0.4,  p:25}
     ]
   },
   coat:{ label:'真石漆/涂料门头', match:['真石漆','涂料','乳胶漆','氟碳漆','外墙漆'], glow:false, autoGlow:true,
@@ -801,10 +825,10 @@ function scaffoldSets(w, h) {
 const DOOR_EXTRAS = [
   { key: 'edge', n: '包边/封边', on: false, bench: { per: 'm', hi: 45 },
     work: { id: 'i_seal', by: 'perimDepth', k: 1, note: '折边收口→固定→打胶' },
-    mat: { n: '包边铝塑板', u: '㎡', by: 'perimDepth', k: 1.15, p: 95 } },
+    mat: { n: '铝塑板', u: '㎡', by: 'perimDepth', k: 1.15, p: 95 } },
   { key: 'ssedge', n: '不锈钢包边', on: false, bench: { per: 'm', hi: 110 },
     work: { id: 'i_seal', by: 'perimDepth', k: 1.2, note: '不锈钢折边→咬口→固定' },
-    mat: { n: '不锈钢包边板', u: '㎡', by: 'perimDepth', k: 1.15, p: 320 } },
+    mat: { n: '不锈钢板包边', u: '㎡', by: 'perimDepth', k: 1.15, p: 320 } },
   // 檐口只沿「上沿 + 两个上转角」，按宽+两侧返边（edgeLen）计米，不能拿整圈周长收一遍；
   // 材料改「成型铝檐口板」按米买（含折 U 型加工），比按㎡折算出更贴市场报价
   { key: 'drip', n: '檐口/滴水线', on: false, bench: { per: 'edge', hi: 75 },
@@ -815,7 +839,7 @@ const DOOR_EXTRAS = [
     mat: { n: '雨棚板（阳光板）', u: '㎡', by: 'canopy', k: 1, p: 120 } },
   { key: 'backplate', n: '底板/封底（补装）', on: false, bench: { per: 'area', hi: 155 },
     work: { id: 'i_board', by: 'area', k: 1, note: '背板/封底安装' },
-    mat: { n: '背板铝塑板', u: '㎡', by: 'area', k: 1.1, p: 95 } },
+    mat: { n: '铝塑板', u: '㎡', by: 'area', k: 1.1, p: 95 } },
   { key: 'paint', n: '钢架防锈刷漆', on: false, bench: { per: 'area', hi: 22 },
     work: { id: 'i_paint', by: 'area', k: 1, note: '除锈→防锈漆两遍' } },
   { key: 'demolish', n: '旧招牌拆除', on: false, bench: { per: 'area', hi: 45 },
@@ -1447,6 +1471,14 @@ const EXTRA_MIN_DEPTH = 0.1;
         exd.mat.forEach(x => ex.mat.push(x));
       }
     }
+    /* 单价库同名行覆盖配方材料价（2026-11-23）：只认精确同名，不做模糊匹配——
+       单价库「铝塑板门头 650/㎡」是整门成品口径，绝不能套到材料行「铝塑板 95/㎡」上。
+       想覆盖哪项材料，就在单价库建一行名字一模一样的（如「热镀锌方管(骨架)」「铝塑板」）。 */
+    const catP = (cfg.catP && typeof cfg.catP === 'object') ? cfg.catP : null;
+    if (catP) ex.mat.forEach(x => {
+      const cp = Number(catP[x.n]);
+      if (cp > 0 && cp !== Number(x.p)) { x.p = cp; x.calc += ' · 单价库'; }
+    });
     const hits = [];
     ex.work.forEach(x => {
       const it = getWorkItem(x.id); if (!it) return;

@@ -32359,6 +32359,8 @@ function bindEvents() {
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && helpModal.classList.contains("open")) closeHelp();
     });
+    /* help.html 跨源（file:// 本地调试）时摸不到父页，「返回系统」走 postMessage 关闭 */
+    window.addEventListener("message", (e) => { if (e && e.data === "gg-help-close") closeHelp(); });
   }
 
   const tabsEl = document.querySelector(".tabs");
@@ -33087,7 +33089,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v211bdead";
+  const APP_VERSION = "v73de0318";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -35492,12 +35494,13 @@ async function loadEstimateConfig() {
 function normalizeEstimateConfig(cfg) {
   const d = (window.Estimate && Estimate.defaultConfig) ? Estimate.defaultConfig() : { params: {}, WH: {}, prices: {}, mat: {}, door: {}, expInfo: {}, history: [], qmem: {} };
   if (!cfg || typeof cfg !== "object") return d;
-  // 配置版本（2026-11-22 引入）：一次性迁移只看 ver<2，迁完写 v:2 并落库。
+  // 配置版本（2026-11-22 引入）：一次性迁移只看 ver，迁完写 v 并落库。
   // 以前每次 normalize 都硬改 rateNormal=30→36，用户主动设 30 元/时会"改了存不住"，
   // 表现为"单价明明改了，价格还是默认"。——迁移必须只跑一次。
+  // v:3（2026-11-23）：配方材料价接入单价库——老快照补「⑪ 门头配方材料」组 + 三行改名对齐（价不变）。
   const ver = Number(cfg.v) || 1;
   return {
-    v: 2,
+    v: 3,
     params: (() => {
       const p = { ...d.params, ...(cfg.params || {}) };
       // 普通工 30 元/时是旧默认（≈240 元/天，低于市场 280–350/天），仅首次迁移抬到 36
@@ -35589,30 +35592,46 @@ function normalizeEstimateConfig(cfg) {
     })) : [],
     // 单价库（CATALOG 参考价目表）：用户可增删改，存云端全员共享。
     // null/缺省 = 用内核默认（老用户零变化，配置不膨胀）；一旦保存过即完整快照接管。
-    catalog: Array.isArray(cfg.catalog) ? cfg.catalog
-      .filter((g) => g && typeof g === "object" && Array.isArray(g.rows))
-      .map((g) => ({
-        cat: String(g.cat || "未分类").slice(0, 40),
-        desc: String(g.desc || "").slice(0, 80),
-        rows: g.rows.map((r) => {
-          if (Array.isArray(r)) r = { id: r[0], n: r[1], p: r[2], u: r[3], note: r[4] }; // 兼容内核数组行
-          const row = {
-            id: String((r && r.id) || ("u_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6))),
-            n: String((r && r.n) || "").slice(0, 60),
-            p: Math.max(0, Number(r && r.p) || 0),
-            u: String((r && r.u) || "").slice(0, 12),
-            note: String((r && r.note) || "").slice(0, 80),
-          };
-          // 老单价库快照里的「市内运输 200元/趟 / 跨区 300元/趟」同步迁到按公里口径（首次迁移）
-          if ((row.id === "calc:transport" || row.id === "t_cross") && (row.u === "元/趟" || (ver < 2 && row.p >= 50))) {
-            row.u = "元/公里"; row.p = 2;
-            row.note = row.id === "calc:transport"
-              ? "按实际公里数×单价；测算器填里程自动算，勿与手加运输项重复"
-              : "同市内口径，夜间加价30%–50%";
-          }
-          return row;
-        }).filter((r) => r.n),
-      })) : null,
+    catalog: Array.isArray(cfg.catalog) ? (() => {
+      const saved = cfg.catalog
+        .filter((g) => g && typeof g === "object" && Array.isArray(g.rows))
+        .map((g) => ({
+          cat: String(g.cat || "未分类").slice(0, 40),
+          desc: String(g.desc || "").slice(0, 80),
+          rows: g.rows.map((r) => {
+            if (Array.isArray(r)) r = { id: r[0], n: r[1], p: r[2], u: r[3], note: r[4] }; // 兼容内核数组行
+            const row = {
+              id: String((r && r.id) || ("u_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6))),
+              n: String((r && r.n) || "").slice(0, 60),
+              p: Math.max(0, Number(r && r.p) || 0),
+              u: String((r && r.u) || "").slice(0, 12),
+              note: String((r && r.note) || "").slice(0, 80),
+            };
+            // 老单价库快照里的「市内运输 200元/趟 / 跨区 300元/趟」同步迁到按公里口径（首次迁移）
+            if ((row.id === "calc:transport" || row.id === "t_cross") && (row.u === "元/趟" || (ver < 2 && row.p >= 50))) {
+              row.u = "元/公里"; row.p = 2;
+              row.note = row.id === "calc:transport"
+                ? "按实际公里数×单价；测算器填里程自动算，勿与手加运输项重复"
+                : "同市内口径，夜间加价30%–50%";
+            }
+            // v:3：三行改名与配方材料同名（价格不变，只是打通"改价即生效"的旋钮）
+            if (ver < 3 && row.id === "e_power") row.n = "LED电源";
+            if (ver < 3 && row.id === "e_wire") row.n = "电线/线缆（2.5mm²）";
+            if (ver < 3 && row.id === "a_glue") { row.n = "结构胶"; row.p = 25; }
+            return row;
+          }).filter((r) => r.n),
+        }));
+      // v:3：老快照补「⑪ 门头配方材料」组（配方在用的价；默认快照没存过 catalog 则不需要）
+      const grp = (window.Estimate && Estimate.CATALOG || []).find((g) => g.cat === "⑪ 门头配方材料");
+      if (ver < 3 && grp && !saved.some((g) => g.cat === "⑪ 门头配方材料")) {
+        saved.push({
+          cat: grp.cat,
+          desc: String(grp.desc || "").slice(0, 80),
+          rows: grp.rows.map((r) => ({ id: r[0], n: r[1], p: Number(r[2]) || 0, u: r[3], note: r[4] || "" })),
+        });
+      }
+      return saved;
+    })() : null,
     hiddenItems: Array.isArray(cfg.hiddenItems) ? cfg.hiddenItems.filter(Boolean).map(String) : [],
     // 内置定额项覆盖（2026-11-22）：{id:{n?,u?,tr?,m?,hf?,wf?}}，只留白名单字段，空对象/非法值直接丢。
     // 与默认值相同的字段在 estItemOvSet 里已剔除，这里再兜一层，防导入坏配置把内置项改乱。
@@ -36557,10 +36576,20 @@ function estRenderDoorExtras() {
   const tip = highCnt ? '<div class="est-door-ex-warn">⚠ 有 ' + highCnt + ' 项折合单价超过行业上限：多半是系数/单价填错或计量方式选错，点「⚙️ 配置管理 → 门头工艺」核对。</div>' : '';
   box.innerHTML = head + '<div class="est-door-ex-chips">' + chips + '</div>' + tip;
 }
+/* 单价库「精确同名价表」：给门头配方覆盖材料价用（tryDoorRecipe 只认精确同名，
+   不做模糊匹配——「铝塑板门头 650/㎡」整门口径不能套到材料行「铝塑板 95/㎡」上）。 */
+function estCatPriceMap() {
+  const map = {};
+  estCatalog().forEach((g) => (g.rows || []).forEach((r) => {
+    const n = String((r && r.n) || "").trim(), p = Number(r && r.p);
+    if (n && p > 0) map[n] = p;
+  }));
+  return map;
+}
 function estDoorExtraHits(txt, key) {
   if (!Estimate || !Estimate.tryDoorRecipe) return [];
   const c = estCfg();
-  const cfg = { ...(c.door || {}), synonyms: c.synonyms, params: c.params, extraDefs: c.doorEx, extraHidden: c.doorExHide, extras: { [key]: true } };
+  const cfg = { ...(c.door || {}), synonyms: c.synonyms, params: c.params, catP: estCatPriceMap(), extraDefs: c.doorEx, extraHidden: c.doorExHide, extras: { [key]: true } };
   const r = Estimate.tryDoorRecipe(txt, cfg);
   return ((r && r.hits) || []).filter((h) => h.extraKey === key);
 }
@@ -36643,6 +36672,7 @@ function estSmartParse() {
   const isDoorText = (Estimate && Estimate.isDoorText) ? Estimate.isDoorText(txt) : /门头|店招|门脸/.test(txt);
   if (isDoorText && Estimate.tryDoorRecipe) {
     const doorCfg = { ...((estCfg().door) || {}), synonyms: estCfg().synonyms, params: estCfg().params,
+      catP: estCatPriceMap(),
       extras: _estUI.doorExtras || {}, extraDefs: estCfg().doorEx, extraHidden: estCfg().doorExHide };
     const door = Estimate.tryDoorRecipe(txt, doorCfg);
     if (door && door.hits && door.hits.length) {
@@ -38139,8 +38169,8 @@ function estOpenPriceLib() {
     : "";
   const tip = isAdmin
     ? `<div class="est-cfg-tip">黄色底为编辑区；空名称行保存时自动忽略；改动保存后全员生效。<br>
-       <b>参与测算的：</b>①「⑨运输/杂费 → 市内运输」按元/公里算车费；② 方案库中<b>按面积/周长计价</b>的项（喷绘画面、灯箱、导视牌等）按名称取本表单价；③ 手动添加的材料项，名称匹配本表时会自动带出单价。<br>
-       <b>不参与测算的：</b>按工时定额计算的安装项（门头骨架、发光字安装、钢架焊接等）——它们按「工时 × 工时单价」算，本表同名单价仅供参考。要调这类项请用「定额校准」。</div>`
+       <b>参与测算的：</b>①「⑨运输/杂费 → 市内运输」按元/公里算车费；② 方案库中<b>按面积/周长计价</b>的项（喷绘画面、灯箱、导视牌等）按名称取本表单价；③ 手动添加的材料项，名称匹配本表时会自动带出单价；④ <b>门头配方材料价</b>：「⑪ 门头配方材料」组就是配方正在用的价，直接改即生效；其他组建与配方材料完全同名的行同样生效（只认精确同名）。<br>
+       <b>不参与测算的：</b>「门头板材 / 发光字」这类<b>整门成品参考价</b>（①②组，铝塑板门头 650/㎡ 等），以及按工时定额计算的安装项——后者按「工时 × 工时单价」算，要调请用「定额校准」。</div>`
     : (Array.isArray(estCfg().catalog) ? `<div class="est-cfg-tip">已启用自定义单价库（管理员保存的版本）。</div>` : ``);
   estShowDrawer("配置管理 · 完整单价库", (estCanManage() ? estCfgHubTabs("catalog") : "") + manageBar + tip
     + (isAdmin ? estCatNameDatalistHtml() : "") + body + (isAdmin
@@ -39089,7 +39119,7 @@ function estRenderDoorExCfg() {
     // 6×2 标准门头试算：这一项勾上去大概多少钱 / 折合多少，超行业上限标红（防参数填歪）
     let stat = null;
     if (Estimate && Estimate.tryDoorRecipe) {
-      const r0 = Estimate.tryDoorRecipe("门头 6米×2米", { ...(c.door || {}), params: c.params, extras: { [raw.key]: true }, extraDefs: estExDraft(), extraHidden: [] });
+      const r0 = Estimate.tryDoorRecipe("门头 6米×2米", { ...(c.door || {}), params: c.params, catP: estCatPriceMap(), extras: { [raw.key]: true }, extraDefs: estExDraft(), extraHidden: [] });
       stat = estExtraStat(((r0 && r0.hits) || []).filter((h) => h.extraKey === raw.key));
     }
     const statTxt = stat

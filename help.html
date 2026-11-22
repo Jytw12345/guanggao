@@ -370,7 +370,7 @@
   <div class="container">
     <div class="header">
       <h1>🏗️ 广告安装施工预约管理系统</h1>
-      <p>使用说明书 v3.13 · 重点工作流程</p>
+      <p>使用说明书 v3.14 · 重点工作流程</p>
     </div>
 
     <div class="toc" id="toc">
@@ -1555,7 +1555,7 @@
     </div>
 
     <div class="footer">
-      <p>文档版本：v3.13 | 更新日期：2026年10月18日</p>
+      <p>文档版本：v3.14 | 更新日期：2026年11月23日</p>
     </div>
   </div>
   <script>
@@ -1600,16 +1600,24 @@
       window.helpJumpTo(secs[t].id);
     };
     window.helpBack = function () {
+      /* 1) iframe 内且同源（线上 https）：直接调父页 closeHelp */
       try {
         if (window.parent && window.parent !== window && typeof window.parent.closeHelp === "function") {
           window.parent.closeHelp(); return;
         }
       } catch (e) {}
+      /* 2) iframe 内同源但 closeHelp 不在：直接关父页弹窗 */
       try {
         var m = window.parent && window.parent.document && window.parent.document.getElementById("helpModal");
         if (m) { m.classList.remove("open"); m.setAttribute("aria-hidden", "true"); return; }
       } catch (e2) {}
-      alert("请点右上角的 ✕ 关闭说明书");
+      /* 3) iframe 内但跨源（file:// 本地调试，父页摸不到）：postMessage 让父页关弹窗 */
+      if (window.parent && window.parent !== window) {
+        try { window.parent.postMessage("gg-help-close", "*"); return; } catch (e3) {}
+      }
+      /* 4) 独立标签页打开：有浏览历史就后退；没有（直接敲地址进来）就回首页 */
+      if (window.history && window.history.length > 1) { window.history.back(); return; }
+      window.location.href = "index.html";
     };
     function helpCurrent() {
       if (!secs.length) return -1;
