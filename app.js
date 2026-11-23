@@ -33105,7 +33105,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "ve0c9299e";
+  const APP_VERSION = "v758a1e02";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -36882,6 +36882,12 @@ function estSmartParse() {
   }
   if (!parsed.length) parsed = estParseWithCustom(txt);
   if (!parsed || !parsed.length) {
+    // 单价库兜底（2026-11-23）：文字精确命中单价库行名 → 按参考价出计价项。
+    // 只在门头配方/整套方案/专项/定额识别全失败后才走，已识别路径一律不进这里。
+    parsed = estCatalogTextHits(txt);
+    if (parsed.length) autoInfo = `（单价库精确同名 ${parsed.length} 项，按参考价计价；数量可改）`;
+  }
+  if (!parsed || !parsed.length) {
     // 没直接认出 → 模糊候选（2026-11-22）：给最接近的施工项点选补充，比"请手动添加"少一步翻列表
     const cands = estFuzzyCandidates(txt);
     estUnknownLog(txt, !!cands.length); // 未识别词收集：整句记录供批量整理同义词映射
@@ -38564,6 +38570,55 @@ function estCatalogPriceFor(name) {
     || rows.find((r) => r.n.length >= 2 && nm.includes(r.n))
     || rows.find((r) => nm.length >= 2 && r.n.includes(nm));
   return hit ? { n: hit.n, p: Number(hit.p) || 0, u: String(hit.u || ""), cat: hit.cat } : null;
+}
+
+/* 智能拆解兜底（2026-11-23）：文字没认出定额，但精确命中单价库行名 → 按单价库价出一条计价项。
+   只认独立词块（名称前后不紧跟汉字）+ 精确同名（空格/斜杠变体），不做模糊包含——
+   防「铝塑板门头」误吃「铝塑板」材料价。只在 estSmartParse 定额识别全失败后调用，
+   已识别的门头配方/整套方案/专项/定额路径一律不进这里（不误伤既有口径）。 */
+function estCatalogTextHits(txt) {
+  const text = String(txt || "").trim();
+  if (!text) return [];
+  const rows = [];
+  estCatalog().forEach((g) => (g.rows || []).forEach((r) => {
+    const n = String((r && r.n) || "").trim(), p = Number(r && r.p);
+    if (n.length >= 2 && p > 0) rows.push({ n, p, u: String(r.u || ""), cat: g.cat || "", id: r.id || "" });
+  }));
+  const HAN = "\\u4e00-\\u9fa5";
+  const QTY = "(\\d+(?:\\.\\d+)?)\\s*(㎡|平方米|平米|m²|m2|平方|米|m(?![a-z²2])|个|张|块|面|根|套|幅|条|件|处|片|只|支|台|组|次|项)?";
+  const out = [];
+  rows.forEach((r) => {
+    const pat = r.n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/[\s/／]+/g, "[\\s/／]*");
+    const re = new RegExp("(^|[^" + HAN + "])(" + pat + ")(?=$|[^" + HAN + "])", "i");
+    const m = text.match(re);
+    if (!m) return;
+    const start = m.index + m[1].length, end = start + m[2].length;
+    const tail = text.slice(end, end + 24), head = text.slice(Math.max(0, start - 16), start);
+    let q = 1, u = "", where = "";
+    // ① 名称后紧跟尺寸串（铝塑板 6米×2米）→ 按面积算量，必须排在「数字+单位」前面，
+    //    否则「6米×2米」会被截成「6米」，面积少算一半。
+    const dimTok = tail.match(/^\s*\d+(?:\.\d+)?\s*(?:cm|mm|厘米|毫米|米|m)?\s*[×x*＊]\s*\d+(?:\.\d+)?/i);
+    const dm = dimTok && (window.Estimate && Estimate.parseSize) ? Estimate.parseSize(tail.trim()) : null;
+    // ② 名称后紧跟「数字+单位」（外墙腻子/底漆 10㎡）
+    const aft = tail.match(new RegExp("^\\s*[:：]?\\s*" + QTY));
+    if (dm && Number(dm.area) > 0) { q = Math.round(dm.area * 100) / 100; u = "㎡"; where = "尺寸"; }
+    else if (aft && Number(aft[1]) > 0) { q = parseFloat(aft[1]); u = aft[2] || ""; where = "后"; }
+    else {
+      // ③ 名称前的数量（10㎡ 外墙腻子/底漆）
+      const bef = head.match(new RegExp(QTY + "\\s*$"));
+      if (bef && Number(bef[1]) > 0) { q = parseFloat(bef[1]); u = bef[2] || ""; where = "前"; }
+    }
+    u = /^(平方米|平米|m²|m2|平方)$/i.test(u) ? "㎡" : u;
+    if (!u) u = String(r.u || "").replace(/^\s*元\s*\/\s*/, "").replace(/^\s*元\s*/, "").trim() || "项";
+    out.push({
+      type: "custom", cid: "cat_" + (r.id || r.n), wid: r.id || "", mode: "qty",
+      n: r.n, u, q, p: r.p,
+      calc: `单价库同名「${r.n}」 ¥${r.p}/${u}` + (where ? ` · 数量${where}写 ${q}` : " · 数量默认1，请核对"),
+      note: "单价库·" + r.cat + (where ? "" : "；数量请核对"), dim: "cat",
+    });
+  });
+  // 长名优先去重（「外墙腻子/底漆」与「外墙腻子」不会双命中）
+  return out.filter((x, i, arr) => arr.findIndex((y) => y.n === x.n) === i).sort((a, b) => b.n.length - a.n.length);
 }
 
 /* 整套方案 → 清单项。dims={area,perim,desc}（智能拆解识别到尺寸时传入）：

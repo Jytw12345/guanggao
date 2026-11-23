@@ -976,6 +976,20 @@ const EXTRA_MIN_DEPTH = 0.1;
 
   // ============ 智能解析：整句拆项 ============
   function parseSpec(t, ctx) {
+    // 中文数字数量词规范化（2026-11-23）：「一条/两块/三套/十二米」→「1条/2块/3套/12米」，
+    // 与阿拉伯数字同口径解析。只匹配「中文数字+量词」紧跟，不碰「一定/统一/一路」等非数量语境。
+    const CN_DIGIT = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+    const cnQtyVal = (s) => {
+      if (CN_DIGIT[s] != null) return CN_DIGIT[s];
+      if (s === '十') return 10;
+      let m = s.match(/^十([一二三四五六七八九])$/);
+      if (m) return 10 + CN_DIGIT[m[1]];
+      m = s.match(/^([二三四五六七八九])十([一二三四五六七八九])?$/);
+      if (m) return CN_DIGIT[m[1]] * 10 + (m[2] ? CN_DIGIT[m[2]] : 0);
+      return null;
+    };
+    t = String(t || '').replace(/([一二两三四五六七八九十]+)\s*(个|块|张|面|根|套|幅|条|件|处|片|只|支|台|组|米|㎡)/g,
+      (all, num, unit) => { const v = cnQtyVal(num); return v != null ? v + unit : all; });
     // 配置化同义词（2026-11-22）：GG 层把 estimate_config.synonyms 传进来，
     // {词: 定额项id} 优先于内置 SMART_DICT；管理员绑定后同样的口语下次直接识别。
     const syn = (ctx && ctx.synonyms && typeof ctx.synonyms === 'object') ? ctx.synonyms : null;
@@ -1132,7 +1146,7 @@ const EXTRA_MIN_DEPTH = 0.1;
           // 只写了面积/尺寸，但该项按「个/套/台…」计价（2026-11-22 修）：
           // 原来直接把平方米数当个数（「灯箱 12㎡」→ 12 个灯箱，报价翻十几倍）。
           // 有按㎡的同类项就切过去（灯箱→门头灯箱安装），否则按 1 个估并写明需核对数量。
-          const fam = /^(个|套|台|组|面|只|副|件)$/.test(it.u || '');
+          const fam = /^(个|套|台|组|面|只|副|件|条|幅)$/.test(it.u || '');
           const twin = fam ? AREA_TWIN[it.id] : null;
           const tw = twin ? getWorkItem(twin) : null;
           if (tw) {
