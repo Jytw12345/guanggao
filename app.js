@@ -23096,7 +23096,7 @@ function touchVersionReport() {
     if (Date.now() - last < 10 * 60 * 1000) return;
     localStorage.setItem("versionReportAt", String(Date.now()));
     sb.from("profiles")
-      .update({ app_version: window.__APP_VERSION__ || "", version_at: new Date().toISOString() })
+      .update({ app_version: reportedAppVersion(), version_at: new Date().toISOString() })
       .eq("id", currentUser.id)
       .then(({ error }) => { if (error) console.warn("[版本上报] 写入失败（可能缺少字段或 RLS 未放行）:", error.message); });
   } catch (_) {}
@@ -26734,7 +26734,14 @@ async function renderAccounts() {
               ${MODE === "cloud" ? `
               <td>
                 ${a.appVersion
-                  ? `<span class="ver-chip ${a.appVersion === (window.__APP_VERSION__ || "") ? "is-ok" : "is-old"}" title="最近上报：${esc(a.versionAt || "")}（与最近活跃同口径，随同步节流上报）">${esc(a.appVersion)}</span>`
+                  ? (() => {
+                      const cur = reportedAppVersion();
+                      const isCur = a.appVersion === cur || a.appVersion === (window.__APP_VERSION__ || "");
+                      const m = String(a.appVersion).match(/^(v\d+)（(.+)）$/); // 新格式：v001（指纹）；老数据原样显示
+                      const shown = m ? m[1] : a.appVersion;
+                      const detail = m ? `${m[1]}（指纹 ${m[2]}）` : a.appVersion;
+                      return `<span class="ver-chip ${isCur ? "is-ok" : "is-old"}" title="最近上报：${esc(a.versionAt || "")} · ${esc(detail)}（与最近活跃同口径，随同步节流上报）">${esc(shown)}</span>`;
+                    })()
                   : `<span class="ver-chip is-old" title="该账号本次更新后还未登录过">未上报</span>`}
               </td>` : ""}
               <td>
@@ -28383,6 +28390,23 @@ async function importOutsourcedWorker(row) {
  * 我的页面（移动端聚合）
  * ============================================================ */
 /* ============ 版本信息：状态查询 + 关于弹窗（「我的」页版本块 / 用户菜单「关于/版本」入口共用） ============ */
+/* 展示用版本标签：v001 是发布序号（每次内容变更 +1，能看出迭代先后），
+   8 位 hash 是内容指纹（缓存与更新判断仍用它）。仅影响显示，不改任何比较逻辑。 */
+function appBuildNo() {
+  return Number((typeof window !== "undefined" && window.__BUILD_NO__) || 0) || 0;
+}
+function versionLabel(buildNo, hash) {
+  const n = Number(buildNo) || 0;
+  const seq = n > 0 ? "v" + String(n).padStart(3, "0") : "";
+  if (seq && hash) return seq + "（" + hash + "）";
+  return seq || hash || "—";
+}
+/* 云端 profiles.app_version 上报值：存完整标签（序号+指纹），
+   账号管理页只显示序号、指纹放 title；老客户端仍上报纯 hash，兼容原样显示。 */
+function reportedAppVersion() {
+  return versionLabel(appBuildNo(), (typeof window !== "undefined" && window.__APP_VERSION__) || "");
+}
+
 // 查询当前 PWA 版本状态并刷新到页面元素：
 //   #mineVersionBadge —— 显示当前版本号（我的页版本块右侧）
 //   #verStatusBox    —— 显示详细状态（关于弹窗内）
@@ -28391,7 +28415,13 @@ function refreshVersionStatus() {
   const badge = document.getElementById("mineVersionBadge");
   const box = document.getElementById("verStatusBox");
   const appVer = (typeof window.__APP_VERSION__ !== "undefined" && window.__APP_VERSION__) || "";
-  if (badge) badge.textContent = appVer || "—";
+  const buildNo = appBuildNo();
+  const seq = buildNo > 0 ? "v" + String(buildNo).padStart(3, "0") : "";
+  const appLabel = versionLabel(buildNo, appVer);
+  if (badge) {
+    badge.textContent = seq || appVer || "—"; // 徽标窄，只放序号；完整标签放 title
+    badge.title = appLabel;
+  }
   if (!box) return;
   const reg = window.__swRegistration || null;
   const ask = (typeof window.__askSwVersion === "function") ? window.__askSwVersion : null;
@@ -28400,8 +28430,8 @@ function refreshVersionStatus() {
   // 1) 有新版本已下载（等用户点「立即更新」）
   if (reg && reg.waiting) {
     if (ask) {
-      ask(reg.waiting, (v) => {
-        setState(`<span style="color:#b45309;">🚀 新版本 <b>${esc(v || "待定")}</b> 已下载，点击下方「立即更新」重启应用即可生效。</span>`);
+      ask(reg.waiting, (v, bn) => {
+        setState(`<span style="color:#b45309;">🚀 新版本 <b>${esc(versionLabel(bn, v))}</b> 已下载，点击下方「立即更新」重启应用即可生效。</span>`);
       });
     } else {
       setState(`<span style="color:#b45309;">🚀 新版本已下载，点击下方「立即更新」重启应用即可生效。</span>`);
@@ -28419,34 +28449,36 @@ function refreshVersionStatus() {
     setTimeout(refreshVersionStatus, 3000);
     return;
   }
-  // 4) 无 waiting：对比「运行中的 SW 缓存版本」与「页面版本」
+  // 4) 无 waiting：对比「运行中的 SW 缓存版本」与「页面版本」（比较仍用 hash，只把展示换成序号）
   if (ask) {
-    ask(navigator.serviceWorker.controller, (cv) => {
+    ask(navigator.serviceWorker.controller, (cv, cvBuild) => {
       if (cv && appVer && cv !== appVer) {
         if (cv < appVer) {
           // controller 版本**比页面旧** → 反常场景（硬刷新绕过 SW 拿了新代码但 controller 没跟上）
           // 这种情况 banner 层已经在处理了，这里弹窗只清晰提示
-          setState(`<span style="color:#dc2626;">⚠️ 缓存版本 ${esc(cv)} 比当前页面 ${esc(appVer)} 落后，即将自动强制刷新修复。</span>`);
+          setState(`<span style="color:#dc2626;">⚠️ 缓存版本 ${esc(versionLabel(cvBuild, cv))} 比当前页面 ${esc(appLabel)} 落后，即将自动强制刷新修复。</span>`);
         } else {
           // controller 版本**比页面新** → 典型的"有新版本待安装，点立即更新即可"
-          setState(`<span style="color:#b45309;">🚀 新版本 ${esc(cv)} 已下载，当前页面还是旧版 ${esc(appVer)}，请点「立即更新」生效。</span>`);
+          setState(`<span style="color:#b45309;">🚀 新版本 ${esc(versionLabel(cvBuild, cv))} 已下载，当前页面还是旧版 ${esc(appLabel)}，请点「立即更新」生效。</span>`);
         }
       } else {
-        setState(`<span style="color:#059669;">✅ 已是最新版本 <b>${esc(appVer || "—")}</b></span>`);
+        setState(`<span style="color:#059669;">✅ 已是最新版本 <b>${esc(appLabel)}</b></span>`);
       }
     });
   } else {
-    setState(`<span style="color:#059669;">✅ 已是最新版本 <b>${esc(appVer || "—")}</b></span>`);
+    setState(`<span style="color:#059669;">✅ 已是最新版本 <b>${esc(appLabel)}</b></span>`);
   }
 }
 
 // 关于/版本弹窗：显示版本号、运行模式、更新状态 + 检查更新 / 立即更新
 function showVersionModal() {
   const appVer = (typeof window.__APP_VERSION__ !== "undefined" && window.__APP_VERSION__) || "";
+  const buildNo = appBuildNo();
+  const seq = buildNo > 0 ? "v" + String(buildNo).padStart(3, "0") : "";
   const mode = (typeof MODE !== "undefined") ? (MODE === "cloud" ? "☁️ 云端模式" : "💻 本地模式") : "";
   const html = `
     <div style="font-size:13px;line-height:1.9;color:#374151;">
-      <div class="detail-row"><span class="detail-label">📦 当前版本</span><span class="detail-value"><b>${esc(appVer || "—")}</b></span></div>
+      <div class="detail-row"><span class="detail-label">📦 当前版本</span><span class="detail-value"><b>${esc(seq || appVer || "—")}</b>${seq ? `<span style="margin-left:8px;font-size:11px;color:#9ca3af;">构建指纹 ${esc(appVer)}</span>` : ""}</span></div>
       <div class="detail-row"><span class="detail-label">🌐 运行模式</span><span class="detail-value">${mode}</span></div>
       <div class="detail-row" style="align-items:flex-start;"><span class="detail-label" style="padding-top:2px;">🔍 更新状态</span><span class="detail-value" id="verStatusBox" style="flex:1;">…</span></div>
       <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
@@ -28454,8 +28486,8 @@ function showVersionModal() {
         <button class="btn primary" onclick="(window.__applyAppUpdate ? window.__applyAppUpdate() : toast('非 PWA 环境，无法立即更新'))">⚡ 立即更新</button>
       </div>
       <div style="margin-top:12px;font-size:11px;color:#9ca3af;line-height:1.6;">
-        版本号由发布工具按文件内容自动计算。每次发布新版本后，应用会在后台自动检测，
-        出现更新提示时点「立即更新」即可生效。
+        v001 为发布序号，每次发布自动 +1，可直接看出迭代先后；括号里的 8 位是内容指纹，
+        仅用于缓存校验与更新检测。出现更新提示时点「立即更新」即可生效。
       </div>
     </div>
   `;
@@ -32305,7 +32337,7 @@ async function startCloudSession() {
     // 字段缺失/RLS 不放行时静默失败（控制台留痕），不影响登录流程。
     try {
       sb.from("profiles")
-        .update({ app_version: window.__APP_VERSION__ || "", version_at: new Date().toISOString(), last_active_at: new Date().toISOString() })
+        .update({ app_version: reportedAppVersion(), version_at: new Date().toISOString(), last_active_at: new Date().toISOString() })
         .eq("id", newProfile.id)
         .then(({ error }) => { if (error) console.warn("[版本上报] 写入失败（可能缺少字段或 RLS 未放行）:", error.message); });
     } catch (_) {}
@@ -33191,9 +33223,12 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   function askSwVersion(sw, cb) {
     try {
       const ch = new MessageChannel();
-      ch.port1.onmessage = (ev) => { const v = ev.data && ev.data.version; cb && cb(v || null); };
+      ch.port1.onmessage = (ev) => {
+        const d = ev.data || {};
+        cb && cb(d.version || null, d.buildNo || 0);
+      };
       sw.postMessage({ type: "GET_VERSION" }, [ch.port2]);
-    } catch (_) { cb && cb(null); }
+    } catch (_) { cb && cb(null, 0); }
   }
   window.__askSwVersion = askSwVersion;
   window.__applyAppUpdate = applyAppUpdate;
@@ -33264,9 +33299,12 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "ve8a8a64d";
+  const APP_VERSION = "va39e7359";
+  // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
+  const BUILD_NO = 2;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
+  window.__BUILD_NO__ = BUILD_NO;
 
   window.addEventListener("load", () => {
     if (!("serviceWorker" in navigator)) return;

@@ -3,8 +3,10 @@
 // - 版本号变化（任意源文件改动后由 release.js 重新计算）→ 浏览器安装新 SW、预缓存新文件，
 //   用户点「立即更新」或下次打开即生效。
 // 推送前运行 `node release.js` 即可自动更新版本号，无需手动改这里的数字。
-const CACHE = "ad-install-ve8a8a64d";
-const VERSION = "ve8a8a64d";
+const CACHE = "ad-install-va39e7359";
+const VERSION = "va39e7359";
+// 展示用发布序号（v001 起，每次发布 +1）；内部缓存与更新判断仍用上面的内容指纹 VERSION。
+const BUILD_NO = 2;
 const COS_CACHE = "ad-install-cos-" + VERSION; // 腾讯云 COS 图片运行时缓存，支持现场离线看图
 
 const ASSETS = [
@@ -34,7 +36,7 @@ self.addEventListener("install", (e) => {
       .then(() => {
         // 通知当前已打开的页面：有新版本待更新（新 SW 停在 waiting，等用户点「立即更新」才接管）
         self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-          clients.forEach((client) => client.postMessage({ type: "VERSION_UPDATED", version: VERSION }));
+          clients.forEach((client) => client.postMessage({ type: "VERSION_UPDATED", version: VERSION, buildNo: BUILD_NO }));
         });
         // 注意：此处不再调用 self.skipWaiting()，避免新 SW 一下载就自动激活接管，
         // 导致旧 app.js 收到重复广播而反复弹出更新横幅。是否接管由前端「立即更新」触发。
@@ -236,7 +238,7 @@ async function handleCosImage(req) {
 
 self.addEventListener("message", (e) => {
   if (e.data && e.data.type === "GET_VERSION") {
-    e.ports[0].postMessage({ type: "VERSION_RESPONSE", version: VERSION });
+    e.ports[0].postMessage({ type: "VERSION_RESPONSE", version: VERSION, buildNo: BUILD_NO });
   }
   if (e.data && e.data.type === "SKIP_WAITING") {
     self.skipWaiting();

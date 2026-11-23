@@ -3,7 +3,9 @@
  * 自动按「源文件内容」计算版本号，彻底免去手动改版本号、漏改导致收不到更新的问题。
  *
  * 规则：
- *   - 版本号 = 核心文件内容的 SHA-256 前 8 位，形如 v1a2b3c4d。
+ *   - 内部版本号 = 核心文件内容的 SHA-256 前 8 位，形如 v1a2b3c4d（缓存与更新判断仍用它）。
+ *   - 展示发布序号 = BUILD_NO，v001 起，每次内容真的变化才 +1；弹窗里显示 v001（指纹 ...），
+ *     解决纯哈希看不出迭代先后的问题。BUILD_NO 不参与哈希，不会自增死循环。
  *   - 只要 index.html / styles.css / app.js / sw.js / 等任意文件有改动，哈希就变，
  *     浏览器会安装新 SW 并预缓存新文件 → 用户点「立即更新」或下次打开即生效。
  *   - 文件都没动 → 哈希不变 → 不重新生成版本号，避免无效刷新。
@@ -23,6 +25,7 @@ const SOURCES = [
   "styles.css",
   "app.js",
   "sw.js",
+  "estimate.js",
   "config.js",
   "vendor/supabase.min.js",
   "vendor/jszip.min.js",
@@ -38,7 +41,8 @@ function stripVersionLines(content) {
   return content
     .replace(/const CACHE = "[^"]*";/g, "")
     .replace(/const VERSION = "[^"]*";/g, "")
-    .replace(/const APP_VERSION = "[^"]*";/g, "");
+    .replace(/const APP_VERSION = "[^"]*";/g, "")
+    .replace(/const BUILD_NO = \d+;/g, ""); // 展示用发布序号不参与内容指纹，避免自增死循环
 }
 
 const h = crypto.createHash("sha256");
@@ -63,18 +67,28 @@ if (curVer === newVer) {
   process.exit(0);
 }
 
+// 展示用发布序号：每次内容真的变化才 +1，纯展示字段不参与内容指纹，所以不会自增死循环。
+let curBuild = 0;
+if (fs.existsSync(appPath)) {
+  const m = fs.readFileSync(appPath, "utf8").match(/const BUILD_NO = (\d+);/);
+  if (m) curBuild = Number(m[1]) || 0;
+}
+const newBuild = curBuild + 1;
+
 sw = sw.replace(/const CACHE = "ad-install-v[0-9a-f]+";/, `const CACHE = "ad-install-${newVer}";`);
 sw = sw.replace(/const VERSION = "v[0-9a-f]+";/, `const VERSION = "${newVer}";`);
+sw = sw.replace(/const BUILD_NO = \d+;/, `const BUILD_NO = ${newBuild};`);
 fs.writeFileSync(swPath, sw);
 
 if (fs.existsSync(appPath)) {
   let app = fs.readFileSync(appPath, "utf8");
   if (app.includes("APP_VERSION")) {
     app = app.replace(/const APP_VERSION = "v[0-9a-f]+";/, `const APP_VERSION = "${newVer}";`);
+    app = app.replace(/const BUILD_NO = \d+;/, `const BUILD_NO = ${newBuild};`);
     fs.writeFileSync(appPath, app);
   }
 }
 
-console.log(`✓ 版本号已更新：${curVer || "(无)"} → ${newVer}`);
-console.log("  已写入：sw.js (CACHE/VERSION)、app.js (APP_VERSION)");
+console.log(`✓ 版本号已更新：${curVer || "(无)"} → ${newVer}（发布序号 v${String(newBuild).padStart(3, "0")}）`);
+console.log("  已写入：sw.js (CACHE/VERSION/BUILD_NO)、app.js (APP_VERSION/BUILD_NO)");
 console.log("  下一步：提交并推送；用户端下次打开即提示更新。");
