@@ -16428,13 +16428,12 @@ table.data.project-hours-diff thead th {
 .est-scene-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 700; }
 .est-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
 .est-drawer-head h4 { margin: 0; font-size: 14px; color: var(--text); }
-.est-drawer-summary { margin-left: auto; margin-right: 8px; font-size: 11px; color: var(--primary); white-space: nowrap; }
 /* 「● 未保存」徽标：参数页改动只在内存草稿里，提醒先点保存（2026-11-22） */
 .est-dirty-badge { margin-left: 8px; font-size: 10.5px; font-weight: 600; color: #b45309; background: #fffbeb; border: 1px solid #fde68a; border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
 .est-drawer-body { padding: 12px 16px; overflow-y: auto; flex: 1 1 auto; -webkit-overflow-scrolling: touch; }
 .est-pick-cat { font-size: 12px; font-weight: 700; color: var(--primary); margin: 12px 0 6px; }
 .est-pick-cat:first-child { margin-top: 0; }
-.est-pick-desc { font-weight: 400; color: var(--muted); margin-left: 6px; font-size: 10px; }
+.est-pick-desc { font-weight: 400; color: var(--muted); margin-left: 6px; font-size: 11px; }
 .est-pick-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .est-pick-chip {
   border: 1px solid var(--border); background: #f8fafc; border-radius: 7px; padding: 5px 8px;
@@ -16514,14 +16513,14 @@ table.data.project-hours-diff thead th {
 /* 自定义行名称格：左边填名称，右边实时显示折合人工（改工时/工种立刻变） */
 .est-item-name { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .est-item-name .est-item-n { flex: 1 1 auto; min-width: 0; }
-.est-item-price { flex: 0 0 auto; font-style: normal; font-size: 10px; color: var(--muted); white-space: nowrap; }
+.est-item-price { flex: 0 0 auto; font-style: normal; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .est-item-row > * { min-width: 0; }
 .est-item-cols { font-size: 11px; color: var(--muted); padding: 0 2px 4px; text-align: center; }
 .est-item-cols span:first-child { text-align: left; }
 .est-item-row { margin-bottom: 5px; }
 .est-item-row input { width: 100%; padding: 5px 2px; border: 1px solid var(--border); border-radius: 5px; font-size: 12.5px; background: #fff; color: var(--text); box-sizing: border-box; text-align: center; }
 .est-item-row input.est-item-n { text-align: left; }
-.est-item-ck { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 1px; font-size: 9.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.est-item-ck { display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 1px; font-size: 11px; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .est-item-ck input { width: auto; }
 .est-item-op { border: 1px solid var(--border); background: #f8fafc; border-radius: 5px; font-size: 11px; line-height: 1; padding: 6px 0; cursor: pointer; color: var(--muted); }
 .est-item-op:hover { color: var(--primary); border-color: var(--primary); }
@@ -16548,14 +16547,14 @@ table.data.project-hours-diff thead th {
 .est-item-bi-n { display: flex; align-items: center; min-width: 0; }
 .est-item-bi-n b { font-weight: 400; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .est-item-bi-n .est-item-tr, .est-item-bi-n .est-item-hf { flex: 0 0 auto; }
-.est-item-bi-n .est-item-m { flex: 1 1 auto; min-width: 0; margin-left: 7px; font-style: normal; font-size: 10px; line-height: 1.2; color: #7c8ba1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.est-item-bi-n .est-item-m { flex: 1 1 auto; min-width: 0; margin-left: 7px; font-style: normal; font-size: 11px; line-height: 1.2; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .est-item-bi:last-child { border-bottom: 0; }
 .est-item-bi span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.est-item-bi em { font-style: normal; font-size: 10px; color: var(--muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.est-item-bi em { font-style: normal; font-size: 11px; color: var(--muted); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 内置项工时输入（可直接校准）：默认态低调，改动后高亮，一眼看出哪些被校准过 */
 .est-item-bi-h { width: 100%; padding: 3px 4px; border: 1px solid var(--border); border-radius: 5px; font-size: 12px; text-align: center; background: #fff; color: var(--text); box-sizing: border-box; }
 .est-item-bi-h.is-calib { border-color: #f59e0b; background: #fffbeb; color: #92400e; font-weight: 700; }
-.est-item-hf { display: inline-block; font-style: normal; font-size: 9px; line-height: 1; padding: 2px 3px; margin-left: 4px; border-radius: 3px; background: #fff7ed; color: #c2410c; vertical-align: middle; }
+.est-item-hf { display: inline-block; font-style: normal; font-size: 10px; line-height: 1; padding: 2px 3px; margin-left: 4px; border-radius: 3px; background: #fff7ed; color: #c2410c; vertical-align: middle; }
 .est-item-hf.est-item-cal { background: #fef3c7; color: #b45309; }
 /* 内置项直接编辑（2026-11-22）：行尾 ✎ 展开面板，名称/单位/工种/施工方式/高墙系数都能改，
    覆盖存 estimate_config.itemOverrides，与「导出改完再导入」相比不用碰 Excel。 */
@@ -16581,7 +16580,7 @@ table.data.project-hours-diff thead th {
 /* 内置工艺「调价」：小按钮 + 已调价徽标 + 展开的编辑区 */
 .est-ex-price { padding: 2px 6px; border: 1px solid var(--border); border-radius: 5px; background: #fff; color: var(--primary); font-size: 10.5px; line-height: 1.5; cursor: pointer; white-space: nowrap; }
 .est-ex-price:hover { background: var(--primary-light); border-color: var(--primary); }
-.est-ex-badge { display: inline-block; margin-left: 4px; padding: 1px 4px; border-radius: 3px; background: #fff7ed; color: #c2410c; font-style: normal; font-size: 9px; line-height: 1.4; vertical-align: middle; }
+.est-ex-badge { display: inline-block; margin-left: 4px; padding: 1px 4px; border-radius: 3px; background: #fff7ed; color: #c2410c; font-style: normal; font-size: 10px; line-height: 1.4; vertical-align: middle; }
 .est-ex-row.is-custom em { color: #c2410c; }
 .est-ex-edit { padding: 7px 14px 5px 60px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
 .est-ex-edit .est-ex-l2 { margin-bottom: 5px; }
@@ -16631,11 +16630,11 @@ table.data.project-hours-diff thead th {
   .est-ex-edit { padding-left: 8px; }
 }
 /* 工种徽标（2026-11）：施工项按工种分价，列表里一眼看出这一项按谁的钱算 */
-.est-item-tr { display: inline-block; font-style: normal; font-size: 9px; line-height: 1; padding: 2px 3px; margin-left: 4px; border-radius: 3px; background: #eef2ff; color: #4338ca; vertical-align: middle; }
+.est-item-tr { display: inline-block; font-style: normal; font-size: 10px; line-height: 1; padding: 2px 3px; margin-left: 4px; border-radius: 3px; background: #eef2ff; color: #4338ca; vertical-align: middle; }
 .est-item-tr-sel { width: 100%; padding: 4px 0; border: 1px solid var(--border); border-radius: 5px; font-size: 10.5px; background: #fff; color: var(--text); box-sizing: border-box; text-align: center; }
 .est-item-cols-bi { grid-template-columns: 24px minmax(0, 1fr) 86px 58px 22px; gap: 6px; padding: 0 8px 4px; }
 .est-item-cols-bi span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.est-item-cols-bi span:first-child { font-size: 10px; }
+.est-item-cols-bi span:first-child { font-size: 11px; }
 .est-item-cols-bi span:nth-child(2) { text-align: left; }
 .est-item-cols-bi span:first-child { text-align: center; }
 .est-item-io { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 12px; padding: 9px 10px; background: #f8fafc; border: 1px dashed var(--border); border-radius: 8px; }
@@ -16665,7 +16664,7 @@ table.data.project-hours-diff thead th {
 }
 
 /* 专项测算项标签 */
-.est-work-tag { display: inline-block; font-size: 9px; line-height: 1; padding: 2px 4px; margin-left: 4px; border-radius: 3px; background: #ede9fe; color: #5b4dc9; vertical-align: middle; }
+.est-work-tag { display: inline-block; font-size: 10px; line-height: 1; padding: 2px 4px; margin-left: 4px; border-radius: 3px; background: #ede9fe; color: #5b4dc9; vertical-align: middle; }
 
 /* 整套方案卡片 */
 .est-combo-card { display: block; width: 100%; text-align: left; padding: 9px 11px; margin-bottom: 7px; border: 1px solid var(--border); border-radius: 8px; background: #fff; cursor: pointer; }
@@ -16811,7 +16810,8 @@ table.data.project-hours-diff thead th {
 .est-unk-meta { display: flex; align-items: center; gap: 8px; }
 .est-unk-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text); }
 .est-unk-meta em { font-style: normal; font-size: 11px; color: var(--muted); flex-shrink: 0; }
-.est-unk-bind, .est-syn-add { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.25fr) auto; gap: 6px; align-items: center; }
+.est-unk-combo { flex-shrink: 0; font-size: 12px; }
+.est-unk-bind, .est-syn-add { display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,1.4fr) auto; gap: 6px; align-items: center; }
 .est-unk-bind { margin-top: 5px; }
 .est-syn-add { margin: 8px 0 12px; }
 .est-unk-bind .input, .est-syn-add .input { width: 100%; min-width: 0; font-size: 12px; padding: 5px 6px; }

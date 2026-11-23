@@ -17224,7 +17224,7 @@ function estOpenAccuracy() {
   if (!window.Estimate) return;
   const rows = estAccuracyRows();
   if (!rows.length) {
-    estShowDrawer("🎯 测算准确度 · 校准建议", `<div class="est-cfg-tip">还没有可用于对比的数据。需要：① 项目做过测算并保存快照；② 项目已完工且有实际工时。满足后再来这里看。</div>`);
+    estShowDrawer("测算准确度 · 校准建议", `<div class="est-cfg-tip">还没有可用于对比的数据。需要：① 项目做过测算并保存快照；② 项目已完工且有实际工时。满足后再来这里看。</div>`);
     return;
   }
   const medianRatio = estMedian(rows.map((r) => r.ratio));
@@ -17273,7 +17273,7 @@ function estOpenAccuracy() {
        <button class="btn small outline" style="margin-top:8px;width:100%;" onclick="estApplyReverseAll()">全部采纳（${rev.rows.length} 项）</button>`
     : `<h5 class="est-sec-t">按项反推</h5>
        <div class="est-cfg-tip">暂无可反推的项。需要 ≥2 个「已完工 + 做过测算 + 有实际工时」的项目，且某项偏差 ≥8% 才会提示。${rev.mismatch ? `另有 ${rev.mismatch} 单是老快照（结果行与清单对不齐），已跳过。` : ""}</div>`;
-  estShowDrawer("🎯 测算准确度 · 校准建议", `
+  estShowDrawer("测算准确度 · 校准建议", `
     <div class="est-cfg-tip">基于 ${rows.length} 个已完工项目，对比测算工时与实际工时（人·小时）。下面分两层：整体口径给一个缩放系数，按项反推给单项定额建议。</div>
     ${advice}
     <div class="est-acc-list">${list}</div>
@@ -33089,7 +33089,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v73de0318";
+  const APP_VERSION = "v4b717c5b";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -35791,6 +35791,55 @@ function estUnknownLog(txt, hadCands) {
     else list.unshift({ t, n: 1, at: new Date().toISOString(), c: !!hadCands });
     localStorage.setItem(EST_UNKNOWN_KEY, JSON.stringify(list.slice(0, 200)));
   } catch (_) {}
+  estUnknownCloudLog(t, !!hadCands);
+}
+/* 云端上报（2026-11-23）：所有登录用户的未识别输入汇总到 estimate_unknown_words 表，
+   管理端「未识别词记录」合并本机+云端查看、绑定成同义词。静默失败（表未建/断网只留本机），
+   不阻塞拆解流程；已是同义词的词不再上报。 */
+let _estUnkCloud = null; // 云端收集缓存 [{word,n,c,updated_at}]
+async function estUnknownCloudLog(t, hadCands) {
+  try {
+    if (MODE !== "cloud" || !sb) return;
+    if (((estCfg() || {}).synonyms || {})[t]) return;
+    const { data, error } = await sb.from("estimate_unknown_words").select("n").eq("word", t).maybeSingle();
+    if (error) return;
+    if (data) await sb.from("estimate_unknown_words").update({ n: (Number(data.n) || 1) + 1, c: !!hadCands, updated_at: new Date().toISOString() }).eq("word", t);
+    else await sb.from("estimate_unknown_words").insert({ word: t, n: 1, c: !!hadCands });
+    _estUnkCloud = null;
+  } catch (_) {}
+}
+/* 合并视图：本机记录 + 云端收集按原文去重（云端计数为准——云端含本机那次），云端优先置顶时间排序 */
+function estUnknownMerged() {
+  const map = new Map();
+  estUnknownLoad().forEach((x) => { if (x && x.t) map.set(x.t, { t: x.t, n: Number(x.n) || 1, at: x.at, c: !!x.c, cloud: false }); });
+  (_estUnkCloud || []).forEach((r) => {
+    const w = String(r.word || "");
+    if (!w) return;
+    const ex = map.get(w);
+    if (ex) { ex.n = Number(r.n) || ex.n; ex.cloud = true; ex.at = r.updated_at || ex.at; if (r.c) ex.c = true; }
+    else map.set(w, { t: w, n: Number(r.n) || 1, at: r.updated_at, c: !!r.c, cloud: true });
+  });
+  return Array.from(map.values()).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+}
+/* 从本机+云端未识别记录里移除一条（绑定/删除/转方案成功后共用） */
+async function estUnknownRemove(t) {
+  try { localStorage.setItem(EST_UNKNOWN_KEY, JSON.stringify(estUnknownLoad().filter((x) => x.t !== t))); } catch (_) {}
+  try { if (MODE === "cloud" && sb) await sb.from("estimate_unknown_words").delete().eq("word", t); } catch (_) {}
+  _estUnkCloud = (_estUnkCloud || []).filter((r) => r.word !== t);
+}
+/* 未识别词转整套方案模板（2026-11-23）：整句多为多物品描述（「电动车停车棚 高2.5米 长30米 阳光板」），
+   一词绑一项不够——进模板编辑器，模板名预填该词（可改短），勾选施工项保存后，
+   智能拆解按「输入含模板名」整套展开，尺寸自动按面积/周长算量。模板落云后自动移除该条记录。 */
+let _estUnkComboSrc = null; // 「转方案」来源记录原文，模板保存成功后据此移除
+function estUnknownToCombo(i) {
+  const x = estUnknownMerged()[i];
+  if (!x) return;
+  const word = String(document.getElementById("estUkW" + i)?.value || "").trim().slice(0, 24) || String(x.t || "").trim().slice(0, 24);
+  _estUnkComboSrc = x.t;
+  estComboNew();
+  if (typeof _estComboItemDraft !== "undefined" && _estComboItemDraft) _estComboItemDraft.n = word;
+  const inp = document.getElementById("estTplName");
+  if (inp) inp.value = word;
 }
 /* 定额项下拉（未识别词绑定 / 同义词管理共用），按内核分组 optgroup，含自定义项 */
 function estItemOptionsHtml(selected) {
@@ -35811,15 +35860,17 @@ function estSynItemName(id) {
   const it = ((window.Estimate && Estimate.WORK_ITEMS) || []).find((x) => x.id === id);
   return it ? it.n : id;
 }
-function estOpenUnknownDrawer() {
+async function estOpenUnknownDrawer() {
   if (!estCanManage()) { toast("无测算管理权限"); return; }
-  const list = estUnknownLoad();
   const synN = Object.keys(estCfg().synonyms || {}).length;
-  const items = list.length ? list.map((x, i) => `
+  const render = () => {
+    const list = estUnknownMerged();
+    const items = list.length ? list.map((x, i) => `
     <div class="est-unk-item">
       <div class="est-unk-meta">
         <span class="est-unk-n">${esc(x.t)}</span>
-        <em>${Number(x.n) || 1} 次 · ${esc((x.at || "").slice(0, 10))}${x.c ? " · 有候选" : ""}</em>
+        <em>${Number(x.n) || 1} 次 · ${esc(String(x.at || "").slice(0, 10))}${x.c ? " · 有候选" : ""}${x.cloud ? " · 云端" : ""}</em>
+        <button class="linkbtn est-unk-combo" onclick="estUnknownToCombo(${i})" title="多物品整句做成整套方案模板：模板名预填此词，勾选包含的施工项保存后，整句输入直接整套展开">转方案</button>
         <button class="hl" onclick="estUnknownDel(${i})">删</button>
       </div>
       <div class="est-unk-bind">
@@ -35827,20 +35878,29 @@ function estOpenUnknownDrawer() {
         <select class="input est-unk-sel" id="estUnS${i}" title="绑定到哪个施工项"><option value="">选择施工项…</option>${estItemOptionsHtml("")}</select>
         <button class="btn small primary" onclick="estUnknownBind(${i})">绑定</button>
       </div>
-    </div>`).join("") : `<div class="est-result-empty">暂无记录。智能拆解没认出输入时会自动记到这里（仅存本机，最多 200 条）。</div>`;
-  estShowDrawer("🧾 未识别词记录", `
-    <div class="est-cfg-tip">智能拆解「没直接认出施工项」时自动记录的原始输入（含走了模糊候选的）。每行填要识别的词、选对应施工项，点「绑定」后立即全员生效，下次直接识别。</div>
+    </div>`).join("") : `<div class="est-result-empty">暂无记录。智能拆解没认出输入时会自动记到这里（全员上报汇总，最多 200 条）。</div>`;
+    estShowDrawer("未识别词记录", `
+    <div class="est-cfg-tip">智能拆解「没直接认出施工项」时自动记录的原始输入（含走了模糊候选的）。本机 + 其他同事的云端上报合并展示。<b>单词对单项</b>：填词选项点「绑定」；<b>多物品整句</b>（如「电动车停车棚 高2.5米 长30米 阳光板」）点「转方案」做成整套模板——模板名预填此词，勾几项保存，下次整句直接整套展开。</div>
     <div class="est-cfg-save" style="margin-bottom:10px;">
-      <button class="btn small outline" onclick="estOpenSynonyms()">🔗 同义词管理 (${synN})</button>
+      <button class="btn small outline" onclick="estOpenSynonyms()">同义词管理 (${synN})</button>
       <button class="btn small outline" onclick="estUnknownCopy()">📋 复制全部</button>
       <button class="btn small outline" onclick="estUnknownClear()">清空</button>
     </div>
     <div>${items}</div>`);
+  };
+  render();
+  try {
+    if (MODE === "cloud" && sb) {
+      const { data, error } = await sb.from("estimate_unknown_words").select("word,n,c,updated_at").order("updated_at", { ascending: false }).limit(200);
+      if (!error && Array.isArray(data)) { _estUnkCloud = data; if (document.getElementById("estDrawer")) render(); }
+    }
+  } catch (_) {}
 }
-/* 一键绑定：词 → 定额项，写进 estimate_config.synonyms（云端全员共享），并从本机未识别词里移除 */
+/* 一键绑定：词 → 定额项，写进 estimate_config.synonyms（云端全员共享），并从本机+云端未识别记录里移除 */
 async function estUnknownBind(i) {
-  const list = estUnknownLoad();
-  if (!list[i]) return;
+  const list = estUnknownMerged();
+  const target = list[i] ? list[i].t : "";
+  if (!target) return;
   const word = String(document.getElementById("estUkW" + i)?.value || "").trim().slice(0, 24);
   const id = document.getElementById("estUnS" + i)?.value || "";
   if (!word || !id) { toast("填写词语并选择施工项"); return; }
@@ -35849,8 +35909,7 @@ async function estUnknownBind(i) {
   estCfg().synonyms = syn;
   const ok = await saveEstimateConfig(estCfg());
   if (!ok) return;
-  list.splice(i, 1);
-  try { localStorage.setItem(EST_UNKNOWN_KEY, JSON.stringify(list)); } catch (_) {}
+  await estUnknownRemove(target);
   toast("已绑定「" + word + "」→ " + estSynItemName(id) + "，下次直接识别");
   estOpenUnknownDrawer();
 }
@@ -35865,17 +35924,15 @@ function estOpenSynonyms() {
       <em>→ ${esc(estSynItemName(syn[k]))}</em>
       <button class="hl" onclick="estSynDel(${i})">删</button>
     </div>`).join("") : `<div class="est-result-empty">还没有自定义同义词。在「未识别词」里一键绑定，或在下面直接添加。</div>`;
-  estShowDrawer("🔗 同义词管理（全员共享）", estCfgHubTabs("syn") + `
-    <div class="est-cfg-tip">智能拆解优先匹配这里的词，命中即直接出定额项；多个词可指向同一项。只学词语映射，不改金额、工时单价。</div>
+  estShowDrawer("同义词管理", estCfgHubTabs("syn") + `
+    <div class="est-cfg-tip">智能拆解优先匹配这里的词，命中即直接出定额项；多个词可指向同一项，全员共享。只学词语映射，不改金额、工时单价。</div>
     <div class="est-syn-add">
       <input class="input" id="estSynWord" maxlength="60" placeholder="词语（多个用空格/逗号分隔）" />
       <select class="input" id="estSynItem"><option value="">选择施工项…</option>${estItemOptionsHtml("")}</select>
       <button class="btn primary" onclick="estSynAdd()">添加</button>
     </div>
     <div class="est-syn-list">${items}</div>
-    <div class="est-cfg-save" style="margin-top:12px;">
-      <button class="btn small outline" onclick="estOpenUnknownDrawer()">返回未识别词</button>
-    </div>`);
+    <div style="margin-top:10px;"><button class="btn small outline" onclick="estOpenUnknownDrawer()">返回未识别词</button></div>`);
 }
 async function estSynAdd() {
   const raw = String(document.getElementById("estSynWord")?.value || "");
@@ -35899,21 +35956,22 @@ async function estSynDel(i) {
   const ok = await saveEstimateConfig(estCfg());
   if (ok) { toast("已删除「" + word + "」"); estOpenSynonyms(); }
 }
-function estUnknownDel(i) {
-  const list = estUnknownLoad();
-  if (!list[i]) return;
-  list.splice(i, 1);
-  try { localStorage.setItem(EST_UNKNOWN_KEY, JSON.stringify(list)); } catch (_) {}
+async function estUnknownDel(i) {
+  const x = estUnknownMerged()[i];
+  if (!x) return;
+  await estUnknownRemove(x.t);
   estOpenUnknownDrawer();
 }
 function estUnknownCopy() {
-  const list = estUnknownLoad();
+  const list = estUnknownMerged();
   if (!list.length) { toast("暂无记录"); return; }
-  copyText(list.map((x) => `${x.t}（${Number(x.n) || 1}次${x.c ? "，有候选" : ""}）`).join("\n"), () => toast("已复制 " + list.length + " 条"));
+  copyText(list.map((x) => `${x.t}（${Number(x.n) || 1}次${x.cloud ? "，云端" : ""}${x.c ? "，有候选" : ""}）`).join("\n"), () => toast("已复制 " + list.length + " 条"));
 }
-function estUnknownClear() {
-  if (!confirm("清空全部未识别词记录？")) return;
+async function estUnknownClear() {
+  if (!confirm("清空全部未识别词记录？（本机 + 云端收集，其他同事上报的也会删掉）")) return;
   try { localStorage.removeItem(EST_UNKNOWN_KEY); } catch (_) {}
+  try { if (MODE === "cloud" && sb) await sb.from("estimate_unknown_words").delete().neq("word", ""); } catch (_) {}
+  _estUnkCloud = null;
   estOpenUnknownDrawer();
 }
 
@@ -36168,7 +36226,7 @@ function estRenderHistList() {
   box.innerHTML = items;
 }
 function estOpenHistory() {
-  estShowDrawer("🕒 测算历史（本机保存）", `
+  estShowDrawer("测算历史（本机保存）", `
     <div class="est-cfg-tip">历史仅存这台设备，可载入复用整份清单（施工项 / 单价 / 高度墙面都还原），不影响项目金额链。改清单后自动保存，也可命名保存。</div>
     <input class="input" placeholder="搜索名称 / 日期…" value="${esc(_estHistKw)}" oninput="estFilterHistory(this.value)" style="margin-bottom:10px;"/>
     <button class="btn primary" style="width:100%;margin-bottom:10px;" onclick="estSaveHistory()">💾 保存当前测算</button>
@@ -37816,12 +37874,15 @@ function estRenderItemManage() {
   // 避免同一组数重复摆两遍；单价数值不影响本页任何计算（≈¥ 直接读 estCfg().params）。
   estShowDrawer("配置管理 · 施工项", estCfgHubTabs("items") + `
     <div class="est-item-manage">
-    <div class="est-cfg-tip est-item-tip" title="人工费 = 标准工时 × 工种单价。工种（普工/安装技工/焊工/电工/高空工/架子工/设计）决定单价，标「高」的项在高空时改按高空工单价，另可叠加墙面系数。右侧「工时」框里的数就是本项校准值，直接改＝校准。">计价口径：<b>工时 × 工种单价</b> ＋ 高度/墙面系数，≈¥＝折合人工（材料另计）。工种单价在「参数与单价」页签改。</div>
+    <div class="est-cfg-tip est-item-tip" title="人工费 = 标准工时 × 工种单价。工种（普工/安装技工/焊工/电工/高空工/架子工/设计）决定单价，标「高」的项在高空时改按高空工单价，另可叠加墙面系数。≈¥＝折合人工（材料另计）。右侧「工时」框里的数就是本项校准值，直接改＝校准。">计价口径：<b>工时 × 工种单价</b> ＋ 高度/墙面系数；工种单价在「参数与单价」页签改。</div>
+    ${draft.length ? `
     <div class="est-item-head"><b>自定义施工项（${draft.length}）</b><button class="btn small outline" onclick="estItemNew()">＋ 新增项</button></div>
     <div class="est-item-cols"><span>名称</span><span>单位</span><span>工时</span><span>工种</span><span>高</span><span>墙</span><span></span><span></span><span></span></div>
-    <div class="est-item-custom-list">${customRows || '<div class="est-empty est-empty-compact">还没有自定义项，点「＋ 新增项」</div>'}</div>
-    <div class="est-item-pools-hint">两个池：<b>上方「自定义施工项」</b>＝自建（云端全员共享）；<b>下方「内置定额项」</b>＝系统预置（只能改名 / 隐藏 / 校准，不能新增）。用法一样；清单里手加的项，点行尾「存」入上方池。</div>
-    <div class="est-item-head est-item-head2"><b>内置定额项（可直接编辑）</b><span class="est-item-muted">已隐藏 ${hidden.size} 项${ovCount ? ` · 改过 ${ovCount} 项` : ""} · ✎＝编辑 · 工时框改＝校准</span></div>
+    <div class="est-item-custom-list">${customRows}</div>`
+    : `
+    <div class="est-item-head"><b>自定义施工项（0）</b><span class="est-item-muted">还没有，点右侧「＋ 新增项」建</span><button class="btn small outline" onclick="estItemNew()">＋ 新增项</button></div>`}
+    <div class="est-item-pools-hint">两个池：上方＝自建（云端共享）；下方＝预置（只能改名/隐藏/校准，<b>不能新增</b>）。清单手加的项点「存」入上方池。</div>
+    <div class="est-item-head est-item-head2" title="✎＝编辑（改名/工种/方式）；工时框直接改＝校准，改回默认即恢复"><b>内置定额项（可直接编辑）</b><span class="est-item-muted">${hidden.size || ovCount ? `已隐藏 ${hidden.size} 项${ovCount ? ` · 改过 ${ovCount} 项` : ""}` : ""}</span></div>
     <div class="est-item-cols est-item-cols-bi"><span>显示</span><span>名称 / 工种 / 施工方式</span><span>折合人工</span><span>工时</span><span></span></div>
     <input class="input" id="estItemBiSearch" placeholder="搜索内置项（名称 / 工种 / 施工方式）…" value="${esc(_estItemBuiltinQ)}" oninput="estItemBuiltinFilter(this.value)" style="margin-bottom:6px"/>
     <div id="estItemBuiltinList" class="est-item-bi-list">${builtinRows || '<div class="est-empty est-empty-compact">没有匹配的内置项</div>'}</div>
@@ -37829,7 +37890,7 @@ function estRenderItemManage() {
       <button class="btn small outline" onclick="estExportItems()" title="导出 CSV（自定义项），Excel/WPS 可直接编辑">📤 导出</button>
       <button class="btn small outline" onclick="estExportItemsAll()" title="导出全部内置定额（分类/工种/工时/折合人工/施工方式）。可在 Excel 里整表改工时·工种·名称，再用「📥 导入」回填——名称命中内置项会按覆盖处理，不新增重复项">📋 定额表</button>
       <label class="btn small outline est-import-label" title="导入 CSV 或旧版 JSON：名称命中内置定额项→当成内置覆盖（可整表回填）；其余按名称合并为自定义项">📥 导入<input type="file" accept=".csv,.json,application/json,text/csv" onchange="estImportItems(this)" hidden/></label>
-      <button class="btn small outline" onclick="estOpenUnknownDrawer()" title="智能拆解没认出的输入记录，一键绑定到施工项">🧾 未识别词${(() => { const n = estUnknownLoad().length; return n ? ` (${n})` : ""; })()}</button>
+      <button class="btn small outline" onclick="estOpenUnknownDrawer()" title="智能拆解没认出的输入记录（本机 + 全员云端上报），一键绑定到施工项">🧾 未识别词${(() => { const n = estUnknownMerged().length; return n ? ` (${n})` : ""; })()}</button>
       <button class="btn small outline" onclick="estOpenSynonyms()" title="查看/新增/删除全员共享的词语→施工项映射">🔗 同义词${(() => { const n = Object.keys(estCfg().synonyms || {}).length; return n ? ` (${n})` : ""; })()}</button>
       <button class="btn small outline" onclick="estOpenAccuracy()" title="用已完工项目的实际工时反推各项定额（按定额比例分摊真实用时），可单项或全部采纳">🎯 反推工时</button>
     </div>
@@ -38165,13 +38226,13 @@ function estOpenPriceLib() {
              <button class="btn small outline" onclick="estExportCatalog()" title="导出 CSV，Excel/WPS 可直接编辑">📤 导出</button>
              <label class="btn small outline est-import-label" title="导入 CSV（分类/说明/名称/单价/单位/备注）或旧版 JSON，覆盖或按分类合并">📥 导入<input type="file" accept=".csv,.json,application/json,text/csv" onchange="estImportCatalog(this)" hidden/></label>
            </span></div>`
-      : `<div class="est-pick-admin"><span>参考价可改可增删，保存后全员共享</span><button class="btn small outline" onclick="estCatEditToggle()">✏️ 编辑单价库</button></div>`)
+      : `<div class="est-pick-admin"><span>${Array.isArray(estCfg().catalog) ? "参考价 · 自定义版本（管理员保存）" : "参考价 · 内置默认价"}</span><button class="btn small outline" onclick="estCatEditToggle()">编辑单价库</button></div>`)
     : "";
   const tip = isAdmin
     ? `<div class="est-cfg-tip">黄色底为编辑区；空名称行保存时自动忽略；改动保存后全员生效。<br>
        <b>参与测算的：</b>①「⑨运输/杂费 → 市内运输」按元/公里算车费；② 方案库中<b>按面积/周长计价</b>的项（喷绘画面、灯箱、导视牌等）按名称取本表单价；③ 手动添加的材料项，名称匹配本表时会自动带出单价；④ <b>门头配方材料价</b>：「⑪ 门头配方材料」组就是配方正在用的价，直接改即生效；其他组建与配方材料完全同名的行同样生效（只认精确同名）。<br>
        <b>不参与测算的：</b>「门头板材 / 发光字」这类<b>整门成品参考价</b>（①②组，铝塑板门头 650/㎡ 等），以及按工时定额计算的安装项——后者按「工时 × 工时单价」算，要调请用「定额校准」。</div>`
-    : (Array.isArray(estCfg().catalog) ? `<div class="est-cfg-tip">已启用自定义单价库（管理员保存的版本）。</div>` : ``);
+    : "";
   estShowDrawer("配置管理 · 完整单价库", (estCanManage() ? estCfgHubTabs("catalog") : "") + manageBar + tip
     + (isAdmin ? estCatNameDatalistHtml() : "") + body + (isAdmin
     ? `<button type="button" class="btn small outline est-cat-addrow" onclick="estCatAdd()" style="margin-top:12px;">＋ 添加分类</button>`
@@ -38711,7 +38772,7 @@ function estComboSaveEdit() {
   estRenderComboManage();
   toast("模板内容已更新，点「保存模板」全员生效");
 }
-function estComboCancelEdit() { _estComboEditIdx = -1; _estComboItemDraft = null; estRenderComboManage(); }
+function estComboCancelEdit() { _estComboEditIdx = -1; _estComboItemDraft = null; _estUnkComboSrc = null; estRenderComboManage(); }
 function estComboDel(i) {
   const c = _estComboDraft[i]; if (!c) return;
   if (!confirm("删除模板「" + c.n + "」？保存后生效。")) return;
@@ -38728,7 +38789,11 @@ async function estSaveComboManage() {
   const c = estCfg();
   c.combos = _estComboDraft.map(estComboClone);
   const ok = await saveEstimateConfig(c);
-  if (ok) { estOpenScenes("combo"); toast("模板已保存，全员下次刷新生效"); }
+  if (ok) {
+    estOpenScenes("combo"); toast("模板已保存，全员下次刷新生效");
+    // 「转方案」链路收尾：模板真落云了才移除来源未识别记录（草稿丢弃时记录保留）
+    if (_estUnkComboSrc) { const t = _estUnkComboSrc; _estUnkComboSrc = null; await estUnknownRemove(t); }
+  }
 }
 /* 草稿是否与云端配置不一致（有未保存的新建/改动） */
 function estComboDirty() {
@@ -38740,6 +38805,7 @@ function estComboDirty() {
 function estComboBack() {
   if (estComboDirty()) {
     if (confirm("模板改动还没保存到云端（只点了「保存这套模板」只存草稿）。\n\n【确定】保存并返回方案库\n【取消】放弃改动直接返回")) { estSaveComboManage(); return; }
+    _estUnkComboSrc = null; // 放弃改动：来源未识别记录保留
   }
   estOpenScenes("combo");
 }
@@ -38847,7 +38913,7 @@ function estShowDrawer(title, html) {
   d = document.createElement("div");
   d.id = "estDrawer";
   d.className = "est-drawer";
-  d.innerHTML = `<div class="est-drawer-head"><h4>${esc(title)}</h4><span class="est-dirty-badge" id="estCfgDirtyBadge" style="display:${_estCfgDirty ? "" : "none"}">● 未保存</span><span class="est-drawer-summary" id="estDrawerSummary"></span><button class="modal-close" onclick="estCloseDrawer()">×</button></div><div class="est-drawer-body">${html}</div>`;
+  d.innerHTML = `<div class="est-drawer-head"><h4>${esc(title)}</h4><span class="est-dirty-badge" id="estCfgDirtyBadge" style="display:${_estCfgDirty ? "" : "none"}">● 未保存</span><button class="modal-close" onclick="estCloseDrawer()">×</button></div><div class="est-drawer-body">${html}</div>`;
   d.addEventListener("input", estCfgDelegatedTouch);
   d.addEventListener("change", estCfgDelegatedTouch);
   const shell = document.querySelector("#estimateModal .est-shell");
@@ -38856,7 +38922,6 @@ function estShowDrawer(title, html) {
     if (shell._estFullH) shell.style.height = shell._estFullH + "px";
     shell.appendChild(d);
   }
-  if (typeof updateDrawerSummary === "function") updateDrawerSummary(_estUI && _estUI.result);
 }
 function estCloseDrawer(force) {
   const d = document.getElementById("estDrawer");
