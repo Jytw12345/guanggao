@@ -11950,6 +11950,22 @@ window.wcEdit = {
   add: () => wcItemAdd("wcEdit"),
 };
 
+/* 项目表单里「施工内容」「注意事项」两个多行框：内容多就长高，超过上限出滚动条。
+   全局 border-box：scrollHeight 不含上下边框，+2 补偿后高度恰好容纳内容，不多出一条滚动条。 */
+function ggAutoGrowTextarea(el, minH, maxH) {
+  if (!el) return;
+  const min = Math.max(40, Number(minH) || 72);
+  const max = Math.max(min, Number(maxH) || 240);
+  el.style.height = "auto";
+  const need = el.scrollHeight + 2;
+  el.style.height = Math.min(max, Math.max(min, need)) + "px";
+  el.style.overflowY = need > max ? "auto" : "hidden";
+}
+function ggAutoGrowProjectTextareas() {
+  ggAutoGrowTextarea(document.getElementById("pWorkContentCustom"), 72, 260);
+  ggAutoGrowTextarea(document.getElementById("pNote"), 72, 240);
+}
+
 function projectForm(p = {}, opts = {}) {
   // isNew=true 时处于「新建预约」流程：预约人只填工程金额，成本扣项不展示（费用是施工管理阶段填写）
   const hideCostAtBooking = !!opts.isNew;
@@ -12127,7 +12143,7 @@ function projectForm(p = {}, opts = {}) {
         <button type="button" class="btn small outline" onclick="estFromProjectForm()" title="按施工内容自动测算工时与费用">🧮 施工费测算</button>
       </div>
       <input type="hidden" id="pCostEstimate" value="${p.costEstimate ? esc(typeof p.costEstimate === 'string' ? p.costEstimate : JSON.stringify(p.costEstimate)) : ''}" />
-      <textarea class="input" id="pWorkContentCustom" rows="2" placeholder="填写实际施工内容，用、或空格分隔；也可直接粘贴测算清单文本，点「按上方内容生成」转明细" style="width:100%;font-size:13px;" ${basicDisabled ? "disabled" : ""}>${esc((p.workContent || []).join("、"))}</textarea>
+      <textarea class="input" id="pWorkContentCustom" rows="3" placeholder="填写实际施工内容，用、或空格分隔；也可直接粘贴测算清单文本，点「按上方内容生成」转明细" style="width:100%;font-size:13px;min-height:72px;max-height:260px;resize:vertical;" oninput="ggAutoGrowTextarea(this,72,260)" ${basicDisabled ? "disabled" : ""}>${esc((p.workContent || []).join("、"))}</textarea>
     </div>
     <div class="form-row wc-items-row">
       <div class="wc-items-head">
@@ -12144,7 +12160,7 @@ function projectForm(p = {}, opts = {}) {
     </div>
     <div class="form-row">
       <label><span style="color:#6b7280;">💬</span> 注意事项</label>
-      <textarea class="input" id="pNote" placeholder="施工注意事项、特殊要求等" style="min-height:50px;" ${basicDisabled ? "disabled" : ""}>${esc(p.note || "")}</textarea>
+      <textarea class="input" id="pNote" rows="3" placeholder="施工注意事项、特殊要求等" style="min-height:72px;max-height:240px;resize:vertical;" oninput="ggAutoGrowTextarea(this,72,240)" ${basicDisabled ? "disabled" : ""}>${esc(p.note || "")}</textarea>
     </div>
     </div><!-- /pform-right -->
     <div id="pPhotosWrap" style="margin-top:10px;"></div>
@@ -13246,12 +13262,12 @@ function switchAssignType(btn) {
 
 function newProject() {
   modal.open("新建项目预约", projectForm({ status: STATUS.BOOKED }, { isNew: true }), { wide: true });
-  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); refreshSegTargetMark(); }, 100);
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); refreshSegTargetMark(); ggAutoGrowProjectTextareas(); }, 100);
 }
 function editProject(id) {
   const _ep = getProject(id);
   modal.open("编辑项目", projectForm(_ep), { wide: true });
-  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", (_ep && _ep.costDeductions) || []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); refreshSegTargetMark(); }, 100);
+  setTimeout(() => { refreshProjectQuickTimeMin(); updateSpanHint(); renderFormPhotos(); renderCostDeductionEditor("pf", (_ep && _ep.costDeductions) || []); window.onCDChange_pf = updateContractCalc; updateContractCalc(); refreshSegTargetMark(); ggAutoGrowProjectTextareas(); }, 100);
 }
 
 /* 快速修改项目预约时间（总工时/人数保存时自动派生） */
@@ -33089,7 +33105,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v4b717c5b";
+  const APP_VERSION = "ve0c9299e";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -35498,9 +35514,14 @@ function normalizeEstimateConfig(cfg) {
   // 以前每次 normalize 都硬改 rateNormal=30→36，用户主动设 30 元/时会"改了存不住"，
   // 表现为"单价明明改了，价格还是默认"。——迁移必须只跑一次。
   // v:3（2026-11-23）：配方材料价接入单价库——老快照补「⑪ 门头配方材料」组 + 三行改名对齐（价不变）。
+  // v:4（2026-11-23）：内置方案模板 7→17 套——已保存过 combos 快照的老配置补入 10 套常用模板。
+  // v:5（2026-11-23）：补「工地大门整套」——只按名字补这一套，绝不复活用户在 v4 主动删掉的其它模板。
+  // v:6（2026-11-23）：补「工地围挡整套/宣传物料整套/展厅布置整套」——同样按名字白名单补，不动用户改过的。
   const ver = Number(cfg.v) || 1;
+  const NEW_IN_V5 = ["工地大门整套"];
+  const NEW_IN_V6 = ["工地围挡整套", "宣传物料整套", "展厅布置整套"];
   return {
-    v: 3,
+    v: 6,
     params: (() => {
       const p = { ...d.params, ...(cfg.params || {}) };
       // 普通工 30 元/时是旧默认（≈240 元/天，低于市场 280–350/天），仅首次迁移抬到 36
@@ -35557,26 +35578,70 @@ function normalizeEstimateConfig(cfg) {
     expInfo: { ...d.expInfo, ...(cfg.expInfo || {}) },
     history: Array.isArray(cfg.history) ? cfg.history : [],
     qmem: (cfg.qmem && typeof cfg.qmem === "object") ? cfg.qmem : {},
-    // 整套方案模板：用户可增删改，存云端全员共享；首次为空时用内核默认 7 套做骨架
-    combos: Array.isArray(cfg.combos) ? cfg.combos.map((c) => {
-      const o = {
-        n: String(c.n || "未命名模板"),
-        ids: Array.isArray(c.ids) ? c.ids.filter(Boolean) : [],
-        q: (c.q && typeof c.q === "object") ? { ...c.q } : {},
-      };
-      // 计价口径（2026-11-22）：m[id]='area'|'perim' 按面积/周长，缺省=固定数量；f[id]=系数（1 省略）
-      if (c.m && typeof c.m === "object") {
-        const m = {};
-        Object.keys(c.m).forEach((k) => { if (c.m[k] === "area" || c.m[k] === "perim") m[k] = c.m[k]; });
-        if (Object.keys(m).length) o.m = m;
+    // 整套方案模板：用户可增删改，存云端全员共享；首次为空时用内核默认 17 套做骨架
+    combos: (() => {
+      const own = Array.isArray(cfg.combos) ? cfg.combos.map((c) => {
+        const o = {
+          n: String(c.n || "未命名模板"),
+          ids: Array.isArray(c.ids) ? c.ids.filter(Boolean) : [],
+          q: (c.q && typeof c.q === "object") ? { ...c.q } : {},
+        };
+        // 计价口径（2026-11-22）：m[id]='area'|'perim' 按面积/周长，缺省=固定数量；f[id]=系数（1 省略）
+        if (c.m && typeof c.m === "object") {
+          const m = {};
+          Object.keys(c.m).forEach((k) => { if (c.m[k] === "area" || c.m[k] === "perim") m[k] = c.m[k]; });
+          if (Object.keys(m).length) o.m = m;
+        }
+        if (c.f && typeof c.f === "object") {
+          const f = {};
+          Object.keys(c.f).forEach((k) => { const v = Number(c.f[k]); if (v > 0 && v !== 1) f[k] = v; });
+          if (Object.keys(f).length) o.f = f;
+        }
+        return o;
+      }) : null;
+      // v:4 一次性迁移：老快照（数组且非空，空数组=用户故意删光，尊重）按名字补入内核新增模板，
+      // 已是同名的跳过（用户改过的不动）；只跑一次（ver>=4 不再补，用户后续删除不再被塞回）。
+      if (own && own.length && ver < 4 && window.Estimate && Estimate.SCENE_COMBOS) {
+        const have = new Set(own.map((c) => c.n));
+        Estimate.SCENE_COMBOS.forEach((d) => {
+          if (d && d.n && !have.has(d.n)) own.push({
+            n: d.n,
+            ids: Array.isArray(d.ids) ? d.ids.slice() : [],
+            q: (d.q && typeof d.q === "object") ? { ...d.q } : {},
+            ...((d.m && Object.keys(d.m).length) ? { m: { ...d.m } } : {}),
+            ...((d.f && Object.keys(d.f).length) ? { f: { ...d.f } } : {}),
+          });
+        });
       }
-      if (c.f && typeof c.f === "object") {
-        const f = {};
-        Object.keys(c.f).forEach((k) => { const v = Number(c.f[k]); if (v > 0 && v !== 1) f[k] = v; });
-        if (Object.keys(f).length) o.f = f;
+      // v:5 一次性迁移：已存过 v4 快照（17 套）的老配置只补内核新增的「工地大门整套」；
+      // 严格按名字白名单补，用户删掉的其它模板不复活；空数组（用户删光）尊重不补。
+      if (own && own.length && ver < 5 && window.Estimate && Estimate.SCENE_COMBOS) {
+        const have = new Set(own.map((c) => c.n));
+        Estimate.SCENE_COMBOS.filter((d) => d && NEW_IN_V5.includes(d.n)).forEach((d) => {
+          if (!have.has(d.n)) own.push({
+            n: d.n,
+            ids: Array.isArray(d.ids) ? d.ids.slice() : [],
+            q: (d.q && typeof d.q === "object") ? { ...d.q } : {},
+            ...((d.m && Object.keys(d.m).length) ? { m: { ...d.m } } : {}),
+            ...((d.f && Object.keys(d.f).length) ? { f: { ...d.f } } : {}),
+          });
+        });
       }
-      return o;
-    }) : JSON.parse(JSON.stringify((window.Estimate && Estimate.SCENE_COMBOS) || [])),
+      // v:6 一次性迁移：只补内核新增的 3 套（围挡/宣传物料/展厅），用户删掉的其它模板不复活。
+      if (own && own.length && ver < 6 && window.Estimate && Estimate.SCENE_COMBOS) {
+        const have = new Set(own.map((c) => c.n));
+        Estimate.SCENE_COMBOS.filter((d) => d && NEW_IN_V6.includes(d.n)).forEach((d) => {
+          if (!have.has(d.n)) own.push({
+            n: d.n,
+            ids: Array.isArray(d.ids) ? d.ids.slice() : [],
+            q: (d.q && typeof d.q === "object") ? { ...d.q } : {},
+            ...((d.m && Object.keys(d.m).length) ? { m: { ...d.m } } : {}),
+            ...((d.f && Object.keys(d.f).length) ? { f: { ...d.f } } : {}),
+          });
+        });
+      }
+      return own || JSON.parse(JSON.stringify((window.Estimate && Estimate.SCENE_COMBOS) || []));
+    })(),
     // 自定义施工项（总经理可增删改）+ 被隐藏的内置项 id（空数组=没隐藏，不能回退）
     customItems: Array.isArray(cfg.customItems) ? cfg.customItems.filter((x) => x && String(x.n || "").trim()).map((x, i) => ({
       id: String(x.id || ("uc_" + i + "_" + Date.now())),
@@ -36331,7 +36396,7 @@ function openEstimateModal(opts) {
       <div class="est-body" id="estBody">
         <div class="est-main">
           <div class="est-section">
-            <label class="est-label">施工内容 <span class="est-tip">写一句话自动拆解，或手动添加施工项</span></label>
+            <label class="est-label">施工内容</label>
             <textarea id="estInput" class="input est-input" placeholder="例：5个1.2×2.4米无框画，门头 6米×2米，20个门牌" style="min-height:58px;" oninput="estDoorExtrasTyping()">${esc(prefill)}</textarea>
             <div class="est-btnrow">
               <button class="btn small est-parse-btn" onclick="estSmartParse()" title="按施工内容自动拆解：识别尺寸/数量/材质，匹配定额工时与材料"><span class="est-parse-ico" aria-hidden="true">✨</span>智能拆解</button>
@@ -36345,7 +36410,7 @@ function openEstimateModal(opts) {
               <span>公里</span>
               <label class="est-rt"><input type="checkbox" id="estRoundTrip" onchange="estDistanceChange(document.getElementById('estDistanceKm').value)" ${_estUI.roundTrip ? "checked" : ""}/> 往返</label>
               <span id="estDistCalc"></span>
-              <span class="est-tip">填了这里就别再手加「运输费」清单项，避免重复</span>
+              <span class="est-tip" title="里程填这里就别再手加「运输费」清单项，避免重复">填了里程不再手加运输费</span>
             </div>
             <div id="estDoorExtras" class="est-door-extras" hidden></div>
             <div id="estGlowHint" class="est-glow-hint" hidden></div>
@@ -36902,6 +36967,9 @@ function estAddWork(w) {
   } else {
     const item = { type: w.type || "lib", id: w.id || "", n: w.n, u: w.u || "", q: Number(w.q) || 0, calc: w.calc || "", isMat, p: w.p };
     if (w.sheets) item.sheets = w.sheets; // 板材整张数：结果行注明「约N张」，金额已按整张面积计
+    if (w.sheetHow) item.sheetHow = w.sheetHow; // 高门头拼接铺法（横铺/竖铺）：只用于结果行提示
+    if (w.netQty > 0) item.netQty = w.netQty; // 净用量（整张取整前）：只用于标呆料，不参与金额
+    if (w.bars > 0) { item.bars = w.bars; item.barLeft = w.barLeft; } // 方管定尺根数/余料：只提示不改金额
     if (isMat) item.kind = "mat"; // 内核计价入口：材料费 = 量 × 单价
     if (w.cid) { item.cid = w.cid; item.mode = w.mode || "qty"; } // 专项项：按量×单价计入施工费
     if (w.custom) item.custom = true;   // 手动加的自定义施工项（可切换「按工时 / 按金额」）
@@ -37121,7 +37189,7 @@ function renderEstimateWorkList() {
   const clearBtn = document.getElementById("estClearBtn");
   if (clearBtn) clearBtn.disabled = !_estUI.work.length; // 空清单时「清空」无意义
   if (!_estUI.work.length) {
-    box.innerHTML = `<div class="est-empty">还没有施工项：点「＋ 施工项」手加一条，或用「＋ 常用施工项」从定额里选。</div>`;
+    box.innerHTML = `<div class="est-empty">清单为空：点「＋ 施工项」手加，或「＋ 常用施工项」从定额里选。</div>`;
     return;
   }
   const TRADES = (window.Estimate && Estimate.TRADES) || {};
@@ -37277,11 +37345,11 @@ function renderEstimateResult(r, ctx) {
       <div class="est-guide">
         <div class="est-guide-hd">三步出报价</div>
         <ol class="est-guide-steps">
-          <li><b>1</b><div><strong>写清施工内容</strong><span>一句话即可：门头 6米×2米，发光字 5个</span></div></li>
-          <li><b>2</b><div><strong>点「✨ 智能拆解」</strong><span>自动匹配定额工时与材料</span></div></li>
-          <li><b>3</b><div><strong>核对并插入项目</strong><span>可改工程量、填运输里程、调整单价</span></div></li>
+          <li><b>1</b><div><strong>写施工内容</strong><span>一句话即可，如「门头 6米×2米，发光字 5个」</span></div></li>
+          <li><b>2</b><div><strong>点「智能拆解」</strong><span>自动匹配定额、材料与工时</span></div></li>
+          <li><b>3</b><div><strong>核对并插入项目</strong><span>工程量、里程、单价都能改</span></div></li>
         </ol>
-        <div class="est-guide-ex">试试示例
+        <div class="est-guide-ex">试试示例（点一下自动填入）
           <div class="est-guide-chips">${ex.map((t) => `<button class="est-guide-chip" onclick="estUseExample('${esc(t)}')">${esc(t)}</button>`).join("")}</div>
         </div>
         <details class="est-guide-calc"><summary>钱怎么算（测算口径）</summary>
@@ -39389,7 +39457,7 @@ function estInsertNewProject() {
     if (hidden) hidden.value = JSON.stringify(snapshot);
     wcRender("wcForm"); // 内含 wcUpdateTotal → 汇总条按快照重算金额
     const customEl = document.getElementById("pWorkContentCustom");
-    if (customEl) customEl.value = names.join("、");
+    if (customEl) { customEl.value = names.join("、"); ggAutoGrowTextarea(customEl, 72, 260); }
     toast("已带入 " + names.length + " 项施工内容与工时明细，填好客户/时间后保存即可");
   }, 150);
 }
@@ -39469,6 +39537,7 @@ function estFromProjectForm(kind) {
         const existing = (customEl.value || "").split(/[、,，\s]+/).filter(Boolean);
         const merged = [...new Set([...existing, ...workNames])];
         customEl.value = merged.join("、");
+        ggAutoGrowTextarea(customEl, 72, 260);
       }
       // 快照已写隐藏字段，随 saveProject 一起落库（不改工程金额）
       // 详情/表单内即时反馈：明确告诉用户金额已现、点按钮才进报价

@@ -16216,20 +16216,33 @@ table.data.project-hours-diff thead th {
   box-shadow: 0 2px 8px rgba(79, 70, 229, .34), inset 0 1px 3px rgba(0, 0, 0, .16);
 }
 .est-btnrow .est-parse-btn:focus-visible { outline: 2px solid #a5b4fc; outline-offset: 2px; }
-/* 次要入口：无边框幽灵按钮，hover 才泛底色——不像 outline 那样跟主 CTA 抢注意力，
-   4 个按钮也能在 ~370px 的左栏里排成一行（outline 版实测 426px 会掉成 3+1 孤行） */
+/* 次要入口：淡边框 + 浅底，一眼看出是可点按钮（原来透明底+透明边框+灰字，看着像一行说明文字）。
+   用比主 CTA 弱很多的青灰描边，不抢 ✨智能拆解 的注意力。
+   窄屏走 3 列 grid + 主 CTA 通栏，不会掉成孤行。 */
 .est-btnrow .btn.ghost {
-  background: transparent;
-  border-color: transparent;
-  color: #64748b;
-  font-weight: 500;
+  background: #f8fafc;
+  border-color: #dbe3ee;
+  color: #475569;
+  font-weight: 600;
   padding: 5px 7px;
 }
 .est-btnrow .btn.ghost:hover {
-  background: #f1f5f9;
-  border-color: transparent;
+  background: #eef2ff;
+  border-color: #a5b4fc;
   color: #4338ca;
   box-shadow: none;
+}
+/* 清单标题行的 ＋施工项/＋材料/清空：同样给可见描边，避免被当成说明文字 */
+.est-list-ops .btn.ghost {
+  background: #f8fafc;
+  border-color: #dbe3ee;
+  color: #475569;
+  font-weight: 600;
+}
+.est-list-ops .btn.ghost:hover {
+  background: #eef2ff;
+  border-color: #a5b4fc;
+  color: #4338ca;
 }
 @media (prefers-reduced-motion: reduce) {
   .est-parse-ico { animation: none; }
@@ -16265,7 +16278,7 @@ table.data.project-hours-diff thead th {
 /* 运输里程（2026-11-22）：按公里×单价库运输价算车费，不进清单 */
 .est-dist-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: var(--text); }
 .est-dist-row label { font-weight: 600; flex-shrink: 0; }
-.est-dist-row input[type=number] { width: 76px; flex-shrink: 0; text-align: right; font-size: 12px; padding: 4px 6px; }
+.est-dist-row input[type=number] { width: 58px; height: 26px; flex-shrink: 0; text-align: right; font-size: 12px; padding: 2px 6px; }
 .est-dist-row b { color: #0369a1; }
 .est-dist-row .est-tip { font-size: 11px; color: var(--muted); }
 .est-empty, .est-result-empty {

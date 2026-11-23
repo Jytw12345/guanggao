@@ -235,7 +235,10 @@ const WORK_GROUPS = [
     ['i_drill','打孔/植筋','个',0.30,1,1,'az','电锤钻孔→清孔→植筋胶'],
     ['i_bolt','膨胀螺栓固定','个',0.07,1,1,'az','钻孔→打入→紧固'],
     ['i_seal','封底/包边','㎡',0.45,1,0,'az','折边→固定→打胶'],
-    ['i_steelremove','钢架拆除','㎡',0.90,1,0,'pg','气割/角磨切割→拆落→清运']
+    ['i_steelremove','钢架拆除','㎡',0.90,1,0,'pg','气割/角磨切割→拆落→清运'],
+    // 2026-11-23 补「工地围挡」（用户反馈：围挡这种常用工艺内置库没有）。按㎡计，
+    // 0.35h/㎡×安装技工48≈17元/㎡人工，对齐三四线彩钢板围挡安装行情；材料走单价库另补。
+    ['i_fence','工地围挡安装（彩钢板/冲孔）','㎡',0.35,0,0,'az','放线→立柱/配重→拼板固定→加固收口']
   ]},
   {g:'④ 电气 / 光源 / 调试', rows:[
     ['i_ledmod','LED模组安装','㎡',0.55,1,0,'dg','贴装/打孔固定→串接'],
@@ -441,11 +444,15 @@ const SMART_DICT = [
   {k:['亚克力字','水晶字','pvc字','PVC字'], id:'i_acrword'},
   {k:['不锈钢字','不锈钢包边字'], id:'i_ssword'},
   {k:['广告板','广告牌','广告展板','宣传栏','宣传栏组装','宣传橱窗','阅报栏'], id:'i_board'},
+  {k:['围挡','工地围挡','彩钢围挡','冲孔围挡','装配式围挡','pvc围挡','PVC围挡'], id:'i_fence'},
+  {k:['KT板','kt板','展板','写真','写真板','雪弗板'], id:'i_kt'},
+  {k:['UV板','uv板','写真裱板','标识牌制作'], id:'i_uvboard'},
   // 灯箱布/透光布要先于「灯箱」命中：否则「灯箱布 12㎡」会被当成成品灯箱按个算
   {k:['灯箱布','透光布','拉布灯箱布','软膜布'], id:'i_lightcloth'},
   {k:['灯箱','吸塑灯箱','超薄灯箱'], id:'i_lb'},
   {k:['软膜'], id:'i_softfilm'},
   {k:['标识牌','标牌','导视牌','指示牌','公示牌','公告栏'], id:'i_guide'},
+  {k:['导视系统','导视成套','标识系统','导视工程'], id:'i_guidesys'},
   {k:['指引牌','引导牌','水牌'], id:'i_easel'},
   {k:['机械挖坑','挖机','挖掘机','机械开挖','机械打坑'], id:'i_pitmach'},
   {k:['混凝土浇筑','浇筑混凝土','打混凝土','混凝土基础','浇筑基础','灌浆'], id:'i_pitcon'},
@@ -466,6 +473,8 @@ const SMART_DICT = [
   {k:['垃圾清运','清运','建筑垃圾'], id:'i_trash'},
   {k:['桁架'], id:'i_truss'},
   {k:['舞台','主席台'], id:'i_stage'},
+  {k:['展厅','展位','展台','展馆'], id:'i_booth'},
+  {k:['形象墙','企业墙','企业文化','企业标语','标语墙','LOGO墙'], id:'i_bgt'},
   {k:['地毯'], id:'i_carpet'},
   {k:['旗杆','旗帜杆'], id:'i_flag'},
   {k:['灯光','音响','灯具'], id:'i_lamp'},
@@ -474,7 +483,7 @@ const SMART_DICT = [
   {k:['文化墙','墙贴','贴纸','无框画','装饰画','挂画','壁画'], id:'i_wallsticker'},
   {k:['玻璃贴','贴膜','磨砂贴'], id:'i_windowfilm'},
   {k:['车贴','车身贴'], id:'i_carsticker'},
-  {k:['亮化','投光灯','洗墙灯','轮廓灯'], id:'i_buildlight'},
+  {k:['亮化','投光灯','洗墙灯','轮廓灯','亮化工程','户外亮化','泛光','泛光照明','轮廓照明','楼体照明'], id:'i_buildlight'},
   {k:['吊篮'], id:'i_basket'},
   {k:['高空车','曲臂车'], id:'i_aerial'},
   {k:['运输','运费','送货'], id:'i_transport'},
@@ -500,7 +509,36 @@ const SCENE_COMBOS = [
   {n:'灯箱广告牌整套', ids:['i_lb','i_board','i_wire','i_transport'], q:{i_lb:1,i_board:1,i_wire:1,i_transport:1}},
   {n:'拆除+新装', ids:['i_remove','i_door','i_wire','i_trash'], q:{i_remove:1,i_door:1,i_wire:1,i_trash:1}},
   {n:'导视标识整套', ids:['i_guide','i_doorplate','i_bolt','i_wire'], q:{i_guide:10,i_doorplate:20,i_bolt:40,i_wire:1}},
-  {n:'停车场导视牌整套', ids:['i_pitbase','i_guide','i_printchange'], q:{i_pitbase:1,i_guide:1,i_printchange:3}, m:{i_printchange:'area'}}
+  {n:'停车场导视牌整套', ids:['i_pitbase','i_guide','i_printchange'], q:{i_pitbase:1,i_guide:1,i_printchange:3}, m:{i_printchange:'area'}},
+  // 2026-11-23 补 10 套广告安装高频场景（用户反馈"常用方案太少"）。ids 均来自 WORK_ITEMS，
+  // 面积项标 m:'area'：输入写了尺寸（6米*3米）即自动算量；只写名称走 q 默认数量。
+  {n:'玻璃贴膜整套', ids:['i_windowfilm','i_static','i_clean'], q:{i_windowfilm:1,i_static:1,i_clean:1}, m:{i_windowfilm:'area',i_static:'area'}},
+  {n:'文化墙整套', ids:['i_reinforce','i_wallsticker','i_acrylic','i_uvboard','i_clean'], q:{i_reinforce:1,i_wallsticker:1,i_acrylic:1,i_uvboard:1,i_clean:1}, m:{i_wallsticker:'area',i_acrylic:'area',i_uvboard:'area'}},
+  {n:'楼体亮化整套', ids:['i_buildlight','i_flood','i_outline','i_wallwash','i_lightdebug'], q:{i_buildlight:1,i_flood:1,i_outline:1,i_wallwash:1,i_lightdebug:1}, m:{i_buildlight:'area'}},
+  {n:'LED显示屏整套', ids:['i_ledscreen','i_power','i_box','i_earth'], q:{i_ledscreen:1,i_power:1,i_box:1,i_earth:1}, m:{i_ledscreen:'area'}},
+  {n:'喷绘画面更换整套', ids:['i_printchange','i_banner','i_glue'], q:{i_printchange:1,i_banner:1,i_glue:1}, m:{i_printchange:'area',i_banner:'area'}},
+  {n:'车身贴整套', ids:['i_carsticker','i_clean'], q:{i_carsticker:1,i_clean:1}},
+  {n:'展位布置整套', ids:['i_booth','i_meshstand','i_xstand','i_venueout'], q:{i_booth:1,i_meshstand:1,i_xstand:1,i_venueout:1}, m:{i_booth:'area'}},
+  {n:'道旗刀旗整套', ids:['i_roadflag','i_knifeflag','i_flag'], q:{i_roadflag:1,i_knifeflag:1,i_flag:1}},
+  {n:'外墙清洗整套', ids:['i_wallclean','i_doorclean','i_clean'], q:{i_wallclean:1,i_doorclean:1,i_clean:1}, m:{i_wallclean:'area',i_doorclean:'area'}},
+  {n:'发光字维修整套', ids:['i_repair','i_ledchange','i_waterproof','i_wire'], q:{i_repair:1,i_ledchange:1,i_waterproof:1,i_wire:1}, m:{i_ledchange:'area'}},
+  // 2026-11-23 补「工地大门整套」（用户反馈：项目部大门这种场景方案库没有）。
+  // 口径：两侧门柱挖坑+浇筑+焊接→门头钢架/面板→项目名称发光字→七牌一图→旗杆→接线→运输。
+  // 写尺寸（6米*2米）时钢架/面板按面积、发光字按面积×0.3（字只占门头一部分），不写尺寸用 q 默认量。
+  {n:'工地大门整套', ids:['i_pitbase','i_pitcon','i_postbase','i_steel','i_fascia','i_led','i_guide','i_flag','i_wire','i_transport'],
+   q:{i_pitbase:2,i_pitcon:2,i_postbase:2,i_steel:12,i_fascia:12,i_led:3.6,i_guide:6,i_flag:2,i_wire:1,i_transport:1},
+   m:{i_steel:'area',i_fascia:'area',i_led:'area'}, f:{i_led:0.3}},
+  // 2026-11-23 第二轮补 3 套（用户列举宣传物料/企业文化/导视/围挡/发光字/装饰/展厅/亮化）：
+  // 导视系统、发光字、亮化定额与方案已完善不动；广告装饰是泛称、与门头/文化墙重叠不建项。
+  {n:'工地围挡整套', ids:['i_fence','i_banner','i_pitbase','i_printchange','i_transport'],
+   q:{i_fence:30,i_banner:30,i_pitbase:5,i_printchange:12,i_transport:1},
+   m:{i_fence:'area',i_banner:'area',i_printchange:'area'}},
+  {n:'宣传物料整套', ids:['i_kt','i_uvboard','i_bannerhang2','i_xstand','i_printchange'],
+   q:{i_kt:10,i_uvboard:8,i_bannerhang2:4,i_xstand:3,i_printchange:8},
+   m:{i_kt:'area',i_uvboard:'area',i_printchange:'area'}},
+  {n:'展厅布置整套', ids:['i_booth','i_bgt','i_acrylic','i_ledscreen','i_lamp','i_carpet','i_clean'],
+   q:{i_booth:20,i_bgt:15,i_acrylic:10,i_ledscreen:6,i_lamp:6,i_carpet:20,i_clean:1},
+   m:{i_booth:'area',i_bgt:'area',i_acrylic:'area',i_ledscreen:'area',i_carpet:'area'}}
 ];
 
 /* ===== 专项测算：脚手架 / 土建基础 / 精神堡垒 =====
@@ -620,6 +658,20 @@ const SPECIAL_CALCS={
 };
 
 const SHEET_AREA=2.98;   // 标准板材 1220×2440mm = 2.98㎡/张
+const SHEET_W=1.22, SHEET_H=2.44; // 板实尺（米）。高门头>2.44m 一张板不够高，纯按面积算张数会少算
+/* 按门头宽高排板（板可横竖旋转铺），返回最省张数与铺法：
+   竖铺=2.44m 朝高（宽 ceil(w/1.22) × 高 ceil(h/2.44)）
+   横铺=1.22m 朝高（宽 ceil(w/2.44) × 高 ceil(h/1.22)）
+   无尺寸时返回 0 → 回退面积法（v429：只写面积不写尺寸的活照旧算）。*/
+function sheetLayoutCount(w, h) {
+  if (!(w > 0) || !(h > 0)) return { n: 0, how: '' };
+  const eps = 1e-9;
+  const v = Math.ceil(w / SHEET_W - eps) * Math.ceil(h / SHEET_H - eps);
+  const hz = Math.ceil(w / SHEET_H - eps) * Math.ceil(h / SHEET_W - eps);
+  if (hz < v) return { n: hz, how: '横铺' };
+  return { n: v, how: '竖铺' };
+}
+const TUBE_LEN=6;        // 方管常用定尺 6 米/根（只用于余料提示，不参与金额）
 let DOOR_DEPTH=0.2;      // 门头围边深度(米)，智能拆解时可改
 let DOOR_GAP=0.6;        // 门头钢架龙骨间距(米)：行业横400-600/竖600-800，默认0.6；刚性面板按网格算用量
 /* 骨架工艺参数：厚度决定"贴墙平面/立体箱体"，造型决定异形焊点系数。
@@ -1177,17 +1229,21 @@ const EXTRA_MIN_DEPTH = 0.1;
     const mat = recipe.mat.map(x => {
       const baseArea = x.wrap ? area + wrapArea : area;
       const areaQty = baseArea * x.k;
-      let q, calc;
+      let q, calc, netQty = 0, bars = 0, barLeft = 0;
       if (x.by === 'grid') {
         const dir = x.gridDir || 'both';
         const oneLen = dir === 'v' ? vLen : dir === 'h' ? hLen : vLen + hLen;
         q = Math.max(1, Math.round(oneLen * qtyN * x.k)) * layers;
+        // 只做提示：按 6 米定尺算需几根、切完余几米；工程款仍按净米数计（不改金额）
+        bars = Math.ceil(q / TUBE_LEN);
+        barLeft = Math.round((bars * TUBE_LEN - q) * 100) / 100;
         const detail = dir === 'v' ? `竖${vN}根×${h}m=${vLen.toFixed(1)}米`
           : dir === 'h' ? `横${hN}根×${w}m=${hLen.toFixed(1)}米`
             : `竖${vN}根×${h}m + 横${hN}根×${w}m = ${(vLen + hLen).toFixed(1)}米`;
         calc = `@${gp}m间距 ${detail}` + (qtyN > 1 ? ` × ${qtyN}套` : '') + (x.k !== 1 ? ` × ${x.k}` : '') + (layers > 1 ? ` ×2层=${q}米` : '');
       } else if (x.u === '㎡' && x.by === 'area') {
         q = Math.max(1, rnd(areaQty));
+        netQty = q; // 整张取整前的净用量，供结果行标「呆料」
         calc = x.wrap
           ? `正面${area.toFixed(2)} + 侧包${wrapArea.toFixed(2)}(${dep}米深) = ${baseArea.toFixed(2)}㎡ × ${x.k}`
           : `面积 ${area.toFixed(2)}㎡ × ${x.k}`;
@@ -1199,14 +1255,23 @@ const EXTRA_MIN_DEPTH = 0.1;
             ? `方通 @${vg}m 间距 竖${lvfRows}根×${h}米 = ${lvfLen.toFixed(0)}米 × ${x.k}`
             : `${x.by === 'perim' ? '周长 ' + perim.toFixed(1) + '米' : qtyN + '套'} × ${x.k}`;
       }
-      const sheets = x.sheet ? Math.ceil(areaQty / SHEET_AREA) : 0;
+      let sheets = x.sheet ? Math.ceil(areaQty / SHEET_AREA) : 0;
+      let sheetHow = '';
+      if (x.sheet) {
+        // 2026-11-23：门头高超过板长 2.44m 必须拼接，纯面积法会少算张数。
+        // 按宽高排板兜底，只在排板张数更多时生效（常规尺寸一分不变）。
+        const lay = sheetLayoutCount(w, h);
+        const layN = lay.n * qtyN;
+        if (layN > sheets) { sheets = layN; sheetHow = lay.how; }
+      }
       if (sheets) {
         // 板材按整张买（2026-11-22）：不足一张算一张，工程量与金额都按整张面积×单价，
         // 不能按「用得上的面积」收钱——否则 5.6 张的活只收 5.6 张不到的料钱。
         q = Math.round(sheets * SHEET_AREA * 100) / 100;
         calc += ` → 按整张 ${sheets}张 × ${SHEET_AREA}㎡ = ${q}㎡（不足一张按一张）`;
+        if (sheetHow) calc += `；高${h}米超板长${SHEET_H}米需拼接·按${sheetHow}排${sheets}张`;
       }
-      return { n: x.n, u: x.u, q, p: x.p, sheets, wrap: !!x.wrap, calc };
+      return { n: x.n, u: x.u, q, p: x.p, sheets, sheetHow, wrap: !!x.wrap, calc, netQty, bars, barLeft };
     });
     if (tk > 0 && braceLen > 0) {
       mat.push({ n: '方管(双层连接撑)', u: '米', q: Math.round(braceLen), p: 24, sheets: 0, wrap: false,
@@ -1270,15 +1335,22 @@ const EXTRA_MIN_DEPTH = 0.1;
         if (!(q > 0)) return;
         let calc = `工艺·${ex.n}`;
         const byTxt = methodTxt(m.by);
-        let sheets = 0;
+        let sheets = 0, netQty = 0, sheetHow = '';
         if (m.sheet) {
+          netQty = q; // 整张取整前净用量
           sheets = Math.ceil(q / SHEET_AREA);
+          // 背板这类整面 area 板材按门头宽高排板；包边 perimDepth 是窄条，不套排版
+          if (m.by === 'area') {
+            const lay = sheetLayoutCount(d.w, d.h);
+            const layN = lay.n * qtyN;
+            if (layN > sheets) { sheets = layN; sheetHow = lay.how; }
+          }
           q = rnd(sheets * SHEET_AREA);
-          calc += `：${byTxt} × ${m.k} → 按整张 ${sheets}张 = ${q}㎡`;
+          calc += `：${byTxt} × ${m.k} → 按整张 ${sheets}张 = ${q}㎡` + (sheetHow ? `（高${d.h}米需拼接·${sheetHow}）` : '');
         } else {
           calc += `：${byTxt} × ${m.k} = ${q}${m.u || ''}`;
         }
-        mat.push({ n: m.n, u: m.u || '项', q, p: Number(m.p) || 0, sheets, wrap: false, calc, extraKey: ex.key, bench });
+        mat.push({ n: m.n, u: m.u || '项', q, p: Number(m.p) || 0, sheets, sheetHow, wrap: false, calc, extraKey: ex.key, bench, netQty });
       }
     });
     return { work, mat };
@@ -1485,7 +1557,8 @@ const EXTRA_MIN_DEPTH = 0.1;
       hits.push({ type: 'lib', id: x.id, n: it.n, u: it.u, q: x.q, calc: x.calc + ' · ' + x.note, kw: recipe.label, note: x.note, extraKey: x.extraKey, bench: x.bench });
     });
     ex.mat.forEach(x => {
-      hits.push({ type: 'mat', n: x.n, u: x.u, q: x.q, p: x.p, sheets: x.sheets, wrap: x.wrap, calc: x.calc, kw: recipe.label, extraKey: x.extraKey, bench: x.bench });
+      hits.push({ type: 'mat', n: x.n, u: x.u, q: x.q, p: x.p, sheets: x.sheets, sheetHow: x.sheetHow, wrap: x.wrap, calc: x.calc,
+        netQty: x.netQty, bars: x.bars, barLeft: x.barLeft, kw: recipe.label, extraKey: x.extraKey, bench: x.bench });
     });
     const extra = parseSpec(t, { synonyms: cfg.synonyms });
     const covered = new Set(ex.work.map(x => x.id));
@@ -1508,9 +1581,17 @@ const EXTRA_MIN_DEPTH = 0.1;
     const rateNormal = p.rateNormal;
     if (w.kind === 'mat') {
       const q = parseFloat(w.q) || 0, price = parseFloat(w.p) || 0;
-      const sheetTxt = w.sheets ? ' · 约' + w.sheets + '张' : '';
+      const sheetTxt = w.sheets ? ' · 约' + w.sheets + '张' + (w.sheetHow ? '(' + w.sheetHow + ')' : '') : '';
+      // 呆料只提示不收钱：板材标净用/整张多出的面积，方管标定尺根数/切余米数。
+      // 金额仍是 q×price（q 已按整张/净米数计），改这几行文字不动一分钱。
+      const net = Number(w.netQty) || 0;
+      const wasteTxt = (w.sheets && net > 0 && q > net)
+        ? ` · 净用${net.toFixed(2)}㎡/呆料${(q - net).toFixed(2)}㎡` : '';
+      const bars = Number(w.bars) || 0;
+      const barTxt = bars > 0
+        ? ` · ${TUBE_LEN}米/根 ${bars}根·余${(Number(w.barLeft) || 0).toFixed(0)}米` : '';
       return { n: w.n || '材料', u: w.u || '项', q, hours: 0, fee: q * price,
-        note: `材料 ${q}${w.u || ''} × ${price}元${sheetTxt}`, isMat: true, isCustom: true };
+        note: `材料 ${q}${w.u || ''} × ${price}元${sheetTxt}${wasteTxt}${barTxt}`, isMat: true, isCustom: true };
     }
     if (w.cid) {
       const name = w.n || '自定义项';
