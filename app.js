@@ -3134,21 +3134,24 @@ function aggregateCommission(projects, inPeriod) {
         totalLaborFee += getLaborFee(p) * _ratio;
         totalMaterialFee += (Number(p.materialFee) || 0) * _ratio;
         totalPool += getCommissionPool(p) * _ratio;
-        const alloc = resolveCommissionAlloc(p);
-        alloc.items.forEach((it) => {
-          const amt = (Number(it.amount) || 0) * _ratio;
-          byWorker[it.workerId] = (byWorker[it.workerId] || 0) + amt;
-          workerNames[it.workerId] = it.workerName;
-          totalAmount += amt;
-          wset.add(it.workerId);
-        });
       }
+      // 个人提成：必须与按天明细（byWorkerDate）同源，都取 commissionDaily 的真实归期金额。
+      // 旧口径用 alloc.amount × ratio 缩放，跨月项目里 A 10/30 施工、B 11/2 施工时，
+      // 11 月月度合计会给两人各 30（ratio 缩放），但日历/明细只显示 B 60 → 两处打架、工钱错发。
+      // 新口径：只累加落在期内的天，月度合计 = 日历明细按人汇总，天然一致。
       const daily = commissionDaily(p);
+      const allocMap = {};
+      (resolveCommissionAlloc(p).items || []).forEach((it) => { allocMap[it.workerId] = it.workerName; });
       Object.keys(daily).forEach((d) => {
         if (inPeriod && !inPeriod(d)) return;
         Object.keys(daily[d]).forEach((wid) => {
+          const amt = daily[d][wid];
           byWorkerDate[wid] = byWorkerDate[wid] || {};
-          byWorkerDate[wid][d] = (byWorkerDate[wid][d] || 0) + daily[d][wid];
+          byWorkerDate[wid][d] = (byWorkerDate[wid][d] || 0) + amt;
+          byWorker[wid] = (byWorker[wid] || 0) + amt;
+          workerNames[wid] = allocMap[wid] || workerNames[wid];
+          totalAmount += amt;
+          wset.add(wid);
         });
       });
     }
@@ -3485,16 +3488,23 @@ let BG_RELOAD_MINUTES = (() => {
 // 云端模式：全局部署于 app_settings 表（全员共享）；本地模式：降级 localStorage（仅本机）。
 let AUTO_REVIEW_AFTER_ACCEPT_HOURS = (() => { try { const v = Number(localStorage.getItem("autoReviewAfterAcceptHours")); return v > 0 ? v : 0; } catch (_) { return 0; } })();
 
-/* 云端模式下从 app_settings 拉取全局「连续施工超时阈值」（全员统一）。本地模式不调用。 */
-async function loadWorkTimeoutSetting() {
+/* 云端模式下从 app_settings 拉取全局「连续施工超时阈值」（全员统一）。本地模式不调用。
+   prefetched：loadAllGlobalSettings 一次取回的 key→row 映射；不传时保留旧的单键查询。 */
+async function loadWorkTimeoutSetting(prefetched) {
   if (MODE !== "cloud" || !sb) return;
   try {
-    const { data, error } = await sb
-      .from("app_settings")
-      .select("value")
-      .eq("key", "work_timeout_hours")
-      .maybeSingle();
-    if (!error && data && data.value != null) {
+    let data = null;
+    if (prefetched && Object.prototype.hasOwnProperty.call(prefetched, "work_timeout_hours")) {
+      data = prefetched.work_timeout_hours || null;
+    } else if (!prefetched) {
+      const res = await sb
+        .from("app_settings")
+        .select("value")
+        .eq("key", "work_timeout_hours")
+        .maybeSingle();
+      if (!res.error) data = res.data;
+    }
+    if (data && data.value != null) {
       const v = Number(data.value);
       if (v > 0) WORKING_TIMEOUT_HOURS = v;
     }
@@ -3504,15 +3514,21 @@ async function loadWorkTimeoutSetting() {
 }
 
 /* 云端模式下从 app_settings 拉取全局「验收后自动审核（小时）」。本地模式不调用。 */
-async function loadAutoReviewSetting() {
+async function loadAutoReviewSetting(prefetched) {
   if (MODE !== "cloud" || !sb) return;
   try {
-    const { data, error } = await sb
-      .from("app_settings")
-      .select("value")
-      .eq("key", "auto_review_after_accept_hours")
-      .maybeSingle();
-    if (!error && data && data.value != null) {
+    let data = null;
+    if (prefetched && Object.prototype.hasOwnProperty.call(prefetched, "auto_review_after_accept_hours")) {
+      data = prefetched.auto_review_after_accept_hours || null;
+    } else if (!prefetched) {
+      const res = await sb
+        .from("app_settings")
+        .select("value")
+        .eq("key", "auto_review_after_accept_hours")
+        .maybeSingle();
+      if (!res.error) data = res.data;
+    }
+    if (data && data.value != null) {
       const v = Number(data.value);
       if (v > 0) AUTO_REVIEW_AFTER_ACCEPT_HOURS = v;
     }
@@ -3522,21 +3538,58 @@ async function loadAutoReviewSetting() {
 }
 
 /* 云端模式下从 app_settings 拉取全局「用车记录虚假里程阈值（km/h）」。本地模式不调用。 */
-async function loadFakeMileageKmhSetting() {
+async function loadFakeMileageKmhSetting(prefetched) {
   if (MODE !== "cloud" || !sb) return;
   try {
-    const { data, error } = await sb
-      .from("app_settings")
-      .select("value")
-      .eq("key", "fake_mileage_kmh")
-      .maybeSingle();
-    if (!error && data && data.value != null) {
+    let data = null;
+    if (prefetched && Object.prototype.hasOwnProperty.call(prefetched, "fake_mileage_kmh")) {
+      data = prefetched.fake_mileage_kmh || null;
+    } else if (!prefetched) {
+      const res = await sb
+        .from("app_settings")
+        .select("value")
+        .eq("key", "fake_mileage_kmh")
+        .maybeSingle();
+      if (!res.error) data = res.data;
+    }
+    if (data && data.value != null) {
       const v = Number(data.value);
       if (v > 0) VEHICLE_FAKE_MILEAGE_KMH = v;
     }
   } catch (e) {
     console.warn("[app] 读取虚假里程阈值失败，使用默认值：", e);
   }
+}
+
+/* 一次查询取回全部全局设置：登录/下拉刷新时原本 4 个 app_settings 单键查询与
+   repo.loadAll 的十几个请求叠在同一瞬间，是移动端假超时的放大器。
+   批量查询失败时传 undefined，各 loader 自动回退到旧的单键查询，行为不变。 */
+const GLOBAL_SETTING_KEYS = ["work_timeout_hours", "auto_review_after_accept_hours", "fake_mileage_kmh", "estimate_config"];
+async function loadAllGlobalSettings() {
+  if (MODE !== "cloud" || !sb) {
+    await loadWorkTimeoutSetting();
+    await loadAutoReviewSetting();
+    await loadFakeMileageKmhSetting();
+    if (typeof loadEstimateConfig === "function") await loadEstimateConfig();
+    return;
+  }
+  let rows; // undefined = 批量失败，交给各 loader 逐键回退
+  try {
+    const { data, error } = await sb
+      .from("app_settings")
+      .select("key,value,updated_at")
+      .in("key", GLOBAL_SETTING_KEYS);
+    if (!error) {
+      rows = {};
+      (data || []).forEach((r) => { rows[r.key] = r; });
+    }
+  } catch (e) {
+    console.warn("[app] 批量读取全局设置失败，回退逐键查询：", e);
+  }
+  await loadWorkTimeoutSetting(rows);
+  await loadAutoReviewSetting(rows);
+  await loadFakeMileageKmhSetting(rows);
+  if (typeof loadEstimateConfig === "function") await loadEstimateConfig(rows);
 }
 
 /* ============================================================
@@ -4058,6 +4111,18 @@ async function cloudQuery(build, retries = CLOUD_FETCH_RETRIES) {
   return res;
 }
 
+/* 分批发送并列查询。移动端浏览器/WebView 对同域并发连接数有限，一次 16 个请求容易
+   在队列里等到超过 cloudQuery 的 15s 超时，被误判成「网络故障」并让整次同步作废。
+   每批 4 个、批间串行；返回顺序与原来的 Promise.all 完全一致，数据语义不变。 */
+async function cloudQueryBatch(builders, batchSize = 4) {
+  const results = [];
+  for (let i = 0; i < builders.length; i += batchSize) {
+    const chunk = builders.slice(i, i + batchSize);
+    results.push(...await Promise.all(chunk.map((build) => cloudQuery(build))));
+  }
+  return results;
+}
+
 const repo = {
   /* ---- 载入全部数据到 cache ---- */
   async loadAll(forceFull) {
@@ -4158,24 +4223,25 @@ const repo = {
         if (hasCache) q.in("project_id", activeIds.length ? activeIds : ["__none__"]);
         return q;
       });
-      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes, itRes, vRes, nRes, aRes, mRes] = await Promise.all([
-        cloudQuery(() => sb.from("workers").select("*")),
-        cloudQuery(() => sb.from("stores").select("*")),
-        cloudQuery(() => sb.from("role_permissions").select("*")),
-        cloudQuery(() => sb.from("leave_records").select("*")),
-        cloudQuery(() => sb.from("leave_quota").select("*")),
-        cloudQuery(() => sb.from("holidays").select("*")),
-        cloudQuery(() => sb.from("outsourced_workers").select("*")),
-        cloudQuery(() => sb.from("operation_logs").select("*").order("timestamp", { ascending: false }).limit(MAX_LOGS)),
-        cloudQuery(() => sb.from("worker_schedules").select("*")),
-        cloudQuery(() => sb.from("vehicle_trips").select("*")),
-        cloudQuery(() => sb.from("user_permissions").select("*")),
+      // 每批最多 4 个请求：避免移动端并发排队触发 15s 超时后整次同步被误判为网络故障。
+      const [wRes, sRes, rpRes, lrRes, lqRes, hRes, oRes, opRes, wsRes, vtRes, uRes, itRes, vRes, nRes, aRes, mRes] = await cloudQueryBatch([
+        () => sb.from("workers").select("*"),
+        () => sb.from("stores").select("*"),
+        () => sb.from("role_permissions").select("*"),
+        () => sb.from("leave_records").select("*"),
+        () => sb.from("leave_quota").select("*"),
+        () => sb.from("holidays").select("*"),
+        () => sb.from("outsourced_workers").select("*"),
+        () => sb.from("operation_logs").select("*").order("timestamp", { ascending: false }).limit(MAX_LOGS),
+        () => sb.from("worker_schedules").select("*"),
+        () => sb.from("vehicle_trips").select("*"),
+        () => sb.from("user_permissions").select("*"),
         // 内部任务 / 上门量尺已于 2026-10-18 下线：保留位置占位，不再发请求（数据表不删，便于回滚）
-        cloudQuery(() => Promise.resolve({ data: [], error: null })),
-        cloudQuery(() => sb.from("vehicles").select("*")),
-        cloudQuery(() => Promise.resolve({ data: [], error: null })),
-        cloudQuery(() => sb.from("notifications").select("*").eq("recipient_user_id", (currentUser && currentUser.id) || "__none__").order("created_at", { ascending: false })),
-        cloudQuery(() => sb.from("user_directory").select("*").order("email")),
+        () => Promise.resolve({ data: [], error: null }),
+        () => sb.from("vehicles").select("*"),
+        () => Promise.resolve({ data: [], error: null }),
+        () => sb.from("notifications").select("*").eq("recipient_user_id", (currentUser && currentUser.id) || "__none__").order("created_at", { ascending: false }),
+        () => sb.from("user_directory").select("*").order("email"),
       ]);
       const allErrors = [
         { name: "workers", res: wRes },
@@ -6238,6 +6304,15 @@ function renderWorkers(dateStr) {
   const scheduleHtml = renderWorkerAssignmentsText(displayDate);
   const overdueSection = renderWorkerOverdueSection();
 
+  // 工人卡提成与统计页同源（2026-11-23）：直接复用 aggregateCommission，修三处旧口径打架——
+  // ①漏算付费维修单分成 ②按施工天归期（旧按预约月）③跨期项目与日历明细同口径。
+  // 只算两次全量（无期间=累计 / 本月期间=本月），避免逐人重复遍历。
+  const _commNow = new Date();
+  const _commYm = `${_commNow.getFullYear()}-${String(_commNow.getMonth() + 1).padStart(2, "0")}`;
+  const _inThisMonth = (d) => !!d && monthKey(d) === _commYm;
+  const _commAggAll = aggregateCommission(cache.projects, null);
+  const _commAggMonth = aggregateCommission(cache.projects, _inThisMonth);
+
   list.innerHTML = `
     <div id="workerScheduleSection" style="margin-bottom: 24px;">
       <div class="section-head" style="margin-bottom: 12px; display:flex; align-items:center; justify-content:space-between;">
@@ -6259,11 +6334,8 @@ function renderWorkers(dateStr) {
     <div class="stats-hint" style="margin-bottom:10px;">💡 提成<b>仅统计已验收 / 已审核的项目</b>，已完工未验收的项目暂不计入，验收完成后才计入。</div>
         <div class="card-grid" style="margin-top:0;">
     ${cache.workers.map((w) => {
-      const totalComm = sumWorkerCommission(w.id, cache.projects);
-      const now = new Date();
-      const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-      const monthProjects = cache.projects.filter(p => monthKey(p.appointmentTime) === ym);
-      const monthComm = sumWorkerCommission(w.id, monthProjects);
+      const totalComm = Math.round((_commAggAll.byWorker[w.id] || 0) * 100) / 100;
+      const monthComm = Math.round((_commAggMonth.byWorker[w.id] || 0) * 100) / 100;
       return `
         <div class="card${w.active === false ? " is-resigned" : ""}">
           <div class="worker-card-head">
@@ -9651,7 +9723,7 @@ function renderProjectPhotosHtml(p) {
         const del = canDelete
           ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeCosPhoto('${esc(p.id)}','${realKind}','${esc(it.key)}')">✕</button>`
           : "";
-        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">${img}${prog}${err}${del}</div>`;
+        return `<div class="cos-thumb${it.uploading ? " is-uploading" : ""}${it.error ? " is-error" : ""}" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${escJsAttr(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">${img}${prog}${err}${del}</div>`;
       })
       .join("");
     const addBtn = canUpload
@@ -11346,14 +11418,20 @@ function renderProjects() {
 
         <!-- 施工内容摘要条：整块可点，点击展开「施工内容 + 注意事项」 -->
         ${(() => {
-          const t = cardWorkContentText(p.workContent, p.note);
-          if (!t.preview && !projectPhotoCount(p)) return "";
+          // 与弹窗同口径：先合并老数据的空格碎片，再去掉明细/注意事项里已有的重复内容，
+          // 避免卡片「14条」与弹窗「7条」打架、也避免预览与注意事项同一句话铺两遍。
+          const merged = mergeWorkContentFragments(p.workContent);
+          const dedup = visibleWorkContentTags(merged, getWorkItems(p), p.note);
+          const t = cardWorkContentText(dedup, p.note);
+          // 入口是否存在取决于「原始是否填过施工内容」，不是去重后的预览文字：
+          // 内容全被明细/注意事项覆盖时去重后为空，但数据没删，卡片仍要保留入口（显示「查看明细」），
+          // 与详情页「内容已列在下方明细与注意事项中」保持一致。
+          if (!merged.length && !projectPhotoCount(p)) return "";
           return `
         <div class="card-content--clickable" onclick="event.stopPropagation(); showProjectContent('${p.id}')" title="查看全部 ${t.total || "详情"} 施工内容、明细与注意事项">
           <span class="cc-label">施工内容</span>
           <span class="cc-text">${esc(t.preview) || "查看明细"}</span>
           ${t.total > 2 ? `<span class="cc-count">${t.total}条</span>` : ""}
-          ${t.notePreview ? `<span class="cc-note">💬 ${esc(t.notePreview)}</span>` : ""}
           ${projectPhotoCount(p) > 0 ? `<span class="cc-photo" title="该项目已有照片，进施工管理查看">📷</span>` : ""}
           <span class="cc-arrow">›</span>
         </div>`;
@@ -12877,7 +12955,7 @@ function renderProjectContentPhotos(p, photos, allowDownload = true) {
     const blockKeys = arr.filter((it) => it.key).map((it) => it.key);
     const items = arr.map((it, i) => {
       const sid = cosSafeId(it.key);
-      return `<div class="cos-thumb cos-thumb--readonly" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">
+      return `<div class="cos-thumb cos-thumb--readonly" id="cos-item-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${escJsAttr(it.name || "")}'${_cosLbArg(blockKeys, it.key)})">
         <img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">
       </div>`;
     }).join("");
@@ -12941,7 +13019,7 @@ function renderFormPhotos() {
           ? `<img src="${esc(it.url)}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`
           : `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key || "")}')">`);
       const del = canDelete
-        ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeFormPhoto('${realKey}','${esc(it.key || it.url || it.name)}')">✕</button>`
+        ? `<button type="button" class="cos-thumb__del" title="删除" onclick="event.stopPropagation();removeFormPhoto('${realKey}','${escJsAttr(it.key || it.url || it.name)}')">✕</button>`
         : "";
       return `<div class="cos-thumb" id="cos-item-${sid}">${img}${del}</div>`;
     }).join("");
@@ -13268,7 +13346,7 @@ function repairPhotosHtml(ro) {
     if (!items || !items.length) return "";
     const thumbs = items.map((it) => {
       const sid = cosSafeId(it.key);
-      return `<div class="cos-thumb" id="ro-ph-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}')">` +
+      return `<div class="cos-thumb" id="ro-ph-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${escJsAttr(it.name || "")}')">` +
         `<img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')"></div>`;
     }).join("");
     return `<div class="detail-block cos-section" style="border-left-color:#f59e0b">
@@ -14160,6 +14238,11 @@ function openCompleteRepairForm(projectId, repairId) {
           <span style="font-size:11px;color:#6b7280;">勾选人员各记此时长</span>
         </div>
       </div>
+      <div class="form-row">
+        <label>维修结论 / 处理结果</label>
+        <textarea class="input" id="repairConclusion" placeholder="例如：已调整灯箱位置并加固支架，调试正常" style="min-height:56px;"></textarea>
+        <small class="hint" style="margin:2px 0 0">选填。记录本次维修做了什么、结果如何，完成后在详情页显示。</small>
+      </div>
       ${isPaid && pool > 0 ? `
       <input type="hidden" id="repairPoolVal" data-pool="${pool}" />
       <div class="form-row" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 10px;font-size:12px;color:#166534;">
@@ -14219,6 +14302,8 @@ async function submitCompleteRepair(projectId, repairId) {
   const workers = workerSourceIds.map(wid => getWorker(wid)).filter(Boolean);
   const actualHours = Math.round((Number(document.getElementById("repairActualHours").value) || 0) * 10) / 10;
   if (actualHours <= 0) { toast("请填写实际用时（考勤参考）"); return; }
+  const conclusionEl = document.getElementById("repairConclusion");
+  const conclusion = conclusionEl ? String(conclusionEl.value || "").trim() : "";
   const checked = workers.filter(w => { const cb = document.getElementById("repairW_" + w.id); return cb && cb.checked; });
   if (checked.length === 0) { toast("请至少勾选一位参与维修人员"); return; }
   // 考勤工时：勾选人员各记整单实际用时（auto 标记=系统按整单用时记，非逐人填报）
@@ -14241,6 +14326,7 @@ async function submitCompleteRepair(projectId, repairId) {
       completedAt: new Date().toISOString(),
       workLogs,
       actualHours,
+      conclusion,
       commissionAlloc,
       payable: isPaid,
       fixedPhotos,
@@ -16799,9 +16885,9 @@ function renderConstruction() {
         </div>
 
         <!-- 已完工/已验收/已审核后的操作：合并到同一 action-group，移动端横向排列 -->
-        ${(canReview && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p)) || (reviewed && perm.unreviewProject(p)) || (perm.deleteWorkLog(p) && (p.workLogs || []).length > 0) ? `
+        ${((canReview || perm.acceptProject(p)) && !reviewed && (p.status === STATUS.DONE || p.status === STATUS.ACCEPTED)) || ((reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair()) || ([STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p)) || (reviewed && perm.unreviewProject(p)) || (perm.deleteWorkLog(p) && (p.workLogs || []).length > 0) ? `
         <div class="action-group action-group--post-completion">
-          ${canReview && !reviewed && p.status === STATUS.DONE ? `<button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>` : ""}
+          ${perm.acceptProject(p) && !reviewed && p.status === STATUS.DONE ? `<button class="btn small success" onclick="updateProjectStatus('${p.id}', '${STATUS.ACCEPTED}')">✅ 确认验收</button>` : ""}
           ${canReview && !reviewed && p.status === STATUS.ACCEPTED ? `<button class="btn small success" onclick="reviewProject('${p.id}')">🔍 审核项目</button>` : ""}
           ${(reviewed || p.status === STATUS.ACCEPTED) && perm.createRepair() ? `<button class="btn small outline" onclick="openRepairOrderForm('${p.id}')">🔧 发起维修</button>` : ""}
           ${[STATUS.DONE, STATUS.ACCEPTED, STATUS.REVIEWED].includes(p.status) && perm.rework(p) ? `<button class="btn small" onclick="reworkProject('${p.id}')">🔄 发起返工</button>` : ""}
@@ -16823,6 +16909,7 @@ function renderConstruction() {
             <div class="info-item"><div class="k">维修原因</div><div class="v">${esc(ro.reason || "—")}</div></div>
             <div class="info-item"><div class="k">维修地址</div><div class="v">${esc(ro.address || "—")}</div></div>
             <div class="info-item"><div class="k">预约维修时间</div><div class="v">${ro.appointmentTime ? fmtDateTime(ro.appointmentTime) : "—"}</div></div>
+            ${ro.completedAt ? `<div class="info-item"><div class="k">实际完成时间</div><div class="v" style="color:#16a34a;font-weight:600;">${fmtDateTime(ro.completedAt)}</div></div>` : ""}
             <div class="info-item"><div class="k">维修状态</div><div class="v">${ro.status || REPAIR_STATUS.PENDING}</div></div>
             <div class="info-item"><div class="k">紧急程度</div><div class="v" style="${ro.urgency === '加急' ? 'color:#dc2626;font-weight:600;' : ''}">${esc(ro.urgency || "普通")}</div></div>
             <div class="info-item"><div class="k">维修人员</div><div class="v">${esc(repairWorkerNames)}</div></div>
@@ -16831,9 +16918,10 @@ function renderConstruction() {
           </div>`;
           })()}
           ${repairFeeBlockHtml(ro)}
-          ${ro.workLogs && ro.workLogs.length ? `
+          ${(ro.workLogs && ro.workLogs.length) || ro.conclusion ? `
           <div class="info-grid" style="margin-top:10px">
-            <div class="info-item"><div class="k">维修工时（考勤参考）</div><div class="v">${(ro.actualHours || ro.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0)).toFixed(1)} 小时</div></div>
+            ${ro.workLogs && ro.workLogs.length ? `<div class="info-item"><div class="k">维修工时（考勤参考）</div><div class="v">${(ro.actualHours || ro.workLogs.reduce((s, l) => s + (Number(l.hours) || 0), 0)).toFixed(1)} 小时</div></div>` : ""}
+            ${ro.conclusion ? `<div class="info-item" style="grid-column:1/-1;"><div class="k">维修结论 / 处理结果</div><div class="v" style="white-space:pre-wrap;">${esc(ro.conclusion)}</div></div>` : ""}
           </div>` : ""}
           ${repairPhotosHtml(ro)}
           ${(ro.status === REPAIR_STATUS.PENDING) ? `
@@ -17178,7 +17266,7 @@ function renderConstruction() {
           <div class="cos-grid" style="margin-top:4px;">
             ${ac.photos.filter(x => x && x.key).map(it => {
               const sid = cosSafeId(it.key);
-              return `<div class="cos-thumb" id="ac-ph-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${esc(it.name || "")}')">
+              return `<div class="cos-thumb" id="ac-ph-${sid}" onclick="openCosLightboxByKey('${esc(it.key)}','${escJsAttr(it.name || "")}')">
                 <img data-cos-key="${esc(it.key)}" data-legacy-url="${esc(it.url || "")}" loading="lazy" alt="${esc(it.name || "")}" onerror="onCosImgError(this,'${esc(it.name || "")}','${esc(it.key)}')">
               </div>`;
             }).join("")}
@@ -26094,7 +26182,7 @@ function renderStoreStats() {
               <td class="ss-store">
                 <span class="ss-rank ${i === 0 ? 'ss-rank--top' : ''}">${i + 1}</span>
                 <span class="ss-store-name">${esc(r.name)}</span>
-                ${r.id && r.count > 0 ? `<button class="btn small ss-view" onclick="showStoreProjects('${r.id}', '${esc(r.name)}', '${esc(month || "")}')">查看</button>` : ""}
+                ${r.id && r.count > 0 ? `<button class="btn small ss-view" onclick="showStoreProjects('${r.id}', '${escJsAttr(r.name)}', '${escJsAttr(month || "")}')">查看</button>` : ""}
               </td>
               <td class="ss-num"><b>${r.count}</b></td>
               <td class="ss-dist">${distBar(r)}</td>
@@ -26533,7 +26621,7 @@ function renderStores() {
         <div class="card-title"><h3>${esc(s.name)}</h3></div>
         <div class="card-row"><span>关联预约</span><b>${projCount} 个</b></div>
         <div class="card-actions">
-          ${projCount > 0 ? `<button class="btn small" onclick="showStoreProjects('${s.id}', '${esc(s.name)}')">查看项目</button>` : ""}
+          ${projCount > 0 ? `<button class="btn small" onclick="showStoreProjects('${s.id}', '${escJsAttr(s.name)}')">查看项目</button>` : ""}
           <button class="btn small" onclick="editStore('${s.id}')">编辑</button>
           <button class="btn small danger" onclick="removeStore('${s.id}')">删除</button>
         </div>
@@ -26650,7 +26738,7 @@ async function renderAccounts() {
                   : `<span class="ver-chip is-old" title="该账号本次更新后还未登录过">未上报</span>`}
               </td>` : ""}
               <td>
-                ${a.role === "manager" ? "" : `<button class="btn btn-small" onclick="openUserPermModal('${a.id}', '${esc(a.name || a.email || a.id)}', '${a.role || ""}')">权限</button> `}
+                ${a.role === "manager" ? "" : `<button class="btn btn-small" onclick="openUserPermModal('${a.id}', '${escJsAttr(a.name || a.email || a.id)}', '${a.role || ""}')">权限</button> `}
                 ${MODE === "cloud" ? `<button class="btn btn-small" onclick="resetUserPassword('${a.id}', '${esc(a.email || a.id)}')">重置密码</button> ` : ""}
                 <button class="btn btn-danger btn-small" onclick="deleteAccount('${a.id}', '${esc(a.email || a.id)}')">删除</button>
               </td>
@@ -29069,10 +29157,7 @@ async function doPullRefresh() {
   // 后台执行真正的云同步与渲染，不阻塞指示器收起，缩短用户感知的刷新耗时
   const syncTask = (async () => {
     const synced = await repo.loadAll();
-    await loadWorkTimeoutSetting();
-    await loadAutoReviewSetting();
-    await loadFakeMileageKmhSetting();
-    if (typeof loadEstimateConfig === "function") await loadEstimateConfig();
+    await loadAllGlobalSettings(); // 4 个全局设置合并为 1 次查询
     renderActiveTabOnly(); // 仅重绘当前可见 Tab，不重绘全部
     return synced;
   })();
@@ -29127,10 +29212,7 @@ async function forceFullRefresh() {
   showSyncing(); // 顶栏转圈；数据就绪前不标「完成」，避免「完成但没出来」假象
   try {
     const ok = await repo.loadAll(true);
-    await loadWorkTimeoutSetting();
-    await loadAutoReviewSetting();
-    await loadFakeMileageKmhSetting();
-    if (typeof loadEstimateConfig === "function") await loadEstimateConfig();
+    await loadAllGlobalSettings(); // 4 个全局设置合并为 1 次查询
     renderActiveTabOnly(); // 仅重绘当前可见 Tab，与下拉刷新一致
     if (ok) {
       recordSyncTime();
@@ -32250,10 +32332,7 @@ async function startCloudSession() {
     // ② 后台拉取最新数据；与 3 个全局设置并行发出，减少总等待。失败则缓存兜底
     const [synced] = await Promise.all([
       repo.loadAll(),
-      loadWorkTimeoutSetting(), // 全局部署的「连续施工超时阈值」（多人统一标准）
-      loadAutoReviewSetting(),  // 全局部署的「验收后自动审核（小时）」
-      loadFakeMileageKmhSetting(), // 全局部署的「用车记录虚假里程阈值（km/h）」
-      typeof loadEstimateConfig === "function" ? loadEstimateConfig() : Promise.resolve(), // 🧮 测算参数/定额（全员共享）
+      loadAllGlobalSettings(), // 4 个全局设置合并为 1 次查询，避免与 loadAll 叠出并发尖峰
     ]);
     if (!canInstantRender) {
       // 首次无缓存 / 无缓存角色：此时才有数据或权限可渲染
@@ -33185,7 +33264,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v5a68216a";
+  const APP_VERSION = "ve8a8a64d";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
@@ -35561,11 +35640,19 @@ function estCfg() {
 
 /* 从 app_settings 拉取全局测算配置（定额/参数/校准/单价库）。
    本地模式降级到 localStorage，仅本机生效。失败静默用内核默认。 */
-async function loadEstimateConfig() {
+async function loadEstimateConfig(prefetched) {
   if (typeof window === "undefined" || !window.Estimate) return;
   if (MODE === "cloud" && sb) {
     try {
-      const { data, error } = await sb.from("app_settings").select("value, updated_at").eq("key", "estimate_config").maybeSingle();
+      let data = null;
+      let error = null;
+      if (prefetched && Object.prototype.hasOwnProperty.call(prefetched, "estimate_config")) {
+        data = prefetched.estimate_config || null;
+      } else if (!prefetched) {
+        const res = await sb.from("app_settings").select("value, updated_at").eq("key", "estimate_config").maybeSingle();
+        data = res.data;
+        error = res.error;
+      }
       if (!error && data && data.value && typeof data.value === "object") {
         _estimateCfg = normalizeEstimateConfig(data.value);
         _estimateCfgMeta = { source: "cloud", at: data.updated_at || "" };
