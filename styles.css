@@ -2565,17 +2565,21 @@ select.input {
   transform: translateY(-1px);
 }
 
-/* 施工内容摘要条：整块可点击，展开「施工内容 + 注意事项」弹窗 */
+/* 施工内容摘要条：固定单行、整块可点击，展开「施工内容 + 明细 + 注意事项」弹窗。
+   2026-11-23：施工内容越填越多，原来把所有 chip 铺开会把卡片撑得又高又乱，
+   改成「标签 + 一行预览 + 条数徽标」，超高内容交给弹窗看，卡片高度不再被内容量绑架。 */
 .card-content--clickable {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   cursor: pointer;
   background: #f0fdfa;
   border: 1px solid #99f6e4;
   border-radius: 8px;
-  padding: 7px 10px;
+  padding: 6px 9px;
   margin-bottom: 10px;
+  min-height: 30px;
+  box-sizing: border-box;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 .card-content--clickable:hover {
@@ -2585,29 +2589,41 @@ select.input {
 .card-content--clickable:active {
   background: #a7f3d0;
 }
-.card-content--clickable .cc-chips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
+.card-content--clickable .cc-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #0f766e;
+  white-space: nowrap;
+}
+.card-content--clickable .cc-text {
   flex: 1;
   min-width: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #134e4a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-/* 摘要条内的 chip 改白底，与条底色形成层次；并关闭 hover 抖动 */
-.card-content--clickable .card-content__chip {
+.card-content--clickable .cc-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #0d9488;
   background: #fff;
-}
-.card-content--clickable .card-content__chip:hover {
-  background: #fff;
-  transform: none;
+  border: 1px solid #99f6e4;
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
 }
 .card-content--clickable .cc-note {
+  flex-shrink: 0;
+  max-width: 34%;
   font-size: 11px;
   line-height: 1.3;
   color: #0f766e;
   opacity: 0.9;
-  flex: 1;
-  min-width: 60px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2618,7 +2634,6 @@ select.input {
   color: #0d9488;
   font-weight: 700;
   flex-shrink: 0;
-  margin-top: 7px;
 }
 /* 施工内容块里的照片标记：中性淡蓝小图标，提示该项目有照片（点整块进施工管理查看） */
 .card-content--clickable .cc-photo {
@@ -2630,7 +2645,6 @@ select.input {
   border: 1px solid #bfdbfe;
   border-radius: 6px;
   padding: 2px 5px;
-  margin-top: 4px;
 }
 
 /* 施工内容/注意事项只读展示块（施工管理页、进度跟踪展开详情等） */
@@ -2655,6 +2669,9 @@ select.input {
   flex-wrap: wrap;
   gap: 5px;
   margin-bottom: 6px;
+  /* 施工内容条目多时不再无限铺开撑高页面，最多 3 行；完整内容点本块进弹窗看 */
+  max-height: 76px;
+  overflow: hidden;
 }
 .proj-content-preview__chips .card-content__chip {
   background: #fff;

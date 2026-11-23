@@ -3599,6 +3599,58 @@ function deriveCostSummary(p, costDeductions) {
   return { materialFee, laborFee: Math.round(laborFee * 100) / 100 };
 }
 
+/* 施工内容碎片合并（2026-11-23）：老数据保存时按空格切分，把「2室外指引牌80x120cm 5套」
+   切成「2室外指引牌80x120cm」「5套」两条，纯数量/量词单独成条。读取时做幂等合并还原：
+   - 纯数字（3/5）＝被切走的下一行序号 → 暂存，拼回下一条实义项开头
+   - 纯量词（条/个）或 数字+量词（5套/3张）＝被切走的行尾数量 → 并入上一条
+   任何带汉字的正常项一律原样保留；合并后不含纯碎片，二次读取幂等。 */
+function mergeWorkContentFragments(list) {
+  const arr = Array.isArray(list) ? list : [];
+  const out = [];
+  let pending = "";
+  const PURE_NUM = /^\d+$/;
+  const UNIT_ONLY = /^[个块张面根套幅条件处片只支台组]$/;
+  const NUM_UNIT = /^\d+(?:\.\d+)?[个块张面根套幅条件处片只支台组]$/;
+  arr.forEach((x) => {
+    const s = String(x == null ? "" : x).trim();
+    if (!s) return;
+    if (PURE_NUM.test(s)) { pending = s; return; }
+    const frag = UNIT_ONLY.test(s) || NUM_UNIT.test(s);
+    if (frag) {
+      const merged = (pending ? pending + " " : "") + s;
+      pending = "";
+      if (out.length) out[out.length - 1] = out[out.length - 1].replace(/\s+$/, "") + " " + merged;
+      else out.push(merged);
+      return;
+    }
+    out.push((pending ? pending + " " : "") + s);
+    pending = "";
+  });
+  if (pending) out.push(pending);
+  return out;
+}
+
+/* 弹窗上方「施工内容」标签去重（2026-11-23）：弹窗下方另有「施工明细」和「注意事项」
+   两块完整内容，而 workContent 常是从测算回填的明细名 + 注意事项原文，三处重复显得乱。
+   这里只保留下方没有的独有文字：与明细项同名、或已出现在注意事项里的标签一律不列。
+   纯展示层函数，不删数据；下方两块仍是完整版。 */
+function visibleWorkContentTags(wc, items, note) {
+  const list = mergeWorkContentFragments(wc);
+  const norm = (s) => String(s == null ? "" : s)
+    .replace(/[\s\u3000]+/g, "")
+    .replace(/[""'']/g, "")
+    .toLowerCase();
+  const itemNames = (Array.isArray(items) ? items : []).map((it) => norm(it && it.n)).filter(Boolean);
+  const noteText = norm(note);
+  return list.filter((s) => {
+    const n = norm(s);
+    if (!n) return false;
+    if (itemNames.some((name) => name === n)) return false;
+    if (noteText && n.length >= 3 && noteText.includes(n)) return false;
+    return true;
+  });
+}
+
 const mapProject = (r) => ({
   id: r.id,
   name: r.name,
@@ -3622,7 +3674,7 @@ const mapProject = (r) => ({
   outsourcedHoursFromLogs: 0,
   status: r.status,
   note: r.note,
-  workContent: (r.work_content && typeof r.work_content === "string" ? safeJsonParse(r.work_content, []) : r.work_content) || r.workContent || [],
+  workContent: mergeWorkContentFragments((r.work_content && typeof r.work_content === "string" ? safeJsonParse(r.work_content, []) : r.work_content) || r.workContent || []),
   costEstimate: (r.cost_estimate && typeof r.cost_estimate === "string" ? safeJsonParse(r.cost_estimate, null) : r.cost_estimate) || r.costEstimate || null,
   acceptance: r.acceptance || null,
   storeId: r.store_id || r.storeId || "",
@@ -4207,9 +4259,11 @@ const repo = {
       // 历史归档：仅保留「云端仍存在」的缓存项目，且排除已在 activeMapped 中的（防重复）。
       // cloudIds 可用时，云端已删除（不在 cloudIds）的项目直接丢弃，删除操作在所有端自愈；
       // cloudIds 拉取失败则降级为原逻辑（按 activeIds 判断），绝不因网络抖动而误删历史。
-      const historical = cloudIds
+      const historical = (cloudIds
         ? cachedProjects.filter((p) => cloudIds.has(p.id) && !activeIds.includes(p.id))
-        : cachedProjects.filter((p) => !activeIds.includes(p.id));
+        : cachedProjects.filter((p) => !activeIds.includes(p.id)))
+        // 历史归档从缓存快照恢复、绕过 mapProject：这里补一次碎片合并（幂等）
+        .map((p) => ({ ...p, workContent: mergeWorkContentFragments(p.workContent) }));
       cache.projects = [...activeMapped, ...historical];
       // 覆盖式重拉可能抹掉「本地已生效、云端尚未追上」的人员分配（见 ASSIGN_GUARD 注释）
       if (reconcileAssignGuard()) console.warn("[assign-guard] 云端快照落后于本地分配，已按本地恢复");
@@ -11292,17 +11346,15 @@ function renderProjects() {
 
         <!-- 施工内容摘要条：整块可点，点击展开「施工内容 + 注意事项」 -->
         ${(() => {
-          const hasWC = p.workContent && p.workContent.length;
-          if (!hasWC && !p.note) return "";
-          const rawNote = (p.note || "").replace(/\s+/g, " ").trim();
-          const notePreview = rawNote.length > 28 ? rawNote.slice(0, 28) + "…" : rawNote;
+          const t = cardWorkContentText(p.workContent, p.note);
+          if (!t.preview && !projectPhotoCount(p)) return "";
           return `
-        <div class="card-content--clickable" onclick="event.stopPropagation(); showProjectContent('${p.id}')" title="查看施工内容与注意事项">
-          <div class="cc-chips">
-            ${hasWC ? p.workContent.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("") : ""}
-            ${notePreview ? `<span class="cc-note">💬 ${esc(notePreview)}</span>` : ""}
-            ${projectPhotoCount(p) > 0 ? `<span class="cc-photo" title="该项目已有照片，进施工管理查看">📷</span>` : ""}
-          </div>
+        <div class="card-content--clickable" onclick="event.stopPropagation(); showProjectContent('${p.id}')" title="查看全部 ${t.total || "详情"} 施工内容、明细与注意事项">
+          <span class="cc-label">施工内容</span>
+          <span class="cc-text">${esc(t.preview) || "查看明细"}</span>
+          ${t.total > 2 ? `<span class="cc-count">${t.total}条</span>` : ""}
+          ${t.notePreview ? `<span class="cc-note">💬 ${esc(t.notePreview)}</span>` : ""}
+          ${projectPhotoCount(p) > 0 ? `<span class="cc-photo" title="该项目已有照片，进施工管理查看">📷</span>` : ""}
           <span class="cc-arrow">›</span>
         </div>`;
         })()}
@@ -12689,11 +12741,30 @@ function renderQuickAllocPreview(id, newType, amt, cdSum) {
   box.innerHTML = `<div class="qc-alloc-preview__title">分成变化预览（验收后才计入统计）</div><div class="qc-alloc-preview__list">${rowsHtml}</div>${doneHint}`;
 }
 
+/* 项目卡片施工内容摘要（2026-11-23）：施工内容填写越来越多，原来在卡片上把所有 chip
+   全铺开，20+ 条会把卡片撑得很高、文字挤成一团。改成固定单行预览 + 条数徽标，
+   完整内容仍由点击后的弹窗展示（一条不删）。纯函数、不碰 DOM，便于回归测试。 */
+function cardWorkContentText(wc, note) {
+  const list = (Array.isArray(wc) ? wc : []).map((x) => String(x == null ? "" : x).trim()).filter(Boolean);
+  const rawNote = String(note == null ? "" : note).replace(/\s+/g, " ").trim();
+  const cut = (s, n) => String(s).length > n ? String(s).slice(0, n) + "…" : String(s);
+  let preview = cut(list.slice(0, 2).join(" · "), 44);
+  if (!preview && rawNote) preview = cut(rawNote, 44);
+  return {
+    total: list.length,
+    preview,
+    notePreview: (list.length && rawNote) ? cut(rawNote, 16) : "",
+  };
+}
+
 /* 渲染「施工内容 + 注意事项 + 图片资料」只读预览块，供施工管理页、进度跟踪展开详情复用 */
 function renderProjectContentPreview(p) {
-  const hasWC = p.workContent && p.workContent.length;
+  // 老缓存里的历史项目可能绕过 mapProject，显示前再合并一次碎片（幂等、纯展示）
+  const wcShow = mergeWorkContentFragments(p.workContent);
   const items = getWorkItems(p);
   const note = (p.note || "").trim();
+  const tagsShow = visibleWorkContentTags(wcShow, items, note);
+  const hasWC = wcShow.length;
   const photos = normalizePhotos(p);
   const photoCount = photos.plan.length + photos.material.length + photos.site.length + photos.completion.length;
   if (!hasWC && !note && !photoCount && !items.length) return "";
@@ -12702,7 +12773,7 @@ function renderProjectContentPreview(p) {
   return `
     <div class="proj-content-preview" onclick="event.stopPropagation(); showProjectContent('${p.id}')" title="点击查看完整施工内容、明细、注意事项与图片资料">
       <div class="proj-content-preview__title">🛠️ 施工内容 ${itemBadge}${photoBadge}</div>
-      ${hasWC ? `<div class="proj-content-preview__chips">${p.workContent.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("")}</div>` : `<div class="proj-content-preview__empty">未填写施工内容</div>`}
+      ${hasWC ? (tagsShow.length ? `<div class="proj-content-preview__chips">${tagsShow.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("")}</div>` : "") : `<div class="proj-content-preview__empty">未填写施工内容</div>`}
       ${items.length ? `<div class="proj-content-preview__detail">明细合计 ${workItemsHoursText(items)} 工时</div>` : ""}
       ${note ? `<div class="proj-content-preview__note">💬 ${esc(note)}</div>` : ""}
     </div>
@@ -12723,8 +12794,10 @@ function workItemsDetailHtml(items) {
 function showProjectContent(id) {
   const p = getProject(id);
   if (!p) return;
-  const wc = p.workContent || [];
+  const wc = mergeWorkContentFragments(p.workContent);
   const items = getWorkItems(p);
+  // 上方标签只列明细/注意事项没有的独有内容（截图反馈：同一份信息铺三遍太乱）
+  const tags = visibleWorkContentTags(wc, items, p.note);
   const canEditItems = typeof perm.editProject !== "function" || perm.editProject(p);
   const photos = normalizePhotos(p);
   const hasAnyPhoto =
@@ -12734,11 +12807,13 @@ function showProjectContent(id) {
     : `<div class="hint" style="margin-top:12px;">暂无现场图 / 施工图及物料 / 完成效果图</div>`;
   const html = `
     <div class="proj-content-detail">
-      <div class="proj-content-detail__label">🛠️ 施工内容</div>
       ${wc.length ? `
-        <div class="proj-content-detail__tags">
-          ${wc.map((c) => `<span class="badge" style="background:#e0f2fe;color:#0369a1;border-color:#7dd3fc;">${esc(c)}</span>`).join("")}
-        </div>` : `<div class="hint">未填写施工内容</div>`}
+        <div class="proj-content-detail__label">🛠️ 施工内容</div>
+        ${tags.length ? `
+          <div class="proj-content-detail__tags">
+            ${tags.map((c) => `<span class="badge" style="background:#e0f2fe;color:#0369a1;border-color:#7dd3fc;">${esc(c)}</span>`).join("")}
+          </div>` : `<div class="hint" style="font-size:11px;">内容已列在下方明细与注意事项中</div>`}
+      ` : `<div class="proj-content-detail__label">🛠️ 施工内容</div><div class="hint">未填写施工内容</div>`}
       <div class="wc-detail-head" style="margin-top:16px;">
         <div class="proj-content-detail__label" style="margin:0;">📝 施工明细 <span class="est-tip">${items.length} 项 · 合计 ${workItemsHoursText(items)} 工时</span></div>
         ${canEditItems ? `<button type="button" class="btn small outline" onclick="modal.close(); openWorkItemsEditor('${esc(p.id)}')">✏️ 编辑明细</button>` : ""}
@@ -13611,8 +13686,13 @@ async function saveProject(id) {
   const durationHours = totalBookedHours; // 总预约时长（各段之和）
   const estimatedHours = Math.round(totalBookedHours * workerCount * 10) / 10;
   
-  const workContent = (document.getElementById("pWorkContentCustom").value || "")
-    .split(/[、,，\s]+/).map((s) => s.trim()).filter(Boolean);
+  // 施工内容切分（2026-11-23）：带序号的多行清单按「行」切，行内空格保留，
+  // 避免「2室外指引牌80x120cm 5套」被切成两条；单行仍按空格/顿号切，兼容旧写法。
+  const wcRaw = (document.getElementById("pWorkContentCustom").value || "").trim();
+  const wcLines = wcRaw.split(/[\n\r]+/).map((s) => s.trim()).filter(Boolean);
+  const workContent = mergeWorkContentFragments(wcLines.length > 1
+    ? wcLines.flatMap((line) => line.split(/[、,，]+/).map((s) => s.trim()).filter(Boolean))
+    : wcRaw.split(/[、,，\s]+/).map((s) => s.trim()).filter(Boolean));
 
   // 包活制字段。成本扣项两种模式都有效：包工包料=材料费；包工=吊车/运费等现场成本。
   // 统一公式：工费 = 工程金额 − 扣项（例：包工 1100 = 工费 350 + 吊车 800 → 池 175）
@@ -20640,7 +20720,7 @@ function generateWorkerScheduleDescription(dateStr = null) {
           <div class="schedule-progress-detail" id="progDetail-${esc(p.id)}" style="display:none;">
             <div class="schedule-progress-detail-grid">
               ${p.description ? `<div class="detail-row"><span class="detail-label">📝 项目说明</span><span class="detail-value">${esc(p.description)}</span></div>` : ''}
-              ${(p.workContent && p.workContent.length) ? `<div class="detail-row"><span class="detail-label">🛠️ 施工内容</span><span class="detail-value">${p.workContent.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("")}</span></div>` : ''}
+              ${(() => { const raw = mergeWorkContentFragments(p.workContent); const wcs = visibleWorkContentTags(raw, getWorkItems(p), p.note); return raw.length ? `<div class="detail-row"><span class="detail-label">🛠️ 施工内容</span><span class="detail-value">${wcs.length ? wcs.map((c) => `<span class="card-content__chip">${esc(c)}</span>`).join("") : '<span style="color:#9ca3af;font-size:11px;">已列在明细与注意事项</span>'}</span></div>` : ''; })()}
               ${p.note ? `<div class="detail-row"><span class="detail-label">💬 注意事项</span><span class="detail-value" style="white-space:pre-wrap;">${esc(p.note)}</span></div>` : ''}
               ${p.reworkContent ? `<div class="detail-row"><span class="detail-label">🔧 返工内容</span><span class="detail-value" style="white-space:pre-wrap;">${esc(p.reworkContent)}</span></div>` : ''}
               ${p.customer ? `<div class="detail-row"><span class="detail-label">👤 客户</span><span class="detail-value">${esc(p.customer)}</span></div>` : ''}
@@ -33105,7 +33185,7 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v758a1e02";
+  const APP_VERSION = "v5a68216a";
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
 
