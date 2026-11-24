@@ -16187,7 +16187,7 @@ table.data.project-hours-diff thead th {
 .est-btnrow .est-parse-btn {
   position: relative;
   overflow: hidden;
-  padding: 5px 12px;
+  padding: 5px 16px;
   font-weight: 700;
   letter-spacing: .2px;
   color: #fff;
@@ -16239,8 +16239,8 @@ table.data.project-hours-diff thead th {
 .est-btnrow .btn.ghost {
   background: #f8fafc;
   border-color: #dbe3ee;
-  color: #475569;
-  font-weight: 600;
+  color: #64748b;          /* 2026-11-24：再降一档对比，主 CTA 更跳；仍保留边框，不退回"像说明文字" */
+  font-weight: 500;
   padding: 5px 7px;
 }
 .est-btnrow .btn.ghost:hover {
@@ -16249,6 +16249,16 @@ table.data.project-hours-diff thead th {
   color: #4338ca;
   box-shadow: none;
 }
+/* AI 优化描述：比普通次级入口稍亮一档（浅紫底/紫字），但仍明显弱于智能拆解主 CTA。
+   窄屏仍是 3 列栅格里的一个格子，按钮文字用 white-space:nowrap 防止被拆行。 */
+.est-btnrow .btn.ghost.est-ai-btn {
+  background: #f5f3ff;
+  border-color: #ddd6fe;
+  color: #6d28d9;
+  white-space: nowrap;
+}
+.est-btnrow .btn.ghost.est-ai-btn:hover { background: #ede9fe; border-color: #c4b5fd; color: #5b21b6; }
+.est-btnrow .btn.ghost.est-ai-btn:disabled { opacity: .6; cursor: wait; }
 /* 清单标题行的 ＋施工项/＋材料/清空：同样给可见描边，避免被当成说明文字 */
 .est-list-ops .btn.ghost {
   background: #f8fafc;
@@ -16324,6 +16334,16 @@ table.data.project-hours-diff thead th {
 .est-guide-calc { border-top: 1px dashed var(--border); padding-top: 8px; }
 .est-guide-calc summary { cursor: pointer; font-size: 12px; color: #475569; }
 .est-guide-calc ul { margin: 8px 0 0; padding-left: 16px; font-size: 11.5px; line-height: 1.65; color: var(--muted); }
+/* 手机端空态引导紧凑化（2026-11-24）：只压间距/内边距，三步文字与示例 chip 全保留（新手引导不删）。
+   独立于上方 440px 块、且放在定义之后以正确覆盖，不动已实测的三列栅格临界布局。 */
+@media (max-width: 440px) {
+  .est-guide-hd { margin-bottom: 6px; }
+  .est-guide-steps { gap: 6px; margin-bottom: 8px; }
+  .est-guide-steps li { gap: 7px; }
+  .est-guide-ex { margin-bottom: 7px; }
+  .est-guide-chip { padding: 3px 8px; }
+  .est-guide-calc { padding-top: 6px; }
+}
 
 .est-list-ops .btn:disabled { opacity: .45; cursor: not-allowed; }
 
@@ -16446,9 +16466,23 @@ table.data.project-hours-diff thead th {
 .est-hub-backup { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; padding-bottom: 4px; }
 /* 手机：5 个页签占一行，备份/恢复整行放页签下方，不再和页签挤 */
 @media (max-width: 520px) {
-  .est-hub-backup { flex-basis: 100%; margin-left: 0; justify-content: flex-end; padding-top: 5px; padding-bottom: 0; margin-top: 2px; }
   .est-item-head { flex-wrap: wrap; row-gap: 2px; }
-  .est-item-head .est-item-muted { flex: 1 1 100%; }
+  /* 自定义施工项：标题与「＋新增项」按钮同行、说明文字另起整行。
+     DOM 顺序是 b → muted(占整行) → btn，单靠 flex 会把按钮挤到第三行；用 order 重排：标题1、按钮2靠右、说明3。 */
+  .est-item-head > b { order: 1; flex: 0 1 auto; }
+  .est-item-head > .btn { order: 2; flex: 0 0 auto; margin-left: auto; }
+  .est-item-head .est-item-muted { order: 3; flex: 1 1 100%; }
+  /* 五页签恢复到一行（2026-11-24：3+2 换行太散，用户要求回一行） */
+  .est-hub-tabs .est-scene-tab { flex: 1 1 auto; padding-left: 3px; padding-right: 3px; font-size: 11.5px; }
+  /* 底栏 6 个管理工具按钮：按内容自然宽排列、不折行（2026-11-24：强制 3 列等宽让「未识别词 (4)」折成两行）。
+     flex:0 1 auto + nowrap，容器本身 flex-wrap，放不下的整颗按钮换到下一行，文字绝不拆行。 */
+  .est-item-io .btn { flex: 0 1 auto; white-space: nowrap; text-align: center; }
+  /* 备份/恢复已提到标题栏：标题 + 备份/恢复 + × 同一行，临时性的「未保存」徽标换行，不挤压关闭按钮 */
+  .est-drawer-head { flex-wrap: wrap; row-gap: 6px; }
+  .est-drawer-head h4 { flex: 0 1 auto; min-width: 0; }
+  .est-drawer-head .est-hub-backup { margin-left: auto; padding: 0; }
+  .est-drawer-head .est-hub-backup .btn { font-size: 10.5px; padding: 4px 6px; }
+  .est-drawer-head .est-dirty-badge { order: 4; flex: 1 1 100%; margin-left: 0; text-align: right; }
 }
 .est-scene-tab {
   flex: 1 1 0; min-width: 0; padding: 8px 6px; border: none; border-bottom: 2px solid transparent;
@@ -16523,6 +16557,9 @@ table.data.project-hours-diff thead th {
 .est-pick-search .input { margin: 0; }
 .est-qty-input { width: 100%; padding: 7px 5px; border: 1px solid var(--border); border-radius: 7px; font-size: 12px; text-align: right; background: #fff; color: var(--text); box-sizing: border-box; }
 .est-match-bar { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); background: #f5f3ff; border: 1px solid #e0e7ff; border-radius: 7px; padding: 6px 9px; margin-bottom: 6px; }
+/* 2026-11-24：display:flex 会盖掉 HTML hidden 属性，未搜索时"全选/加入已选"那行一直显示，
+   造成"两条加入路径并存"的困惑。补 [hidden] 规则让它默认真正隐藏，只在搜索后由 estFilterPick 打开。 */
+.est-match-bar[hidden], .est-match-list[hidden] { display: none; }
 .est-match-bar label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .est-match-bar span { flex: 1 1 auto; }
 .est-match-list { max-height: 186px; overflow-y: auto; border: 1px solid var(--border); border-radius: 7px; margin-bottom: 10px; -webkit-overflow-scrolling: touch; }
@@ -16691,6 +16728,8 @@ table.data.project-hours-diff thead th {
   .est-item-row .est-item-tr-sel { flex: 0 0 70px; }
   .est-item-row .est-item-ck { flex: 0 0 28px; }
   .est-item-row .est-item-op { flex: 0 0 26px; padding: 6px 0; }
+  /* 内置定额项保持单行显示（2026-11-24：两行方案实测不好看，回退）。
+     沿用 768px 下的 5 列 grid（22px+1fr+60px+48px+20px），名称过长由 title 悬浮看全。 */
 }
 
 /* 专项测算项标签 */
@@ -16845,6 +16884,10 @@ table.data.project-hours-diff thead th {
 .est-unk-bind { margin-top: 5px; }
 .est-syn-add { margin: 8px 0 12px; }
 .est-unk-bind .input, .est-syn-add .input { width: 100%; min-width: 0; font-size: 12px; padding: 5px 6px; }
+/* AI 批量建议行：浅紫提示，仅显示建议+采纳按钮，不自动保存（仍走该行「绑定」确认） */
+.est-ai-suggest { margin-top: 5px; padding: 5px 8px; border-radius: 6px; background: #f5f3ff; border: 1px solid #e9e2ff; color: #6d28d9; font-size: 11.5px; line-height: 1.5; }
+.est-ai-suggest .linkbtn { margin-left: 6px; color: #4338ca; text-decoration: underline; }
+.est-cfg-save .btn:disabled { opacity: .6; cursor: wait; }
 .est-syn-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-bottom: 1px solid #f1f5f9; font-size: 12.5px; }
 .est-syn-row span { min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .est-syn-row em { flex: 1; min-width: 0; font-style: normal; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

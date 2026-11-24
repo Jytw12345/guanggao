@@ -706,7 +706,9 @@ const DOOR_RECIPES = {
     ],
     mat:[
       {n:'热镀锌方管(骨架)',u:'米', by:'grid', gridDir:'both', k:1, p:20},
-      {n:'不锈钢板包边',   u:'㎡', by:'area',  k:0.5, p:320, sheet:true, wrap:true},
+      // 包边是沿门头一圈的窄条料，不是整面面板：按周长×侧包深算（与工艺增项 ssedge 同口径）。
+      // 原来 by:'area'+wrap+sheet 套整面排版，5×1.5米门头排出 5张=14.9㎡（净用量才5㎡），虚高 3 倍。
+      {n:'不锈钢板包边',   u:'㎡', by:'perimDepth', k:1.15, p:320},
       {n:'不锈钢包边发光字', u:'㎡', by:'area',  k:0.4, p:600},
       {n:'LED灯条',        u:'米', by:'perim', k:1.5, p:12},
       {n:'LED电源',        u:'个', by:'fixed', k:1,   p:90}
@@ -1121,6 +1123,14 @@ const EXTRA_MIN_DEPTH = 0.1;
         let it = getWorkItem(match.r.id); if (!it) return;
         if ((!useQty || useQty <= 0) && meterQty && it.u === '米') useQty = meterQty;
         let areaUnit = AREA_UNITS.indexOf(it.u) >= 0;
+        // 「发光字 5个」按「字」计价（2026-11-24）：口语的 5 个是字数，不是 5㎡。
+        // 词典把「发光字」映射到按㎡的 i_led，通用路径原来直接 q=5 挂到㎡项，金额翻几倍。
+        // 只在「明确写了个数 + 本段没有面积尺寸」时切 i_ledz；写了面积（「发光字 6㎡」）
+        // 仍走 i_led 按㎡。门头配方路径（字数×字高²算面积）在 tryDoorRecipe 里，不受影响。
+        if (match.r.id === 'i_led' && useQty > 0 && !(sz && sz.area)) {
+          const zw = getWorkItem('i_ledz');
+          if (zw) { it = zw; areaUnit = false; }
+        }
         // 明确写了米数（「桁架 20米」）→ 按延米计量，不能再用画面尺寸乘套数
         const byMeter = !qm && meterQty != null && useQty === meterQty && it.u === '米';
         let q, calc = '', matQ = null;
@@ -1220,7 +1230,9 @@ const EXTRA_MIN_DEPTH = 0.1;
     const vg = (lvfGap != null && Number(lvfGap) >= 0.05) ? Number(lvfGap) : (Number(WORK_PARAM_DEFAULT.lvfGap) || 0.12);
     const lvfRows = Math.max(1, Math.ceil(w / vg - 1e-9));
     const lvfLen = lvfRows * h * qtyN;
-    const by = { area, perim, fixed: qtyN, stripLen, lvfLen };
+    // perimDepth：包边窄条料按周长×有效侧包深算（侧包0时按0.1米最小收边），与工艺增项同口径。
+    const effDepth = dep > 0 ? dep : EXTRA_MIN_DEPTH;
+    const by = { area, perim, perimDepth: perim * effDepth * qtyN, fixed: qtyN, stripLen, lvfLen };
     const tk = (thick > 0 ? thick : 0);
     const layers = tk > 0 ? 2 : 1;
     const shp = shape || 'rect';
@@ -1267,7 +1279,9 @@ const EXTRA_MIN_DEPTH = 0.1;
           ? `灯条 @${lp}m 行距 横${stripRows}根×${w}米 = ${stripLen.toFixed(0)}米 × ${x.k}`
           : x.by === 'lvfLen'
             ? `方通 @${vg}m 间距 竖${lvfRows}根×${h}米 = ${lvfLen.toFixed(0)}米 × ${x.k}`
-            : `${x.by === 'perim' ? '周长 ' + perim.toFixed(1) + '米' : qtyN + '套'} × ${x.k}`;
+            : x.by === 'perimDepth'
+              ? `周长 ${perim.toFixed(1)}米 × ${effDepth}米深${dep > 0 ? '' : '(侧包0→按0.1米收边)'} = ${(perim * effDepth).toFixed(2)}㎡ × ${x.k}`
+              : `${x.by === 'perim' ? '周长 ' + perim.toFixed(1) + '米' : qtyN + '套'} × ${x.k}`;
       }
       let sheets = x.sheet ? Math.ceil(areaQty / SHEET_AREA) : 0;
       let sheetHow = '';
@@ -1578,7 +1592,8 @@ const EXTRA_MIN_DEPTH = 0.1;
     const covered = new Set(ex.work.map(x => x.id));
     extra.forEach(e => {
       if (e.type === 'lib' && covered.has(e.id)) return;
-      if (e.type === 'lib' && /^(i_door|i_fascia|i_led|i_wire|i_steel|i_ssword|i_acrword|i_banner)$/.test(e.id)) return;
+      // i_ledz 是「单独发光字 N个」的按字口径；门头配方已按字数×字高²出 i_led，不能再补一次
+      if (e.type === 'lib' && /^(i_door|i_fascia|i_led|i_ledz|i_wire|i_steel|i_ssword|i_acrword|i_banner)$/.test(e.id)) return;
       hits.push(e);
     });
     // charQty/charH 回传：GG 层据此判断发光字面积是真按字数算、还是按门头面积 40% 暂估

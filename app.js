@@ -33299,9 +33299,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va39e7359";
+  const APP_VERSION = "v730f7bec";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 2;
+  const BUILD_NO = 13;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -36143,6 +36143,7 @@ async function estOpenUnknownDrawer() {
         <button class="linkbtn est-unk-combo" onclick="estUnknownToCombo(${i})" title="多物品整句做成整套方案模板：模板名预填此词，勾选包含的施工项保存后，整句输入直接整套展开">转方案</button>
         <button class="hl" onclick="estUnknownDel(${i})">删</button>
       </div>
+      ${_estAiSuggest[i] ? `<div class="est-ai-suggest" title="AI 建议：${esc(_estAiSuggest[i].why)}（${_estAiSuggest[i].conf === "high" ? "高" : "中"}置信度，仅供核对）">🤖 建议 ${esc(estSynItemName(_estAiSuggest[i].id))} <button class="linkbtn" onclick="estAiAdopt(${i})">采纳</button></div>` : ""}
       <div class="est-unk-bind">
         <input class="input est-unk-word" id="estUkW${i}" maxlength="24" value="${esc(String(x.t || "").slice(0, 24))}" title="实际要绑定的词，可改短（如「指引牌」）" />
         <select class="input est-unk-sel" id="estUnS${i}" title="绑定到哪个施工项"><option value="">选择施工项…</option>${estItemOptionsHtml("")}</select>
@@ -36152,6 +36153,7 @@ async function estOpenUnknownDrawer() {
     estShowDrawer("未识别词记录", `
     <div class="est-cfg-tip">智能拆解「没直接认出施工项」时自动记录的原始输入（含走了模糊候选的）。本机 + 其他同事的云端上报合并展示。<b>单词对单项</b>：填词选项点「绑定」；<b>多物品整句</b>（如「电动车停车棚 高2.5米 长30米 阳光板」）点「转方案」做成整套模板——模板名预填此词，勾几项保存，下次整句直接整套展开。</div>
     <div class="est-cfg-save" style="margin-bottom:10px;">
+      ${estCanManage() ? `<button class="btn small outline" id="estAiSuggestBtn" onclick="estAiSuggestUnknown()" title="AI 批量分析未识别词，给出建议绑定的定额项；只作建议，需逐条确认后采纳">🤖 AI 批量建议</button>` : ""}
       <button class="btn small outline" onclick="estOpenSynonyms()">同义词管理 (${synN})</button>
       <button class="btn small outline" onclick="estUnknownCopy()">📋 复制全部</button>
       <button class="btn small outline" onclick="estUnknownClear()">清空</button>
@@ -36165,6 +36167,52 @@ async function estOpenUnknownDrawer() {
       if (!error && Array.isArray(data)) { _estUnkCloud = data; if (document.getElementById("estDrawer")) render(); }
     }
   } catch (_) {}
+}
+/* ===== AI 批量建议（仅管理员）：未识别词 → 建议绑定的定额项，逐条确认，不自动写入 ===== */
+let _estAiSuggest = {}; // { 列表索引: {id, conf, why} }，重开抽屉时清空
+function estAiSuggestReset() { _estAiSuggest = {}; }
+async function estAiSuggestUnknown() {
+  if (!estCanManage()) { toast("仅测算管理员可用 AI 批量建议"); return; }
+  const list = estUnknownMerged();
+  if (!list.length) { toast("还没有未识别词"); return; }
+  const btn = document.getElementById("estAiSuggestBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ 分析中…"; }
+  try {
+    // 定额项目录：只传 id+名称（内核 WORK_ITEMS + 自定义项），不传单价/工时，AI 不碰金额
+    const catalog = (typeof Estimate !== "undefined" && Estimate.WORK_ITEMS || []).map((w) => ({ id: w[0], n: w[1] }));
+    const words = list.map((x) => x.t);
+    const { data, error } = await estAiInvoke({ mode: "suggest", words, catalog }, 30000);
+    if (error || !data || !Array.isArray(data.items)) {
+      toast(estAiErrTip(error, "AI 建议失败，原记录未改动"));
+      console.warn("[estimate-ai] 建议失败：", String((error && error.message) || ""), error);
+      return;
+    }
+    _estAiSuggest = {};
+    let n = 0;
+    data.items.forEach((it) => {
+      const i = Number(it && it.i);
+      if (!Number.isInteger(i) || i < 0 || i >= list.length || !it.id || it.conf === "low") return;
+      // id 前端再校验一次必须在目录内（双保险，服务端已白名单过滤）
+      if (!catalog.some((c) => c.id === it.id)) return;
+      _estAiSuggest[i] = { id: it.id, conf: it.conf, why: String(it.why || "") };
+      n++;
+    });
+    toast(n ? `AI 给出 ${n} 条建议，请逐条确认后采纳` : "AI 没找到可靠匹配，原记录未改动");
+    // 触发抽屉重绘以显示建议（用既有入口，避免复制渲染逻辑）
+    if (n) estOpenUnknownDrawer();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "🤖 AI 批量建议"; }
+  }
+}
+/* 采纳一条 AI 建议：把对应行的下拉框设成建议 id（不自动保存，仍需点该行「绑定」确认） */
+function estAiAdopt(i) {
+  const s = _estAiSuggest[i];
+  if (!s) return;
+  const sel = document.getElementById("estUnS" + i);
+  if (!sel) return;
+  sel.value = s.id;
+  sel.focus && sel.focus();
+  toast("已填入建议值，请核对后点「绑定」保存");
 }
 /* 一键绑定：词 → 定额项，写进 estimate_config.synonyms（云端全员共享），并从本机+云端未识别记录里移除 */
 async function estUnknownBind(i) {
@@ -36605,6 +36653,7 @@ function openEstimateModal(opts) {
             <textarea id="estInput" class="input est-input" placeholder="例：5个1.2×2.4米无框画，门头 6米×2米，20个门牌" style="min-height:58px;" oninput="estDoorExtrasTyping()">${esc(prefill)}</textarea>
             <div class="est-btnrow">
               <button class="btn small est-parse-btn" onclick="estSmartParse()" title="按施工内容自动拆解：识别尺寸/数量/材质，匹配定额工时与材料"><span class="est-parse-ico" aria-hidden="true">✨</span>智能拆解</button>
+              <button class="btn small ghost est-ai-btn" id="estAiPolishBtn" onclick="estAiPolish()" title="AI 把口语补全成标准描述（尺寸/字数/字高/材质），只回填输入框、不自动拆解、不改金额">✨ 优化描述</button>
               <button class="btn small ghost" onclick="estOpenScenes('combo')" title="整套方案 + 专项测算（脚手架 / 土建 / 精神堡垒）">方案库</button>
               <button class="btn small ghost" onclick="estOpenQuickAdd()" title="从常用施工项里勾选加入清单">常用施工项</button>
               <button class="btn small ghost" onclick="estOpenHistory()" title="最近的测算记录">历史</button>
@@ -36977,6 +37026,85 @@ function estToggleDoorExtra(key, on) {
     toast(before === _estUI.work.length ? '「' + name + '」已取消勾选' : '已移除「' + name + '」' + (before - _estUI.work.length) + ' 项');
   }
   estRenderDoorExtras();
+}
+
+/* ============ AI 辅助（2026-11-24）：提示词优化 / 未识别词批量建议 ============
+   统一走 estimate-ai Edge Function；LLM 密钥只在服务端。任何失败都静默降级，
+   不阻断原有拆解路径（v429：不污染高频正常路径）。
+   AI 结果不参与金额/工时计算，只回填输入框或给出待确认的绑定建议。 */
+async function estAiInvoke(body, timeoutMs = 16000) {
+  if (MODE !== "cloud" || !sb) return { data: null, error: new Error("本地模式不支持 AI 辅助") };
+  try {
+    const p = sb.functions.invoke("estimate-ai", { body });
+    const to = new Promise((_, rej) => setTimeout(() => rej(new Error("AI 请求超时")), timeoutMs));
+    const res = await Promise.race([p, to]);
+    if (res.error) {
+      // supabase-js 的 FunctionsHttpError.message 只有「non-2xx status code」，
+      // 后端真正的原因（AI_NOT_CONFIGURED / LLM_HTTP_401 / FORBIDDEN…）在 error.context 的 body 里。
+      // 读出来透传，用户才能分清是没部署、没配 key、key 错还是超时。
+      const e0 = res.error;
+      try {
+        const ctx = e0 && e0.context;
+        if (ctx && typeof ctx.json === "function") {
+          const j = await Promise.race([
+            ctx.clone().json(),
+            new Promise((r) => setTimeout(() => r(null), 1500)),
+          ]);
+          if (j && (j.error || j.code)) {
+            const e1 = new Error(String(j.error || j.code));
+            e1.code = String(j.code || "");
+            e1.status = ctx.status;
+            return { data: null, error: e1 };
+          }
+        }
+      } catch (_) { /* body 读不到（如 404 返回 HTML）就退回原始 error */ }
+      return { data: null, error: e0 };
+    }
+    return { data: res.data, error: null };
+  } catch (e) { return { data: null, error: e }; }
+}
+
+/* AI 失败提示：把后端错误码翻成人话，优化/批量建议两处共用。
+   estAiInvoke 已把 error.context body 里的 code/error 透传出来，这里的 em 就是那个具体原因。 */
+function estAiErrTip(error, fallback) {
+  const em = String((error && error.message) || (error && error.code) || "");
+  const rest = fallback.replace(/^AI (优化失败|建议失败)，/, "");
+  if (/AI_NOT_CONFIGURED|未配置|缺少 LLM_API_KEY/.test(em)) return "AI 服务未配置：请管理员在 Supabase 配 LLM_API_KEY（智谱 key）";
+  if (/FORBIDDEN|无测算管理权限/.test(em)) return "AI 权限不足，请联系管理员";
+  if (/INVALID_JWT|MISSING_JWT|登录态无效|未提供登录令牌/.test(em)) return "AI 登录态失效，请重新登录后再试";
+  if (/LLM_HTTP_401|LLM_HTTP_403|API.?key|额度|余额/i.test(em)) return "智谱密钥无效或额度不足，请检查 LLM_API_KEY";
+  if (/超时|timeout/i.test(em)) return "AI 请求超时，" + rest;
+  if (/LLM_HTTP_|BAD_AI_JSON|EMPTY_AI_TEXT|LLM_FAILED/.test(em)) return "智谱服务暂时不可用，" + rest;
+  if (/non-2xx|404|FunctionsFetchError|fetch/i.test(em)) return "AI 函数未部署或网络异常，请检查 estimate-ai 是否已部署";
+  return fallback;
+}
+
+/* 提示词优化：AI 补全尺寸/字数/字高/材质 → 回填输入框（不自动拆解、不改金额）。
+   用户可继续改，点智能拆解仍是原链路。失败静默提示，原文不动。 */
+async function estAiPolish() {
+  if (!_estUI) return;
+  const inp = document.getElementById("estInput");
+  const txt = (inp && inp.value || "").trim();
+  if (!txt) { toast("先写一句施工内容，再让 AI 优化"); return; }
+  const btn = document.getElementById("estAiPolishBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ 优化中…"; }
+  try {
+    const { data, error } = await estAiInvoke({ mode: "polish", text: txt });
+    if (error || !data || !data.text) {
+      toast(estAiErrTip(error, "AI 优化失败，已保留原文，可直接拆解"));
+      console.warn("[estimate-ai] 优化失败：", String((error && error.message) || ""), error);
+      return;
+    }
+    const optimized = String(data.text).slice(0, 500);
+    if (inp) inp.value = optimized;
+    // 改了文字 → 清掉「已拆解」锁，允许对优化后的文本拆解
+    if (_estUI) _estUI.lastParsedText = "";
+    estDoorExtrasTyping && estDoorExtrasTyping();
+    const ch = Array.isArray(data.changes) ? data.changes.filter(Boolean).join("；") : "";
+    toast("AI 已优化描述" + (ch ? "：" + ch : "") + "（可继续改，确认后点智能拆解）");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "✨ 优化描述"; }
+  }
 }
 
 /* 智能拆解：调内核 parseSpec */
@@ -37551,7 +37679,9 @@ function renderEstimateResult(r, ctx) {
     const c = estCfg();
     const rateN = c.params.rateNormal, rateH = c.params.rateHigh;
     const rateT = estTransportRate(), aux = c.params.auxRatio;
-    const ex = ["门头 6米×2米", "5个1.2×2.4米无框画", "发光字 5个", "20个门牌"];
+    // 示例精简为 2 个（2026-11-24）：都是门头带发光字，覆盖「通用门头」与「材质门头+字数+字高」两种典型写法。
+    // 关键：示例必须写「发光字N个X厘米」——只写「门头 6米×2米」内核会按门头面积 40% 暂估字面积，金额差好几倍。
+    const ex = ["门头 6米×2米，发光字5个60厘米"];
     box.innerHTML = `
       <div class="est-guide">
         <div class="est-guide-hd">三步出报价</div>
@@ -37640,6 +37770,12 @@ function renderEstimateResult(r, ctx) {
     const btns = [];
     if (_estUI.mode === "insert") {
       btns.push(`<button class="btn primary" onclick="estInsertToProject()">插入到项目</button>`);
+      // 结果页直连「填入工程金额」（2026-11-24）：从预约表单打开测算器时，金额就在眼前，
+      // 不必先「插入到项目」再回表单找按钮。仅当有工程金额输入框且可编辑时出现。
+      const amtInp = document.getElementById("pProjectAmount");
+      if (amtInp && !amtInp.disabled) {
+        btns.push(`<button class="btn outline est-fill-amount" onclick="estFillAmountFromResult()" title="把本次测算金额写入工程金额（包工包料会同步记材料扣项），保存前还能改">↗ 填入工程金额</button>`);
+      }
       btns.push(`<button class="btn outline" onclick="estOpenExportPanel()">导出报价单</button>`);
       btns.push(`<button class="btn outline" onclick="estOpenPriceLib()" title="查看材料/画面参考单价">📖 参考价</button>`);
     } else {
@@ -37812,14 +37948,14 @@ function estOpenQuickAdd() {
     </div>
   </div>`;
   const search = `<div class="est-pick-search">
-    <input class="input" id="estPickSearch" placeholder="搜索施工项（联想多选）…" oninput="estFilterPick(this.value)"/>
-    <input type="number" id="estPickQty" class="est-qty-input" value="1" min="1" step="1" title="加入数量"/>
-    <button class="btn small" onclick="estAddMatched()">加入匹配</button>
+    <input class="input" id="estPickSearch" placeholder="搜名称加入（一键全加）…" oninput="estFilterPick(this.value)"/>
+    <input type="number" id="estPickQty" class="est-qty-input" value="1" min="1" step="1" title="每项加入数量"/>
+    <button class="btn small primary" onclick="estAddMatched()" title="把搜索到的施工项一次全加进清单（每项数量取上面填的数）">一键全加</button>
   </div>
   <div id="estMatchBar" class="est-match-bar" hidden>
     <label><input type="checkbox" id="estMatchAll" onchange="estToggleMatchAll(this.checked)"/> 全选</label>
     <span id="estMatchCount">匹配 0 项</span>
-    <button class="btn small primary" onclick="estAddSelected()">加入已选</button>
+    <button class="btn small" onclick="estAddSelected()" title="只加入下面勾选的项，没勾就先勾几个">加入勾选</button>
   </div>
   <div id="estMatchList" class="est-match-list" hidden></div>`;
   estShowDrawer("常用施工项（点选 / 联想 / 批量）", `${adminBar}${batch}${search}<div id="estPickList">${rows}</div>`);
@@ -38176,7 +38312,7 @@ function estRenderItemManage() {
     <div class="est-cfg-save">
       <button class="btn small outline est-cfg-save-l" onclick="estOpenWhCalib()" title="整表逐项改标准工时：改回默认值即恢复">✏️ 校准工时</button>
       <button class="btn small outline" onclick="estOpenQuickAdd()">返回</button>
-      <button class="btn primary" onclick="estSaveItems()">保存施工项</button>
+      <button class="btn small primary" onclick="estSaveItems()">保存施工项</button>
     </div>
     </div>`);
   const bd = document.querySelector("#estDrawer .est-drawer-body");
@@ -39241,7 +39377,10 @@ function estShowDrawer(title, html) {
   d = document.createElement("div");
   d.id = "estDrawer";
   d.className = "est-drawer";
-  d.innerHTML = `<div class="est-drawer-head"><h4>${esc(title)}</h4><span class="est-dirty-badge" id="estCfgDirtyBadge" style="display:${_estCfgDirty ? "" : "none"}">● 未保存</span><button class="modal-close" onclick="estCloseDrawer()">×</button></div><div class="est-drawer-body">${html}</div>`;
+  // 配置中枢五页签：备份/恢复按钮提到标题栏（2026-11-24）。用 html 里是否含页签栏判断，
+  // 非管理员的只读单价库页无页签栏 → 不注入，权限自动对齐。
+  const headBackup = (typeof html === "string" && html.includes("est-hub-tabs") && typeof estHubBackupHtml === "function") ? estHubBackupHtml() : "";
+  d.innerHTML = `<div class="est-drawer-head"><h4>${esc(title)}</h4>${headBackup}<span class="est-dirty-badge" id="estCfgDirtyBadge" style="display:${_estCfgDirty ? "" : "none"}">● 未保存</span><button class="modal-close" onclick="estCloseDrawer()">×</button></div><div class="est-drawer-body">${html}</div>`;
   d.addEventListener("input", estCfgDelegatedTouch);
   d.addEventListener("change", estCfgDelegatedTouch);
   const shell = document.querySelector("#estimateModal .est-shell");
@@ -39269,14 +39408,18 @@ function estCloseDrawer(force) {
    「本单」安装高度/墙面/对比报价仍留在测算面板，不进全局配置。
    无管理权限者点输入区「单价库」仍走只读 estOpenPriceLib()。 */
 let _estCfgHubTab = "items";
+/* 备份/恢复按钮（2026-11-24 移到抽屉标题栏）：从页签栏拆出来，由 estShowDrawer 检测 est-hub-tabs 自动注入。
+   好处：非管理员的只读单价库页不渲染页签栏 → 自然看不到备份按钮，权限自动对齐，不用每个调用点单独传参。 */
+function estHubBackupHtml() {
+  return `<span class="est-hub-backup">
+    <button class="btn small outline" onclick="estExportAll()" title="一个文件备份施工项+方案模板+单价库+参数工时，换设备/迁移/误操作兜底">📤 备份全部</button>
+    <label class="btn small outline est-import-label" title="恢复备份文件（覆盖当前全部测算配置）">📥 恢复<input type="file" accept=".json,application/json" onchange="estImportAll(this)" hidden/></label>
+  </span>`;
+}
 function estCfgHubTabs(active) {
   const tab = (k, label) => `<button class="est-scene-tab${active === k ? " active" : ""}" onclick="estOpenCfgHub('${k}')">${label}</button>`;
   return `<div class="est-scene-tabs est-hub-tabs">
     ${tab("params", "参数与单价")}${tab("items", "施工项·工时")}${tab("combo", "方案模板")}${tab("catalog", "单价库")}${tab("syn", "同义词")}
-    <span class="est-hub-backup">
-      <button class="btn small outline" onclick="estExportAll()" title="一个文件备份施工项+方案模板+单价库+参数工时，换设备/迁移/误操作兜底">📤 备份全部</button>
-      <label class="btn small outline est-import-label" title="恢复备份文件（覆盖当前全部测算配置）">📥 恢复<input type="file" accept=".json,application/json" onchange="estImportAll(this)" hidden/></label>
-    </span>
   </div>`;
 }
 function estOpenCfgHub(tab) {
@@ -39766,6 +39909,23 @@ function estInsertToProject() {
   if (typeof _estUI.onInsert === "function") {
     _estUI.onInsert({ snapshot, workNames: names, result: _estUI.result, construction: _estUI.result.construction });
   }
+}
+
+/* 结果页直连「填入工程金额」（2026-11-24）：从预约表单打开测算器时，金额就在眼前，
+   不必先「插入到项目」再回表单找按钮。
+   关键顺序：此刻测算结果只在 _estUI.result，表单的 #pCostEstimate 还是旧值/空，
+   直接调 wcFillProjectAmount 会读不到新快照 → 填成 0 或旧值。
+   所以先走 estInsertToProject 既有回填链路（onInsert 内写快照+明细+施工内容、关测算器、恢复表单），
+   再复用 wcFillProjectAmount —— 权限校验、替换确认、包工包料材料扣项联动全在那一个函数里，
+   绝不在本函数另写金额逻辑（金额链铁律）。 */
+function estFillAmountFromResult() {
+  const inp = document.getElementById("pProjectAmount");
+  if (!inp) { toast("当前表单没有「工程金额」输入框"); return; }
+  if (inp.disabled) { toast("没有修改工程金额的权限"); return; }
+  if (!_estUI || !_estUI.result || !(_estUI.work || []).length) { toast("清单是空的，先加施工项"); return; }
+  if (typeof _estUI.onInsert !== "function") { toast("请从预约表单里打开测算器再填入金额"); return; }
+  estInsertToProject();   // 同步快照+明细+施工内容进表单（回调内关闭测算器、恢复表单）
+  wcFillProjectAmount();  // 复用统一写入函数（含替换确认、包工包料材料扣项联动）
 }
 
 /* ---------- 项目接入：从预约表单打开测算器 ---------- */
