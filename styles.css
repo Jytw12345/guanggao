@@ -8820,6 +8820,8 @@ table.data.project-hours-diff thead th {
   padding: 0 4px;
 }
 
+/* 2026-11-24：从纯色黑块改为浅色卡片（白底深字 + 左侧语义色条），
+   在浅色弹窗/页面上不再是一块突兀黑条；四种语义色仍靠左边条+图标区分。 */
 .toast {
   position: fixed;
   bottom: 28px;
@@ -8827,12 +8829,15 @@ table.data.project-hours-diff thead th {
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: #fff;
-  padding: 10px 18px 10px 14px;
+  gap: 9px;
+  color: #1e293b;
+  background: #fff;
+  padding: 10px 18px 10px 13px;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #64748b;
   border-radius: 10px;
   z-index: 99999;
-  box-shadow: var(--shadow);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.08);
   animation: fadein 0.2s;
   font-size: 14px;
   font-weight: 500;
@@ -8843,16 +8848,17 @@ table.data.project-hours-diff thead th {
   font-size: 15px;
   line-height: 1;
   flex-shrink: 0;
+  font-weight: 700;
 }
-/* 语义色：成功绿 / 失败红 / 警告琥珀 / 信息蓝灰（不再清一色纯黑） */
-.toast-info    { background: #334155; }
-.toast-info::before    { content: "\2139"; }   /* ℹ */
-.toast-success { background: #16a34a; }
-.toast-success::before { content: "\2713"; }   /* ✓ */
-.toast-error   { background: #dc2626; }
-.toast-error::before   { content: "\2715"; }   /* ✕ */
-.toast-warning { background: #d97706; }
-.toast-warning::before { content: "\26A0"; }   /* ⚠ */
+/* 语义色：成功绿 / 失败红 / 警告琥珀 / 信息蓝灰，只落在左边条与图标上 */
+.toast-info    { border-left-color: #64748b; }
+.toast-info::before    { content: "\2139"; color: #64748b; }   /* ℹ */
+.toast-success { border-left-color: #16a34a; }
+.toast-success::before { content: "\2713"; color: #16a34a; }   /* ✓ */
+.toast-error   { border-left-color: #dc2626; }
+.toast-error::before   { content: "\2715"; color: #dc2626; }   /* ✕ */
+.toast-warning { border-left-color: #d97706; }
+.toast-warning::before { content: "\26A0"; color: #d97706; }   /* ⚠ */
 
 /* 上传进度浮层（独立于 .toast，可更新文本并保持显示，结束才淡出） */
 .upload-prog {
@@ -16275,10 +16281,12 @@ table.data.project-hours-diff thead th {
   .est-parse-ico { animation: none; }
   .est-btnrow .est-parse-btn::after { display: none; }
 }
-/* 窄屏：主 CTA 通栏，三个入口等宽一行（原来 2×2 会让主次同权） */
+/* 窄屏三列栅格（2026-11-24 再调）：主 CTA 占 2 格（不再通栏，用户嫌整行太长），
+   AI 转化自动补第 1 行第 3 格；方案库/常用施工项/历史自动落到第 2 行。
+   原来主 CTA 通栏时「历史」独占第 3 行成孤行，现在 5 个按钮正好 2 行填平。 */
 @media (max-width: 440px) {
   .est-btnrow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-  .est-btnrow .est-parse-btn { grid-column: 1 / -1; }
+  .est-btnrow .est-parse-btn { grid-column: span 2; }
   .est-btnrow .btn { width: 100%; }
 }
 /* 发光字面积暂估提示（2026-11-22）：只写门头尺寸时按面积40%占位，金额影响大，常驻提醒 */
