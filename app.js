@@ -33299,9 +33299,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v730f7bec";
+  const APP_VERSION = "v536f3bfb";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 13;
+  const BUILD_NO = 15;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -36653,7 +36653,7 @@ function openEstimateModal(opts) {
             <textarea id="estInput" class="input est-input" placeholder="例：5个1.2×2.4米无框画，门头 6米×2米，20个门牌" style="min-height:58px;" oninput="estDoorExtrasTyping()">${esc(prefill)}</textarea>
             <div class="est-btnrow">
               <button class="btn small est-parse-btn" onclick="estSmartParse()" title="按施工内容自动拆解：识别尺寸/数量/材质，匹配定额工时与材料"><span class="est-parse-ico" aria-hidden="true">✨</span>智能拆解</button>
-              <button class="btn small ghost est-ai-btn" id="estAiPolishBtn" onclick="estAiPolish()" title="AI 把口语补全成标准描述（尺寸/字数/字高/材质），只回填输入框、不自动拆解、不改金额">✨ 优化描述</button>
+              <button class="btn small ghost est-ai-btn" id="estAiPolishBtn" onclick="estAiPolish()" title="AI 按内置标准施工项转写口语描述（不编数字，只提醒补尺寸/字数），回填输入框、不自动拆解、不改金额">✨ 智能转化</button>
               <button class="btn small ghost" onclick="estOpenScenes('combo')" title="整套方案 + 专项测算（脚手架 / 土建 / 精神堡垒）">方案库</button>
               <button class="btn small ghost" onclick="estOpenQuickAdd()" title="从常用施工项里勾选加入清单">常用施工项</button>
               <button class="btn small ghost" onclick="estOpenHistory()" title="最近的测算记录">历史</button>
@@ -37081,29 +37081,114 @@ function estAiErrTip(error, fallback) {
 
 /* 提示词优化：AI 补全尺寸/字数/字高/材质 → 回填输入框（不自动拆解、不改金额）。
    用户可继续改，点智能拆解仍是原链路。失败静默提示，原文不动。 */
+/* AI 标准化转写用的内核词表：标准项名称 + SMART_DICT 同义词，只喂 id/名称/关键词，不碰单价工时 */
+function estAiVocab() {
+  if (typeof Estimate === "undefined") return [];
+  const items = Array.isArray(Estimate.WORK_ITEMS) ? Estimate.WORK_ITEMS : [];
+  const dict = Array.isArray(Estimate.SMART_DICT) ? Estimate.SMART_DICT : [];
+  const keysById = {};
+  dict.forEach((d) => {
+    const id = String((d && d.id) || "");
+    if (!id || !Array.isArray(d.k)) return;
+    d.k.forEach((raw) => {
+      const k = String(raw || "").trim();
+      if (!k) return;
+      if (!keysById[id]) keysById[id] = [];
+      if (keysById[id].indexOf(k) < 0) keysById[id].push(k);
+    });
+  });
+  const out = items.map((w) => ({
+    id: String(w[0] || ""),
+    n: String(w[1] || "").replace(/（[^）]*）/g, "").trim(),
+    k: (keysById[w[0]] || []).slice(0, 12)
+  })).filter((x) => x.id && x.n);
+  // SMART_DICT 有些 id 不在 WORK_ITEMS（导视系统/画面更换等），补进去免得 AI 漏认
+  const have = {};
+  out.forEach((x) => { have[x.id] = true; });
+  dict.forEach((d) => {
+    const id = String((d && d.id) || "");
+    if (!id || have[id]) return;
+    const ks = (Array.isArray(d.k) ? d.k : []).map((k) => String(k || "").trim()).filter(Boolean);
+    out.push({ id, n: ks[0] || id, k: ks.slice(0, 12) });
+    have[id] = true;
+  });
+  return out;
+}
+
+/* 本地兜底：口语说法 → 内核能识别的标准关键词（长词优先替换）。
+   不依赖 LLM / Edge Function 部署，保证「智能转化」在旧后端或 AI 只加单位时仍真的转成标准项。金额链零接触。 */
+const EST_SPOKEN_ALIAS = [
+  [/门口那圈亮的|亮字招牌|那圈发光的|门头发光字/g, "发光字"],
+  [/围蔽|围板|临时围挡|彩钢围栏|围界/g, "围挡"],
+  [/做字的铁架子|字的钢架|做字的架子|铁架子|钢架子/g, "钢架"],
+  [/搭个台|搭台|颁奖台/g, "舞台"],
+  [/做招牌|整块招牌|做门脸/g, "门头"],
+  [/那面形象墙|企业标语墙|logo墙/gi, "背景墙"],
+  [/大屏|显示屏|拼接大屏/g, "LED屏"],
+  [/拉布灯箱|灯箱片|透光布/g, "灯箱布"],
+  [/换画面|画面更换|贴画面/g, "画面安装"],
+  [/吊旗|条幅布/g, "横幅"],
+  [/清理建筑垃圾|垃圾外运/g, "垃圾清运"],
+  [/拆掉|拆旧字/g, "拆除"],
+  [/送货|送过来/g, "运输"],
+  [/量尺|上门测量尺寸/g, "测量"]
+];
+function estLocalStandardize(txt) {
+  let s = String(txt || "");
+  EST_SPOKEN_ALIAS.forEach((pair) => { s = s.replace(pair[0], pair[1]); });
+  // 只规范用户已给数字的分隔符，不补任何用户没说的数
+  s = s.replace(/(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*米/gi, "$1米×$2米");
+  return s;
+}
+/* 用内核试拆，返回能拆出的项数；只用于判断「是否已是标准说法」，不参与金额 */
+function estParseCount(txt) {
+  try {
+    if (!window.Estimate || typeof Estimate.parseSpec !== "function") return 0;
+    const p = Estimate.parseSpec(String(txt || ""), {});
+    return Array.isArray(p) ? p.length : 0;
+  } catch (_) { return 0; }
+}
+
 async function estAiPolish() {
   if (!_estUI) return;
   const inp = document.getElementById("estInput");
   const txt = (inp && inp.value || "").trim();
-  if (!txt) { toast("先写一句施工内容，再让 AI 优化"); return; }
+  if (!txt) { toast("先写一句施工内容，再让 AI 标准化"); return; }
   const btn = document.getElementById("estAiPolishBtn");
-  if (btn) { btn.disabled = true; btn.textContent = "⏳ 优化中…"; }
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ 转化中…"; }
   try {
-    const { data, error } = await estAiInvoke({ mode: "polish", text: txt });
-    if (error || !data || !data.text) {
-      toast(estAiErrTip(error, "AI 优化失败，已保留原文，可直接拆解"));
-      console.warn("[estimate-ai] 优化失败：", String((error && error.message) || ""), error);
-      return;
+    const vocab = estAiVocab();
+    const { data, error } = await estAiInvoke({ mode: "polish", text: txt, vocab });
+    let optimized = (data && data.text) ? String(data.text).slice(0, 500) : "";
+    let fallbackNote = "";
+    if (error || !optimized) {
+      // AI 不可用也照做本地转化，不把「只加单位」的旧后端结果当成功
+      const tip = estAiErrTip(error, "AI 转化失败");
+      console.warn("[estimate-ai] 转化失败，走本地兜底：", tip, error);
+      optimized = estLocalStandardize(txt);
+      fallbackNote = "（" + tip + "，已用本地词表转化）";
+    } else if (!estParseCount(optimized)) {
+      // 关键：AI 结果内核仍拆不出项 = 它只加了单位/标点，没做关键词替换 → 本地兜底覆盖
+      const local = estLocalStandardize(txt);
+      if (estParseCount(local) > estParseCount(optimized)) {
+        optimized = local;
+        fallbackNote = "（AI 未识别标准项，已用本地词表转化）";
+      }
     }
-    const optimized = String(data.text).slice(0, 500);
     if (inp) inp.value = optimized;
-    // 改了文字 → 清掉「已拆解」锁，允许对优化后的文本拆解
+    // 改了文字 → 清掉「已拆解」锁，允许对转化后的文本拆解
     if (_estUI) _estUI.lastParsedText = "";
     estDoorExtrasTyping && estDoorExtrasTyping();
-    const ch = Array.isArray(data.changes) ? data.changes.filter(Boolean).join("；") : "";
-    toast("AI 已优化描述" + (ch ? "：" + ch : "") + "（可继续改，确认后点智能拆解）");
+    const ch = Array.isArray(data && data.changes) ? data.changes.filter(Boolean).join("；") : "";
+    // 展示「已转成哪些标准项」：服务端已白名单过滤，这里按本地词表再过一遍防幻觉
+    const byId = {};
+    vocab.forEach((v) => { byId[v.id] = v.n; });
+    const mapped = Array.isArray(data && data.mapped)
+      ? data.mapped.map((id) => String(id || "")).filter((id) => byId[id]).slice(0, 8) : [];
+    const label = mapped.map((id) => byId[id]).join("、");
+    toast("AI 已转成标准项" + (label ? "：" + label : "") + (ch ? "（" + ch + "）" : "") + fallbackNote + "，确认后点智能拆解");
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "✨ 优化描述"; }
+    if (btn) { btn.disabled = false; btn.textContent = "✨ 智能转化"; }
   }
 }
 

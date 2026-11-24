@@ -370,7 +370,7 @@
   <div class="container">
     <div class="header">
       <h1>🏗️ 广告安装施工预约管理系统</h1>
-      <p>使用说明书 v3.24 · 重点工作流程</p>
+      <p>使用说明书 v3.25 · 重点工作流程</p>
     </div>
 
     <div class="toc" id="toc">
@@ -848,7 +848,7 @@
         <h4>1. 写施工内容</h4>
         <p>一句话描述要干的活，<strong>尺寸、数量、材质</strong>有什么写什么，用空格或逗号隔开都行。写得越具体，拆得越准：</p>
         <div class="code">门头招牌 6×2米 铝塑板 发光字5个60厘米 · 3个1.2×2.4米无框画 · 搭桁架 4.6×3米 5套</div>
-        <p><strong>AI 优化描述（可选）：</strong>写得口语也没关系，点「✨ 优化描述」让 AI 补全尺寸、字数、字高、材质，结果只回填输入框，<strong>不自动拆解、不改金额</strong>。你可以继续改，确认后再点智能拆解。AI 服务未配置或网络失败时自动保留原文，不影响正常使用。</p>
+        <p><strong>AI 智能转化（可选）：</strong>写得口语也没关系，点「✨ 智能转化」让 AI 按系统内置标准施工项转写——比如「门口那圈亮的」转成「发光字」、「围蔽」转成「围挡」，并把尺寸、字数、数量整理成标准写法。AI <strong>只提醒补充缺失的尺寸或字数，绝不编造数字</strong>，结果只回填输入框，<strong>不自动拆解、不改金额</strong>。转完会提示识别到哪些标准项，你可以继续改，确认后再点智能拆解。AI 服务未配置或网络失败时自动保留原文，不影响正常使用。</p>
         <p>管理员备注：AI 走<strong>智谱 GLM</strong>（OpenAI 兼容接口），在 Supabase → Functions → Secrets 配 <code>LLM_API_KEY</code>（智谱开放平台申请的 key）即可；<code>LLM_API_URL</code>、<code>LLM_MODEL</code> 可留空，默认用免费的 <code>glm-4-flash</code>。密钥只存服务端，前端看不到；没配也不影响正常拆解。</p>
       </div>
       <div class="flow-step">
@@ -1564,7 +1564,7 @@
     </div>
 
     <div class="footer">
-      <p>文档版本：v3.24 | 更新日期：2026年11月24日</p>
+      <p>文档版本：v3.25 | 更新日期：2026年11月24日</p>
     </div>
   </div>
   <script>
