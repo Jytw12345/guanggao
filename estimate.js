@@ -104,6 +104,8 @@ const CATALOG = [
   {cat:'⑦ 高空设备/机械', desc:'按台班或次，高层项目成本大头', rows:[
     ['calc:basket','吊篮台班',800,'元/台班','600–1000/天'],
     ['calc:crane','吊车台班',1200,'元/台班','三四线：随车吊/8吨600–900，12–16吨1100–1500，25吨1800–2000；通用取16吨1200，精神堡垒专项按吨位分档'],
+    // 2026-11-25 地面机械：机械挖坑自动关联用（小挖 60–80 型台班，≈60m³/台班；大挖自行改单价）
+    ['calc:excavator','挖机台班（小挖60–80型）',1000,'元/台班','800–1500/台班；一台班约挖60m³普通土，按方量自动折算台班、至少1台班'],
     ['h_cherry','曲臂式高空作业平台',2000,'元/台','1800–2600/台，进出场另计约1500'],
     ['h_hoist','屋面卷扬机',1300,'元/台班','1200–1800（含钢丝绳/滑轮）'],
     ['h_entry','设备进出场费',1000,'元/次',''],
@@ -152,6 +154,15 @@ const CATALOG = [
     ['dm:screw','自攻钉/铆钉（含密封胶）',0.4,'元/个','约 20 个/㎡'],
     ['dm:drip','檐口铝板(成型)',55,'元/米','含折 U 加工'],
     ['dm:canopy','雨棚板（阳光板）',120,'元/㎡','出挑 0.8 米（配方）']
+  ]},
+  // 2026-11-25 墙面基层材料：识别到 i_walllevel/i_putty/i_latex/i_drywall 后按面积自动带出。
+  // 名称与 app.js EST_AUTO_MAT 的 cat 精确同名，改价即改补材料费。
+  {cat:'⑫ 墙面基层材料', desc:'元/㎡，按墙面面积自动补（可改可删）', rows:[
+    ['wm:level','墙面找平石膏/砂浆',14,'元/㎡','石膏找平 12–18，水泥砂浆找平略高'],
+    ['wm:putty','内墙腻子粉',7,'元/㎡','两遍+打磨；成品腻子 5–10'],
+    ['wm:latex','内墙乳胶漆',18,'元/㎡','底漆一遍+面漆两遍；12–25，品牌差异大'],
+    ['wm:gypsum','石膏板（12mm）',26,'元/㎡','普通纸面石膏板；防潮板另计'],
+    ['wm:keel','轻钢龙骨',32,'元/㎡','含竖向+横向龙骨、配件；隔墙口径']
   ]}
 ];
 const STORE_KEY='adQuotePrices_v1';
@@ -198,8 +209,13 @@ const WORK_GROUPS = [
     ['i_mini','迷你字安装','字',0.50,1,0,'az','定位贴装→接线'],
     ['i_hole','冲孔外露字安装','㎡',1.50,1,1,'az','螺柱/背架固定→接线'],
     ['i_halo','背发光字安装','字',0.90,1,0,'az','立边固定→藏线→接线'],
-    ['i_titan','钛金字/金属字安装','字',0.60,1,0,'az','涨塞/结构胶固定'],
+    ['i_titan','钛金字/金属字安装（按字）','字',0.60,1,0,'az','涨塞/结构胶固定'],
     ['i_edge','无边字安装','字',0.55,1,0,'az','背胶/涨塞固定→接线'],
+    // 不发光字双因子（2026-11-25）：按字基础（每个字的定位/固定动作）+ 按㎡面积附加（大字更重/更高）。
+    // 两行都由 parseSpec 自动带出，工时/单价可在参数页分别校准；不发光字不接线，工种按安装技工。
+    ['i_carve','雕刻字/雪弗板字安装（按字·基础）','字',0.35,1,0,'az','定位→贴装→固定（不发光，大字面积另计）'],
+    ['i_reflect','反光字安装（按字·基础）','字',0.30,1,0,'az','定位→贴反光膜→固定（不发光，大字面积另计）'],
+    ['i_wordarea','大字安装·面积附加（按㎡）','㎡',1.20,1,1,'az','单字面积大→搬运/上墙/加固附加（与按字基础叠加）'],
     ['i_wire','接线/发光字调试','组',4.00,0,0,'dg','电源+时控进箱→通电试灯→测电流'],
     ['i_wordfix','发光字更换/维护','字',0.45,1,0,'az','拆旧字→换字→复接'],
     ['i_lightbox','门头灯箱安装','㎡',1.50,1,1,'az','挂装→接线→试灯'],
@@ -229,6 +245,10 @@ const WORK_GROUPS = [
     ['i_postbase','立柱/基座焊接','个',2.50,0,0,'hg','立柱组对→满焊→法兰固定'],
     ['i_pitbase','人工挖坑栽立柱（普通土/小坑）','个',1.50,0,0,'pg','人工开挖→立杆→回填夯实'],
     ['i_pitmach','机械挖坑栽立柱（挖机配合）','个',0.30,0,0,'pg','挖机开坑→人工扶正→回填'],
+    // 2026-11-25 三维尺寸驱动方量：写「挖坑 60×60×80厘米」走 m³ 口径（默认定额工时，可在参数与单价页校准）；
+    // 不写尺寸仍走上面按「个」的口径，两条路径互不干扰。
+    ['i_pitvol','人工挖坑（按方量/普通土）','m³',5.00,0,0,'pg','按坑立方量：开挖→立杆→回填夯实'],
+    ['i_pitmachvol','机械挖坑（按方量/挖机配合）','m³',1.00,0,0,'pg','挖机按方量开坑→人工配合回填'],
     ['i_pitcon','混凝土浇筑基础（含预埋浇筑）','个',2.00,0,0,'pg','支模→浇筑→振捣→抹面养护'],
     ['i_paint','钢架除锈刷漆','㎡',0.25,1,0,'pg','打磨除锈→两遍防锈漆'],
     ['i_reinforce','保温层/基层加固','㎡',0.50,0,1,'az','切割基层→加衬板→固定'],
@@ -361,6 +381,16 @@ const WORK_GROUPS = [
     ['i_loadtest','荷载检测','项',4.00,0,0,'sj','布点→加载→记录'],
     ['i_nightwork','夜间施工降效','项',1.50,0,0,'pg','照明布置→降效补偿'],
     ['i_hotwork','动火作业监护','项',4.00,0,0,'pg','看火人全程监护→灭火器到位']
+  ]},
+  // 2026-11-25 补墙面基层/涂饰工序（用户场景：墙不平找平 / 隔轻钢龙骨石膏板 / 刮腻子 / 刷乳胶漆 / 之后装字）。
+  // 原来只有 i_coat（门头真石漆配方），普通「墙面刷乳胶漆」识别为 0 项。工时按三四线行情：
+  // 找平 0.45h/㎡≈16元、刮腻子 0.5h/㎡≈18元、乳胶漆 0.3h/㎡≈11元、石膏板隔墙 1.2h/㎡≈58元。
+  // 材料走单价库按面积自动带出；均可在「参数与单价 → 内置定额」校准。
+  {g:'⑬ 墙面基层 / 涂饰', rows:[
+    ['i_walllevel','墙面找平（石膏/水泥）','㎡',0.45,0,1,'pg','清基→局部修补→整体找平→养护'],
+    ['i_putty','墙面刮腻子（两遍+打磨）','㎡',0.50,0,1,'pg','批刮两遍→干透→砂纸打磨→清灰'],
+    ['i_latex','乳胶漆粉刷（滚/刷/喷）','㎡',0.30,0,1,'pg','底漆一遍→面漆两遍→修补收边'],
+    ['i_drywall','轻钢龙骨石膏板隔墙/隔层','㎡',1.20,0,0,'az','弹线→龙骨固定→封板→接缝处理']
   ]}
 ];
 const WORK_ITEMS = WORK_GROUPS.flatMap(grp=>grp.rows.map(a=>({
@@ -433,6 +463,8 @@ const WORK_PARAM_LABELS = [
 
 const SMART_DICT = [
   {k:['门头','招牌','店招','门牌招牌'], id:'i_door'},
+  // 「不发光字」必须排在「发光字」前（位置 0 < 1 触发重叠过滤），否则「不发光字 8个」误归发光字
+  {k:['不发光字','不发光雕刻字','不发光亚克力字'], id:'i_carve'},
   {k:['发光字','led字','LED字','灯字'], id:'i_led'},
   {k:['吸塑字'], id:'i_suction'},
   {k:['树脂字'], id:'i_resin'},
@@ -442,6 +474,11 @@ const SMART_DICT = [
   {k:['钛金字','金属字'], id:'i_titan'},
   {k:['无边字'], id:'i_edge'},
   {k:['亚克力字','水晶字','pvc字','PVC字'], id:'i_acrword'},
+  // 不发光字双因子（2026-11-25）：雕刻字/反光字/金属字按字基础 + 大字面积附加，
+  // 词表顺序：具体材质词在前，「字」这种泛词不单列避免吞掉整句。
+  {k:['雕刻字','雕花字','雪弗板字','雪弗板雕刻字'], id:'i_carve'},
+  {k:['反光字','反光标识字','反光膜字','晶彩格字'], id:'i_reflect'},
+  {k:['钛金字','钛金不锈钢字','不锈钢字'], id:'i_titan'},
   {k:['不锈钢字','不锈钢包边字'], id:'i_ssword'},
   {k:['广告板','广告牌','广告展板','宣传栏','宣传栏组装','宣传橱窗','阅报栏'], id:'i_board'},
   {k:['围挡','工地围挡','彩钢围挡','冲孔围挡','装配式围挡','pvc围挡','PVC围挡'], id:'i_fence'},
@@ -457,6 +494,11 @@ const SMART_DICT = [
   {k:['机械挖坑','挖机','挖掘机','机械开挖','机械打坑'], id:'i_pitmach'},
   {k:['混凝土浇筑','浇筑混凝土','打混凝土','混凝土基础','浇筑基础','灌浆'], id:'i_pitcon'},
   {k:['挖坑','栽立柱','栽柱','立柱基础','预埋','基坑','立杆','埋柱'], id:'i_pitbase'},
+  // 2026-11-25 补「打孔固定」口径（原在定额库里却没进识别词典，停车立柱水泥地打孔装螺丝识别不出）：
+  // 外墙打孔走高空工 i_walldril，普通地面/立面打孔走 i_drill，膨胀螺栓/化学锚栓走 i_bolt。
+  {k:['外墙打孔','水钻打孔','墙面打孔'], id:'i_walldril'},
+  {k:['打孔','钻孔','打眼','植筋','电锤打孔'], id:'i_drill'},
+  {k:['膨胀螺栓','膨胀螺丝','化学锚栓','涨塞','胀栓','打螺丝','上螺丝','拧螺丝','螺丝固定','装螺丝'], id:'i_bolt'},
   {k:['贴画面','裱画面','换画面','画面安装','画面裱贴','安画面','装画面','上画面'], id:'i_printchange'},
   {k:['地贴','地贴膜','地面贴','地贴纸'], id:'i_floorsticker'},
   {k:['喷绘','喷绘布','画面更换','换画'], id:'i_banner'},
@@ -481,6 +523,13 @@ const SMART_DICT = [
   {k:['led屏','LED屏','显示屏','大屏','拼接屏'], id:'i_ledscreen'},
   {k:['横幅','条幅','喷绘横幅'], id:'i_bannerhang'},
   {k:['文化墙','墙贴','贴纸','无框画','装饰画','挂画','壁画'], id:'i_wallsticker'},
+  // 2026-11-25 墙面基层/涂饰（用户场景：找平→石膏板隔层→刮腻子→乳胶漆→装字）：
+  // 「乳胶漆/粉刷」只在门头语境走 i_coat 配方，普通墙面语句命中这里。
+  // 顺序：石膏板隔墙/隔层要整体先命中，避免被「石膏板」拆细；刮腻子先于「腻子」。
+  {k:['轻钢龙骨石膏板隔墙','轻钢龙骨石膏板隔层','石膏板隔墙','石膏板隔层','龙骨隔墙','轻钢龙骨隔墙','隔墙','隔层','轻钢龙骨石膏板','龙骨石膏板','隔一层'], id:'i_drywall'},
+  {k:['墙面找平','墙体找平','找平','石膏找平','水泥找平'], id:'i_walllevel'},
+  {k:['刮腻子','批腻子','打腻子','腻子粉','腻子'], id:'i_putty'},
+  {k:['乳胶漆','墙漆','内墙漆','刷墙','粉刷','滚涂','刷漆'], id:'i_latex'},
   {k:['玻璃贴','贴膜','磨砂贴'], id:'i_windowfilm'},
   {k:['车贴','车身贴'], id:'i_carsticker'},
   {k:['亮化','投光灯','洗墙灯','轮廓灯','亮化工程','户外亮化','泛光','泛光照明','轮廓照明','楼体照明'], id:'i_buildlight'},
@@ -501,6 +550,9 @@ const SMART_DICT = [
   {k:['精神堡垒','立牌'], id:'i_monument'},
   {k:['易拉宝','展架','x展架'], id:'i_xstand'}
 ];
+// 按「字」计价、且需要双因子（字数基础 + 大字面积附加）的安装项。
+// 发光字 i_ledz/i_led 不在此列：它们走门头配方或按㎡，字数口径已单独处理（见 1247 行附近）。
+const WORD_BY_UNIT = { i_carve: 1, i_reflect: 1, i_titan: 1, i_ssword: 1, i_acrword: 1, i_resin: 1, i_mini: 1, i_halo: 1, i_edge: 1 };
 // 常用组合：一次加入整套（覆盖用户说的"一个项目包含很多施工内容"）
 const SCENE_COMBOS = [
   {n:'发光字门头整套', ids:['i_door','i_led','i_wire','i_steel','i_remove'], q:{i_door:1,i_led:1,i_wire:1,i_steel:1,i_remove:1}},
@@ -538,7 +590,15 @@ const SCENE_COMBOS = [
    m:{i_kt:'area',i_uvboard:'area',i_printchange:'area'}},
   {n:'展厅布置整套', ids:['i_booth','i_bgt','i_acrylic','i_ledscreen','i_lamp','i_carpet','i_clean'],
    q:{i_booth:20,i_bgt:15,i_acrylic:10,i_ledscreen:6,i_lamp:6,i_carpet:20,i_clean:1},
-   m:{i_booth:'area',i_bgt:'area',i_acrylic:'area',i_ledscreen:'area',i_carpet:'area'}}
+   m:{i_booth:'area',i_bgt:'area',i_acrylic:'area',i_ledscreen:'area',i_carpet:'area'}},
+  // 2026-11-25 墙面基层两套（用户场景：墙不平找平 / 石膏板隔层→刮腻子→乳胶漆→装字）。
+  // 面积项写尺寸自动算量；发光字按墙面面积×0.3（字只占一部分），不写尺寸走 q 默认量。
+  {n:'墙面基层涂饰整套', ids:['i_walllevel','i_putty','i_latex'],
+   q:{i_walllevel:20,i_putty:20,i_latex:20},
+   m:{i_walllevel:'area',i_putty:'area',i_latex:'area'}},
+  {n:'墙面基层+发光字整套', ids:['i_drywall','i_walllevel','i_putty','i_latex','i_led','i_wire'],
+   q:{i_drywall:20,i_walllevel:20,i_putty:20,i_latex:20,i_led:6,i_wire:1},
+   m:{i_drywall:'area',i_walllevel:'area',i_putty:'area',i_latex:'area',i_led:'area'}, f:{i_led:0.3}}
 ];
 
 /* ===== 专项测算：脚手架 / 土建基础 / 精神堡垒 =====
@@ -924,7 +984,28 @@ const EXTRA_MIN_DEPTH = 0.1;
   function itemUnitPrice(it, p) { return (Number(it && it.h) || 0) * tradeRate(it, p); }
 
   // ============ 智能解析：尺寸 ============
+  // 中文口语尺寸归一化（2026-11-25）：「1米2」=1.2米、「2米4」=2.4米；
+  // 两个口语尺寸连写（「1米2  2米4」）→「1.2×2.4米」，parseSpec/parseSize/parseDims 共用。
+  // 量词紧跟时不转（「6米2个」是 6 米、2 个，不是 6.2 米），避免误伤。
+  const CN_FRAC = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  function normalizeSpokenSize(s) {
+    const src = String(s == null ? '' : s);
+    const SPOKEN = /(\d+)\s*米\s*(\d|[零一二两三四五六七八九])(?![\d个块张面根套幅条件处片只支台组人])/g;
+    let count = 0;
+    const out = src.replace(SPOKEN, (all, a, b) => {
+      count++;
+      const frac = CN_FRAC[b] != null ? CN_FRAC[b] : Number(b);
+      const val = Math.round((Number(a) + frac / 10) * 100) / 100;
+      return val + '米';
+    });
+    if (count < 2) return out;
+    // 两处口语尺寸紧邻（只隔空格/逗号）→ 当成宽×高
+    return out.replace(/(\d+(?:\.\d+)?)\s*米\s*[,，\s]+\s*(\d+(?:\.\d+)?)\s*米/,
+      (all, a, b) => parseFloat(a) + '×' + parseFloat(b) + '米');
+  }
+
   function parseSize(seg) {
+    seg = normalizeSpokenSize(seg);
     let m;
     m = seg.match(/(\d+(?:\.\d+)?)\s*(?:mm|毫米)\s*[×x*＊.]\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)?/i);
     if (m) { const w = parseFloat(m[1]) / 1000, h = parseFloat(m[2]) / 1000; return { w, h, area: w * h, perim: 2 * (w + h), desc: m[1] + '×' + m[2] + 'mm' }; }
@@ -951,9 +1032,56 @@ const EXTRA_MIN_DEPTH = 0.1;
     return null;
   }
 
+  // 三维坑体积解析（2026-11-25 挖坑按方量）：识别「60厘米×60厘米×80厘米」「0.6×0.6×0.8米」
+  // 「600×600×800mm」三种写法，统一换算成米算 m³。只认明确写了三个维度的写法，
+  // 二维（长×宽）仍由 parseSize 按面积处理，避免「门头 6×2米」被误当成坑。
+  function parsePitVolume(seg) {
+    const s = String(seg || '');
+    // 三个维度数字；单位可以写在每个数后，也可以只在末尾写一次（600×600×800mm 最常见）。
+    const U = '(mm|毫米|cm|厘米|公分|米|m)';
+    const re = new RegExp('(\\d+(?:\\.\\d+)?)\\s*' + U + '?\\s*[×x*＊]\\s*(\\d+(?:\\.\\d+)?)\\s*' + U + '?\\s*[×x*＊]\\s*(\\d+(?:\\.\\d+)?)\\s*' + U + '?', 'i');
+    const m = s.match(re);
+    if (!m) return null;
+    const nums = [m[1], m[3], m[5]].map(Number);
+    const u = [m[2], m[4], m[6]].find(Boolean); // 单位写哪一段都算：取出现的第一个
+    let f = 1, unit = '米';
+    if (u) {
+      const lo = String(u).toLowerCase();
+      if (/^(mm|毫米)$/.test(lo)) { f = 0.001; unit = 'mm'; }
+      else if (/^(cm|厘米|公分)$/.test(lo)) { f = 0.01; unit = 'cm'; }
+      else { f = 1; unit = '米'; }
+    } else {
+      // 没写单位：有小数按米（0.6×0.6×0.8），整数三连按 cm（60×60×80 坑尺寸习惯）
+      const isM = nums.some((n) => n % 1 !== 0);
+      f = isM ? 1 : 0.01; unit = isM ? '米' : 'cm';
+    }
+    const a = nums[0]*f, b = nums[1]*f, c = nums[2]*f;
+    if (!(a > 0 && b > 0 && c > 0)) return null;
+    return { v: a*b*c, desc: nums.join('×') + unit };
+  }
+  /* 不发光字单字面积（2026-11-25 双因子）：从一段里取「一个字占0.5平方」「字高60厘米」「每个字0.6米」。
+     返回 { area:单字㎡, desc }，供 parseSpec 里的按字项加一条「按㎡面积附加」行。
+     只认紧跟「字」的描述，不碰整体墙面尺寸（「6米×2米的墙」不该当成字面积）。 */
+  function parseWordArea(seg) {
+    const s = String(seg || '');
+    let m = s.match(/(?:每个字|每字|一个字|单字|字)\s*(?:约|占|面积)?\s*(\d+(?:\.\d+)?)\s*(?:㎡|m2|平方米|平方|平米)/i);
+    if (m) { const a = parseFloat(m[1]); if (a > 0 && a < 100) return { area: a, desc: '单字约' + a + '㎡' }; }
+    m = s.match(/(?:字高|每个字|每字|一个字|字)\s*(\d+(?:\.\d+)?)\s*(mm|毫米|cm|厘米|公分|米|m)/i);
+    if (!m) m = s.match(/(\d+(?:\.\d+)?)\s*(mm|毫米|cm|厘米|公分|米|m)\s*(?:高)?\s*的?\s*字/i);
+    if (m) {
+      const v = parseFloat(m[1]), u = m[2].toLowerCase();
+      let h = v;
+      if (/mm|毫米/.test(u)) h = v / 1000;
+      else if (/cm|厘米|公分/.test(u)) h = v / 100;
+      if (h > 0 && h < 10) return { area: Math.round(h * h * 1000) / 1000, desc: '字高' + v + u + '≈' + (Math.round(h*h*100)/100) + '㎡/字' };
+    }
+    return null;
+  }
+
   // 尺寸解析（整套方案按面积/周长计价用）：比 parseSize 多返回 w/h/perim；
   // 只写了「N㎡」没有长宽时 perim=0、areaOnly=true（按周长计价的项拿不到量，回退默认数量）。
   function parseDims(t) {
+    t = normalizeSpokenSize(t);
     let m;
     m = String(t || '').match(/(\d+(?:\.\d+)?)\s*(?:mm|毫米)\s*[×x*＊.]\s*(\d+(?:\.\d+)?)\s*(?:mm|毫米)?/i);
     if (m) { const w = parseFloat(m[1]) / 1000, h = parseFloat(m[2]) / 1000; return { w, h, area: w * h, perim: 2 * (w + h), desc: m[1] + '×' + m[2] + 'mm' }; }
@@ -992,6 +1120,8 @@ const EXTRA_MIN_DEPTH = 0.1;
     };
     t = String(t || '').replace(/([一二两三四五六七八九十]+)\s*(个|块|张|面|根|套|幅|条|件|处|片|只|支|台|组|米|㎡)/g,
       (all, num, unit) => { const v = cnQtyVal(num); return v != null ? v + unit : all; });
+    // 口语尺寸「1米2  2米4」→「1.2×2.4米」：入口先归一化，后面分段/isSizeTok 才能把它当一个尺寸词
+    t = normalizeSpokenSize(t);
     // 配置化同义词（2026-11-22）：GG 层把 estimate_config.synonyms 传进来，
     // {词: 定额项id} 优先于内置 SMART_DICT；管理员绑定后同样的口语下次直接识别。
     const syn = (ctx && ctx.synonyms && typeof ctx.synonyms === 'object') ? ctx.synonyms : null;
@@ -1076,6 +1206,16 @@ const EXTRA_MIN_DEPTH = 0.1;
         // 「灯箱布」条目录在「灯箱」之前，所以 12㎡ 不会被当成 12 个成品灯箱）；
         // 同一条词里则取长的（「喷绘布」不能只剩「喷绘」，否则后面紧跟的「换画面」会被当成第二件事）
         hits.sort((a, b) => a.idx - b.idx || a.ord - b.ord || b.len - a.len);
+        // 免挖坑（2026-11-25）：「水泥地面打孔装螺丝」这类明确不打坑的描述，抑制词典里的
+        // 挖坑项（栽立柱/立杆），否则会把打孔固定误算成挖坑，多算工、多算坑。
+        // 用整句原文 t 判定（不是分段 seg），避免「停车场立柱，水泥地面打孔装膨胀螺丝」
+        // 被逗号切开后各段都不完整、判定失效。
+        if (isNoDigOnly(t)) {
+          for (let i = hits.length - 1; i >= 0; i--) {
+            const hid = hits[i].r && hits[i].r.id;
+            if (hid === 'i_pitbase' || hid === 'i_pitmach') hits.splice(i, 1);
+          }
+        }
         const picked = [];
         // 「喷绘布换画面」「灯箱布换画面」：画面类的换画/贴画面词紧跟在物体词后面时是同一件事，
         // 否则会「喷绘布张拉 + 画面更换」两条都按 14㎡ 计，人工翻倍。
@@ -1083,6 +1223,9 @@ const EXTRA_MIN_DEPTH = 0.1;
         hits.forEach((h) => {
           if (picked.some((p) => h.idx < p.idx + p.len && p.idx < h.idx + h.len)) return;
           if (SYN_TAIL.indexOf(h.hit) >= 0 && picked.some((p) => h.idx === p.idx + p.len)) return;
+          // 同一段里同一 id 命中多个同义词（「挖坑栽立柱」= 挖坑 + 栽立柱）只保留一个，
+          // 否则同一件事出两条、数量翻倍。不同段（逗号切开）的同 id 仍各自产出，不受影响。
+          if (picked.some((p) => p.r.id === h.r.id)) return;
           picked.push(h);
         });
         matches = picked;
@@ -1123,6 +1266,17 @@ const EXTRA_MIN_DEPTH = 0.1;
         let it = getWorkItem(match.r.id); if (!it) return;
         if ((!useQty || useQty <= 0) && meterQty && it.u === '米') useQty = meterQty;
         let areaUnit = AREA_UNITS.indexOf(it.u) >= 0;
+        // 挖坑按方量（2026-11-25）：命中人工/机械挖坑且本段写了三维尺寸（60×60×80厘米）时，
+        // 切到 m³ 定额项、q=单坑体积×个数。没写三维尺寸仍走原「按个」口径，两条路径互不干扰。
+        const PIT_VOL_TWIN = { i_pitbase: 'i_pitvol', i_pitmach: 'i_pitmachvol' };
+        let pitVol = null;
+        if (PIT_VOL_TWIN[it.id]) {
+          const pv = parsePitVolume(seg);
+          if (pv && pv.v > 0) {
+            const volItem = getWorkItem(PIT_VOL_TWIN[it.id]);
+            if (volItem) { pitVol = pv; it = volItem; areaUnit = false; }
+          }
+        }
         // 「发光字 5个」按「字」计价（2026-11-24）：口语的 5 个是字数，不是 5㎡。
         // 词典把「发光字」映射到按㎡的 i_led，通用路径原来直接 q=5 挂到㎡项，金额翻几倍。
         // 只在「明确写了个数 + 本段没有面积尺寸」时切 i_ledz；写了面积（「发光字 6㎡」）
@@ -1134,7 +1288,12 @@ const EXTRA_MIN_DEPTH = 0.1;
         // 明确写了米数（「桁架 20米」）→ 按延米计量，不能再用画面尺寸乘套数
         const byMeter = !qm && meterQty != null && useQty === meterQty && it.u === '米';
         let q, calc = '', matQ = null;
-        if (areaUnit && sz && sz.area) {
+        if (pitVol) {
+          const pits = useQty && useQty > 0 ? useQty : 1;
+          q = +(pitVol.v * pits).toFixed(3);
+          calc = pits > 1 ? pits + '坑 × ' + pitVol.desc + '(' + pitVol.v.toFixed(3) + 'm³) = ' + q + 'm³'
+            : pitVol.desc + ' = ' + q + 'm³';
+        } else if (areaUnit && sz && sz.area) {
           q = useQty && useQty > 0 ? +(useQty * sz.area).toFixed(3) : +sz.area.toFixed(3);
           calc = (useQty && useQty > 0 ? useQty + '个 × ' : '') + sz.desc + '(' + sz.area.toFixed(3) + '㎡)' + (useQty && useQty > 0 ? ' = ' + q + '㎡' : '');
         } else if (areaUnit && !useQty && !sz && lastAreaQty) {
@@ -1175,6 +1334,23 @@ const EXTRA_MIN_DEPTH = 0.1;
         const hit = { type: 'lib', id: it.id, n: it.n, u: it.u, q, calc, kw: match.hit };
         if (matQ != null && matQ > 0) hit.matQ = matQ; // 租赁/运费按总长（桁架含后斜撑），与人工口径分开
         out.push(hit);
+        // 不发光字双因子（2026-11-25）：按字基础行之上，若整句写了单字面积/字高，
+        // 再补一条「大字面积附加」行（q=单字面积×字数）。只写「雕刻字20个」不追加，
+        // 避免字数与面积两条都按 20 收、重复计价。门头发光字路径不在此列。
+        // 用整句 t 判定：「雕刻字 1个 一个字占0.5平方」里面积描述会被切成另一段，
+        // 用 seg 取不到；整句能同时拿到字数和单字面积。
+        if (WORD_BY_UNIT[it.id]) {
+          const wa = parseWordArea(t);
+          // 必须有明确字数才出面积附加：只写「雕刻字 6平方米」时字数=6 其实是面积数被误当字数，
+          // 不再叠一条面积行，避免同一坨工程量收两遍（走既有逐项逻辑，数量请用户核对）。
+          const nWords = useQty > 0 ? useQty : (globalQty > 0 ? globalQty : 0);
+          if (wa && nWords > 0) {
+            const areaQ = Math.round(wa.area * nWords * 1000) / 1000;
+            const wi = getWorkItem('i_wordarea');
+            if (wi && areaQ > 0 && !out.some((o) => o.id === wi.id && o.q === areaQ)) out.push({ type: 'lib', id: wi.id, n: wi.n, u: wi.u, q: areaQ,
+              calc: nWords + '字 × ' + wa.desc + ' = ' + areaQ + '㎡（大字面积附加）', kw: match.hit });
+          }
+        }
       });
     });
     return out;
@@ -1313,6 +1489,9 @@ const EXTRA_MIN_DEPTH = 0.1;
     const dep = d.depth != null ? Number(d.depth) : DOOR_DEPTH;
     const effDepth = dep > 0 ? dep : EXTRA_MIN_DEPTH;
     const qtyN = d.qtyN > 0 ? d.qtyN : 1;
+    // 脚手架有效高度：文字写了「离地X米」时按 离地净高+门头高 算层数；台阶不抵减。
+    const scH = Number(d.scaffoldH) > 0 ? Number(d.scaffoldH) : d.h;
+    const scExtra = scH > d.h ? `（门头${d.h}米+离地${(scH - d.h).toFixed(2).replace(/\.00$/, '')}米）` : '';
     // 檐口/滴水线的有效长度：上沿（=宽）+ 两个上转角返边，不按整圈周长
     const edgeLen = (d.w + 2 * effDepth) * qtyN;
     const baseOf = (by) => {
@@ -1320,7 +1499,7 @@ const EXTRA_MIN_DEPTH = 0.1;
       if (by === 'perimDepth') return d.perim * effDepth;
       if (by === 'edgeLen') return edgeLen;
       if (by === 'canopy') return d.w * 0.8 * qtyN;
-      if (by === 'scaffold') return scaffoldSets(d.w, d.h);
+      if (by === 'scaffold') return scaffoldSets(d.w, scH);
       if (by === 'fixed') return qtyN;
       return d.area;
     };
@@ -1329,7 +1508,7 @@ const EXTRA_MIN_DEPTH = 0.1;
       : by === 'perim' ? `周长 ${d.perim.toFixed(1)}米`
         : by === 'edgeLen' ? `宽 ${d.w}米 + 两侧返边 ${(2 * effDepth).toFixed(1)}米 = ${edgeLen.toFixed(1)}米`
           : by === 'canopy' ? `宽 ${d.w}米 × 0.8米出挑`
-            : by === 'scaffold' ? `宽 ${d.w}米÷1.8=${Math.ceil(d.w / 1.8)}片 × 高 ${d.h}米叠${Math.ceil(Math.max(0, d.h - SCAFFOLD_REACH) / SCAFFOLD_UNIT_H)}层 = ${scaffoldSets(d.w, d.h)}组`
+            : by === 'scaffold' ? `宽 ${d.w}米÷1.8=${Math.ceil(d.w / 1.8)}片 × 有效高 ${scH}米${scExtra}叠${Math.ceil(Math.max(0, scH - SCAFFOLD_REACH) / SCAFFOLD_UNIT_H)}层 = ${scaffoldSets(d.w, scH)}组`
               : by === 'fixed' ? `${qtyN} 套` : `面积 ${d.area.toFixed(2)}㎡`;
     const rnd = (x) => Math.round(x * 100) / 100;
     // 折合护栏：把 bench.per 换成「这一项的对照量」，配置页/勾选区按 金额÷对照量 与行业上限比
@@ -1339,7 +1518,7 @@ const EXTRA_MIN_DEPTH = 0.1;
       const per = b.per === 'edge' ? edgeLen
         : b.per === 'm' ? d.perim
           : b.per === 'canopy' ? d.w * 0.8 * qtyN
-            : b.per === 'group' ? scaffoldSets(d.w, d.h)
+            : b.per === 'group' ? scaffoldSets(d.w, scH)
               : d.area;
       return { per: b.per, qty: per, hi: Number(b.hi) || 0 };
     };
@@ -1411,12 +1590,88 @@ const EXTRA_MIN_DEPTH = 0.1;
     const s = String(t || '');
     return /拆除|拆旧|拆掉|撤除|清拆|拆移/.test(s) && !/新装|再装|重装|安装|制作|更换|换新|重做|翻新|改造|新建/.test(s);
   }
+  /* 免挖坑判定（2026-11-25）：停车场立柱常见两种做法——挖坑栽柱 vs 水泥地面打孔装螺丝。
+     用户写「水泥地面打孔装膨胀螺丝/化学锚栓」时明确不打坑，此时要抑制 i_pitbase/i_pitmach，
+     否则词典里的「栽立柱/立杆」会把水泥地打孔误算成挖坑（多算工、多算坑）。
+     判据：出现「打孔固定」类词 + 地面/水泥/混凝土场景，且没有明确的挖坑/开挖词。 */
+  function isNoDigOnly(t) {
+    const s = String(t || '');
+    const fixed = /打孔|钻孔|打眼|植筋|膨胀螺丝|膨胀螺栓|化学锚栓|涨塞|胀栓|打螺丝|上螺丝|拧螺丝|螺丝固定/.test(s);
+    if (!fixed) return false;
+    const ground = /水泥|混凝土|地面|地坪|水泥地|硬地|打膨胀/.test(s);
+    // 只有明确动土才算真要挖；「立杆」这类只描述立起来的模糊词不算，以免误伤打孔场景。
+    const dig = /挖坑|开挖|基坑|栽柱|栽立柱|埋柱|预埋|挖机|机械挖/.test(s);
+    return ground && !dig;
+  }
   function isDoorText(t) {
     const s = String(t || '');
     if (isRemoveOnly(s)) return false;
     if (/门头|店招|门脸/.test(s)) return true;
     if (/招牌/.test(s)) { const z = parseSize(s); return !!(z && z.area); }
     return false;
+  }
+  /* 门头「厚度」识别（2026-11-25）：文字写了厚 20厘米 / 20cm厚 / 厚度0.3米 时，
+     本次拆解的侧包深度与骨架厚度都按它算（前后双层框架 + 连接撑 + 侧包面积）。
+     只认带单位的箱体厚度：3mm 铝板、1.2mm 不锈钢这类板厚不改成箱体，
+     「发光字厚5厘米」是字壳厚度也不误伤。解析结果只作用于本次拆解，不写回配置。*/
+  const DOOR_THICK_CN = { 一:1, 二:2, 两:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9, 十:10 };
+  function doorThickNum(s) {
+    if (/^\d+(?:\.\d+)?$/.test(s)) return parseFloat(s);
+    if (DOOR_THICK_CN[s] != null) return DOOR_THICK_CN[s];
+    const m = String(s).match(/^([二三四五六七八九])?十([一二三四五六七八九])?$/);
+    if (m) return (m[1] ? DOOR_THICK_CN[m[1]] : 1) * 10 + (m[2] ? DOOR_THICK_CN[m[2]] : 0);
+    return NaN;
+  }
+  function parseDoorThickness(t) {
+    const s = String(t || '');
+    if (!/厚/.test(s)) return null;
+    const NUM = '([0-9]+(?:\\.[0-9]+)?|[一二两三四五六七八九十]+)';
+    const UNIT = '(毫米|mm|厘米|公分|cm|米|m)';
+    const pats = [
+      new RegExp('厚\\s*度?\\s*' + NUM + '\\s*' + UNIT, 'gi'),       // 厚20厘米 / 厚度 0.3 米
+      new RegExp(NUM + '\\s*' + UNIT + '\\s*(?:的)?\\s*厚\\s*度?', 'gi') // 20cm厚 / 30公分厚的门头
+    ];
+    const hits = [];
+    pats.forEach(re => { let m; while ((m = re.exec(s)) != null) hits.push(m); });
+    hits.sort((a, b) => a.index - b.index);
+    for (const m of hits) {
+      const before = s.slice(0, m.index).replace(/\s+$/, '');
+      if (/(?:字|字壳|字面)$/.test(before)) continue; // 字壳厚≠箱体厚
+      const raw = doorThickNum(m[1]);
+      if (!(raw > 0)) continue;
+      const unit = m[2];
+      let meters;
+      if (/毫米|mm/i.test(unit)) {
+        if (raw < 80) continue; // <8cm 按板厚/包边料厚忽略
+        meters = raw / 1000;
+      } else if (/厘米|公分|cm/i.test(unit)) meters = raw / 100;
+      else meters = raw;
+      meters = Math.round(meters * 1000) / 1000;
+      if (meters < 0.05 || meters > 1) continue;
+      return { meters, raw, unit, text: m[0].trim() };
+    }
+    return null;
+  }
+  /* 门头离地净高（2026-11-25）：「离地3米 / 距地面2.4米 / 门头底离地80公分」。
+     脚手架按「离地净高 + 门头高」折算层数；台阶只当通行方式，不抵减高度。
+     与板厚同理：只作用于本次拆解，不写回配置。*/
+  function parseDoorClearance(t) {
+    const s = String(t || '');
+    const NUM = '([0-9]+(?:\\.[0-9]+)?|[一二两三四五六七八九十]+)';
+    const UNIT = '(毫米|mm|厘米|公分|cm|米|m)';
+    const re = new RegExp('(?:离|距(?:离)?)\\s*(?:地(?:面)?)?\\s*(?:高度|高)?\\s*' + NUM + '\\s*' + UNIT, 'i');
+    const m = s.match(re);
+    if (!m) return null;
+    const raw = doorThickNum(m[1]);
+    if (!(raw > 0)) return null;
+    const unit = m[2];
+    let meters;
+    if (/毫米|mm/i.test(unit)) meters = raw / 1000;
+    else if (/厘米|公分|cm/i.test(unit)) meters = raw / 100;
+    else meters = raw;
+    meters = Math.round(meters * 1000) / 1000;
+    if (meters < 0.05 || meters > 20) return null;
+    return { meters, text: m[0].trim() };
   }
   function tryDoorRecipe(t, doorCfg) {
     const cfg = doorCfg || {};
@@ -1493,9 +1748,17 @@ const EXTRA_MIN_DEPTH = 0.1;
     }
     const recipe = matchDoorRecipe(t);
     const elCfg = cfg.params || WORK_PARAM_DEFAULT;
+    // 文字写明厚度时，本次拆解覆盖配置的侧包深度/骨架厚度（配置值不动）；
+    // 没写厚度则完全沿用旧口径（v429：不污染高频正常路径）。
+    const thickness = parseDoorThickness(t);
+    const dep = thickness ? thickness.meters : (cfg.depth != null ? cfg.depth : DOOR_DEPTH);
+    const tk = thickness ? thickness.meters : (cfg.thick != null ? cfg.thick : 0);
+    // 离地净高只影响脚手架组数（离地+门头高=有效作业高度），不改骨架/面板用料
+    const clearance = parseDoorClearance(t);
+    const scaffoldH = clearance ? Math.round((clearance.meters + h) * 1000) / 1000 : h;
     const ex = expandDoorRecipe(recipe, w, h, qty,
-      cfg.depth != null ? cfg.depth : DOOR_DEPTH, cfg.gap != null ? cfg.gap : DOOR_GAP,
-      cfg.thick != null ? cfg.thick : 0, cfg.shape || 'rect',
+      dep, cfg.gap != null ? cfg.gap : DOOR_GAP,
+      tk, cfg.shape || 'rect',
       cfg.lampGap != null ? cfg.lampGap : elCfg.lampGap,
       cfg.lvfGap != null ? cfg.lvfGap : elCfg.lvfGap);
     // 新配方（铝方通/石材/真石漆/镀锌板）主干不含发光字：只有文字里点了「发光字」才补一行，
@@ -1566,7 +1829,7 @@ const EXTRA_MIN_DEPTH = 0.1;
       const sel = (cfg.extras && typeof cfg.extras === 'object') ? cfg.extras : null;
       if (sel) {
         const defs = doorExtraDefs(cfg.extraDefs, cfg.extraHidden);
-        const exd = expandDoorExtras(defs, sel, { area: ex.area, perim: ex.perim, w, h, qtyN: qty > 0 ? qty : 1, depth: ex.depth });
+        const exd = expandDoorExtras(defs, sel, { area: ex.area, perim: ex.perim, w, h, qtyN: qty > 0 ? qty : 1, depth: ex.depth, scaffoldH });
         exd.work.forEach(x => ex.work.push(x));
         exd.mat.forEach(x => ex.mat.push(x));
       }
@@ -1597,7 +1860,9 @@ const EXTRA_MIN_DEPTH = 0.1;
       hits.push(e);
     });
     // charQty/charH 回传：GG 层据此判断发光字面积是真按字数算、还是按门头面积 40% 暂估
-    return { hits, recipe, area: ex.area, perim: ex.perim, wrapArea: ex.wrapArea, depth: ex.depth, gap: ex.gap, w, h, qty, charQty, charH, frame: ex.frame };
+    return { hits, recipe, area: ex.area, perim: ex.perim, wrapArea: ex.wrapArea, depth: ex.depth, gap: ex.gap, w, h, qty, charQty, charH,
+      thickness: thickness ? thickness.meters : 0, thicknessText: thickness ? thickness.text : '',
+      clearance: clearance ? clearance.meters : 0, scaffoldHeight: scaffoldH, frame: ex.frame };
   }
 
   // ============ 单项解析（万能录入，三种计价模式） ============
@@ -1630,6 +1895,13 @@ const EXTRA_MIN_DEPTH = 0.1;
         // 进而误导"建议几人几天"）。工时记 0，仅金额进施工费。
         return { n: name, u: '项', q: 1, hours: 0, fee,
           note: '包干价（不计工时）' + (w.note ? ' · ' + w.note : ''), isCustom: true };
+      }
+      // 设备租赁（2026-11-25）：量×单价进施工费、工时记 0。机械是设备不是人工，
+      // 更不能反推工时——否则台班费被折算成上百工时，拉长建议工期→连带抬高高空设备费(equipDays)。
+      if (w.mode === 'equip') {
+        const q = parseFloat(w.q) || 0, price = parseFloat(w.p) || 0;
+        return { n: name, u: w.u || '台班', q, hours: 0, fee: q * price,
+          note: `${q}${w.u || '台班'} × ${price}元（设备租赁·不计工时）` + (w.note ? ' · ' + w.note : ''), isCustom: true, isEquip: true };
       }
       // 自定义施工项按工时（2026-11-22）：定额里没有的活，让人自己填「工时/单位」+ 工种，
       // 与定额项同口径：人工费 = 量 × 单位工时 × 工种单价，工时同时参与总工时/人数建议。
@@ -1821,9 +2093,9 @@ const EXTRA_MIN_DEPTH = 0.1;
     CATALOG, AREA_UNITS,
     SHEET_AREA, SHAPE_FACTOR, WELD_H_PER_PT,
     getWorkItem, getH, tradeKeyOf, tradeRate, itemUnitPrice, money, esc, unitOf,
-    parseSize, parseDims, parseSpec, extractArea, extractQty, splitItems,
+    parseSize, parseDims, parsePitVolume, parseWordArea, parseDoorThickness, parseDoorClearance, normalizeSpokenSize, parseSpec, extractArea, extractQty, splitItems,
     trussUsage, TRUSS_SECTION,
-    matchDoorRecipe, expandDoorRecipe, tryDoorRecipe, isDoorText, isRemoveOnly,
+    matchDoorRecipe, expandDoorRecipe, tryDoorRecipe, isDoorText, isRemoveOnly, isNoDigOnly,
     resolveItem, calcCrew, calculate, quoteText, defaultConfig
   };
   global.Estimate = API;
