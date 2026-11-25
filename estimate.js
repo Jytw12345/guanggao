@@ -1562,6 +1562,14 @@ const EXTRA_MIN_DEPTH = 0.1;
     });
     return { work, mat };
   }
+  /* 主干已含侧包/包边料的配方（铝塑板/亚克力/PVC/generic 用 wrap，不锈钢用 perimDepth），
+     再勾「包边/封边」「不锈钢包边」就是同一圈料收两遍钱（6×2 米门头多出约 ¥418 / ¥1260）。
+     这里给纯函数供 UI 隐藏 + 内核过滤两处共用，避免只藏了界面、云端默认勾选仍重复计价。*/
+  function doorExtraRedundantKeys(recipe) {
+    const mats = (recipe && Array.isArray(recipe.mat)) ? recipe.mat : [];
+    const hasSide = mats.some(x => x && (x.wrap === true || x.by === 'perimDepth'));
+    return hasSide ? ['edge', 'ssedge'] : [];
+  }
   /* 工艺库 = 内置（可隐藏/可覆盖）+ 自定义。
      同 key 时用自定义项「按字段覆盖」内置项：只改了材料单价的内置工艺，人工定额不会丢。*/
   function doorExtraDefs(custom, hidden) {
@@ -1828,8 +1836,11 @@ const EXTRA_MIN_DEPTH = 0.1;
     {
       const sel = (cfg.extras && typeof cfg.extras === 'object') ? cfg.extras : null;
       if (sel) {
+        // 主干已含侧包/包边时忽略包边类工艺（配置对象只读，不改调用方传进来的 extras）
+        const skip = new Set(doorExtraRedundantKeys(recipe));
+        const effSel = skip.size ? Object.keys(sel).reduce((m, k) => { if (!skip.has(k)) m[k] = sel[k]; return m; }, {}) : sel;
         const defs = doorExtraDefs(cfg.extraDefs, cfg.extraHidden);
-        const exd = expandDoorExtras(defs, sel, { area: ex.area, perim: ex.perim, w, h, qtyN: qty > 0 ? qty : 1, depth: ex.depth, scaffoldH });
+        const exd = expandDoorExtras(defs, effSel, { area: ex.area, perim: ex.perim, w, h, qtyN: qty > 0 ? qty : 1, depth: ex.depth, scaffoldH });
         exd.work.forEach(x => ex.work.push(x));
         exd.mat.forEach(x => ex.mat.push(x));
       }
@@ -1861,6 +1872,7 @@ const EXTRA_MIN_DEPTH = 0.1;
     });
     // charQty/charH 回传：GG 层据此判断发光字面积是真按字数算、还是按门头面积 40% 暂估
     return { hits, recipe, area: ex.area, perim: ex.perim, wrapArea: ex.wrapArea, depth: ex.depth, gap: ex.gap, w, h, qty, charQty, charH,
+      hiddenExtras: doorExtraRedundantKeys(recipe),
       thickness: thickness ? thickness.meters : 0, thicknessText: thickness ? thickness.text : '',
       clearance: clearance ? clearance.meters : 0, scaffoldHeight: scaffoldH, frame: ex.frame };
   }
@@ -2089,7 +2101,7 @@ const EXTRA_MIN_DEPTH = 0.1;
     WORK_GROUPS, WORK_ITEMS, WORK_PARAM_DEFAULT, WORK_PARAM_LABELS,
     TRADES, TRADE_IDS,
     SMART_DICT, SCENE_COMBOS, SPECIAL_CALCS, DOOR_RECIPES, DOOR_EXTRAS, DOOR_EXTRA_METHODS,
-    doorExtraDefs, expandDoorExtras, scaffoldSets, SCAFFOLD_UNIT_W, SCAFFOLD_UNIT_H, SCAFFOLD_REACH,
+    doorExtraDefs, doorExtraRedundantKeys, expandDoorExtras, scaffoldSets, SCAFFOLD_UNIT_W, SCAFFOLD_UNIT_H, SCAFFOLD_REACH,
     CATALOG, AREA_UNITS,
     SHEET_AREA, SHAPE_FACTOR, WELD_H_PER_PT,
     getWorkItem, getH, tradeKeyOf, tradeRate, itemUnitPrice, money, esc, unitOf,

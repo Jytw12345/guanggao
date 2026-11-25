@@ -33299,9 +33299,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v6fdb1dce";
+  const APP_VERSION = "ve7b183c4";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 32;
+  const BUILD_NO = 33;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -37597,7 +37597,10 @@ function estOpenQuoteReview(data) {
   const webN = Number((data && data.webRefs) || 0) || 0;
   const cq = (_estUI && _estUI.customerQuote) || null;
   const advice = (data && Array.isArray(data.priceAdvice)) ? data.priceAdvice : [];
-  const advHtml = advice.length ? '<div class="cq-advice"><b>逐项调价建议（仅供参考，不自动改价）</b>'
+  // 缓存改价方案与所用引擎：报告里的「一键应用」据此把 pct 折算回利润率，返回报价单也带引擎标识。
+  if (cq) { cq.priceAdvice = advice; cq.reviewEngine = (data && data.engine) || ""; }
+  const engineTxt = (data && data.engine === "deepseek") ? "DeepSeek" : "智谱 GLM";
+  const advHtml = advice.length ? '<div class="cq-advice"><b>逐项调价方案（仅供参考，可一键应用）</b>'
     + advice.map((a) => {
       const row = (cq && cq.rows && cq.rows[a && a.i]) || null;
       const ref = (cq && cq.refPrices && cq.refPrices[a && a.i]) || 0;
@@ -37612,11 +37615,15 @@ function estOpenQuoteReview(data) {
     }).join("") + '</div>' : "";
   const body = '<div class="est-ai-review-top"><b>' + v[0] + ' ' + v[1] + '</b>'
     + '<p>' + esc((data && data.summary) || "复核完成，以下建议供参考。") + '</p>'
-    + '<p class="est-ai-review-cnt">共 ' + sugs.length + ' 条疑点 · ' + (webN > 0 ? '联网参考 ' + webN + ' 条' : '未取到联网行情') + '</p></div>'
+    + '<p class="est-ai-review-cnt">共 ' + sugs.length + ' 条疑点 · ' + (webN > 0 ? '联网参考 ' + webN + ' 条' : '未取到联网行情')
+    + ' · 复核引擎 ' + engineTxt + '</p></div>'
     + advHtml
     + '<div class="est-ai-review-list">' + list + '</div>'
-    + '<p class="est-ai-review-note">客户价合理性只作建议：不改报价单、不改工程金额；公开行情不等于真实成交价，你填的参考价也只是参考，采纳与否自行判断。</p>'
-    + '<div class="cq-btns"><button class="btn primary" onclick="estReopenCustomerQuote()">返回报价单</button></div>';
+    + '<p class="est-ai-review-note">由 ' + engineTxt + ' 复核，改价方案只作建议：点「一键应用」才会按 pct 微调逐行利润率并重算客户价；'
+    + '公开行情不等于真实成交价，你填的参考价也只是参考。应用只改本次报价单，不写工程金额。</p>'
+    + '<div class="cq-btns">'
+    + (advice.length ? '<button class="btn primary" onclick="estApplyPriceAdvice()">✅ 一键应用改价方案（' + advice.length + ' 项）</button>' : '')
+    + '<button class="btn outline" onclick="estReopenCustomerQuote()">返回报价单</button></div>';
   modal.open("客户报价合理性复核", body, { hideFooter: true, closeOnMask: false, wide: true });
 }
 /* modal.open 是替换同一层弹窗而不是压栈：从复核页返回时按缓存重绘报价单 */
@@ -37624,6 +37631,36 @@ function estReopenCustomerQuote() {
   const cq = (_estUI && _estUI.customerQuote) || null;
   if (!cq) { modal.close(); return; }
   estOpenCustomerQuote(cq.raw, cq.src === "local", cq.rowRates, cq.refPrices);
+}
+/* 纯计算：把改价方案的 pct（相对当前客户价）折算回利润率。
+   newRate=((1+cur/100)*(1+pct/100)-1)*100；越界/keep/pct=0 跳过，0–100 截断。 */
+function estPriceAdviceToRates(rowRates, advice, rowCount) {
+  const rates = (Array.isArray(rowRates) ? rowRates : []).slice();
+  const def = (typeof EST_PROFIT_DEFAULT !== "undefined" && EST_PROFIT_DEFAULT.labor) || 25;
+  while (rates.length < rowCount) rates.push(def);
+  let changed = 0;
+  (Array.isArray(advice) ? advice : []).forEach((a) => {
+    const i = Number(a && a.i);
+    const pct = Number(a && a.pct) || 0;
+    if (!Number.isInteger(i) || i < 0 || i >= rowCount || !pct) return;
+    const cur = Number(rates[i]) || 0;
+    const nr = ((1 + cur / 100) * (1 + pct / 100) - 1) * 100;
+    rates[i] = Math.min(100, Math.max(0, Math.round(nr * 10) / 10));
+    changed++;
+  });
+  return { rates, changed };
+}
+/* 一键应用改价方案：只改本次报价单内存的利润率并重算客户价，不碰工程金额/内部成本。 */
+function estApplyPriceAdvice() {
+  const cq = (_estUI && _estUI.customerQuote) || null;
+  if (!cq) { toast("先生成客户报价单"); return; }
+  const advice = Array.isArray(cq.priceAdvice) ? cq.priceAdvice : [];
+  if (!advice.length) { toast("本次复核没有可应用的改价方案"); return; }
+  const n = estCustomerQuoteRows().length;
+  const out = estPriceAdviceToRates(cq.rowRates, advice, n);
+  if (!out.changed) { toast("改价方案里没有需要调整的行"); return; }
+  estOpenCustomerQuote(cq.raw, cq.src === "local", out.rates, cq.refPrices);
+  toast("已按改价方案调整 " + out.changed + " 项，客户价已更新（未写工程金额）");
 }
 async function estAiQuoteCheck() {
   // 用户可能改了利润率/参考价但没点应用，先静默重绘让复核基于最新数字
