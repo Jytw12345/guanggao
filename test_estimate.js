@@ -942,7 +942,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     return helpSrc.slice(i, helpSrc.indexOf('<div class="section" id="review">', i));
   })();
   ck('AA', '有 #estimate 章节且目录里可跳转', estSec.length > 4000 && /<li><a href="#estimate">施工费测算<\/a><\/li>/.test(helpSrc));
-  ck('AA', '说明书版本号已升到 v3.53', helpSrc.includes('使用说明书 v3.53'));
+  ck('AA', '说明书版本号已升到 v3.55', helpSrc.includes('使用说明书 v3.55'));
   ck('AA', '小节覆盖三步 / 明细 / 门头 / 填入 / 参数 / 反推 / 常见问题',
     ['三步出报价', '施工项清单的三种行', '门头：配方与工艺增项', '一键填入工程金额', '参数与单价（管理员）', '反推工时', '常见问题'].every((k) => estSec.includes(k)));
   ck('AA', '写明「测算不改金额链」与包工包料扣项', estSec.includes('测算不改金额链') && estSec.includes('材料费（测算）'));
@@ -960,8 +960,8 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
   // 起因 2026-11-22：说明书在 iframe 里一滚到底、回不去目录/系统；用户又问
   // 「自定义施工项是不是只能显示在自定义区，不能加进内置定额项」。
   console.log('\n=== AB. 帮助页导航 / 施工项存入定额库 ===');
-  ck('AB', '说明书版本升到 v3.53（顶部与页脚一致）',
-    helpSrc.includes('使用说明书 v3.53') && helpSrc.includes('文档版本：v3.53'));
+  ck('AB', '说明书版本升到 v3.55（顶部与页脚一致）',
+    helpSrc.includes('使用说明书 v3.55') && helpSrc.includes('文档版本：v3.55'));
   ck('AB', 'sticky 导航条：章节下拉 / 目录 / 上下节 / 顶部 / 返回系统',
     /\.help-nav \{[^}]*position: sticky/.test(helpSrc)
     && ['id="helpJump"', 'helpGoToc()', 'helpStep(-1)', 'helpStep(1)', 'helpGoTop()', 'helpBack()'].every((k) => helpSrc.includes(k)));
@@ -2463,7 +2463,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && cssSrc.includes('.est-ai-review-sec-head'));
     ck('BM', '客户报价复核明确写「客户报价口径」并指向方案复核入口',
       appSrc.includes('行业价格对照（客户报价口径，内部参考）')
-      && appSrc.includes('这里比的是<b>当前客户单价</b>，不是内部成本价')
+      && appSrc.includes('这里比的是<b>当前报价单价</b>，不是内部成本价')
       && appSrc.includes('请到测算结果页点「AI 方案复核」'));
   }
 
@@ -2474,6 +2474,8 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     const cssSrc = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
     const calcSrc = slice('function estCustomerQuoteCalc(', 'function estCustomerQuoteRows()');
     const quoteFn = slice('function estOpenCustomerQuote(', 'async function estAiPrice(forceRefresh)');
+    const bnExportFn = slice('/* 客户报价单导出', '/* 重复拆解选择');
+    const bnTextSrc = slice('function estCustomerQuoteText(', 'function estCustomerQuotePrintHtml(');
     ck('BN', 'Edge Function 有 price/quotecheck 两模式与分项利润护栏',
       aiSrc.includes('mode === "price"') && aiSrc.includes('mode === "quotecheck"')
       && /const PROFIT_GUARD/.test(aiSrc) && aiSrc.includes('clampProfitRate')
@@ -2499,6 +2501,14 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       cssSrc.includes('.cq-table') && cssSrc.includes('.cq-total') && cssSrc.includes('.cq-internal')
       && /\.cq-table th:nth-child\(3\), \.cq-table th:nth-child\(4\)/.test(cssSrc)
       && /\.cq-table td:nth-child\(3\), \.cq-table td:nth-child\(4\)/.test(cssSrc));
+    ck('BN', '客户可见列统一叫「报价单价」，不再叫「客户单价」',
+      quoteFn.includes('<th>报价单价</th>') && !quoteFn.includes('客户单价')
+      && bnTextSrc.includes('报价单价') && !bnTextSrc.includes('客户单价')
+      && bnExportFn.includes('报价单价') && !bnExportFn.includes('客户单价')
+      && /ctx\.fillText\("报价单价"/.test(appSrc));
+    ck('BN', '服务端报告提示词同步用「报价单价」，不再出现「客户单价」',
+      !aiSrc.includes('客户单价') && aiSrc.includes('price=报价单价')
+      && aiSrc.includes('当前报价单价是否符合') && aiSrc.includes('」报价单价 ¥${r.price}'));
     ck('BN', '重复加价按清单/锚签名缓存，内部区提供主动重掷入口',
       /async function estAiPrice\(forceRefresh\)/.test(appSrc)
       && appSrc.includes('const sig = JSON.stringify(payload);')
@@ -2506,6 +2516,17 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && appSrc.includes('onclick="estAiPrice(true)"') && appSrc.includes('🎲 换一组建议')
       && helpSrc.includes('重复点「重新加价」金额会跳吗')
       && cssSrc.includes('.cq-rate-actions'));
+    ck('BN', '每次加价自动对比新旧金额：报价单渲染对比块、金额变化才重算',
+      /function estQuoteCompare\(/.test(appSrc) && /function estCompareHtml\(/.test(appSrc)
+      && quoteFn.includes('estCompareHtml(compare)') && quoteFn.includes('estQuoteCompare(prevCq, q)')
+      && quoteFn.includes('compare,') && appSrc.includes('📊 与上次对比')
+      && appSrc.includes('function estToggleCompareDetail()')
+      && helpSrc.includes('每次加价自动对比新旧金额')
+      && cssSrc.includes('.cq-compare') && cssSrc.includes('.cq-cmp-delta.is-up'));
+    ck('BN', '对比数据不进三种导出，只挂在内存 cq.compare',
+      !/cq\.compare|cq-cmp|estCompareHtml/.test(bnExportFn)
+      && !/cq\.compare|cq-cmp|estCompareHtml/.test(bnTextSrc)
+      && !/cq\.compare|cq-cmp|estCompareHtml/.test(appSrc.slice(appSrc.indexOf('function estCustomerQuoteImage('), appSrc.indexOf('function estCustomerQuoteExport('))));
     // 运行时：真实纯函数验证分项加价与起步价/辅材口径
     const cqCtx = { console };
     vm.createContext(cqCtx);
@@ -2577,6 +2598,63 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       rc.__calls === 3 && rc.__bodies[2].items[0].refPrice === 88);
   }
 
+  // ===== CE：新旧加价金额对比（纯函数运行时验证）=====
+  {
+    const cmpSrc = slice('function estQuoteCompare(', 'function estOpenCustomerQuote(');
+    const ceCtx = { console };
+    vm.createContext(ceCtx);
+    vm.runInContext(cmpSrc, ceCtx);
+    const prev = { totals: { grand: 7953 }, rows: [
+      { n: '钢架焊接', unit: 30, amount: 360 }, { n: '铝塑板', unit: 95, amount: 1698.6 }
+    ] };
+    const same = vm.runInContext('estQuoteCompare(' + JSON.stringify(prev) + ','
+      + JSON.stringify({ grand: 7953, rows: prev.rows }) + ')', ceCtx);
+    ck('CE', '金额没变时不生成对比（重绘/返回沿用上次）', same === null);
+    const kept = { ...prev, compare: { oldGrand: 7000, newGrand: 7953, diff: 953, pct: 13.61, rows: [] } };
+    const keptAgain = vm.runInContext('estQuoteCompare(' + JSON.stringify(kept) + ','
+      + JSON.stringify({ grand: 7953, rows: prev.rows }) + ')', ceCtx);
+    ck('CE', '金额没变时沿用上次对比对象，不丢历史',
+      !!keptAgain && keptAgain.oldGrand === 7000 && keptAgain.newGrand === 7953);
+    const changed = vm.runInContext('estQuoteCompare(' + JSON.stringify(prev) + ','
+      + JSON.stringify({ grand: 8065.82, rows: [
+        { n: '钢架焊接', unit: 37.5, amount: 450 }, { n: '铝塑板', unit: 95, amount: 1698.6 }
+      ] }) + ')', ceCtx);
+    ck('CE', '合计变化出差额与百分比，逐行只列变化项',
+      changed && changed.oldGrand === 7953 && changed.newGrand === 8065.82
+      && changed.diff === 112.82 && Math.abs(changed.pct - 1.42) < 0.02
+      && changed.rows.length === 1 && changed.rows[0].n === '钢架焊接'
+      && changed.rows[0].oldUnit === 30 && changed.rows[0].newUnit === 37.5
+      && changed.rows[0].oldAmt === 360 && changed.rows[0].newAmt === 450);
+    const added = vm.runInContext('estQuoteCompare(' + JSON.stringify(prev) + ','
+      + JSON.stringify({ grand: 9053, rows: [
+        { n: '钢架焊接', unit: 30, amount: 360 }, { n: '铝塑板', unit: 95, amount: 1698.6 },
+        { n: '接线调试', unit: 250, amount: 1100 }
+      ] }) + ')', ceCtx);
+    ck('CE', '清单增加行时标注跨清单对比，新增行单独列',
+      added && added.listChanged === true && added.rows.length === 1
+      && added.rows[0].kind === 'add' && added.rows[0].n === '接线调试');
+    // 渲染：HTML 转义 + 涨红跌绿 + 不导出字段
+    const escFn = appSrc.slice(appSrc.indexOf('function esc(str)'), appSrc.indexOf('\n}', appSrc.indexOf('function esc(str)')) + 2);
+    const htmlCtx = { console };
+    vm.createContext(htmlCtx);
+    vm.runInContext(escFn + '\n' + cmpSrc, htmlCtx);
+    const html = vm.runInContext('estCompareHtml(' + JSON.stringify({ oldGrand: 7953, newGrand: 8065.82,
+      diff: 112.82, pct: 1.42, listChanged: false,
+      rows: [{ n: '<img src=x onerror=1>', oldUnit: 30, newUnit: 37.5, oldAmt: 360, newAmt: 450, kind: 'change' }] }) + ')', htmlCtx);
+    ck('CE', '对比区块渲染合计/差额/逐行，恶意文本被转义，涨红跌绿',
+      html.includes('📊 与上次对比') && html.includes('¥7,953.00') === false
+      && html.includes('¥7953.00') && html.includes('¥8065.82')
+      && html.includes('+¥112.82') && html.includes('+1.42%')
+      && html.includes('cq-cmp-delta is-up') && html.includes('is-down') === false
+      && html.includes('&lt;img src=x onerror=1&gt;') && !html.includes('<img src=x')
+      && html.includes('不导出'));
+    const downHtml = vm.runInContext('estCompareHtml(' + JSON.stringify({ oldGrand: 900, newGrand: 800,
+      diff: -100, pct: -11.11, rows: [] }) + ')', htmlCtx);
+    ck('CE', '金额下降显示跌绿与负号，无逐行变化时给提示',
+      downHtml.includes('cq-cmp-delta is-down') && downHtml.includes('-¥100.00')
+      && downHtml.includes('-11.11%') && downHtml.includes('各行单价未变'));
+  }
+
   // ===== BO：客户报价单导出（图片 / 打印PDF / 文本）=====
   {
     const cssSrc = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
@@ -2608,8 +2686,9 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       totals: { construction: 475, material: 1936.03, grand: 2411.03 } };
     const txt = vm.runInContext('estCustomerQuoteText(' + JSON.stringify(sample)
       + ',{company:"XX广告",customer:"王总",no:"Q001"})', boCtx);
-    ck('BO', '文本导出只列项目/客户单价/小计与合计，未带内部字段',
+    ck('BO', '文本导出只列项目/报价单价/小计与合计，未带内部字段',
       txt.includes('客户报价单（不含税）') && txt.includes('客户：王总')
+      && txt.includes('项目 | 数量 | 报价单价 | 小计') && !txt.includes('客户单价')
       && txt.includes('钢架焊接 | 12㎡ | ¥37.50 | ¥450.00')
       && txt.includes('合计：¥2411.03')
       && !/成本|利润率|加价|25%|12%/.test(txt));
@@ -3110,7 +3189,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     ck('BZ', '易比价材料 basis=guard 与理由一致，前端有「类别区间」标签映射',
       aiSrc.includes('const rateBasis = op.level === "low" ? "guard" : "opaque"')
       && appSrc.includes('a.basis === "guard" ? "类别区间"'));
-    // 运行时：用截图真实数字复现。热镀锌方管 52米 总价¥1040、客户单价¥22.40。
+    // 运行时：用截图真实数字复现。热镀锌方管 52米 总价¥1040、报价单价¥22.40。
     const aiSlice = (a, b) => {
       const i = aiSrc.indexOf(a); if (i < 0) throw new Error('ai 切片起点未找到: ' + a);
       const j = aiSrc.indexOf(b, i); if (j < 0) throw new Error('ai 切片终点未找到: ' + b);

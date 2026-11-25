@@ -33301,9 +33301,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "ve46b4389";
+  const APP_VERSION = "v805d0482";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 51;
+  const BUILD_NO = 53;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -37568,7 +37568,71 @@ function estAiPricePayload() {
     }
   };
 }
+/* 新旧报价对比（2026-11-25）：只在金额真正变化时重算；重绘/复核返回时沿用上次对比。
+   纯只读：compare 只挂在内存 cq.compare 上，不参与 estCustomerQuoteCalc，三种导出也不读它。 */
+function estQuoteCompare(prev, q) {
+  if (!prev || !prev.totals || !Array.isArray(prev.rows) || !q || !Array.isArray(q.rows)) return null;
+  const oldGrand = Number(prev.totals.grand) || 0;
+  const newGrand = Number(q.grand) || 0;
+  const rows = [];
+  const n = Math.max(prev.rows.length, q.rows.length);
+  for (let i = 0; i < n; i++) {
+    const a = prev.rows[i], b = q.rows[i];
+    const oldUnit = a ? Number(a.unit) || 0 : null;
+    const newUnit = b ? Number(b.unit) || 0 : null;
+    const kind = !a ? "add" : (!b ? "remove" : (Math.abs(oldUnit - newUnit) > 0.004 ? "change" : ""));
+    if (!kind) continue;
+    const oldAmt = a ? Number(a.amount) || 0 : 0;
+    const newAmt = b ? Number(b.amount) || 0 : 0;
+    rows.push({ n: String((b && b.n) || (a && a.n) || ""), oldUnit, newUnit, oldAmt, newAmt, kind });
+  }
+  const changed = Math.abs(oldGrand - newGrand) > 0.004 || rows.length > 0;
+  if (!changed) return prev.compare || null;
+  return {
+    oldGrand, newGrand, diff: Math.round((newGrand - oldGrand) * 100) / 100,
+    pct: oldGrand > 0 ? Math.round((newGrand - oldGrand) / oldGrand * 10000) / 100 : 0,
+    rows: rows.slice(0, 30), listChanged: prev.rows.length !== q.rows.length
+  };
+}
+function estCompareHtml(cmp) {
+  if (!cmp) return "";
+  const money = (v) => { const n = Number(v) || 0; return (n < 0 ? "-" : "") + "¥" + Math.abs(n).toFixed(2); };
+  const diff = Number(cmp.diff) || 0;
+  const cls = diff > 0 ? "is-up" : (diff < 0 ? "is-down" : "");
+  const pct = Number(cmp.pct) || 0;
+  const rows = Array.isArray(cmp.rows) ? cmp.rows : [];
+  const rowHtml = rows.map((r) => {
+    const price = r.kind === "add" ? "新增 " + money(r.newUnit)
+      : r.kind === "remove" ? "移除 " + money(r.oldUnit)
+        : money(r.oldUnit) + " → " + money(r.newUnit);
+    const amtDiff = (Number(r.newAmt) || 0) - (Number(r.oldAmt) || 0);
+    const ac = amtDiff > 0 ? "is-up" : (amtDiff < 0 ? "is-down" : "");
+    return '<tr><td>' + esc(r.n || "—") + '</td><td>' + esc(price) + '</td><td class="' + ac + '">'
+      + (amtDiff > 0 ? "+" : "") + money(amtDiff) + '</td></tr>';
+  }).join("");
+  return '<div class="cq-compare">'
+    + '<div class="cq-cmp-head" onclick="estToggleCompareDetail()">'
+    + '<b>📊 与上次对比</b><span>合计 ' + money(cmp.oldGrand) + ' → ' + money(cmp.newGrand) + '</span>'
+    + '<span class="cq-cmp-delta ' + cls + '">' + (diff > 0 ? "+" : "") + money(diff)
+    + '（' + (pct > 0 ? "+" : "") + pct.toFixed(2) + '%）</span>'
+    + '<span class="cq-cmp-toggle" id="cqCmpToggle">逐行 ▾</span></div>'
+    + '<div class="cq-cmp-detail" id="cqCmpDetail" style="display:none">'
+    + (rowHtml ? '<table class="cq-cmp-table"><thead><tr><th>项目</th><th>报价单价</th><th>小计变化</th></tr></thead><tbody>'
+      + rowHtml + '</tbody></table>' : '<p class="cq-cmp-note">各行单价未变，仅合计有差异。</p>')
+    + (cmp.listChanged ? '<p class="cq-cmp-note">清单项有增减，跨清单对比仅供参考。</p>' : '')
+    + '<p class="cq-cmp-note">仅内部参考：不进客户报价单、不导出、不改工程金额与内部成本。</p>'
+    + '</div></div>';
+}
+function estToggleCompareDetail() {
+  const d = document.getElementById("cqCmpDetail");
+  const t = document.getElementById("cqCmpToggle");
+  if (!d || !t) return;
+  const open = d.style.display !== "none";
+  d.style.display = open ? "none" : "";
+  t.textContent = open ? "逐行 ▾" : "收起 ▴";
+}
 function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice) {
+  const prevCq = (_estUI && _estUI.customerQuote) || null;
   const rows0 = estCustomerQuoteRows();
   const rates = {};
   Object.keys(EST_PROFIT_DEFAULT).forEach((k) => { rates[k] = EST_PROFIT_DEFAULT[k]; });
@@ -37592,8 +37656,10 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice
   const r = (_estUI && _estUI.result) || {};
   const q = estCustomerQuoteCalc(rows0, rates, r, useRates);
   const src = fallback ? "local" : "ai";
+  // 与上一次报价对比：金额真变了才生成，重绘/返回沿用上次结果；只读、不进导出。
+  const compare = estQuoteCompare(prevCq, q);
   if (_estUI) _estUI.customerQuote = { rows: q.rows, totals: q, rates, rowRates: useRates,
-    suggested, refPrices: refs, src, raw: data,
+    suggested, refPrices: refs, src, raw: data, compare,
     applied: Array.isArray(appliedAdvice) ? appliedAdvice : ((_estUI.customerQuote && _estUI.customerQuote.applied) || []),
     summary: (data && data.summary) || "", why: suggested.map((s) => s.why) };
   const lines = q.rows.map((x) => '<tr><td>' + esc(x.n) + '</td><td>' + esc(String(x.q) + (x.u || ""))
@@ -37618,11 +37684,12 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice
   const body = '<div class="cq-meta">客户报价单 · 不含税 · 仅本次查看</div>'
     + '<div class="cq-tip">' + (fallback ? 'AI 未配置或失败，已用内置分项利润率生成：' : '')
     + esc((data && data.summary) || '按施工项分别加价，材料低、风险高的活高。') + '</div>'
-    + '<table class="cq-table"><thead><tr><th>项目</th><th>数量</th><th>客户单价</th><th>小计</th></tr></thead><tbody>'
+    + '<table class="cq-table"><thead><tr><th>项目</th><th>数量</th><th>报价单价</th><th>小计</th></tr></thead><tbody>'
     + (lines || '<tr><td colspan="4">清单为空</td></tr>') + '</tbody></table>'
     + '<div class="cq-total"><span>施工费 <b>¥' + q.construction.toFixed(2) + '</b></span>'
     + '<span>材料费 <b>¥' + q.material.toFixed(2) + '</b></span>'
     + '<span class="is-grand">合计 <b>¥' + q.grand.toFixed(2) + '</b></span></div>'
+    + estCompareHtml(compare)
     + '<details class="cq-internal"><summary>利润率微调 / 加价依据（内部，勿展示给客户）</summary>'
     + '<div class="cq-rate-note">每行默认取 AI 建议率，可改 0–300%；超出常用区间标黄但仍生效。'
     + '「当地成交价」是定价锚：<b>填了它再点「🔄 重新加价」，AI 会按成交价反推利润率（可到 100%+）</b>，'
@@ -37784,7 +37851,7 @@ function estOpenQuoteReview(data) {
     }).join("")
     + '</tbody></table><p class="cq-anchor-note">按你填的成交价算；低于成交价不等于必须涨到成交价，改价方案按 70% 收敛给出，避免一刀切。</p></div>' : "";
   const industryHtml = industry.length ? '<div class="cq-anchor cq-industry"><b>行业价格对照（客户报价口径，内部参考）</b>'
-    + '<table class="cq-anchor-table"><thead><tr><th>项目</th><th>当前客户单价</th><th>行业经验区间</th><th>较参考价</th><th>评价</th><th>口径</th></tr></thead><tbody>'
+    + '<table class="cq-anchor-table"><thead><tr><th>项目</th><th>当前报价单价</th><th>行业经验区间</th><th>较参考价</th><th>评价</th><th>口径</th></tr></thead><tbody>'
     + industry.map((a) => {
       const vd = String((a && a.verdict) || "");
       const cls = vd === "低于行业区间" ? "is-low" : (vd === "高于行业区间" ? "is-high" : "");
@@ -37796,7 +37863,7 @@ function estOpenQuoteReview(data) {
         + '<td>' + esc(vd || "—") + '</td>'
         + '<td>' + esc((a && a.label) || "") + '</td></tr>';
     }).join("")
-    + '</tbody></table><p class="cq-anchor-note">这里比的是<b>当前客户单价</b>，不是内部成本价；拆解与施工组合是否合理，请到测算结果页点「AI 方案复核」。'
+    + '</tbody></table><p class="cq-anchor-note">这里比的是<b>当前报价单价</b>，不是内部成本价；拆解与施工组合是否合理，请到测算结果页点「AI 方案复核」。'
     + '按测算器内置 CATALOG 的三四线城市经验区间比对，<b>不是当地实时成交价</b>；匹配不到行业口径的项目不列。'
     + '真要按当地行情定价，请在报价单里填「当地成交价（锚）」或让管理员配置联网行情源。</p></div>' : "";
   const advHtml = advice.length ? '<div class="cq-advice"><b>逐项调价方案（仅供参考，可一键应用）</b>'
@@ -37835,7 +37902,7 @@ function estOpenQuoteReview(data) {
     + advHtml
     + '<div class="est-ai-review-list">' + list + '</div>'
     + '<p class="est-ai-review-note">由 ' + engineTxt + ' 复核，改价方案只作建议：点「一键应用」才会按 pct 调整逐行利润率并重算客户价。'
-    + '分析不只看利润率，还会把<b>当前客户单价</b>与内置行业价经验区间对照，判断报价是否符合行业口径（含制作/仅安装/按㎡/按组/按台班）。'
+    + '分析不只看利润率，还会把<b>当前报价单价</b>与内置行业价经验区间对照，判断报价是否符合行业口径（含制作/仅安装/按㎡/按组/按台班）。'
     + '定价依据优先级：<b>你填的当地成交价 &gt; 联网公开行情 &gt; 内置行业价经验区间 &gt; 不透明度/风险 &gt; 内置分项利润率</b>。'
     + '内置行业价来自测算器 CATALOG 的三四线城市经验区间，<b>不是当地实时成交价</b>；没配联网密钥也能做这层校验。'
     + '要按真实当地行情定价，请在报价单填「当地成交价（锚）」，或让管理员配置联网行情源。'
@@ -37924,7 +37991,7 @@ async function estAiQuoteCheck() {
   }
 }
 
-/* 客户报价单导出（2026-11-25）：只导出客户可见字段（项目/数量/客户单价/小计/合计），
+/* 客户报价单导出（2026-11-25）：只导出客户可见字段（项目/数量/报价单价/小计/合计），
    绝不把内部成本、加价率、加价依据带出去。图片走离线 canvas，打印走浏览器原生 PDF。 */
 function estCustomerQuoteExportInfo() {
   const e = (_estUI && _estUI.expInfo) || {};
@@ -37950,7 +38017,7 @@ function estCustomerQuoteText(cq, info) {
   if (i.no) out.push("单号：" + i.no);
   out.push("日期：" + estCustomerQuoteDate());
   out.push("────────────────────────");
-  out.push("项目 | 数量 | 客户单价 | 小计");
+  out.push("项目 | 数量 | 报价单价 | 小计");
   rows.forEach((x) => {
     out.push(String(x.n || "") + " | " + (Number(x.q) || 0) + String(x.u || "")
       + " | " + money(x.unit) + " | " + money(x.amount));
@@ -37978,7 +38045,7 @@ function estCustomerQuotePrintHtml(cq, info) {
     '日期：' + h(estCustomerQuoteDate())].filter(Boolean).join('<span> · </span>');
   return '<article class="cq-print"><h1>客户报价单（不含税）</h1>'
     + '<div class="cq-print-meta">' + meta + '</div>'
-    + '<table class="cq-print-table"><thead><tr><th>项目</th><th>数量</th><th>客户单价</th><th>小计</th></tr></thead><tbody>'
+    + '<table class="cq-print-table"><thead><tr><th>项目</th><th>数量</th><th>报价单价</th><th>小计</th></tr></thead><tbody>'
     + (lines || '<tr><td colspan="4">清单为空</td></tr>') + '</tbody></table>'
     + '<div class="cq-print-total"><span>施工费 <b>' + money(t.construction) + '</b></span>'
     + '<span>材料费 <b>' + money(t.material) + '</b></span>'
@@ -37994,7 +38061,7 @@ function estOpenCustomerQuoteExport() {
       <label class="modal-label">公司/抬头<input class="input" id="cqExCompany" value="${esc(e.company)}" placeholder="选填，显示在报价单上"/></label>
       <label class="modal-label">客户<input class="input" id="cqExCustomer" value="${esc(e.customer)}" placeholder="选填"/></label>
       <label class="modal-label">单号<input class="input" id="cqExNo" value="${esc(e.no)}" placeholder="选填"/></label>
-      <p class="cq-export-note">导出内容只含项目、数量、客户单价、小计与合计，不含成本、利润率和加价依据。</p>
+      <p class="cq-export-note">导出内容只含项目、数量、报价单价、小计与合计，不含成本、利润率和加价依据。</p>
       <div class="cq-btns">
         <button class="btn primary" onclick="estConfirmCustomerQuoteExport('image')">📷 生成图片</button>
         <button class="btn outline" onclick="estConfirmCustomerQuoteExport('print')">🖨 打印 / 存 PDF</button>
@@ -38044,7 +38111,7 @@ function estPrintCustomerQuote(cq, info) {
   if (window.addEventListener) window.addEventListener("afterprint", cleanup, { once: true });
   try { window.print(); } finally { setTimeout(cleanup, 1200); }
 }
-/* 离线 canvas 客户版报价单图片：四列（项目/数量/客户单价/小计），不画工时、成本和利润率 */
+/* 离线 canvas 客户版报价单图片：四列（项目/数量/报价单价/小计），不画工时、成本和利润率 */
 function estCustomerQuoteImage(cq, info) {
   if (!cq || !(cq.rows || []).length) { toast("报价单是空的，先加施工项"); return; }
   const rows = cq.rows, t = cq.totals || {}, i = info || {};
@@ -38100,7 +38167,7 @@ function estCustomerQuoteImage(cq, info) {
   setFont(13, true); ctx.fillStyle = "#3730a3";
   ctx.textAlign = "left"; ctx.fillText("项目", colName, tableTop + 23);
   ctx.textAlign = "right"; ctx.fillText("数量", colQty, tableTop + 23);
-  ctx.fillText("客户单价", colUnit, tableTop + 23);
+  ctx.fillText("报价单价", colUnit, tableTop + 23);
   ctx.fillText("小计", colAmt, tableTop + 23);
   let ry = tableTop + thH;
   rows.forEach((x, idx) => {
