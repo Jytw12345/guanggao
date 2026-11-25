@@ -27518,6 +27518,8 @@ const modal = {
     if (modalBox) {
       modalBox.classList.toggle("modal--narrow", !!(options && options.narrow));
       modalBox.classList.toggle("modal--wide", !!(options && options.wide));
+      // 报告型弹窗（AI 方案复核）：只加宽，不启用预约表单的拖动/最小化。
+      modalBox.classList.toggle("modal--report", !!(options && options.reportWide));
     }
     // 最小化按钮只对宽弹窗（预约表单）显示，手机端不显示
     const modalMinBtn = document.getElementById("modalMin");
@@ -33299,9 +33301,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v42214ea4";
+  const APP_VERSION = "v3b24a362";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 41;
+  const BUILD_NO = 49;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -37123,6 +37125,53 @@ function estToggleDoorExtra(key, on) {
    统一走 estimate-ai Edge Function；LLM 密钥只在服务端。任何失败都静默降级，
    不阻断原有拆解路径（v429：不污染高频正常路径）。
    AI 结果不参与金额/工时计算，只回填输入框或给出待确认的绑定建议。 */
+/* 原生 fetch 直连 Edge Function：绕过 supabase-js 的 functions.invoke。
+   file:// / WebView2 / 代理环境下 functions.invoke 常报模糊的 FunctionsFetchError
+   （Failed to send a request…），但同一时刻原生 fetch 往往还能通。所有 AI 模式
+   只读、不写库不改金额，直连安全。底层错误（net::ERR 系列/CORS）原样带出便于定位。 */
+async function estAiInvokeDirect(body, timeoutMs) {
+  try {
+    const token = await _getSupabaseAccessToken();
+    if (!token) throw new Error("未获取到登录令牌，请重新登录后再试");
+    const cfg = window.APP_CONFIG || {};
+    const url = String(cfg.SUPABASE_URL || "").replace(/\/+$/, "") + "/functions/v1/estimate-ai";
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    const to = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + token,
+          "apikey": String(cfg.SUPABASE_ANON_KEY || ""),
+        },
+        body: JSON.stringify(body),
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+      const text = await resp.text().catch(() => "");
+      let j = null;
+      try { j = text ? JSON.parse(text) : null; } catch (_) {}
+      if (!resp.ok) {
+        const e = new Error(String((j && (j.error || j.code)) || ("HTTP " + resp.status)));
+        e.code = String((j && j.code) || "");
+        e.status = resp.status;
+        e.body = j;
+        return { data: null, error: e };
+      }
+      return { data: j, error: null };
+    } finally {
+      if (to) clearTimeout(to);
+    }
+  } catch (e) {
+    // fetch 的底层原因在 e.cause（net::ERR_*），拼进 message 才能看清是网络/CORS 还是超时。
+    const msg = String((e && e.message) || e || "");
+    const cause = e && e.cause ? String((e.cause && e.cause.message) || e.cause) : "";
+    const e2 = new Error(msg + (cause ? "（直连底层：" + cause.slice(0, 80) + "）" : "（直连失败）"));
+    e2.name = (e && e.name) || "";
+    return { data: null, error: e2 };
+  }
+}
+
 async function estAiInvoke(body, timeoutMs = 16000, _retry = true) {
   if (MODE !== "cloud" || !sb) return { data: null, error: new Error("本地模式不支持 AI 辅助") };
   try {
@@ -37145,6 +37194,9 @@ async function estAiInvoke(body, timeoutMs = 16000, _retry = true) {
             const e1 = new Error(String(j.error || j.code));
             e1.code = String(j.code || "");
             e1.status = ctx.status;
+            // 带上后端完整 body：quotecheck 的 engineDetail（DeepSeek 是否配置/尝试/失败码）
+            // 只有透传出来，前端才能给出可执行的提示，而不是笼统「主备均不可用」。
+            e1.body = j;
             return { data: null, error: e1 };
           }
         }
@@ -37154,18 +37206,24 @@ async function estAiInvoke(body, timeoutMs = 16000, _retry = true) {
     return { data: res.data, error: null };
   } catch (e) {
     // 网络层失败（非 HTTP 错误、非超时）多为瞬时抖动。所有 AI 模式都是只读建议，
-    // 不写库、不改金额，重试一次是安全的；HTTP 4xx/5xx 与超时不重试。
+    // 不写库、不改金额。策略：先重试一次 supabase-js，仍失败就换原生 fetch 直连
+    // （两套底层实现，file:// / WebView / 代理下常有一条能通）。HTTP 4xx/5xx 与超时不重试。
     const msg = String((e && e.message) || e || "");
     if (_retry && /Failed to send a request to the Edge Function|FunctionsFetchError|Failed to fetch|NetworkError/i.test(msg)) {
       console.warn("[estimate-ai] 网络层失败，自动重试一次：", msg);
       return estAiInvoke(body, timeoutMs, false);
     }
-    // FunctionsFetchError 只说「Failed to send a request...」，底层原因在 cause（如 net::ERR_*）。
-    // 把它拼进 message，前端 toast 才能区分网络波动/代理问题与「函数没部署」。
     const cause = e && e.cause ? String((e.cause && e.cause.message) || e.cause) : "";
-    if (/Failed to send a request|fetch/i.test(msg) && cause) {
-      const e2 = new Error(msg + "（" + cause.slice(0, 80) + "）");
-      e2.name = (e && e.name) || "";
+    if (/Failed to send a request|FunctionsFetchError|Failed to fetch|NetworkError|fetch/i.test(msg)) {
+      console.warn("[estimate-ai] supabase-js 通道失败，改用原生 fetch 直连：", msg, cause);
+      const direct = await estAiInvokeDirect(body, timeoutMs);
+      if (!direct.error) return direct;
+      // 直连也失败：把两条通道的原因都带出来，前端能判断是链路断了还是深层网络问题。
+      const dmsg = String((direct.error && direct.error.message) || "");
+      const e2 = new Error("supabase-js：" + msg.slice(0, 50) + (cause ? "（" + cause.slice(0, 40) + "）" : "")
+        + "；直连：" + dmsg.slice(0, 80));
+      e2.code = (direct.error && direct.error.code) || "";
+      e2.body = (direct.error && direct.error.body) || null;
       return { data: null, error: e2 };
     }
     return { data: null, error: e };
@@ -37176,7 +37234,13 @@ async function estAiInvoke(body, timeoutMs = 16000, _retry = true) {
    estAiInvoke 已把 error.context body 里的 code/error 透传出来，这里的 em 就是那个具体原因。 */
 function estAiErrTip(error, fallback, data) {
   // HTTP 200 但 body 里 ok:false 时 error 为空，真实原因在 data.error，不能只翻 error。
-  const em = String((error && (error.message || error.code)) || (data && (data.error || data.code)) || "");
+  // body 字段（如 engineDetail.code）也拼进来，避免后端把具体失败码藏在 code 里被吞掉。
+  const body = (error && error.body) || data || null;
+  // error/data 的 message 与 code 都要拼进 em：后端常把失败码藏在 code 里，
+  // 只看 message 会让 DEEPSEEK_LLM_HTTP_402 这类关键码被吞掉、误报成通用错误。
+  const em = [error && error.message, error && error.code,
+    data && data.error, data && data.code, body && body.code]
+    .filter(Boolean).map(String).join(" ");
   // 未知错误也要把后端原文带出来，否则用户只看到「未改动」而无法判断原因。
   const detail = String((data && (data.error || data.code)) || (error && (error.message || error.code)) || "").trim();
   const rest = fallback.replace(/^AI .*?失败，/, "");
@@ -37184,11 +37248,19 @@ function estAiErrTip(error, fallback, data) {
   if (/AI_NOT_CONFIGURED|未配置|缺少 LLM_API_KEY/.test(em)) return "AI 服务未配置：请管理员在 Supabase 配 LLM_API_KEY（智谱 key）";
   if (/FORBIDDEN|无测算管理权限/.test(em)) return "AI 权限不足，请联系管理员";
   if (/INVALID_JWT|MISSING_JWT|登录态无效|未提供登录令牌/.test(em)) return "AI 登录态失效，请重新登录后再试";
+  // 报价复核专属：DeepSeek 主审的失败码单独翻，不能混进「智谱密钥无效」误导排查方向。
+  if (/DEEPSEEK_/.test(em)) return "DeepSeek 主审失败：" + String(body && body.error || em).replace(/^DEEPSEEK_/, "").slice(0, 70);
+  if (/主模型与备用模型均不可用/.test(em)) {
+    const ed = body && body.engineDetail;
+    if (ed && ed.deepseekConfigured && !ed.deepseekErr && ed.glmErr) return "智谱兜底失败（DeepSeek 主审也没返回）：" + ed.glmErr;
+    return "AI 主备模型均失败：" + detail.slice(0, 70);
+  }
   if (/LLM_HTTP_401|LLM_HTTP_403|API.?key|额度|余额/i.test(em)) return "智谱密钥无效或额度不足，请检查 LLM_API_KEY";
   if (/超时|timeout/i.test(em)) return "AI 请求超时，" + rest;
   if (/LLM_HTTP_|BAD_AI_JSON|EMPTY_AI_TEXT|LLM_FAILED/.test(em)) return "智谱服务暂时不可用，" + rest;
-  if (/Failed to send a request to the Edge Function|FunctionsFetchError|Failed to fetch|NetworkError/i.test(em))
-    return "连不上 AI 服务（网络层失败）：请检查网络/代理后重试；智能加利润能用就说明函数已部署";
+  if (/直连|Failed to send a request to the Edge Function|FunctionsFetchError|Failed to fetch|NetworkError/i.test(em))
+    return "连不上 AI 服务：自动重试与原生直连两条通道都失败（链路或代理问题）。请换网络/关代理重试，"
+      + "或换用部署后的 HTTPS 地址（本地 file:// 的 Origin:null 易触发跨域拦截）。底层：" + detail.slice(0, 80);
   if (/non-2xx|404|fetch/i.test(em)) return "AI 函数未部署或网络异常，请检查 estimate-ai 是否已部署";
   return fallback + (detail ? "：" + detail.slice(0, 60) : "");
 }
@@ -37306,25 +37378,35 @@ async function estAiPolish() {
   }
 }
 
-/* ============ AI 合理性复核（2026-11-25）============
-   测算完成后，把「施工内容原文 + 清单逐项 + 汇总 + 施工条件」交给 estimate-ai 的 review 模式，
-   让第三方视角查漏项/重复计价/数量口径，只出建议，不回写清单、不改金额、不自动采纳。
+/* ============ AI 方案复核（2026-11-25）============
+   只审两件事：①拆解合理性（漏项/重复/尺寸数量单位口径）②施工组合合理性（工序链/措施配套/互斥做法）。
+   内置确定性规则先给核对结果，AI 只按这两组给建议；不评价单价高低、不算利润率、不碰金额。
    失败只 toast，原测算结果与高频拆解路径零接触（v429）。 */
 function estAiReviewPayload() {
   const inp = document.getElementById("estInput");
   const txt = (((inp && inp.value) || "") + "").trim().slice(0, 500);
   const r = (_estUI && _estUI.result) || {};
   const rows = Array.isArray(r.rows) ? r.rows : [];
+  const c = estCfg() || {};
+  const p = c.params || {};
+  const cond = {
+    height: (_estUI && _estUI.height) || "low",
+    wall: (_estUI && _estUI.wall) || "flat",
+    distanceKm: Number(r.distanceKm) || 0,
+    roundTrip: !!r.roundTrip,
+    crew: r.crew ? String(r.crew.level || "") : ""
+  };
+  // cat/scope 只用来判断人工行/材料行/设备行是否配套；不传客户名/工程金额。
   const items = rows.slice(0, 40).map((x) => ({
     n: String((x && x.n) || "").slice(0, 40),
     u: String((x && x.u) || "").slice(0, 12),
     q: Number((x && x.q) || 0) || 0,
     h: Number((x && x.hours) || 0) || 0,
     fee: Number((x && x.fee) || 0) || 0,
-    note: String((x && x.note) || "").slice(0, 60)
+    note: String((x && x.note) || "").slice(0, 60),
+    cat: estItemCat(x, cond),
+    scope: estCostScope(x)
   }));
-  const c = estCfg() || {};
-  const p = c.params || {};
   return {
     mode: "review", text: txt, items,
     totals: {
@@ -37334,13 +37416,7 @@ function estAiReviewPayload() {
       floor: Number(r.floor) || 0, construction: Number(r.construction) || 0,
       grand: Number(r.grand) || 0
     },
-    cond: {
-      height: (_estUI && _estUI.height) || "low",
-      wall: (_estUI && _estUI.wall) || "flat",
-      distanceKm: Number(r.distanceKm) || 0,
-      roundTrip: !!r.roundTrip,
-      crew: r.crew ? String(r.crew.level || "") : ""
-    },
+    cond,
     params: {
       rateNormal: Number(p.rateNormal) || 0, rateHigh: Number(p.rateHigh) || 0,
       rateAz: Number(p.rateAz) || 0, rateJz: Number(p.rateJz) || 0,
@@ -37349,37 +37425,51 @@ function estAiReviewPayload() {
   };
 }
 function estOpenAiReview(data) {
-  const V = { ok: ["✅", "基本合理"], check: ["⚠️", "建议核对"], risk: ["🚨", "疑点较多"] };
+  const V = { ok: ["✅", "拆解与组合基本合理"], check: ["⚠️", "建议核对"], risk: ["🚨", "需重点核对"] };
   const v = V[data && data.verdict] || V.check;
   const sugs = Array.isArray(data && data.suggestions) ? data.suggestions : [];
-  const list = sugs.map((s) => {
+  const checks = Array.isArray(data && data.reviewChecks) ? data.reviewChecks : [];
+  const plain = (s) => String(s || "").replace(/^【(拆解|组合)】/, "");
+  const groupOf = (x) => /组|施工|工序|工艺|措施/.test(
+    String((x && x.group) || (x && x.cat) || "")) ? "组合" : "拆解";
+  const sugHtml = (s) => {
     const level = s && s.level === "high" ? "高" : (s && s.level === "mid" ? "中" : "低");
     const cls = s && s.level === "high" ? "is-high" : (s && s.level === "mid" ? "is-mid" : "");
     return '<div class="est-ai-review-item ' + cls + '">'
       + '<div class="est-ai-review-title"><span class="est-ai-review-lv">' + level + '</span>'
-      + esc((s && s.title) || "待核对") + ((s && s.cat) ? '<span class="est-ai-review-cat">' + esc(s.cat) + '</span>' : '') + '</div>'
-      + '<div>依据：' + esc((s && s.why) || "—") + '</div>'
-      + '<div>建议：' + esc((s && s.action) || "按上面的点逐项核对，再决定是否调整清单") + '</div>'
+      + esc(plain((s && s.title) || "待核对")) + '</div>'
+      + '<div>依据：' + esc(plain((s && s.why) || "—")) + '</div>'
+      + '<div>建议：' + esc(plain((s && s.action) || "按上面的点逐项核对，再决定是否调整清单")) + '</div>'
       + '</div>';
-  }).join("") || '<div class="est-ai-review-item">AI 未给出具体条目，请按清单自行核对。</div>';
-  const webN = Number((data && data.webRefs) || 0) || 0;
-  const srcTip = webN > 0
-    ? '已尝试联网行情核对，取到 ' + webN + ' 条参考（行情仅供参考，非当地实时价）'
-    : '未取到联网行情，本次按内置审计规则与行业经验做深度分析（未声称查过实时行情）';
+  };
+  const sectionHtml = (title, hint, checkList, sugList) => {
+    const checkPart = checkList.length
+      ? '<div class="est-ai-review-checks">' + checkList.map((c) => '<div>· ' + esc(plain((c && c.text) || c)) + '</div>').join('') + '</div>'
+      : '<div class="est-ai-review-checks empty">内置规则未发现该项明显缺口，仍需结合现场核对。</div>';
+    const sugPart = sugList.length
+      ? '<div class="est-ai-review-list">' + sugList.map(sugHtml).join('') + '</div>'
+      : '<div class="est-ai-review-list"><div class="est-ai-review-item">AI 未给出这组的具体建议。</div></div>';
+    return '<div class="est-ai-review-section"><div class="est-ai-review-sec-head"><b>' + title + '</b><span>' + hint + '</span></div>'
+      + checkPart + sugPart + '</div>';
+  };
   const body = '<div class="est-ai-review-top"><b>' + v[0] + ' ' + v[1] + '</b>'
-    + '<p>' + esc((data && data.summary) || "复核完成，以下建议供参考。") + '</p>'
-    + '<p class="est-ai-review-cnt">共 ' + sugs.length + ' 条疑点，按金额影响排序</p></div>'
-    + '<div class="est-ai-review-list">' + list + '</div>'
-    + '<p class="est-ai-review-note">第三方审计视角：结合内置审计规则' + (webN > 0 ? '与联网行情参考' : '')
-    + '，' + srcTip + '；不改动清单与金额，采纳与否请自行判断。</p>';
-  modal.open("AI 合理性复核", body, { confirmText: "知道了", onConfirm: () => modal.close(), closeOnMask: true });
+    + '<p>' + esc(plain((data && data.summary) || "复核完成，以下建议供参考。")) + '</p>'
+    + '<p class="est-ai-review-cnt">内置核对 ' + checks.length + ' 项 · AI 建议 ' + sugs.length + ' 条（按施工影响排序）</p></div>'
+    + sectionHtml('① 拆解合理性', '漏项 / 重复 / 尺寸数量单位口径',
+      checks.filter((c) => groupOf(c) === '拆解'), sugs.filter((s) => groupOf(s) === '拆解'))
+    + sectionHtml('② 施工组合合理性', '工序链 / 措施配套 / 互斥做法',
+      checks.filter((c) => groupOf(c) === '组合'), sugs.filter((s) => groupOf(s) === '组合'))
+    + '<p class="est-ai-review-note">只审<strong>拆解是否合理、施工组合是否配套</strong>，'
+    + '不评价单价高低、不算利润率、不与客户报价单混用；内置核对是可量化规则，AI 建议仅作参考。'
+    + '不改动清单与金额，采纳与否请自行判断。</p>';
+  modal.open("AI 方案复核", body, { confirmText: "知道了", onConfirm: () => modal.close(), closeOnMask: true, reportWide: true });
 }
 async function estAiReview() {
   if (!_estUI || !(_estUI.work || []).length) { toast("先拆解出清单，再让 AI 复核"); return; }
   const btn = document.getElementById("estAiReviewBtn");
-  if (btn) { btn.disabled = true; btn.textContent = "⏳ 深度复核中…"; }
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ 方案复核中…"; }
   try {
-    // 服务端会做内置规则审计；若管理员配了行情搜索，还会多两次外部请求，放宽到 35 秒
+    // 服务端只做结构/工序规则审计（不联网查价），仍留 35 秒给模型生成建议
     const { data, error } = await estAiInvoke(estAiReviewPayload(), 35000);
     if (error || !data || !data.ok) {
       toast(estAiErrTip(error, "AI 复核失败，已保留当前清单和金额（未应用建议）", data));
@@ -37387,7 +37477,7 @@ async function estAiReview() {
     }
     estOpenAiReview(data);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "🤖 AI 深度复核"; }
+    if (btn) { btn.disabled = false; btn.textContent = "🤖 AI 方案复核"; }
   }
 }
 
@@ -37400,6 +37490,17 @@ const EST_PROFIT_MAX = 300;
 const EST_PROFIT_UI_GUARD = {
   labor: [15, 35], laborHigh: [25, 50], mat: [6, 20], equip: [15, 40], transport: [8, 25]
 };
+/* 费用口径：纯施工费/材料进价/包工包料/设备租赁/运输。
+   测算行里 isMat 是独立材料行、isEquip 是设备租赁，其余（含定额人工、包干价）默认按施工费；
+   只有明确写「包工包料/成品/含材料/全包」才当含料口径，避免把人工费拿去比含料行业价。 */
+function estCostScope(x) {
+  if (x && x.isMat) return "material";
+  if (x && x.isEquip) return "equip";
+  const s = String((x && x.n) || "") + " " + String((x && x.note) || "");
+  if (/包工包料|成品|含材料|全包/.test(s)) return "combined";
+  if (/运输|运费|里程|送货/.test(s)) return "transport";
+  return "labor";
+}
 function estItemCat(x, cond) {
   if (x && x.isMat) return "mat";
   if (x && x.isEquip) return "equip";
@@ -37640,7 +37741,19 @@ function estOpenQuoteReview(data) {
   const appliedTip = applied.length
     ? '<p class="cq-applied-tip">已应用 ' + applied.length + ' 项改价；本次复核基于调整后的价格，已调整的方向不再重复建议。</p>'
     : "";
-  const engineTxt = (data && data.engine === "deepseek") ? "DeepSeek" : "智谱 GLM";
+  // 引擎诊断：明确告诉用户 DeepSeek 到底配没配、主审成没成功，不再只写「DeepSeek」让人误以为一定用它。
+  const ed = (data && data.engineDetail) || null;
+  let engineTxt = (data && data.engine === "deepseek") ? "DeepSeek 主审" : "智谱 GLM";
+  if (ed) {
+    if (!ed.deepseekConfigured) engineTxt = "智谱 GLM（未配置 DeepSeek）";
+    else if (ed.deepseekTried && data.engine === "deepseek") engineTxt = "DeepSeek 主审成功";
+    else if (ed.deepseekTried && data.engine !== "deepseek")
+      engineTxt = "智谱 GLM 兜底（DeepSeek 主审失败：" + String(ed.deepseekErr || "无返回").slice(0, 36) + "）";
+  }
+  const engineNote = ed && ed.deepseekConfigured && ed.deepseekErr
+    ? '<p class="cq-engine-note">DeepSeek 主审未成功，本次报告由智谱兜底完成。若长期使用，请管理员检查 '
+      + esc(String(ed.deepseekErr).slice(0, 80)) + '（密钥/额度/接口地址）。</p>'
+    : "";
   const anchorHtml = anchors.length ? '<div class="cq-anchor"><b>当地成交价锚定评价（内部，不导出）</b>'
     + '<table class="cq-anchor-table"><thead><tr><th>项目</th><th>内部成本</th><th>当前客户价</th><th>你填成交价</th><th>价差</th><th>评价</th><th>隐含加价</th></tr></thead><tbody>'
     + anchors.map((a) => {
@@ -37655,7 +37768,7 @@ function estOpenQuoteReview(data) {
         + '<td>' + Number((a && a.rate) || 0).toFixed(1) + '%</td></tr>';
     }).join("")
     + '</tbody></table><p class="cq-anchor-note">按你填的成交价算；低于成交价不等于必须涨到成交价，改价方案按 70% 收敛给出，避免一刀切。</p></div>' : "";
-  const industryHtml = industry.length ? '<div class="cq-anchor cq-industry"><b>行业价格对照（内部，不导出）</b>'
+  const industryHtml = industry.length ? '<div class="cq-anchor cq-industry"><b>行业价格对照（客户报价口径，内部参考）</b>'
     + '<table class="cq-anchor-table"><thead><tr><th>项目</th><th>当前客户单价</th><th>行业经验区间</th><th>较参考价</th><th>评价</th><th>口径</th></tr></thead><tbody>'
     + industry.map((a) => {
       const vd = String((a && a.verdict) || "");
@@ -37668,7 +37781,8 @@ function estOpenQuoteReview(data) {
         + '<td>' + esc(vd || "—") + '</td>'
         + '<td>' + esc((a && a.label) || "") + '</td></tr>';
     }).join("")
-    + '</tbody></table><p class="cq-anchor-note">按测算器内置 CATALOG 的三四线城市经验区间比对，<b>不是当地实时成交价</b>；匹配不到行业口径的项目不列。'
+    + '</tbody></table><p class="cq-anchor-note">这里比的是<b>当前客户单价</b>，不是内部成本价；拆解与施工组合是否合理，请到测算结果页点「AI 方案复核」。'
+    + '按测算器内置 CATALOG 的三四线城市经验区间比对，<b>不是当地实时成交价</b>；匹配不到行业口径的项目不列。'
     + '真要按当地行情定价，请在报价单里填「当地成交价（锚）」或让管理员配置联网行情源。</p></div>' : "";
   const advHtml = advice.length ? '<div class="cq-advice"><b>逐项调价方案（仅供参考，可一键应用）</b>'
     + advice.map((a) => {
@@ -37678,7 +37792,8 @@ function estOpenQuoteReview(data) {
       const pct = Number((a && a.pct) || 0);
       const target = row && pct ? Number(row.unit) * (1 + pct / 100) : null;
       const basis = a && a.basis === "refPrice" ? "锚定" : (a && a.basis === "opaque" ? "难比价"
-        : (a && a.basis === "floor" ? "保本" : (a && a.basis === "web" ? "行情" : "经验")));
+        : (a && a.basis === "guard" ? "类别区间" : (a && a.basis === "floor" ? "保本"
+        : (a && a.basis === "web" ? "行情" : "经验"))));
       const ind = industry.find((r) => Number(r && r.i) === Number(a && a.i) && r.verdict !== "接近行业区间");
       const indTag = ind ? '<span class="cq-advice-basis">行业价' + (ind.verdict === "高于行业区间" ? "偏高" : "偏低") + '</span>' : "";
       const nrRaw = a && a.newRate;
@@ -37698,6 +37813,7 @@ function estOpenQuoteReview(data) {
       : (webOn ? '行情源已配但未取到结果，按内置行业价分析' : '未配置联网行情源，按内置行业价与清单分析'))
     + (industry.length ? ' · 行业价对照 ' + industry.length + ' 项' : '')
     + ' · 复核引擎 ' + engineTxt + '</p></div>'
+    + engineNote
     + appliedTip
     + anchorHtml
     + industryHtml
@@ -37772,9 +37888,11 @@ async function estAiQuoteCheck() {
   const tip = document.getElementById("estAiCheckTip");
   _estAiCheckBusy = true;
   if (btn) { btn.disabled = true; btn.textContent = "⏳ 复核中，请稍候…"; }
-  if (tip) { tip.textContent = "AI 正在逐行分析（DeepSeek 主审，通常 10–30 秒），请勿重复点击"; tip.style.display = "block"; }
+  if (tip) { tip.textContent = "AI 正在逐行分析（DeepSeek 主审 + 智谱兜底，主备都失败最长约 60 秒），请勿重复点击"; tip.style.display = "block"; }
   try {
-    const { data, error } = await estAiInvoke(body0, 35000);
+    // 服务端 DeepSeek 主审 15s×2 + 智谱兜底 15s×2 最坏约 60s，前端必须等够，
+    // 否则会在服务端还在兜底时先报「Failed to send a request」，看起来像 DeepSeek 没成功。
+    const { data, error } = await estAiInvoke(body0, 60000);
     if (error || !data || !data.ok) {
       toast(estAiErrTip(error, "AI 报价复核失败，已保留你改好的单价（未应用改价建议）", data));
       return;
@@ -38768,7 +38886,7 @@ function renderEstimateResult(r, ctx) {
       btns.push(`<button class="btn outline" onclick="estOpenPriceLib()" title="查看材料/画面参考单价">📖 参考价</button>`);
       if (estCanManage()) btns.push(`<button class="btn outline" onclick="estOpenCfgHub()">⚙️ 配置管理</button>`);
     }
-    if (MODE === "cloud") btns.push(`<button class="btn outline" id="estAiReviewBtn" onclick="estAiReview()" title="深度审计：核对漏项、重复计价、数量口径与单价异常，可联网查行情参考；只给建议，不改金额">🤖 AI 深度复核</button>`);
+    if (MODE === "cloud") btns.push(`<button class="btn outline" id="estAiReviewBtn" onclick="estAiReview()" title="方案复核：核对拆解是否漏项/重复/口径齐全，施工组合是否工序完整、措施配套；只给建议，不改金额">🤖 AI 方案复核</button>`);
     if (MODE === "cloud") btns.push(`<button class="btn primary" id="estPriceBtn" onclick="estAiPrice()" title="AI 按人工/材料/设备/运输分项智能加利润，生成只显示客户价的不含税报价单；不写库、不改工程金额">💰 智能加利润</button>`);
     btns.push(`<button class="btn secondary" onclick="closeEstimateModal()">关闭</button>`);
     foot.innerHTML = btns.join("");

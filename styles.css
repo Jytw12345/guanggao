@@ -6467,6 +6467,15 @@ body.modal-open {
    再窄会挤；要更宽用右下角拖拽（≥880 自动切两栏 xl 档）。双击标题栏复位到默认宽。
    拖动/缩放后由 JS 加 modal--floating（fixed 定位 + 内联宽高）。手机端不生效。
    复用测算弹窗的 .est-win-handle 缩放角标。 */
+/* AI 方案复核等报告型弹窗：两组核对结果 + AI 建议，420px 默认宽度太挤。
+   只加宽不改 dragging/min 行为；手机端仍走全宽 + 表格自身横滚。 */
+@media (min-width: 769px) {
+  .modal--report { width: min(94vw, 900px); max-width: 900px; }
+}
+@media (max-width: 768px) {
+  .modal--report .cq-anchor-table { min-width: 560px; }
+  .modal--report .cq-anchor { overflow-x: auto; }
+}
 @media (min-width: 769px) {
   .modal--wide { max-width: 560px; }
   .modal--wide .modal-head { cursor: move; user-select: none; }
@@ -16895,7 +16904,7 @@ table.data.project-hours-diff thead th {
 /* AI 批量建议行：浅紫提示，仅显示建议+采纳按钮，不自动保存（仍走该行「绑定」确认） */
 .est-ai-suggest { margin-top: 5px; padding: 5px 8px; border-radius: 6px; background: #f5f3ff; border: 1px solid #e9e2ff; color: #6d28d9; font-size: 11.5px; line-height: 1.5; }
 .est-ai-suggest .linkbtn { margin-left: 6px; color: #4338ca; text-decoration: underline; }
-/* AI 合理性复核报告：浅色卡片 + 语义色左条，三级严重度一眼可分 */
+/* AI 方案复核报告：拆解 / 施工组合两组，内置核对结果 + AI 建议 */
 .est-ai-review-top { padding: 10px 12px; border: 1px solid #e9e2ff; border-radius: 8px; background: #f5f3ff; }
 .est-ai-review-top b { font-size: 14px; color: #5b21b6; }
 .est-ai-review-top p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.6; color: #4b5563; }
@@ -16910,6 +16919,12 @@ table.data.project-hours-diff thead th {
 .is-high .est-ai-review-lv { background: #fecaca; color: #991b1b; }
 .est-ai-review-cat { font-size: 10.5px; font-weight: 400; color: #6b7280; }
 .est-ai-review-note { margin: 10px 0 0; font-size: 11px; line-height: 1.6; color: #6b7280; }
+.est-ai-review-section { margin-top: 12px; padding: 10px 11px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa; }
+.est-ai-review-sec-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding-bottom: 6px; border-bottom: 1px dashed #e5e7eb; }
+.est-ai-review-sec-head b { font-size: 13px; color: #5b21b6; }
+.est-ai-review-sec-head span { font-size: 11px; color: #6b7280; }
+.est-ai-review-checks { margin-top: 7px; display: grid; gap: 3px; font-size: 11.5px; line-height: 1.6; color: #4b5563; }
+.est-ai-review-checks.empty { color: #9ca3af; }
 
 /* 客户报价单（不含税）：只显示客户价，内部加价依据默认折叠 */
 .cq-meta { font-size: 11px; color: #7c3aed; margin-bottom: 4px; }
@@ -16926,6 +16941,7 @@ table.data.project-hours-diff thead th {
 .cq-internal summary { cursor: pointer; color: #4b5563; }
 .est-ai-check-tip { margin: 10px 0 0; padding: 8px 10px; border-radius: 6px; background: #eef2ff; color: #3730a3; font-size: 12px; line-height: 1.6; }
 .cq-applied-tip { margin: 8px 0; padding: 7px 10px; border-radius: 6px; background: #ecfdf5; color: #047857; font-size: 12px; line-height: 1.6; }
+.cq-engine-note { margin: 8px 0; padding: 7px 10px; border-radius: 6px; background: #fef3c7; color: #92400e; font-size: 12px; line-height: 1.6; }
 .cq-btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .cq-export-form { display: flex; flex-direction: column; gap: 10px; }
 .cq-export-note { margin: 2px 0 0; font-size: 11px; line-height: 1.6; color: #6b7280; }
