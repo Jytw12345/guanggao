@@ -33301,9 +33301,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v805d0482";
+  const APP_VERSION = "va10000ad";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 53;
+  const BUILD_NO = 55;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -37670,8 +37670,11 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice
     const g = EST_PROFIT_UI_GUARD[cat] || EST_PROFIT_UI_GUARD.labor;
     const cur = useRates[i];
     const warn = (cur < g[0] || cur > g[1]) ? " cq-rate-warn" : "";
-    const basis = suggested[i].basis === "refPrice"
-      ? '<span class="cq-basis" title="按你填的当地成交价反推，不受常用区间限制">锚</span>' : "";
+    const b = suggested[i].basis;
+    const basis = b === "refPrice"
+      ? '<span class="cq-basis" title="按你填的当地成交价反推，不受常用区间限制">锚</span>'
+      : (b === "industry"
+        ? '<span class="cq-basis" title="内部成本低于同口径行业下限，已抬到行业下限保价">行业</span>' : "");
     return '<tr><td>' + esc(x.n) + '</td><td>' + fmtRate(suggested[i].rate) + '%' + basis + '</td>'
       + '<td><input class="input cq-rate-input' + warn + '" type="number" min="0" max="300" step="0.5"'
       + ' value="' + fmtRate(cur) + '" data-cq-rate="' + i + '"'
@@ -37736,7 +37739,9 @@ function estApplyCustomerQuoteRates() { estCollectCustomerQuoteEdits(false); }
 async function estAiPrice(forceRefresh) {
   if (!_estUI || !(_estUI.work || []).length) { toast("先拆解出清单，再智能加利润"); return; }
   const payload = estAiPricePayload();
-  const sig = JSON.stringify(payload);
+  // 前端版本也进签名：升级后即使清单没变，也要重新向服务端要一次新规则下的利润率。
+  const appVer = (typeof window !== "undefined" && window.__APP_VERSION__) || "";
+  const sig = JSON.stringify({ appVer, payload });
   const cached = _estUI.customerQuote;
   // 同一份清单 / 原文 / 条件 / 成交价锚重复点「重新加价」：直接沿用当前利润率，不再重掷 AI。
   // 否则同样输入每次都会因模型 temperature=0.2 给出略不同的逐行率，报价总额跟着跳。

@@ -942,7 +942,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     return helpSrc.slice(i, helpSrc.indexOf('<div class="section" id="review">', i));
   })();
   ck('AA', '有 #estimate 章节且目录里可跳转', estSec.length > 4000 && /<li><a href="#estimate">施工费测算<\/a><\/li>/.test(helpSrc));
-  ck('AA', '说明书版本号已升到 v3.55', helpSrc.includes('使用说明书 v3.55'));
+  ck('AA', '说明书版本号已升到 v3.56', helpSrc.includes('使用说明书 v3.56'));
   ck('AA', '小节覆盖三步 / 明细 / 门头 / 填入 / 参数 / 反推 / 常见问题',
     ['三步出报价', '施工项清单的三种行', '门头：配方与工艺增项', '一键填入工程金额', '参数与单价（管理员）', '反推工时', '常见问题'].every((k) => estSec.includes(k)));
   ck('AA', '写明「测算不改金额链」与包工包料扣项', estSec.includes('测算不改金额链') && estSec.includes('材料费（测算）'));
@@ -960,8 +960,8 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
   // 起因 2026-11-22：说明书在 iframe 里一滚到底、回不去目录/系统；用户又问
   // 「自定义施工项是不是只能显示在自定义区，不能加进内置定额项」。
   console.log('\n=== AB. 帮助页导航 / 施工项存入定额库 ===');
-  ck('AB', '说明书版本升到 v3.55（顶部与页脚一致）',
-    helpSrc.includes('使用说明书 v3.55') && helpSrc.includes('文档版本：v3.55'));
+  ck('AB', '说明书版本升到 v3.56（顶部与页脚一致）',
+    helpSrc.includes('使用说明书 v3.56') && helpSrc.includes('文档版本：v3.56'));
   ck('AB', 'sticky 导航条：章节下拉 / 目录 / 上下节 / 顶部 / 返回系统',
     /\.help-nav \{[^}]*position: sticky/.test(helpSrc)
     && ['id="helpJump"', 'helpGoToc()', 'helpStep(-1)', 'helpStep(1)', 'helpGoTop()', 'helpBack()'].every((k) => helpSrc.includes(k)));
@@ -2511,7 +2511,8 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && aiSrc.includes('当前报价单价是否符合') && aiSrc.includes('」报价单价 ¥${r.price}'));
     ck('BN', '重复加价按清单/锚签名缓存，内部区提供主动重掷入口',
       /async function estAiPrice\(forceRefresh\)/.test(appSrc)
-      && appSrc.includes('const sig = JSON.stringify(payload);')
+      && appSrc.includes('const sig = JSON.stringify({ appVer, payload });')
+      && appSrc.includes('window.__APP_VERSION__')
       && appSrc.includes('_estUI.priceSig === sig')
       && appSrc.includes('onclick="estAiPrice(true)"') && appSrc.includes('🎲 换一组建议')
       && helpSrc.includes('重复点「重新加价」金额会跳吗')
@@ -2971,6 +2972,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       .replace(/function itemScope\(x: any, cat: string\): string/, 'function itemScope(x, cat)')
       .replace(/function normPriceUnit\(u: any\): string/, 'function normPriceUnit(u)')
       .replace(/function industryPriceCheck\(items: any\[\]\): any\[\]/, 'function industryPriceCheck(items)')
+      .replace(/function industryCostFloor\([^)]*\): \{[^}]*\} \| null/, 'function industryCostFloor(x, cat)')
       .replace(/\(x: any, i: number\)/, '(x, i)')
       .replace(/const out: any\[\] = \[\];/g, 'const out = [];');
     const buCtx = { console, num: (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; } };
@@ -3131,6 +3133,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       .replace(/const COST_SCOPE_LABEL: Record<string, string> =/, 'const COST_SCOPE_LABEL =')
       .replace(/function itemScope\(x: any, cat: string\): string/, 'function itemScope(x, cat)')
       .replace(/function industryPriceCheck\(items: any\[\]\): any\[\]/, 'function industryPriceCheck(items)')
+      .replace(/function industryCostFloor\([^)]*\): \{[^}]*\} \| null/, 'function industryCostFloor(x, cat)')
       .replace(/\(x: any, i: number\)/, '(x, i)')
       .replace(/const out: any\[\] = \[\];/g, 'const out = [];');
     const indSrc = stripTs(aiSlice('type IndRule =', '// 有当地成交价锚定时'))
@@ -3235,6 +3238,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       .replace(/function itemScope\(x: any, cat: string\): string/, 'function itemScope(x, cat)')
       .replace(/function normPriceUnit\(u: any\): string/, 'function normPriceUnit(u)')
       .replace(/function industryPriceCheck\(items: any\[\]\): any\[\]/, 'function industryPriceCheck(items)')
+      .replace(/function industryCostFloor\([^)]*\): \{[^}]*\} \| null/, 'function industryCostFloor(x, cat)')
       .replace(/\(x: any, i: number\)/, '(x, i)')
       .replace(/const out: any\[\] = \[\];/g, 'const out = [];');
     const bzIndCtx = { console };
@@ -3336,6 +3340,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
         .replace(/function itemScope\(x: any, cat: string\): string/, 'function itemScope(x, cat)')
         .replace(/function normPriceUnit\(u: any\): string/, 'function normPriceUnit(u)')
         .replace(/function industryPriceCheck\(items: any\[\]\): any\[\]/, 'function industryPriceCheck(items)')
+        .replace(/function industryCostFloor\([^)]*\): \{[^}]*\} \| null/, 'function industryCostFloor(x, cat)')
         .replace(/\(x: any, i: number\)/, '(x, i)')
         .replace(/const out: any\[\] = \[\];/g, 'const out = [];');
       const ctx = { console, num: (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; } };
@@ -3394,6 +3399,92 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       JSON.stringify(clues));
     ck('CC', '运行时：¥28.8/㎡ 纯焊工只查结构口径，不再输出行业成本高低结论',
       !clues.some((c) => /行业区间|成本偏高|成本偏低|利润/.test(c)), JSON.stringify(clues));
+    // 带单位尺寸（6米×2米 / 5个60厘米）不再误报「尺寸缺失」——用户原文已给全尺寸
+    const cluesDim = vm.runInContext(`reviewClues(
+      '门头 6米×2米，发光字5个60厘米',
+      [{n:'发光字安装（按㎡）',u:'㎡',q:1.8,fee:138.24,note:'5个字 宽0.6米=1.8㎡'},
+       {n:'热镀锌方管（骨架）',u:'米',q:52,fee:1040,note:'6米/根 9根'},
+       {n:'铝塑板',u:'㎡',q:17.88,fee:1698.6,note:'净用16.72㎡'},
+       {n:'LED灯条',u:'米',q:24,fee:288},
+       {n:'LED电源',u:'个',q:1,fee:90},
+       {n:'电线/线缆',u:'米',q:21,fee:126}],
+      {transportFee:240}, {height:'low',distanceKm:30},
+      {rateNormal:36,rateHigh:75,rateAz:48,rateJz:60})`, ctx);
+    ck('CC', '运行时：6米×2米 带单位尺寸不再报「没给宽高或面积」',
+      !cluesDim.some((c) => /没给宽高或面积|尺寸缺失|未提供门头尺寸/.test(c)), JSON.stringify(cluesDim));
+    ck('CC', '运行时：字数折面积不算「面积与原文不符」',
+      !cluesDim.some((c) => /面积与原文不符|面积.*需核对/.test(c)), JSON.stringify(cluesDim));
+    const clueDim3 = vm.runInContext(`reviewClues('挖坑 3米×2米×1.5米', [], {}, {height:'low',distanceKm:0}, {})`, ctx);
+    ck('CC', '运行时：三维带单位尺寸不再报「未写三维尺寸」',
+      !clueDim3.some((c) => /未写三维尺寸/.test(c)), JSON.stringify(clueDim3));
+    ck('CC', '提示词：AI 不得照抄内置误报尺寸缺失、字数折面积不算不符、改问厚度/高度口径',
+      aiSrc.includes('【尺寸口径铁律】') && aiSrc.includes('【字数折面积不是"不符"】')
+      && aiSrc.includes('【该问的是什么】') && aiSrc.includes('绝不能报「尺寸缺失」')
+      && aiSrc.includes('门头/板材厚度') && aiSrc.includes('是否包含 LOGO 与小字'));
+  }
+
+  // ===== CF：报价单价明显偏低——行业价库补口径 + price 保价纠偏 =====
+  {
+    const fnPath = path.join(ROOT, 'supabase/functions/estimate-ai/index.ts');
+    const aiSrc = fs.readFileSync(fnPath, 'utf8');
+    const helpSrc = fs.readFileSync(path.join(ROOT, 'help.html'), 'utf8');
+    const aiSlice = (a, b) => {
+      const i = aiSrc.indexOf(a); if (i < 0) throw new Error('ai 切片起点未找到: ' + a);
+      const j = aiSrc.indexOf(b, i); if (j < 0) throw new Error('ai 切片终点未找到: ' + b);
+      return aiSrc.slice(i, j);
+    };
+    ck('CF', '行业价库补齐按米/个材料区间，复核能识别偏低',
+      aiSrc.includes('热镀锌方管/骨架（按米）') && aiSrc.includes('label: "LED灯条"')
+      && aiSrc.includes('label: "电线/线缆"') && aiSrc.includes('label: "LED电源"')
+      && aiSrc.includes('当前报价单价低于内置行业价对照的下限')
+      && helpSrc.includes('成本写太低也会纠偏'));
+    ck('CF', 'price 分支调用成本保价并标 basis=industry，锚定行不走保价',
+      aiSrc.includes('function industryCostFloor(') && aiSrc.includes('const fl = industryCostFloor(x, cat);')
+      && aiSrc.includes('basis: lifted ? "industry"') && aiSrc.includes('industryFloorCount: industryN')
+      && aiSrc.includes('这类行你照常按类别给 rate 即可')
+      && /r\.basis === "refPrice" \|\| r\.basis === "opaque" \|\| r\.basis === "industry"/.test(aiSrc)
+      && appSrc.includes('b === "industry"'));
+    const unitCostFn = aiSlice('function unitCost(', '// 分项利润护栏')
+      .replace(/function unitCost\(x: any, key = "cost"\): number/, 'function unitCost(x, key = "cost")');
+    const indSrc = aiSlice('type IndRule =', '// 有当地成交价锚定时')
+      .replace(/type IndRule = \{[^}]*\};/, '')
+      .replace(/const INDUSTRY_PRICE: IndRule\[\] =/, 'const INDUSTRY_PRICE =')
+      .replace(/const COST_SCOPE_LABEL: Record<string, string> =/, 'const COST_SCOPE_LABEL =')
+      .replace(/function itemScope\(x: any, cat: string\): string/, 'function itemScope(x, cat)')
+      .replace(/function normPriceUnit\(u: any\): string/, 'function normPriceUnit(u)')
+      .replace(/function industryPriceCheck\(items: any\[\]\): any\[\]/, 'function industryPriceCheck(items)')
+      .replace(/function industryCostFloor\([^)]*\): \{[^}]*\} \| null/, 'function industryCostFloor(x, cat)')
+      .replace(/\(x: any, i: number\)/, '(x, i)')
+      .replace(/const out: any\[\] = \[\];/g, 'const out = [];');
+    const ctx = { console, num: (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; } };
+    vm.createContext(ctx);
+    vm.runInContext(unitCostFn + '\n' + indSrc, ctx);
+    const lowRows = vm.runInContext(`industryPriceCheck([
+      { n:'热镀锌方管(骨架)', u:'米', cat:'mat', price:11.2, note:'' },
+      { n:'LED灯条', u:'米', cat:'mat', price:5.75, note:'' },
+      { n:'电线/线缆', u:'米', cat:'mat', price:2.3, note:'' },
+      { n:'LED电源', u:'个', cat:'mat', price:42, note:'' }
+    ])`, ctx);
+    ck('CF', '运行时：截图里按米材料被判低于行业区间，电源在区间内',
+      lowRows.length === 4
+      && lowRows[0].label === '热镀锌方管/骨架（按米）' && lowRows[0].verdict === '低于行业区间'
+      && lowRows[1].label === 'LED灯条' && lowRows[1].verdict === '低于行业区间'
+      && lowRows[2].label === '电线/线缆' && lowRows[2].verdict === '低于行业区间'
+      && lowRows[3].label === 'LED电源' && lowRows[3].verdict === '接近行业区间',
+      JSON.stringify(lowRows));
+    const fl = vm.runInContext(`industryCostFloor(
+      { n:'热镀锌方管(骨架)', u:'米', q:52, fee:520, cat:'mat' }, 'mat')`, ctx);
+    const flLed = vm.runInContext(`industryCostFloor(
+      { n:'LED灯条', u:'米', q:24, fee:120, cat:'mat' }, 'mat')`, ctx);
+    const flAlu = vm.runInContext(`industryCostFloor(
+      { n:'铝塑板', u:'㎡', q:17.88, fee:1519.8, cat:'mat' }, 'mat')`, ctx);
+    const flLabor = vm.runInContext(`industryCostFloor(
+      { n:'门头钢架焊接/加固', u:'㎡', q:12, fee:792, cat:'labor' }, 'labor')`, ctx);
+    ck('CF', '运行时：成本 ¥10/米 方管抬到行业下限需 +80%，轻微偏低/纯人工不误抬',
+      !!fl && fl.rate === 80 && fl.lo === 18 && fl.why.includes('行业下限')
+      && !!flLed && flLed.rate === 60
+      && flAlu === null && flLabor === null,
+      JSON.stringify({ fl, flLed, flAlu, flLabor }));
   }
 
   console.log(`\n=== 汇总：${PASS} 通过 / ${FAIL} 失败 ===`);
