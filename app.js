@@ -3577,7 +3577,7 @@ async function loadAllGlobalSettings() {
   try {
     const { data, error } = await sb
       .from("app_settings")
-      .select("key,value,updated_at")
+      .select("key,value,updated_at,updated_by")
       .in("key", GLOBAL_SETTING_KEYS);
     if (!error) {
       rows = {};
@@ -33301,9 +33301,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "va10000ad";
+  const APP_VERSION = "v0d756c5e";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 55;
+  const BUILD_NO = 56;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -35658,16 +35658,30 @@ repo.deleteMeasurement = async function (id) {
 
 // 内存中的当前配置（云端覆盖内核默认值）；初始为内核默认，登录后被 loadEstimateConfig 覆盖
 let _estimateCfg = null;
-// 配置来源与保存时间（只用于界面提示，不参与计算）：cloud=云端 app_settings / local=本机 / default=内核默认
-let _estimateCfgMeta = { source: "default", at: "" };
+// 配置来源、保存时间与保存人（只用于界面提示，不参与计算）：cloud=云端 app_settings / local=本机 / default=内核默认
+let _estimateCfgMeta = { source: "default", at: "", by: "" };
+// 保存人 uid → 姓名：优先用已加载的人员缓存（profiles.id 与 auth uid 同源）；
+// 缓存没到时回退当前登录人；都没有则显示短 id，不显示裸 uuid。
+function estCfgSavedBy(uid) {
+  if (!uid) return "";
+  const w = (cache.workers || []).find((x) => x && x.id === uid);
+  if (w && w.name) return w.name;
+  if (currentProfile && currentProfile.id === uid && currentProfile.name) return currentProfile.name;
+  if (currentUser && currentUser.id === uid && currentUser.email) return currentUser.email;
+  return String(uid).slice(0, 8);
+}
 function estCfgSavedText() {
   const m = _estimateCfgMeta || {};
   if (m.source === "cloud" && m.at) {
     const d = new Date(m.at);
     const p = (n) => String(n).padStart(2, "0");
-    return `上次保存：${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} · 云端（全员共享）`;
+    const by = m.by ? ` · 保存人：${estCfgSavedBy(m.by)}` : " · 保存人：早期版本未记录";
+    return `上次保存：${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())} · 云端（全员共享）${by}`;
   }
-  if (m.source === "local") return "本机保存（云端未读到 estimate_config，当前用本机副本）";
+  if (m.source === "local") {
+    const me = (currentProfile && currentProfile.name) || (currentUser && currentUser.email) || "";
+    return "本机保存（云端未读到 estimate_config，当前用本机副本）" + (me ? ` · 当前：${me}` : "");
+  }
   return "服务器上还没有保存过配置，现在显示的是默认值";
 }
 function estCfg() {
@@ -35689,13 +35703,13 @@ async function loadEstimateConfig(prefetched) {
       if (prefetched && Object.prototype.hasOwnProperty.call(prefetched, "estimate_config")) {
         data = prefetched.estimate_config || null;
       } else if (!prefetched) {
-        const res = await sb.from("app_settings").select("value, updated_at").eq("key", "estimate_config").maybeSingle();
+        const res = await sb.from("app_settings").select("value, updated_at, updated_by").eq("key", "estimate_config").maybeSingle();
         data = res.data;
         error = res.error;
       }
       if (!error && data && data.value && typeof data.value === "object") {
         _estimateCfg = normalizeEstimateConfig(data.value);
-        _estimateCfgMeta = { source: "cloud", at: data.updated_at || "" };
+        _estimateCfgMeta = { source: "cloud", at: data.updated_at || "", by: data.updated_by || "" };
         estSyncCustomItems();
         return;
       }
@@ -36355,13 +36369,13 @@ async function saveEstimateConfig(cfg) {
       return false;
     }
     // 回读校验：确认这条真的在服务器上、且时间就是刚才那次
-    let at = nowIso, readBack = true;
+    let at = nowIso, readBack = true, by = currentUser ? currentUser.id : null;
     try {
-      const { data, error: e2 } = await sb.from("app_settings").select("updated_at").eq("key", "estimate_config").maybeSingle();
+      const { data, error: e2 } = await sb.from("app_settings").select("updated_at, updated_by").eq("key", "estimate_config").maybeSingle();
       if (e2 || !data) readBack = false;
-      else at = data.updated_at || nowIso;
+      else { at = data.updated_at || nowIso; by = data.updated_by || by; }
     } catch (_) { readBack = false; }
-    _estimateCfgMeta = { source: readBack ? "cloud" : "default", at };
+    _estimateCfgMeta = { source: readBack ? "cloud" : "default", at, by: by || "" };
     estCfgDirtyClear();
     if (!readBack) {
       toast("已提交保存，但读不回这条配置（可能只有写权限、没有读权限）。刷新后如仍显示默认值，请检查 app_settings 的 RLS 策略", 7000);

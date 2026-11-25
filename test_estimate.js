@@ -780,11 +780,21 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
 
   // ---------- W. 配置持久化可诊断性（改了存不住 / 存哪了） ----------
   console.log('\n=== W. 测算配置持久化（云端 app_settings · 未保存保护）===');
-  ck('W', '读取时带 updated_at 记来源', appSrc.includes('select("value, updated_at").eq("key", "estimate_config")'));
+  ck('W', '读取时带 updated_at 与 updated_by 记来源和保存人', appSrc.includes('select("value, updated_at, updated_by").eq("key", "estimate_config")'));
   ck('W', '保存失败按 RLS / 表缺失给人话', appSrc.includes('row-level security|permission denied')
     && appSrc.includes('app_settings 表不存在'));
   ck('W', '保存后回读校验（防止只写不读）', appSrc.includes('回读校验') && appSrc.includes('readBack'));
-  ck('W', '参数页显示上次保存来源与时间', appSrc.includes('function estCfgSavedText') && appSrc.includes('est-cfg-saved'));
+  ck('W', '参数页显示上次保存来源/时间/保存人', appSrc.includes('function estCfgSavedText') && appSrc.includes('est-cfg-saved')
+    && appSrc.includes('保存人：${estCfgSavedBy(m.by)}') && appSrc.includes('早期版本未记录'));
+  ck('W', '保存人 uid 换算姓名：人员缓存 → 当前登录人 → 短 id',
+    appSrc.includes('function estCfgSavedBy(uid)') && appSrc.includes('x.id === uid')
+    && appSrc.includes('currentProfile.id === uid') && appSrc.includes('currentUser.email')
+    && appSrc.includes('String(uid).slice(0, 8)'));
+  ck('W', '批量预取与保存回读都带 updated_by',
+    appSrc.includes('.select("key,value,updated_at,updated_by")')
+    && appSrc.includes('select("updated_at, updated_by").eq("key", "estimate_config")')
+    && appSrc.includes('by = data.updated_by || by'));
+  ck('W', '本机保存也标注当前登录人', appSrc.includes('本机保存（云端未读到 estimate_config') && appSrc.includes(' · 当前：${me}'));
   ck('W', '保存参数条 sticky 常显', appSrc.includes('est-cfg-save--sticky') && /\.est-cfg-save--sticky\s*\{[^}]*position:\s*sticky/.test(fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8')));
   ck('W', '未保存徽标 + 关闭抽屉二次确认', appSrc.includes('estCfgDirtyBadge') && appSrc.includes('参数/工艺有改动还没点「保存参数」'));
   ck('W', '切页签也拦未保存改动', appSrc.includes('切换页签会丢掉这些改动'));
@@ -2431,8 +2441,9 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     const reviewFn = appSrc.slice(appSrc.indexOf('async function estAiReview()'), appSrc.indexOf('/* 重复拆解选择', appSrc.indexOf('async function estAiReview()')));
     const openFn = appSrc.slice(appSrc.indexOf('function estOpenAiReview(data)'), appSrc.indexOf('async function estAiReview()'));
     const reviewBranch = aiSrc.slice(aiSrc.indexOf('} else if (mode === "review")'), aiSrc.indexOf('} else if (mode === "price")'));
-    ck('BM', '提示词强制至少 3 条具体疑点，禁止空话',
-      aiSrc.includes('至少 3 条 suggestions') && aiSrc.includes('严禁输出「未见明显问题」')
+    ck('BM', '提示词宁缺毋滥、禁无指向套话，禁止空话，逐条回应内置核对',
+      aiSrc.includes('输出 1–5 条 suggestions') && aiSrc.includes('宁缺毋滥')
+      && aiSrc.includes('严禁输出「未见明显问题」') && aiSrc.includes('无指向套话')
       && aiSrc.includes('必须逐条回应') && aiSrc.includes('【拆解合理性】') && aiSrc.includes('【施工组合合理性】'));
     ck('BM', '内置规则按拆解/组合覆盖尺寸/重复/漏项/工序措施',
       /function reviewClues\(/.test(aiSrc) && aiSrc.includes('【拆解】') && aiSrc.includes('【组合】')
@@ -3421,6 +3432,26 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       aiSrc.includes('【尺寸口径铁律】') && aiSrc.includes('【字数折面积不是"不符"】')
       && aiSrc.includes('【该问的是什么】') && aiSrc.includes('绝不能报「尺寸缺失」')
       && aiSrc.includes('门头/板材厚度') && aiSrc.includes('是否包含 LOGO 与小字'));
+    // A：取消「至少3条」逼AI凑数的机制，改为宁缺毋滥 + 依据必须点名具体行
+    ck('CC', '提示词：不再强制3条、禁尺寸/数量核对套话、依据须点名具体行',
+      aiSrc.includes('输出 1–5 条 suggestions') && aiSrc.includes('宁缺毋滥')
+      && aiSrc.includes('严禁为凑数编造') && aiSrc.includes('无指向套话')
+      && aiSrc.includes('点名具体行或具体字段')
+      && aiSrc.includes('少于 3 条完全正常') && aiSrc.includes('不足 3 条不要硬凑'));
+    // B：用户关心的三项做成内置确定性规则，不靠 AI 自觉
+    ck('CC', '运行时：门头板材无厚度→内置提示厚度（拆解）',
+      cluesDim.some((c) => c.indexOf('【拆解】') === 0 && c.includes('板材/字壳厚度')), JSON.stringify(cluesDim));
+    ck('CC', '运行时：发光字未说LOGO/小字→内置提示字数构成（拆解）',
+      cluesDim.some((c) => c.indexOf('【拆解】') === 0 && c.includes('是否含 LOGO/小字')), JSON.stringify(cluesDim));
+    ck('CC', '运行时：未写施工高度→内置提示登高口径（组合）',
+      cluesDim.some((c) => c.indexOf('【组合】') === 0 && c.includes('施工高度')), JSON.stringify(cluesDim));
+    const cluesFull = vm.runInContext(`reviewClues(
+      '门头 6米×2米 铝塑板厚2厘米 发光字5个60厘米 含LOGO及小字 离地4米',
+      [{n:'铝塑板',u:'㎡',q:12,fee:1140,note:'铝塑板面板'},
+       {n:'发光字',u:'㎡',q:1.8,fee:900}],
+      {}, {height:'low',distanceKm:0}, {})`, ctx);
+    ck('CC', '运行时：厚度/LOGO/高度都写明时三项内置提示都不再报',
+      !cluesFull.some((c) => /板材\/字壳厚度|是否含 LOGO\/小字|未写离地\/施工高度/.test(c)), JSON.stringify(cluesFull));
   }
 
   // ===== CF：报价单价明显偏低——行业价库补口径 + price 保价纠偏 =====
