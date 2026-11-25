@@ -16895,6 +16895,74 @@ table.data.project-hours-diff thead th {
 /* AI 批量建议行：浅紫提示，仅显示建议+采纳按钮，不自动保存（仍走该行「绑定」确认） */
 .est-ai-suggest { margin-top: 5px; padding: 5px 8px; border-radius: 6px; background: #f5f3ff; border: 1px solid #e9e2ff; color: #6d28d9; font-size: 11.5px; line-height: 1.5; }
 .est-ai-suggest .linkbtn { margin-left: 6px; color: #4338ca; text-decoration: underline; }
+/* AI 合理性复核报告：浅色卡片 + 语义色左条，三级严重度一眼可分 */
+.est-ai-review-top { padding: 10px 12px; border: 1px solid #e9e2ff; border-radius: 8px; background: #f5f3ff; }
+.est-ai-review-top b { font-size: 14px; color: #5b21b6; }
+.est-ai-review-top p { margin: 4px 0 0; font-size: 12.5px; line-height: 1.6; color: #4b5563; }
+.est-ai-review-top .est-ai-review-cnt { font-size: 11px; color: #7c3aed; }
+.est-ai-review-list { margin-top: 10px; display: grid; gap: 8px; }
+.est-ai-review-item { padding: 8px 10px; border: 1px solid #e5e7eb; border-left: 3px solid #94a3b8; border-radius: 6px; background: #fff; font-size: 12px; line-height: 1.65; color: #374151; word-break: break-word; }
+.est-ai-review-item.is-mid { border-left-color: #f59e0b; background: #fffbeb; }
+.est-ai-review-item.is-high { border-left-color: #ef4444; background: #fef2f2; }
+.est-ai-review-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 2px; font-weight: 600; color: #111827; }
+.est-ai-review-lv { display: inline-block; padding: 0 5px; border-radius: 4px; background: #e2e8f0; color: #475569; font-size: 10.5px; }
+.is-mid .est-ai-review-lv { background: #fde68a; color: #92400e; }
+.is-high .est-ai-review-lv { background: #fecaca; color: #991b1b; }
+.est-ai-review-cat { font-size: 10.5px; font-weight: 400; color: #6b7280; }
+.est-ai-review-note { margin: 10px 0 0; font-size: 11px; line-height: 1.6; color: #6b7280; }
+
+/* 客户报价单（不含税）：只显示客户价，内部加价依据默认折叠 */
+.cq-meta { font-size: 11px; color: #7c3aed; margin-bottom: 4px; }
+.cq-tip { padding: 8px 10px; border: 1px solid #d9f99d; border-radius: 6px; background: #f7fee7; font-size: 12px; line-height: 1.6; color: #3f6212; margin-bottom: 10px; word-break: break-word; }
+.cq-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cq-table th, .cq-table td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; color: #374151; }
+.cq-table th { font-size: 11px; color: #6b7280; background: #f9fafb; }
+.cq-table td:nth-child(3), .cq-table td:nth-child(4) { text-align: right; white-space: nowrap; }
+.cq-total { display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: flex-end; margin-top: 10px; font-size: 12px; color: #4b5563; }
+.cq-total b { color: #111827; }
+.cq-total .is-grand { font-size: 14px; color: #b91c1c; }
+.cq-total .is-grand b { color: #b91c1c; }
+.cq-internal { margin-top: 10px; padding: 8px 10px; border: 1px dashed #d1d5db; border-radius: 6px; font-size: 11px; line-height: 1.7; color: #6b7280; }
+.cq-internal summary { cursor: pointer; color: #4b5563; }
+.cq-btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.cq-export-form { display: flex; flex-direction: column; gap: 10px; }
+.cq-export-note { margin: 2px 0 0; font-size: 11px; line-height: 1.6; color: #6b7280; }
+.cq-rate-note { margin: 8px 0; font-size: 11px; line-height: 1.6; color: #6b7280; }
+.cq-rate-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.cq-rate-table th, .cq-rate-table td { padding: 5px 6px; border-bottom: 1px solid #e5e7eb; text-align: left; color: #4b5563; }
+.cq-rate-table th { color: #6b7280; background: #f9fafb; }
+.cq-rate-table .input { width: 72px; padding: 4px 6px; font-size: 11px; }
+.cq-rate-table .cq-ref-input { width: 84px; }
+.cq-rate-table .cq-rate-warn { border: 1px solid #f59e0b; background: #fffbeb; }
+.cq-rate-floor { margin-top: 8px; font-size: 11px; color: #6b7280; }
+.cq-advice { margin: 10px 0; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 6px; background: #eef2ff; font-size: 12px; color: #3730a3; }
+.cq-advice-item { padding: 5px 0; border-bottom: 1px dashed #c7d2fe; line-height: 1.6; }
+.cq-advice-item:last-child { border-bottom: 0; }
+.cq-advice-item em { display: block; font-style: normal; font-size: 11px; color: #4b5563; }
+@media (max-width: 520px) {
+  .cq-rate-table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+/* 客户报价单打印/PDF：隐藏业务界面，只留客户可见字段 */
+#cqPrintRoot { display: none; }
+body.cq-printing > *:not(#cqPrintRoot) { display: none !important; }
+body.cq-printing #cqPrintRoot {
+  display: block; position: absolute; left: 0; top: 0; width: 100%;
+  padding: 8px 12px; background: #fff; color: #111827;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+.cq-print h1 { margin: 0 0 6px; font-size: 20px; }
+.cq-print-meta { margin-bottom: 14px; font-size: 12px; color: #4b5563; }
+.cq-print-meta b { color: #111827; }
+.cq-print-meta span { margin: 0 4px; color: #d1d5db; }
+.cq-print-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cq-print-table th, .cq-print-table td { padding: 7px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; }
+.cq-print-table th { color: #6b7280; background: #f9fafb; }
+.cq-print-table td:nth-child(3), .cq-print-table td:nth-child(4), .cq-print-table th:nth-child(3), .cq-print-table th:nth-child(4) { text-align: right; white-space: nowrap; }
+.cq-print-total { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px 18px; margin-top: 14px; font-size: 12px; color: #4b5563; }
+.cq-print-grand { font-size: 15px; color: #b91c1c; }
+.cq-print-grand b { color: #b91c1c; }
+.cq-print-note { margin-top: 12px; font-size: 11px; color: #6b7280; }
+@media print { @page { margin: 14mm; } }
 .est-cfg-save .btn:disabled { opacity: .6; cursor: wait; }
 .est-syn-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-bottom: 1px solid #f1f5f9; font-size: 12.5px; }
 .est-syn-row span { min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

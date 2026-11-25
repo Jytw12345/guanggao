@@ -33299,9 +33299,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "vab012ac1";
+  const APP_VERSION = "v6fdb1dce";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 26;
+  const BUILD_NO = 32;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -37004,10 +37004,14 @@ function estRenderDoorExtras() {
   if (!isDoorNow) { box.hidden = true; box.innerHTML = ""; return; }
   const defs = estDoorExtraDefs();
   if (!defs.length) { box.hidden = true; box.innerHTML = ""; return; }
-  // 主干里已经含底板的配方（灯箱布的内打光底板、真石漆的水泥压力板），再勾「底板/封底」＝重复计价 → 不列出来
-  const rk = (Estimate && Estimate.matchDoorRecipe) ? Estimate.matchDoorRecipe(txtEx).key : "";
-  const hasBack = rk === "lightbox" || rk === "coat";
-  const list = hasBack ? defs.filter((ex) => ex.key !== "backplate") : defs;
+  // 主干已含侧包/包边的配方（铝塑板/亚克力/PVC/不锈钢/通用）不再列包边类工艺，
+  // 灯箱布/真石漆主干含底板则隐藏「底板/封底」——两处都按配方算量结果过滤，内核同步过滤防云端默认勾选重复计价
+  const recipe = (Estimate && Estimate.matchDoorRecipe) ? Estimate.matchDoorRecipe(txtEx) : null;
+  const rk = recipe ? recipe.key : "";
+  const hidden = new Set(Estimate && Estimate.doorExtraRedundantKeys ? Estimate.doorExtraRedundantKeys(recipe) : []);
+  if (rk === "lightbox" || rk === "coat") hidden.add("backplate");
+  hidden.forEach((k) => { if (_estUI.doorExtras && _estUI.doorExtras[k]) delete _estUI.doorExtras[k]; });
+  const list = hidden.size ? defs.filter((ex) => !hidden.has(ex.key)) : defs;
   const METHODS = (Estimate && Estimate.DOOR_EXTRA_METHODS) || [];
   const mName = (v) => (METHODS.find((x) => x.v === v) || {}).n || v;
   box.hidden = false;
@@ -37032,7 +37036,9 @@ function estRenderDoorExtras() {
       + (prev ? '<em class="est-door-ex-amt">' + fmtEstMoney(prev.amt) + '</em>' : '')
       + '</label>';
   }).join('');
-  const head = '<div class="est-door-ex-head">门头工艺<span class="est-door-ex-sub">勾选即按尺寸自动算量，可改数量</span>'
+  const dupTip = (hidden.has("edge") || hidden.has("ssedge"))
+    ? '<span class="est-door-ex-sub">· 主干已含侧包，包边类不再重复列出</span>' : '';
+  const head = '<div class="est-door-ex-head">门头工艺<span class="est-door-ex-sub">勾选即按尺寸自动算量，可改数量</span>' + dupTip
     + (onCnt ? '<b class="est-door-ex-sum">已选 ' + onCnt + ' 项 ≈' + fmtEstMoney(sum) + (highCnt ? ' ⚠' : '') + '</b>' : '')
     + '</div>';
   const tip = highCnt ? '<div class="est-door-ex-warn">⚠ 有 ' + highCnt + ' 项折合单价超过行业上限：多半是系数/单价填错或计量方式选错，点「⚙️ 配置管理 → 门头工艺」核对。</div>' : '';
@@ -37277,6 +37283,582 @@ async function estAiPolish() {
   }
 }
 
+/* ============ AI 合理性复核（2026-11-25）============
+   测算完成后，把「施工内容原文 + 清单逐项 + 汇总 + 施工条件」交给 estimate-ai 的 review 模式，
+   让第三方视角查漏项/重复计价/数量口径，只出建议，不回写清单、不改金额、不自动采纳。
+   失败只 toast，原测算结果与高频拆解路径零接触（v429）。 */
+function estAiReviewPayload() {
+  const inp = document.getElementById("estInput");
+  const txt = (((inp && inp.value) || "") + "").trim().slice(0, 500);
+  const r = (_estUI && _estUI.result) || {};
+  const rows = Array.isArray(r.rows) ? r.rows : [];
+  const items = rows.slice(0, 40).map((x) => ({
+    n: String((x && x.n) || "").slice(0, 40),
+    u: String((x && x.u) || "").slice(0, 12),
+    q: Number((x && x.q) || 0) || 0,
+    h: Number((x && x.hours) || 0) || 0,
+    fee: Number((x && x.fee) || 0) || 0,
+    note: String((x && x.note) || "").slice(0, 60)
+  }));
+  const c = estCfg() || {};
+  const p = c.params || {};
+  return {
+    mode: "review", text: txt, items,
+    totals: {
+      totalHours: Number(r.totalHours) || 0, labor: Number(r.labor) || 0,
+      equip: Number(r.equip) || 0, transportFee: Number(r.transportFee) || 0,
+      matFee: Number(r.matFee) || 0, auxFee: Number(r.auxFee) || 0,
+      floor: Number(r.floor) || 0, construction: Number(r.construction) || 0,
+      grand: Number(r.grand) || 0
+    },
+    cond: {
+      height: (_estUI && _estUI.height) || "low",
+      wall: (_estUI && _estUI.wall) || "flat",
+      distanceKm: Number(r.distanceKm) || 0,
+      roundTrip: !!r.roundTrip,
+      crew: r.crew ? String(r.crew.level || "") : ""
+    },
+    params: {
+      rateNormal: Number(p.rateNormal) || 0, rateHigh: Number(p.rateHigh) || 0,
+      rateAz: Number(p.rateAz) || 0, rateJz: Number(p.rateJz) || 0,
+      auxRatio: Number(p.auxRatio) || 0, minStart: Number(p.minStart) || 0
+    }
+  };
+}
+function estOpenAiReview(data) {
+  const V = { ok: ["✅", "基本合理"], check: ["⚠️", "建议核对"], risk: ["🚨", "疑点较多"] };
+  const v = V[data && data.verdict] || V.check;
+  const sugs = Array.isArray(data && data.suggestions) ? data.suggestions : [];
+  const list = sugs.map((s) => {
+    const level = s && s.level === "high" ? "高" : (s && s.level === "mid" ? "中" : "低");
+    const cls = s && s.level === "high" ? "is-high" : (s && s.level === "mid" ? "is-mid" : "");
+    return '<div class="est-ai-review-item ' + cls + '">'
+      + '<div class="est-ai-review-title"><span class="est-ai-review-lv">' + level + '</span>'
+      + esc((s && s.title) || "待核对") + ((s && s.cat) ? '<span class="est-ai-review-cat">' + esc(s.cat) + '</span>' : '') + '</div>'
+      + '<div>依据：' + esc((s && s.why) || "—") + '</div>'
+      + '<div>建议：' + esc((s && s.action) || "按上面的点逐项核对，再决定是否调整清单") + '</div>'
+      + '</div>';
+  }).join("") || '<div class="est-ai-review-item">AI 未给出具体条目，请按清单自行核对。</div>';
+  const webN = Number((data && data.webRefs) || 0) || 0;
+  const srcTip = webN > 0
+    ? '已尝试联网行情核对，取到 ' + webN + ' 条参考（行情仅供参考，非当地实时价）'
+    : '未配置联网行情源或未取到结果，本次按内置审计规则做深度分析，未声称查过行情';
+  const body = '<div class="est-ai-review-top"><b>' + v[0] + ' ' + v[1] + '</b>'
+    + '<p>' + esc((data && data.summary) || "复核完成，以下建议供参考。") + '</p>'
+    + '<p class="est-ai-review-cnt">共 ' + sugs.length + ' 条疑点，按金额影响排序</p></div>'
+    + '<div class="est-ai-review-list">' + list + '</div>'
+    + '<p class="est-ai-review-note">第三方审计视角：结合内置审计规则' + (webN > 0 ? '与联网行情参考' : '')
+    + '，' + srcTip + '；不改动清单与金额，采纳与否请自行判断。</p>';
+  modal.open("AI 合理性复核", body, { confirmText: "知道了", onConfirm: () => modal.close(), closeOnMask: true });
+}
+async function estAiReview() {
+  if (!_estUI || !(_estUI.work || []).length) { toast("先拆解出清单，再让 AI 复核"); return; }
+  const btn = document.getElementById("estAiReviewBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ 深度复核中…"; }
+  try {
+    // 服务端会做内置规则审计；若管理员配了行情搜索，还会多两次外部请求，放宽到 35 秒
+    const { data, error } = await estAiInvoke(estAiReviewPayload(), 35000);
+    if (error || !data || !data.ok) {
+      toast(estAiErrTip(error, "AI 复核失败，清单和金额未改动"));
+      return;
+    }
+    estOpenAiReview(data);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "🤖 AI 深度复核"; }
+  }
+}
+
+/* ============ 智能加利润 → 客户报价单（2026-11-25）============
+   AI 只按分项给加价率，前端按率算客户价；客户弹窗只显示客户价，不含税。
+   不写库、不回写 cost_estimate / projectAmount / laborFee（金额链隔离铁律）。 */
+const EST_PROFIT_DEFAULT = { labor: 25, laborHigh: 35, mat: 12, equip: 28, transport: 15 };
+/* 仅用于 UI 标记「超出常用区间」；用户可填 0–100，系统不强行改回。 */
+const EST_PROFIT_UI_GUARD = {
+  labor: [15, 35], laborHigh: [25, 50], mat: [6, 20], equip: [15, 40], transport: [8, 25]
+};
+function estItemCat(x, cond) {
+  if (x && x.isMat) return "mat";
+  if (x && x.isEquip) return "equip";
+  const s = String((x && x.n) || "") + " " + String((x && x.note) || "");
+  if (/运输|运费|里程|送货/.test(s)) return "transport";
+  if ((cond && cond.height === "high") || /高空|吊篮|登高|离地/.test(s)) return "laborHigh";
+  return "labor";
+}
+/* 纯计算：内部成本行 + 加价率 → 客户价行。rowRates 为逐行率（AI 建议或用户改过），
+   优先于类别率——否则 AI 按行给的差异会被抹平成「每个类别一个数」。floor/辅材仍按类别率。 */
+function estCustomerQuoteCalc(rows, rates, totals, rowRates) {
+  const r = rates || {};
+  const over = Array.isArray(rowRates) ? rowRates : null;
+  const list = (rows || []).map((x, i) => {
+    const cat = x.cat || "labor";
+    const got = over && over[i] != null ? Number(over[i]) : Number(r[cat]);
+    const rate = Number.isFinite(got) ? got : 0;
+    const q = Number(x.q) || 0, fee = Number(x.fee) || 0;
+    return {
+      n: String(x.n || ""), u: String(x.u || ""), q, cat, rate,
+      unit: q > 0 ? Math.round(fee / q * (1 + rate / 100) * 100) / 100 : 0,
+      amount: Math.round(fee * (1 + rate / 100) * 100) / 100,
+      note: String(x.note || "")
+    };
+  });
+  const floor = Math.round((Number(totals && totals.floor) || 0) * (1 + (Number(r.labor) || 0) / 100) * 100) / 100;
+  const aux = Math.round((Number(totals && totals.auxFee) || 0) * (1 + (Number(r.mat) || 0) / 100) * 100) / 100;
+  let construction = floor, material = aux;
+  list.forEach((x) => { if (x.cat === "mat") material += x.amount; else construction += x.amount; });
+  construction = Math.round(construction * 100) / 100;
+  material = Math.round(material * 100) / 100;
+  return { rows: list, construction, material, floor, aux,
+    grand: Math.round((construction + material) * 100) / 100 };
+}
+function estCustomerQuoteRows() {
+  const r = (_estUI && _estUI.result) || {};
+  const cond = { height: (_estUI && _estUI.height) || "low" };
+  return (Array.isArray(r.rows) ? r.rows : []).map((x) => ({
+    n: x.n, u: x.u, q: x.q, fee: x.fee, note: x.note, cat: estItemCat(x, cond)
+  }));
+}
+function estAiPricePayload() {
+  const inp = document.getElementById("estInput");
+  const txt = (((inp && inp.value) || "") + "").trim().slice(0, 500);
+  const r = (_estUI && _estUI.result) || {};
+  const items = estCustomerQuoteRows().map((x) => ({
+    n: String(x.n || "").slice(0, 40), u: String(x.u || "").slice(0, 12),
+    q: Number(x.q) || 0, fee: Number(x.fee) || 0, cat: x.cat,
+    note: String(x.note || "").slice(0, 60)
+  }));
+  return {
+    mode: "price", text: txt, items,
+    totals: {
+      labor: Number(r.labor) || 0, equip: Number(r.equip) || 0,
+      transportFee: Number(r.transportFee) || 0, matFee: Number(r.matFee) || 0,
+      auxFee: Number(r.auxFee) || 0, floor: Number(r.floor) || 0, grand: Number(r.grand) || 0
+    },
+    cond: {
+      height: (_estUI && _estUI.height) || "low",
+      wall: (_estUI && _estUI.wall) || "flat",
+      distanceKm: Number(r.distanceKm) || 0, roundTrip: !!r.roundTrip
+    }
+  };
+}
+function estOpenCustomerQuote(data, fallback, rowRates, refPrices) {
+  const rows0 = estCustomerQuoteRows();
+  const rates = {};
+  Object.keys(EST_PROFIT_DEFAULT).forEach((k) => { rates[k] = EST_PROFIT_DEFAULT[k]; });
+  const got = (data && Array.isArray(data.rates)) ? data.rates : [];
+  // AI 返回的是「逐行」rate：不再用最后一行覆盖类别率，逐行差异必须留到计算里。
+  const suggested = rows0.map((x, i) => {
+    const g = got[i] || {};
+    const n = Number(g.rate);
+    return { rate: Number.isFinite(n) ? n : (rates[x.cat] || EST_PROFIT_DEFAULT.labor),
+      why: String(g.why || "") };
+  });
+  const useRates = rows0.map((x, i) => {
+    const v = (Array.isArray(rowRates) && rowRates[i] != null) ? Number(rowRates[i]) : suggested[i].rate;
+    return Number.isFinite(v) ? v : (rates[x.cat] || 0);
+  });
+  const refs = rows0.map((x, i) => {
+    const v = (Array.isArray(refPrices) && refPrices[i] != null) ? refPrices[i] : "";
+    const n = Number(v);
+    return v !== "" && Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : "";
+  });
+  const r = (_estUI && _estUI.result) || {};
+  const q = estCustomerQuoteCalc(rows0, rates, r, useRates);
+  const src = fallback ? "local" : "ai";
+  if (_estUI) _estUI.customerQuote = { rows: q.rows, totals: q, rates, rowRates: useRates,
+    suggested, refPrices: refs, src, raw: data,
+    summary: (data && data.summary) || "", why: suggested.map((s) => s.why) };
+  const lines = q.rows.map((x) => '<tr><td>' + esc(x.n) + '</td><td>' + esc(String(x.q) + (x.u || ""))
+    + '</td><td>¥' + x.unit.toFixed(2) + '</td><td>¥' + x.amount.toFixed(2) + '</td></tr>').join("");
+  const fmtRate = (v) => (Number(v) || 0).toFixed(1);
+  const rateRows = q.rows.map((x, i) => {
+    const cat = x.cat || "labor";
+    const g = EST_PROFIT_UI_GUARD[cat] || EST_PROFIT_UI_GUARD.labor;
+    const cur = useRates[i];
+    const warn = (cur < g[0] || cur > g[1]) ? " cq-rate-warn" : "";
+    return '<tr><td>' + esc(x.n) + '</td><td>' + fmtRate(suggested[i].rate) + '%</td>'
+      + '<td><input class="input cq-rate-input' + warn + '" type="number" min="0" max="100" step="0.5"'
+      + ' value="' + fmtRate(cur) + '" data-cq-rate="' + i + '"'
+      + ' oninput="estMarkRateWarn(this,\'' + cat + '\')"'
+      + ' title="常用 ' + g[0] + '–' + g[1] + '%，可填 0–100%"/></td>'
+      + '<td><input class="input cq-ref-input" type="number" min="0" step="0.01" value="'
+      + esc(refs[i] ? String(refs[i]) : "") + '" data-cq-ref="' + i + '" placeholder="选填"/></td>'
+      + '<td>' + esc(suggested[i].why || "—") + '</td></tr>';
+  }).join("");
+  const body = '<div class="cq-meta">客户报价单 · 不含税 · 仅本次查看</div>'
+    + '<div class="cq-tip">' + (fallback ? 'AI 未配置或失败，已用内置分项利润率生成：' : '')
+    + esc((data && data.summary) || '按施工项分别加价，材料低、风险高的活高。') + '</div>'
+    + '<table class="cq-table"><thead><tr><th>项目</th><th>数量</th><th>客户单价</th><th>小计</th></tr></thead><tbody>'
+    + (lines || '<tr><td colspan="4">清单为空</td></tr>') + '</tbody></table>'
+    + '<div class="cq-total"><span>施工费 <b>¥' + q.construction.toFixed(2) + '</b></span>'
+    + '<span>材料费 <b>¥' + q.material.toFixed(2) + '</b></span>'
+    + '<span class="is-grand">合计 <b>¥' + q.grand.toFixed(2) + '</b></span></div>'
+    + '<details class="cq-internal"><summary>利润率微调 / 加价依据（内部，勿展示给客户）</summary>'
+    + '<div class="cq-rate-note">每行默认取 AI 建议率，可改 0–100%；超出常用区间标黄但仍生效。'
+    + '参考成交价只用于下面的「AI 报价复核」，不显示给客户、不导出、不写工程金额。</div>'
+    + '<table class="cq-rate-table"><thead><tr><th>项目</th><th>AI建议</th><th>利润率%</th><th>参考成交价¥</th><th>依据</th></tr></thead><tbody>'
+    + (rateRows || '<tr><td colspan="5">清单为空</td></tr>') + '</tbody></table>'
+    + '<div><button class="btn outline" onclick="estApplyCustomerQuoteRates()">应用利润率与参考价</button></div>'
+    + '<div class="cq-rate-floor">起步价补足按人工 ' + fmtRate(rates.labor) + '%、辅材按材料 '
+    + fmtRate(rates.mat) + '% 加价。</div></details>'
+    + '<div class="cq-btns"><button class="btn primary" onclick="estAiQuoteCheck()">🤖 AI 报价复核</button>'
+    + '<button class="btn outline" onclick="estOpenCustomerQuoteExport()">⬇ 导出报价单</button>'
+    + '<button class="btn outline" onclick="estAiPrice()">🔄 重新加价</button>'
+    + '<button class="btn ghost" onclick="modal.close()">关闭</button></div>';
+  modal.open("客户报价单（不含税）", body, { hideFooter: true, closeOnMask: false, wide: true });
+}
+function estMarkRateWarn(el, cat) {
+  if (!el) return;
+  const g = EST_PROFIT_UI_GUARD[cat] || EST_PROFIT_UI_GUARD.labor;
+  const n = Number(el.value);
+  el.classList.toggle("cq-rate-warn", Number.isFinite(n) && (n < g[0] || n > g[1]));
+}
+/* 收集内部区输入并重绘报价单；silent=true 供 AI 报价复核前静默同步。 */
+function estCollectCustomerQuoteEdits(silent) {
+  const cq = (_estUI && _estUI.customerQuote) || null;
+  if (!cq) return;
+  const rates = cq.rows.map((x, i) => {
+    const el = document.querySelector('input[data-cq-rate="' + i + '"]');
+    const v = el ? Number(el.value) : (cq.rowRates ? cq.rowRates[i] : cq.rates[x.cat]);
+    return Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v * 10) / 10)) : 0;
+  });
+  const refs = cq.rows.map((_, i) => {
+    const el = document.querySelector('input[data-cq-ref="' + i + '"]');
+    const txt = el ? String(el.value || "").trim() : "";
+    const n = Number(txt);
+    return txt && Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : "";
+  });
+  estOpenCustomerQuote(cq.raw, cq.src === "local", rates, refs);
+  if (!silent) toast("利润率与参考价已应用，报价单已更新");
+}
+function estApplyCustomerQuoteRates() { estCollectCustomerQuoteEdits(false); }
+async function estAiPrice() {
+  if (!_estUI || !(_estUI.work || []).length) { toast("先拆解出清单，再智能加利润"); return; }
+  const btn = document.getElementById("estPriceBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ 加价中…"; }
+  try {
+    const { data, error } = await estAiInvoke(estAiPricePayload(), 35000);
+    if (error || !data || !data.ok) {
+      console.warn("[estimate-ai] 智能加价失败，走内置分项利润率：", error);
+      estOpenCustomerQuote(null, true);
+      toast(estAiErrTip(error, "AI 加价失败，已用内置分项利润率生成报价单"));
+      return;
+    }
+    estOpenCustomerQuote(data, false);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "💰 智能加利润"; }
+  }
+}
+function estAiQuoteCheckPayload() {
+  const cq = (_estUI && _estUI.customerQuote) || null;
+  if (!cq) return null;
+  const inp = document.getElementById("estInput");
+  const txt = (((inp && inp.value) || "") + "").trim().slice(0, 500);
+  const r = (_estUI && _estUI.result) || {};
+  const rows0 = estCustomerQuoteRows();
+  const items = rows0.map((x, i) => {
+    const c = cq.rows[i] || {};
+    return {
+      n: String(x.n || "").slice(0, 40), u: String(x.u || "").slice(0, 12),
+      q: Number(x.q) || 0, cat: x.cat, cost: Number(x.fee) || 0,
+      price: Number(c.unit) || 0, amount: Number(c.amount) || 0,
+      refPrice: Number((cq.refPrices && cq.refPrices[i]) || 0) || 0,
+      note: String(x.note || "").slice(0, 60)
+    };
+  });
+  const sumBy = (catMat) => cq.rows.reduce((s, x) => s + ((x.cat === "mat") === catMat ? (x.amount || 0) : 0), 0);
+  return {
+    mode: "quotecheck", text: txt, items,
+    totals: {
+      costGrand: Number(r.grand) || 0, quoteGrand: cq.totals.grand,
+      costLabor: Number(r.labor) || 0, quoteLabor: Math.round(sumBy(false) * 100) / 100,
+      costMat: Number(r.matFee) || 0, quoteMat: Math.round(sumBy(true) * 100) / 100,
+      costEquip: Number(r.equip) || 0, quoteEquip: 0,
+      floor: Number(r.floor) || 0
+    },
+    cond: {
+      height: (_estUI && _estUI.height) || "low",
+      wall: (_estUI && _estUI.wall) || "flat"
+    }
+  };
+}
+function estOpenQuoteReview(data) {
+  const V = { ok: ["✅", "报价合理"], check: ["⚠️", "建议核对"], risk: ["🚨", "疑点较多"] };
+  const v = V[data && data.verdict] || V.check;
+  const sugs = Array.isArray(data && data.suggestions) ? data.suggestions : [];
+  const list = sugs.map((s) => {
+    const level = s && s.level === "high" ? "高" : (s && s.level === "mid" ? "中" : "低");
+    const cls = s && s.level === "high" ? "is-high" : (s && s.level === "mid" ? "is-mid" : "");
+    return '<div class="est-ai-review-item ' + cls + '">'
+      + '<div class="est-ai-review-title"><span class="est-ai-review-lv">' + level + '</span>'
+      + esc((s && s.title) || "待核对") + ((s && s.cat) ? '<span class="est-ai-review-cat">' + esc(s.cat) + '</span>' : '') + '</div>'
+      + '<div>依据：' + esc((s && s.why) || "—") + '</div>'
+      + '<div>建议：' + esc((s && s.action) || "对照成本与客户价逐项核对") + '</div></div>';
+  }).join("") || '<div class="est-ai-review-item">AI 未给出具体条目，请自行核对客户价。</div>';
+  const webN = Number((data && data.webRefs) || 0) || 0;
+  const cq = (_estUI && _estUI.customerQuote) || null;
+  const advice = (data && Array.isArray(data.priceAdvice)) ? data.priceAdvice : [];
+  const advHtml = advice.length ? '<div class="cq-advice"><b>逐项调价建议（仅供参考，不自动改价）</b>'
+    + advice.map((a) => {
+      const row = (cq && cq.rows && cq.rows[a && a.i]) || null;
+      const ref = (cq && cq.refPrices && cq.refPrices[a && a.i]) || 0;
+      const dir = a && a.dir === "up" ? "↑ 调高" : (a && a.dir === "down" ? "↓ 调低" : "→ 保持");
+      const pct = Number((a && a.pct) || 0);
+      const target = row && pct ? Number(row.unit) * (1 + pct / 100) : null;
+      return '<div class="cq-advice-item"><span>第 ' + ((Number(a && a.i) || 0) + 1) + '项 '
+        + esc((row && row.n) || "") + '：' + dir + ' ' + Math.abs(pct).toFixed(1) + '%'
+        + (target != null ? '（约 ¥' + target.toFixed(2) + '）' : '')
+        + (ref ? ' · 你填参考价 ¥' + Number(ref).toFixed(2) : '') + '</span>'
+        + ((a && a.why) ? '<em>' + esc(a.why) + '</em>' : '') + '</div>';
+    }).join("") + '</div>' : "";
+  const body = '<div class="est-ai-review-top"><b>' + v[0] + ' ' + v[1] + '</b>'
+    + '<p>' + esc((data && data.summary) || "复核完成，以下建议供参考。") + '</p>'
+    + '<p class="est-ai-review-cnt">共 ' + sugs.length + ' 条疑点 · ' + (webN > 0 ? '联网参考 ' + webN + ' 条' : '未取到联网行情') + '</p></div>'
+    + advHtml
+    + '<div class="est-ai-review-list">' + list + '</div>'
+    + '<p class="est-ai-review-note">客户价合理性只作建议：不改报价单、不改工程金额；公开行情不等于真实成交价，你填的参考价也只是参考，采纳与否自行判断。</p>'
+    + '<div class="cq-btns"><button class="btn primary" onclick="estReopenCustomerQuote()">返回报价单</button></div>';
+  modal.open("客户报价合理性复核", body, { hideFooter: true, closeOnMask: false, wide: true });
+}
+/* modal.open 是替换同一层弹窗而不是压栈：从复核页返回时按缓存重绘报价单 */
+function estReopenCustomerQuote() {
+  const cq = (_estUI && _estUI.customerQuote) || null;
+  if (!cq) { modal.close(); return; }
+  estOpenCustomerQuote(cq.raw, cq.src === "local", cq.rowRates, cq.refPrices);
+}
+async function estAiQuoteCheck() {
+  // 用户可能改了利润率/参考价但没点应用，先静默重绘让复核基于最新数字
+  estCollectCustomerQuoteEdits(true);
+  const body0 = estAiQuoteCheckPayload();
+  if (!body0) { toast("先生成客户报价单，再让 AI 复核"); return; }
+  try {
+    const { data, error } = await estAiInvoke(body0, 35000);
+    if (error || !data || !data.ok) {
+      toast(estAiErrTip(error, "AI 报价复核失败，报价单未改动"));
+      return;
+    }
+    estOpenQuoteReview(data);
+  } catch (e) { toast("AI 报价复核失败，报价单未改动"); }
+}
+
+/* 客户报价单导出（2026-11-25）：只导出客户可见字段（项目/数量/客户单价/小计/合计），
+   绝不把内部成本、加价率、加价依据带出去。图片走离线 canvas，打印走浏览器原生 PDF。 */
+function estCustomerQuoteExportInfo() {
+  const e = (_estUI && _estUI.expInfo) || {};
+  return {
+    company: String(e.company || "").trim(),
+    customer: String(e.customer || "").trim(),
+    no: String(e.no || "").trim()
+  };
+}
+function estCustomerQuoteDate() {
+  return new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+/* 纯文本：供复制/测试，字段集合与图片、打印完全一致 */
+function estCustomerQuoteText(cq, info) {
+  const rows = (cq && Array.isArray(cq.rows)) ? cq.rows : [];
+  const t = (cq && cq.totals) || {};
+  const i = info || {};
+  const money = (n) => "¥" + (Number(n) || 0).toFixed(2);
+  const out = [];
+  if (i.company) out.push(i.company);
+  out.push("客户报价单（不含税）");
+  if (i.customer) out.push("客户：" + i.customer);
+  if (i.no) out.push("单号：" + i.no);
+  out.push("日期：" + estCustomerQuoteDate());
+  out.push("────────────────────────");
+  out.push("项目 | 数量 | 客户单价 | 小计");
+  rows.forEach((x) => {
+    out.push(String(x.n || "") + " | " + (Number(x.q) || 0) + String(x.u || "")
+      + " | " + money(x.unit) + " | " + money(x.amount));
+  });
+  out.push("────────────────────────");
+  out.push("施工费：" + money(t.construction));
+  out.push("材料费：" + money(t.material));
+  out.push("合计：" + money(t.grand));
+  out.push("（不含税；数量与单价以现场复核为准）");
+  return out.join("\n");
+}
+/* 打印/PDF 用的 HTML：只走 esc 转义，内部折叠区不参与 */
+function estCustomerQuotePrintHtml(cq, info) {
+  const rows = (cq && Array.isArray(cq.rows)) ? cq.rows : [];
+  const t = (cq && cq.totals) || {};
+  const i = info || {};
+  const h = (s) => esc(s == null ? "" : String(s));
+  const money = (n) => "¥" + (Number(n) || 0).toFixed(2);
+  const lines = rows.map((x) => '<tr><td>' + h(x.n) + '</td><td>'
+    + h((Number(x.q) || 0) + String(x.u || "")) + '</td><td>' + money(x.unit)
+    + '</td><td>' + money(x.amount) + '</td></tr>').join("");
+  const meta = [i.company ? '<b>' + h(i.company) + '</b>' : "",
+    i.customer ? '客户：' + h(i.customer) : "",
+    i.no ? '单号：' + h(i.no) : "",
+    '日期：' + h(estCustomerQuoteDate())].filter(Boolean).join('<span> · </span>');
+  return '<article class="cq-print"><h1>客户报价单（不含税）</h1>'
+    + '<div class="cq-print-meta">' + meta + '</div>'
+    + '<table class="cq-print-table"><thead><tr><th>项目</th><th>数量</th><th>客户单价</th><th>小计</th></tr></thead><tbody>'
+    + (lines || '<tr><td colspan="4">清单为空</td></tr>') + '</tbody></table>'
+    + '<div class="cq-print-total"><span>施工费 <b>' + money(t.construction) + '</b></span>'
+    + '<span>材料费 <b>' + money(t.material) + '</b></span>'
+    + '<span class="cq-print-grand">合计 <b>' + money(t.grand) + '</b></span></div>'
+    + '<p class="cq-print-note">不含税；数量与单价以现场复核为准。</p></article>';
+}
+function estOpenCustomerQuoteExport() {
+  const cq = (_estUI && _estUI.customerQuote) || null;
+  if (!cq || !(cq.rows || []).length) { toast("先生成客户报价单，再导出"); return; }
+  const e = estCustomerQuoteExportInfo();
+  modal.open("导出客户报价单", `
+    <div class="cq-export-form">
+      <label class="modal-label">公司/抬头<input class="input" id="cqExCompany" value="${esc(e.company)}" placeholder="选填，显示在报价单上"/></label>
+      <label class="modal-label">客户<input class="input" id="cqExCustomer" value="${esc(e.customer)}" placeholder="选填"/></label>
+      <label class="modal-label">单号<input class="input" id="cqExNo" value="${esc(e.no)}" placeholder="选填"/></label>
+      <p class="cq-export-note">导出内容只含项目、数量、客户单价、小计与合计，不含成本、利润率和加价依据。</p>
+      <div class="cq-btns">
+        <button class="btn primary" onclick="estConfirmCustomerQuoteExport('image')">📷 生成图片</button>
+        <button class="btn outline" onclick="estConfirmCustomerQuoteExport('print')">🖨 打印 / 存 PDF</button>
+        <button class="btn outline" onclick="estConfirmCustomerQuoteExport('copy')">📋 复制文本</button>
+        <button class="btn ghost" onclick="estConfirmCustomerQuoteExport('back')">返回报价单</button>
+      </div>
+    </div>`, { closeOnMask: true, onClose: () => { if (_estUI && _estUI.customerQuote) estReopenCustomerQuote(); } });
+}
+function estConfirmCustomerQuoteExport(mode) {
+  const cq = (_estUI && _estUI.customerQuote) || null;
+  if (!cq) { toast("报价单已失效，请重新加价生成"); return; }
+  const info = {
+    company: (document.getElementById("cqExCompany")?.value || "").trim(),
+    customer: (document.getElementById("cqExCustomer")?.value || "").trim(),
+    no: (document.getElementById("cqExNo")?.value || "").trim()
+  };
+  if (_estUI) _estUI.expInfo = info;
+  try { localStorage.setItem("estimate_expinfo", JSON.stringify(info)); } catch (_) {}
+  if (mode === "back") { modal.close(); return; }
+  if (mode === "print") { estPrintCustomerQuote(cq, info); return; }
+  modal.close(); // onClose 会回到客户报价单
+  if (mode === "copy") estCopyCustomerQuoteText(cq, info);
+  else if (mode === "image") estCustomerQuoteImage(cq, info);
+}
+function estCopyCustomerQuoteText(cq, info) {
+  const txt = estCustomerQuoteText(cq, info);
+  const done = () => toast("客户报价单文本已复制");
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done).catch(() => estFallbackCopy(txt, done));
+  else estFallbackCopy(txt, done);
+}
+function estPrintCustomerQuote(cq, info) {
+  const prev = document.getElementById("cqPrintRoot");
+  if (prev) prev.remove();
+  const box = document.createElement("div");
+  box.id = "cqPrintRoot";
+  box.innerHTML = estCustomerQuotePrintHtml(cq, info);
+  document.body.appendChild(box);
+  document.body.classList.add("cq-printing");
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    document.body.classList.remove("cq-printing");
+    const el = document.getElementById("cqPrintRoot");
+    if (el) el.remove();
+  };
+  if (window.addEventListener) window.addEventListener("afterprint", cleanup, { once: true });
+  try { window.print(); } finally { setTimeout(cleanup, 1200); }
+}
+/* 离线 canvas 客户版报价单图片：四列（项目/数量/客户单价/小计），不画工时、成本和利润率 */
+function estCustomerQuoteImage(cq, info) {
+  if (!cq || !(cq.rows || []).length) { toast("报价单是空的，先加施工项"); return; }
+  const rows = cq.rows, t = cq.totals || {}, i = info || {};
+  const date = estCustomerQuoteDate();
+  const FONT = '"PingFang SC","Microsoft YaHei",sans-serif';
+  const C = { ink: "#111827", muted: "#6b7280", line: "#e5e7eb", soft: "#f8fafc", accent: "#b91c1c" };
+  const W = 820, pad = 36, right = W - pad;
+  const rowH = 34, thH = 34, metaTop = 96, metaH = 48;
+  const tableTop = metaTop + metaH + 20;
+  const totalsTop = tableTop + thH + rows.length * rowH + 14;
+  const totalsH = 106, H = totalsTop + totalsH + 34;
+  const money = (n) => "¥" + (Number(n) || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const c = document.createElement("canvas");
+  const dpr = 2; c.width = W * dpr; c.height = H * dpr;
+  const ctx = c.getContext("2d"); ctx.scale(dpr, dpr);
+  const setFont = (size, bold) => { ctx.font = `${bold ? "bold " : ""}${size}px ${FONT}`; };
+  const rr = (x, y, w, h, rad) => {
+    const r = Math.min(rad, h / 2, w / 2);
+    ctx.beginPath(); ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  };
+  const fit = (s, maxW) => {
+    s = String(s == null ? "" : s);
+    if (ctx.measureText(s).width <= maxW) return s;
+    let v = s;
+    while (v.length > 1 && ctx.measureText(v + "…").width > maxW) v = v.slice(0, -1);
+    return v + "…";
+  };
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+  const grad = ctx.createLinearGradient(0, 0, W, 0);
+  grad.addColorStop(0, "#2563eb"); grad.addColorStop(1, "#7c3aed");
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, W, 6);
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  setFont(26, true); ctx.fillStyle = C.ink; ctx.fillText("客户报价单", pad, 56);
+  setFont(12); ctx.fillStyle = C.muted; ctx.fillText("QUOTATION · 不含税", pad, 78);
+  if (i.company) {
+    ctx.textAlign = "right"; setFont(15, true); ctx.fillStyle = C.ink;
+    ctx.fillText(fit(i.company, 320), right, 54);
+  }
+  rr(pad, metaTop, W - pad * 2, metaH, 10);
+  ctx.fillStyle = C.soft; ctx.fill(); ctx.strokeStyle = C.line; ctx.lineWidth = 1; ctx.stroke();
+  ctx.textAlign = "left"; setFont(13); ctx.fillStyle = C.ink;
+  ctx.fillText("客户：" + fit(i.customer || "—", 240), pad + 16, metaTop + 20);
+  ctx.fillText("日期：" + date + "　不含税", pad + 16, metaTop + 38);
+  if (i.no) {
+    ctx.textAlign = "right"; setFont(13); ctx.fillStyle = C.muted;
+    ctx.fillText("单号：" + fit(i.no, 180), right - 16, metaTop + 20);
+  }
+  const colName = pad + 14, colQty = right - 300, colUnit = right - 150, colAmt = right - 14;
+  rr(pad, tableTop, W - pad * 2, thH, 8);
+  ctx.fillStyle = "#eef2ff"; ctx.fill();
+  setFont(13, true); ctx.fillStyle = "#3730a3";
+  ctx.textAlign = "left"; ctx.fillText("项目", colName, tableTop + 23);
+  ctx.textAlign = "right"; ctx.fillText("数量", colQty, tableTop + 23);
+  ctx.fillText("客户单价", colUnit, tableTop + 23);
+  ctx.fillText("小计", colAmt, tableTop + 23);
+  let ry = tableTop + thH;
+  rows.forEach((x, idx) => {
+    if (idx % 2 === 1) { ctx.fillStyle = "#fcfcfd"; ctx.fillRect(pad, ry, W - pad * 2, rowH); }
+    const base = ry + 22;
+    setFont(14); ctx.fillStyle = C.ink; ctx.textAlign = "left";
+    ctx.fillText(fit(x.n, colQty - colName - 24), colName, base);
+    setFont(13); ctx.fillStyle = C.muted; ctx.textAlign = "right";
+    ctx.fillText(fit((Number(x.q) || 0) + String(x.u || ""), 120), colQty, base);
+    ctx.fillStyle = C.ink;
+    ctx.fillText(money(x.unit), colUnit, base);
+    ctx.fillText(money(x.amount), colAmt, base);
+    ctx.strokeStyle = "#f1f3f7"; ctx.beginPath(); ctx.moveTo(pad, ry + rowH); ctx.lineTo(right, ry + rowH); ctx.stroke();
+    ry += rowH;
+  });
+  rr(pad, totalsTop, W - pad * 2, totalsH, 12);
+  ctx.fillStyle = C.soft; ctx.fill(); ctx.strokeStyle = C.line; ctx.stroke();
+  setFont(13, true); ctx.textAlign = "left"; ctx.fillStyle = C.muted;
+  ctx.fillText("费用合计", pad + 18, totalsTop + 30);
+  const bx = right - 18;
+  setFont(13); ctx.textAlign = "right"; ctx.fillStyle = C.muted;
+  ctx.fillText("施工费", bx - 120, totalsTop + 26);
+  ctx.fillStyle = C.ink; ctx.fillText(money(t.construction), bx, totalsTop + 26);
+  ctx.fillStyle = C.muted; ctx.fillText("材料费", bx - 120, totalsTop + 50);
+  ctx.fillStyle = C.ink; ctx.fillText(money(t.material), bx, totalsTop + 50);
+  ctx.strokeStyle = C.line; ctx.beginPath(); ctx.moveTo(bx - 190, totalsTop + 62); ctx.lineTo(bx, totalsTop + 62); ctx.stroke();
+  setFont(13, true); ctx.textAlign = "left"; ctx.fillStyle = C.muted;
+  ctx.fillText("合计", bx - 190, totalsTop + 88);
+  setFont(24, true); ctx.textAlign = "right"; ctx.fillStyle = C.accent;
+  ctx.fillText(money(t.grand), bx, totalsTop + 90);
+  setFont(11); ctx.textAlign = "left"; ctx.fillStyle = C.muted;
+  ctx.fillText("不含税；数量与单价以现场复核为准。", pad, H - 14);
+  try {
+    const url = c.toDataURL("image/png");
+    const a = document.createElement("a"); a.href = url;
+    const who = String(i.customer || i.no || date).replace(/[\\/:*?"<>|]/g, "_").slice(0, 40) || date;
+    a.download = "客户报价单_" + who + ".png";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    toast("客户报价单图片已生成");
+  } catch (e) { toast("生成失败，请截图保存"); }
+}
+
 /* 重复拆解选择（2026-11-25）：原文改过再点智能拆解时，默认行为是「累加」到现有清单，
    同一批活改几个字重拆会让数量翻倍。先让用户选累加还是清除重算；相同原文重复点仍按旧提示拦住。 */
 function estOpenParseModeChoice(txt) {
@@ -37339,6 +37921,8 @@ function estSmartParse(picked, skipCombo) {
       catP: estCatPriceMap(),
       extras: _estUI.doorExtras || {}, extraDefs: estCfg().doorEx, extraHidden: estCfg().doorExHide };
     let door = Estimate.tryDoorRecipe(txt, doorCfg);
+    // 主干已含侧包时内核已忽略包边类勾选，这里把状态也清掉，避免下次换配方又冒出来重复计价
+    ((door && door.hiddenExtras) || []).forEach((k) => { if (_estUI.doorExtras && _estUI.doorExtras[k]) delete _estUI.doorExtras[k]; });
     // 写了「离地X米」且有效作业高度超过站立高度 → 自动勾选脚手架，组数按离地净高+门头高算；
     // 台阶只当通行方式，不抵减高度。未写离地高度则沿用原来的手动勾选口径。
     if (door && door.clearance > 0 && door.scaffoldHeight > (Estimate.SCAFFOLD_REACH || 1.8)
@@ -38033,6 +38617,8 @@ function renderEstimateResult(r, ctx) {
       btns.push(`<button class="btn outline" onclick="estOpenPriceLib()" title="查看材料/画面参考单价">📖 参考价</button>`);
       if (estCanManage()) btns.push(`<button class="btn outline" onclick="estOpenCfgHub()">⚙️ 配置管理</button>`);
     }
+    if (MODE === "cloud") btns.push(`<button class="btn outline" id="estAiReviewBtn" onclick="estAiReview()" title="深度审计：核对漏项、重复计价、数量口径与单价异常，可联网查行情参考；只给建议，不改金额">🤖 AI 深度复核</button>`);
+    if (MODE === "cloud") btns.push(`<button class="btn primary" id="estPriceBtn" onclick="estAiPrice()" title="AI 按人工/材料/设备/运输分项智能加利润，生成只显示客户价的不含税报价单；不写库、不改工程金额">💰 智能加利润</button>`);
     btns.push(`<button class="btn secondary" onclick="closeEstimateModal()">关闭</button>`);
     foot.innerHTML = btns.join("");
   }
