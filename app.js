@@ -33299,9 +33299,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "ve7b183c4";
+  const APP_VERSION = "v42214ea4";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 33;
+  const BUILD_NO = 41;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -37123,7 +37123,7 @@ function estToggleDoorExtra(key, on) {
    统一走 estimate-ai Edge Function；LLM 密钥只在服务端。任何失败都静默降级，
    不阻断原有拆解路径（v429：不污染高频正常路径）。
    AI 结果不参与金额/工时计算，只回填输入框或给出待确认的绑定建议。 */
-async function estAiInvoke(body, timeoutMs = 16000) {
+async function estAiInvoke(body, timeoutMs = 16000, _retry = true) {
   if (MODE !== "cloud" || !sb) return { data: null, error: new Error("本地模式不支持 AI 辅助") };
   try {
     const p = sb.functions.invoke("estimate-ai", { body });
@@ -37152,22 +37152,45 @@ async function estAiInvoke(body, timeoutMs = 16000) {
       return { data: null, error: e0 };
     }
     return { data: res.data, error: null };
-  } catch (e) { return { data: null, error: e }; }
+  } catch (e) {
+    // 网络层失败（非 HTTP 错误、非超时）多为瞬时抖动。所有 AI 模式都是只读建议，
+    // 不写库、不改金额，重试一次是安全的；HTTP 4xx/5xx 与超时不重试。
+    const msg = String((e && e.message) || e || "");
+    if (_retry && /Failed to send a request to the Edge Function|FunctionsFetchError|Failed to fetch|NetworkError/i.test(msg)) {
+      console.warn("[estimate-ai] 网络层失败，自动重试一次：", msg);
+      return estAiInvoke(body, timeoutMs, false);
+    }
+    // FunctionsFetchError 只说「Failed to send a request...」，底层原因在 cause（如 net::ERR_*）。
+    // 把它拼进 message，前端 toast 才能区分网络波动/代理问题与「函数没部署」。
+    const cause = e && e.cause ? String((e.cause && e.cause.message) || e.cause) : "";
+    if (/Failed to send a request|fetch/i.test(msg) && cause) {
+      const e2 = new Error(msg + "（" + cause.slice(0, 80) + "）");
+      e2.name = (e && e.name) || "";
+      return { data: null, error: e2 };
+    }
+    return { data: null, error: e };
+  }
 }
 
 /* AI 失败提示：把后端错误码翻成人话，优化/批量建议两处共用。
    estAiInvoke 已把 error.context body 里的 code/error 透传出来，这里的 em 就是那个具体原因。 */
-function estAiErrTip(error, fallback) {
-  const em = String((error && error.message) || (error && error.code) || "");
-  const rest = fallback.replace(/^AI (优化失败|建议失败)，/, "");
+function estAiErrTip(error, fallback, data) {
+  // HTTP 200 但 body 里 ok:false 时 error 为空，真实原因在 data.error，不能只翻 error。
+  const em = String((error && (error.message || error.code)) || (data && (data.error || data.code)) || "");
+  // 未知错误也要把后端原文带出来，否则用户只看到「未改动」而无法判断原因。
+  const detail = String((data && (data.error || data.code)) || (error && (error.message || error.code)) || "").trim();
+  const rest = fallback.replace(/^AI .*?失败，/, "");
+  if (/EMPTY_QUOTE_REVIEW|未给出报价复核意见|未给出.*复核意见/.test(em)) return "AI 没给出可用的复核意见，请重试或换用其他复核模型";
   if (/AI_NOT_CONFIGURED|未配置|缺少 LLM_API_KEY/.test(em)) return "AI 服务未配置：请管理员在 Supabase 配 LLM_API_KEY（智谱 key）";
   if (/FORBIDDEN|无测算管理权限/.test(em)) return "AI 权限不足，请联系管理员";
   if (/INVALID_JWT|MISSING_JWT|登录态无效|未提供登录令牌/.test(em)) return "AI 登录态失效，请重新登录后再试";
   if (/LLM_HTTP_401|LLM_HTTP_403|API.?key|额度|余额/i.test(em)) return "智谱密钥无效或额度不足，请检查 LLM_API_KEY";
   if (/超时|timeout/i.test(em)) return "AI 请求超时，" + rest;
   if (/LLM_HTTP_|BAD_AI_JSON|EMPTY_AI_TEXT|LLM_FAILED/.test(em)) return "智谱服务暂时不可用，" + rest;
-  if (/non-2xx|404|FunctionsFetchError|fetch/i.test(em)) return "AI 函数未部署或网络异常，请检查 estimate-ai 是否已部署";
-  return fallback;
+  if (/Failed to send a request to the Edge Function|FunctionsFetchError|Failed to fetch|NetworkError/i.test(em))
+    return "连不上 AI 服务（网络层失败）：请检查网络/代理后重试；智能加利润能用就说明函数已部署";
+  if (/non-2xx|404|fetch/i.test(em)) return "AI 函数未部署或网络异常，请检查 estimate-ai 是否已部署";
+  return fallback + (detail ? "：" + detail.slice(0, 60) : "");
 }
 
 /* 提示词优化：AI 补全尺寸/字数/字高/材质 → 回填输入框（不自动拆解、不改金额）。
@@ -37342,7 +37365,7 @@ function estOpenAiReview(data) {
   const webN = Number((data && data.webRefs) || 0) || 0;
   const srcTip = webN > 0
     ? '已尝试联网行情核对，取到 ' + webN + ' 条参考（行情仅供参考，非当地实时价）'
-    : '未配置联网行情源或未取到结果，本次按内置审计规则做深度分析，未声称查过行情';
+    : '未取到联网行情，本次按内置审计规则与行业经验做深度分析（未声称查过实时行情）';
   const body = '<div class="est-ai-review-top"><b>' + v[0] + ' ' + v[1] + '</b>'
     + '<p>' + esc((data && data.summary) || "复核完成，以下建议供参考。") + '</p>'
     + '<p class="est-ai-review-cnt">共 ' + sugs.length + ' 条疑点，按金额影响排序</p></div>'
@@ -37359,7 +37382,7 @@ async function estAiReview() {
     // 服务端会做内置规则审计；若管理员配了行情搜索，还会多两次外部请求，放宽到 35 秒
     const { data, error } = await estAiInvoke(estAiReviewPayload(), 35000);
     if (error || !data || !data.ok) {
-      toast(estAiErrTip(error, "AI 复核失败，清单和金额未改动"));
+      toast(estAiErrTip(error, "AI 复核失败，已保留当前清单和金额（未应用建议）", data));
       return;
     }
     estOpenAiReview(data);
@@ -37372,7 +37395,8 @@ async function estAiReview() {
    AI 只按分项给加价率，前端按率算客户价；客户弹窗只显示客户价，不含税。
    不写库、不回写 cost_estimate / projectAmount / laborFee（金额链隔离铁律）。 */
 const EST_PROFIT_DEFAULT = { labor: 25, laborHigh: 35, mat: 12, equip: 28, transport: 15 };
-/* 仅用于 UI 标记「超出常用区间」；用户可填 0–100，系统不强行改回。 */
+/* 成交价锚定时利润率可超过 100%（成本×3 以内）；无锚定时仍建议按常用区间，超出只标黄不拦。 */
+const EST_PROFIT_MAX = 300;
 const EST_PROFIT_UI_GUARD = {
   labor: [15, 35], laborHigh: [25, 50], mat: [6, 20], equip: [15, 40], transport: [8, 25]
 };
@@ -37421,9 +37445,12 @@ function estAiPricePayload() {
   const inp = document.getElementById("estInput");
   const txt = (((inp && inp.value) || "") + "").trim().slice(0, 500);
   const r = (_estUI && _estUI.result) || {};
-  const items = estCustomerQuoteRows().map((x) => ({
+  const cq = (_estUI && _estUI.customerQuote) || null;
+  const items = estCustomerQuoteRows().map((x, i) => ({
     n: String(x.n || "").slice(0, 40), u: String(x.u || "").slice(0, 12),
     q: Number(x.q) || 0, fee: Number(x.fee) || 0, cat: x.cat,
+    // 用户填的当地成交价是定价锚，必须进入智能加利润，否则 AI 只能按类别区间猜。
+    refPrice: Number((cq && cq.refPrices && cq.refPrices[i]) || 0) || 0,
     note: String(x.note || "").slice(0, 60)
   }));
   return {
@@ -37440,7 +37467,7 @@ function estAiPricePayload() {
     }
   };
 }
-function estOpenCustomerQuote(data, fallback, rowRates, refPrices) {
+function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice) {
   const rows0 = estCustomerQuoteRows();
   const rates = {};
   Object.keys(EST_PROFIT_DEFAULT).forEach((k) => { rates[k] = EST_PROFIT_DEFAULT[k]; });
@@ -37450,7 +37477,7 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices) {
     const g = got[i] || {};
     const n = Number(g.rate);
     return { rate: Number.isFinite(n) ? n : (rates[x.cat] || EST_PROFIT_DEFAULT.labor),
-      why: String(g.why || "") };
+      basis: String(g.basis || ""), why: String(g.why || "") };
   });
   const useRates = rows0.map((x, i) => {
     const v = (Array.isArray(rowRates) && rowRates[i] != null) ? Number(rowRates[i]) : suggested[i].rate;
@@ -37466,6 +37493,7 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices) {
   const src = fallback ? "local" : "ai";
   if (_estUI) _estUI.customerQuote = { rows: q.rows, totals: q, rates, rowRates: useRates,
     suggested, refPrices: refs, src, raw: data,
+    applied: Array.isArray(appliedAdvice) ? appliedAdvice : ((_estUI.customerQuote && _estUI.customerQuote.applied) || []),
     summary: (data && data.summary) || "", why: suggested.map((s) => s.why) };
   const lines = q.rows.map((x) => '<tr><td>' + esc(x.n) + '</td><td>' + esc(String(x.q) + (x.u || ""))
     + '</td><td>¥' + x.unit.toFixed(2) + '</td><td>¥' + x.amount.toFixed(2) + '</td></tr>').join("");
@@ -37475,11 +37503,13 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices) {
     const g = EST_PROFIT_UI_GUARD[cat] || EST_PROFIT_UI_GUARD.labor;
     const cur = useRates[i];
     const warn = (cur < g[0] || cur > g[1]) ? " cq-rate-warn" : "";
-    return '<tr><td>' + esc(x.n) + '</td><td>' + fmtRate(suggested[i].rate) + '%</td>'
-      + '<td><input class="input cq-rate-input' + warn + '" type="number" min="0" max="100" step="0.5"'
+    const basis = suggested[i].basis === "refPrice"
+      ? '<span class="cq-basis" title="按你填的当地成交价反推，不受常用区间限制">锚</span>' : "";
+    return '<tr><td>' + esc(x.n) + '</td><td>' + fmtRate(suggested[i].rate) + '%' + basis + '</td>'
+      + '<td><input class="input cq-rate-input' + warn + '" type="number" min="0" max="300" step="0.5"'
       + ' value="' + fmtRate(cur) + '" data-cq-rate="' + i + '"'
       + ' oninput="estMarkRateWarn(this,\'' + cat + '\')"'
-      + ' title="常用 ' + g[0] + '–' + g[1] + '%，可填 0–100%"/></td>'
+      + ' title="常用 ' + g[0] + '–' + g[1] + '%；填当地成交价后可到 300%"/></td>'
       + '<td><input class="input cq-ref-input" type="number" min="0" step="0.01" value="'
       + esc(refs[i] ? String(refs[i]) : "") + '" data-cq-ref="' + i + '" placeholder="选填"/></td>'
       + '<td>' + esc(suggested[i].why || "—") + '</td></tr>';
@@ -37493,14 +37523,16 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices) {
     + '<span>材料费 <b>¥' + q.material.toFixed(2) + '</b></span>'
     + '<span class="is-grand">合计 <b>¥' + q.grand.toFixed(2) + '</b></span></div>'
     + '<details class="cq-internal"><summary>利润率微调 / 加价依据（内部，勿展示给客户）</summary>'
-    + '<div class="cq-rate-note">每行默认取 AI 建议率，可改 0–100%；超出常用区间标黄但仍生效。'
-    + '参考成交价只用于下面的「AI 报价复核」，不显示给客户、不导出、不写工程金额。</div>'
-    + '<table class="cq-rate-table"><thead><tr><th>项目</th><th>AI建议</th><th>利润率%</th><th>参考成交价¥</th><th>依据</th></tr></thead><tbody>'
+    + '<div class="cq-rate-note">每行默认取 AI 建议率，可改 0–300%；超出常用区间标黄但仍生效。'
+    + '「当地成交价」是定价锚：<b>填了它再点「🔄 重新加价」，AI 会按成交价反推利润率（可到 100%+）</b>，'
+    + '复核时也会逐行评价当前价相对成交价的高低；不填才按内置分项区间。它不显示给客户、不导出、不写工程金额。</div>'
+    + '<table class="cq-rate-table"><thead><tr><th>项目</th><th>AI建议</th><th>利润率%</th><th>当地成交价¥（锚）</th><th>依据</th></tr></thead><tbody>'
     + (rateRows || '<tr><td colspan="5">清单为空</td></tr>') + '</tbody></table>'
     + '<div><button class="btn outline" onclick="estApplyCustomerQuoteRates()">应用利润率与参考价</button></div>'
     + '<div class="cq-rate-floor">起步价补足按人工 ' + fmtRate(rates.labor) + '%、辅材按材料 '
     + fmtRate(rates.mat) + '% 加价。</div></details>'
-    + '<div class="cq-btns"><button class="btn primary" onclick="estAiQuoteCheck()">🤖 AI 报价复核</button>'
+    + '<div class="est-ai-check-tip" id="estAiCheckTip" style="display:none">AI 正在逐行分析，请稍候…</div>'
+    + '<div class="cq-btns"><button class="btn primary" id="estAiCheckBtn" onclick="estAiQuoteCheck()">🤖 AI 报价复核</button>'
     + '<button class="btn outline" onclick="estOpenCustomerQuoteExport()">⬇ 导出报价单</button>'
     + '<button class="btn outline" onclick="estAiPrice()">🔄 重新加价</button>'
     + '<button class="btn ghost" onclick="modal.close()">关闭</button></div>';
@@ -37519,7 +37551,7 @@ function estCollectCustomerQuoteEdits(silent) {
   const rates = cq.rows.map((x, i) => {
     const el = document.querySelector('input[data-cq-rate="' + i + '"]');
     const v = el ? Number(el.value) : (cq.rowRates ? cq.rowRates[i] : cq.rates[x.cat]);
-    return Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v * 10) / 10)) : 0;
+    return Number.isFinite(v) ? Math.min(EST_PROFIT_MAX, Math.max(0, Math.round(v * 10) / 10)) : 0;
   });
   const refs = cq.rows.map((_, i) => {
     const el = document.querySelector('input[data-cq-ref="' + i + '"]');
@@ -37578,7 +37610,8 @@ function estAiQuoteCheckPayload() {
     cond: {
       height: (_estUI && _estUI.height) || "low",
       wall: (_estUI && _estUI.wall) || "flat"
-    }
+    },
+    applied: Array.isArray(cq.applied) ? cq.applied.slice(0, 12) : []
   };
 }
 function estOpenQuoteReview(data) {
@@ -37595,11 +37628,48 @@ function estOpenQuoteReview(data) {
       + '<div>建议：' + esc((s && s.action) || "对照成本与客户价逐项核对") + '</div></div>';
   }).join("") || '<div class="est-ai-review-item">AI 未给出具体条目，请自行核对客户价。</div>';
   const webN = Number((data && data.webRefs) || 0) || 0;
+  const webOn = !!(data && data.webConfigured);
+  const industry = (data && Array.isArray(data.industryCheck)) ? data.industryCheck : [];
   const cq = (_estUI && _estUI.customerQuote) || null;
   const advice = (data && Array.isArray(data.priceAdvice)) ? data.priceAdvice : [];
+  // 服务端按用户自填成交价算出锚定评价，模型不吐金额，避免幻觉目标价。
+  const anchors = (data && Array.isArray(data.anchors)) ? data.anchors : [];
   // 缓存改价方案与所用引擎：报告里的「一键应用」据此把 pct 折算回利润率，返回报价单也带引擎标识。
   if (cq) { cq.priceAdvice = advice; cq.reviewEngine = (data && data.engine) || ""; }
+  const applied = (cq && Array.isArray(cq.applied)) ? cq.applied : [];
+  const appliedTip = applied.length
+    ? '<p class="cq-applied-tip">已应用 ' + applied.length + ' 项改价；本次复核基于调整后的价格，已调整的方向不再重复建议。</p>'
+    : "";
   const engineTxt = (data && data.engine === "deepseek") ? "DeepSeek" : "智谱 GLM";
+  const anchorHtml = anchors.length ? '<div class="cq-anchor"><b>当地成交价锚定评价（内部，不导出）</b>'
+    + '<table class="cq-anchor-table"><thead><tr><th>项目</th><th>内部成本</th><th>当前客户价</th><th>你填成交价</th><th>价差</th><th>评价</th><th>隐含加价</th></tr></thead><tbody>'
+    + anchors.map((a) => {
+      const gap = Number(a && a.gapPct) || 0;
+      const cls = gap <= -10 ? "is-low" : (gap >= 10 ? "is-high" : "");
+      return '<tr class="' + cls + '"><td>' + esc((a && a.n) || "") + '</td>'
+        + '<td>¥' + Number((a && a.cost) || 0).toFixed(2) + '</td>'
+        + '<td>¥' + Number((a && a.price) || 0).toFixed(2) + '</td>'
+        + '<td>¥' + Number((a && a.refPrice) || 0).toFixed(2) + '</td>'
+        + '<td>' + (gap > 0 ? "+" : "") + gap.toFixed(1) + '%</td>'
+        + '<td>' + esc((a && a.verdict) || "—") + '</td>'
+        + '<td>' + Number((a && a.rate) || 0).toFixed(1) + '%</td></tr>';
+    }).join("")
+    + '</tbody></table><p class="cq-anchor-note">按你填的成交价算；低于成交价不等于必须涨到成交价，改价方案按 70% 收敛给出，避免一刀切。</p></div>' : "";
+  const industryHtml = industry.length ? '<div class="cq-anchor cq-industry"><b>行业价格对照（内部，不导出）</b>'
+    + '<table class="cq-anchor-table"><thead><tr><th>项目</th><th>当前客户单价</th><th>行业经验区间</th><th>较参考价</th><th>评价</th><th>口径</th></tr></thead><tbody>'
+    + industry.map((a) => {
+      const vd = String((a && a.verdict) || "");
+      const cls = vd === "低于行业区间" ? "is-low" : (vd === "高于行业区间" ? "is-high" : "");
+      const diff = Number((a && a.diffPct) || 0);
+      return '<tr class="' + cls + '"><td>' + esc((a && a.n) || "") + '</td>'
+        + '<td>¥' + Number((a && a.price) || 0).toFixed(2) + '/' + esc((a && a.u) || "") + '</td>'
+        + '<td>¥' + Number((a && a.lo) || 0).toFixed(0) + '–' + Number((a && a.hi) || 0).toFixed(0) + '/' + esc((a && a.u) || "") + '</td>'
+        + '<td>' + (diff > 0 ? "+" : "") + diff.toFixed(1) + '%</td>'
+        + '<td>' + esc(vd || "—") + '</td>'
+        + '<td>' + esc((a && a.label) || "") + '</td></tr>';
+    }).join("")
+    + '</tbody></table><p class="cq-anchor-note">按测算器内置 CATALOG 的三四线城市经验区间比对，<b>不是当地实时成交价</b>；匹配不到行业口径的项目不列。'
+    + '真要按当地行情定价，请在报价单里填「当地成交价（锚）」或让管理员配置联网行情源。</p></div>' : "";
   const advHtml = advice.length ? '<div class="cq-advice"><b>逐项调价方案（仅供参考，可一键应用）</b>'
     + advice.map((a) => {
       const row = (cq && cq.rows && cq.rows[a && a.i]) || null;
@@ -37607,20 +37677,38 @@ function estOpenQuoteReview(data) {
       const dir = a && a.dir === "up" ? "↑ 调高" : (a && a.dir === "down" ? "↓ 调低" : "→ 保持");
       const pct = Number((a && a.pct) || 0);
       const target = row && pct ? Number(row.unit) * (1 + pct / 100) : null;
+      const basis = a && a.basis === "refPrice" ? "锚定" : (a && a.basis === "opaque" ? "难比价"
+        : (a && a.basis === "floor" ? "保本" : (a && a.basis === "web" ? "行情" : "经验")));
+      const ind = industry.find((r) => Number(r && r.i) === Number(a && a.i) && r.verdict !== "接近行业区间");
+      const indTag = ind ? '<span class="cq-advice-basis">行业价' + (ind.verdict === "高于行业区间" ? "偏高" : "偏低") + '</span>' : "";
+      const nrRaw = a && a.newRate;
+      const nr = nrRaw != null && Number.isFinite(Number(nrRaw)) ? Number(nrRaw) : null;
       return '<div class="cq-advice-item"><span>第 ' + ((Number(a && a.i) || 0) + 1) + '项 '
         + esc((row && row.n) || "") + '：' + dir + ' ' + Math.abs(pct).toFixed(1) + '%'
         + (target != null ? '（约 ¥' + target.toFixed(2) + '）' : '')
+        + '<span class="cq-advice-basis">' + basis + '</span>' + indTag
+        + (nr != null ? ' · 调后利润 ' + nr.toFixed(1) + '%' : '')
         + (ref ? ' · 你填参考价 ¥' + Number(ref).toFixed(2) : '') + '</span>'
         + ((a && a.why) ? '<em>' + esc(a.why) + '</em>' : '') + '</div>';
     }).join("") + '</div>' : "";
   const body = '<div class="est-ai-review-top"><b>' + v[0] + ' ' + v[1] + '</b>'
     + '<p>' + esc((data && data.summary) || "复核完成，以下建议供参考。") + '</p>'
-    + '<p class="est-ai-review-cnt">共 ' + sugs.length + ' 条疑点 · ' + (webN > 0 ? '联网参考 ' + webN + ' 条' : '未取到联网行情')
+    + '<p class="est-ai-review-cnt">共 ' + sugs.length + ' 条疑点 · ' + (anchors.length ? '成交价锚定 ' + anchors.length + ' 项 · ' : '')
+    + (webN > 0 ? '联网行情 ' + webN + ' 条'
+      : (webOn ? '行情源已配但未取到结果，按内置行业价分析' : '未配置联网行情源，按内置行业价与清单分析'))
+    + (industry.length ? ' · 行业价对照 ' + industry.length + ' 项' : '')
     + ' · 复核引擎 ' + engineTxt + '</p></div>'
+    + appliedTip
+    + anchorHtml
+    + industryHtml
     + advHtml
     + '<div class="est-ai-review-list">' + list + '</div>'
-    + '<p class="est-ai-review-note">由 ' + engineTxt + ' 复核，改价方案只作建议：点「一键应用」才会按 pct 微调逐行利润率并重算客户价；'
-    + '公开行情不等于真实成交价，你填的参考价也只是参考。应用只改本次报价单，不写工程金额。</p>'
+    + '<p class="est-ai-review-note">由 ' + engineTxt + ' 复核，改价方案只作建议：点「一键应用」才会按 pct 调整逐行利润率并重算客户价。'
+    + '分析不只看利润率，还会把<b>当前客户单价</b>与内置行业价经验区间对照，判断报价是否符合行业口径（含制作/仅安装/按㎡/按组/按台班）。'
+    + '定价依据优先级：<b>你填的当地成交价 &gt; 联网公开行情 &gt; 内置行业价经验区间 &gt; 不透明度/风险 &gt; 内置分项利润率</b>。'
+    + '内置行业价来自测算器 CATALOG 的三四线城市经验区间，<b>不是当地实时成交价</b>；没配联网密钥也能做这层校验。'
+    + '要按真实当地行情定价，请在报价单填「当地成交价（锚）」，或让管理员配置联网行情源。'
+    + '调价幅度已放开到 +200%（高空/调试/非标等难比价项），易比价材料仍克制，任何降价都不会压到成本线以下。应用只改本次报价单，不写工程金额。</p>'
     + '<div class="cq-btns">'
     + (advice.length ? '<button class="btn primary" onclick="estApplyPriceAdvice()">✅ 一键应用改价方案（' + advice.length + ' 项）</button>' : '')
     + '<button class="btn outline" onclick="estReopenCustomerQuote()">返回报价单</button></div>';
@@ -37633,10 +37721,11 @@ function estReopenCustomerQuote() {
   estOpenCustomerQuote(cq.raw, cq.src === "local", cq.rowRates, cq.refPrices);
 }
 /* 纯计算：把改价方案的 pct（相对当前客户价）折算回利润率。
-   newRate=((1+cur/100)*(1+pct/100)-1)*100；越界/keep/pct=0 跳过，0–100 截断。 */
+   newRate=((1+cur/100)*(1+pct/100)-1)*100；越界/keep/pct=0 跳过，0–300 截断。 */
 function estPriceAdviceToRates(rowRates, advice, rowCount) {
   const rates = (Array.isArray(rowRates) ? rowRates : []).slice();
   const def = (typeof EST_PROFIT_DEFAULT !== "undefined" && EST_PROFIT_DEFAULT.labor) || 25;
+  const cap = (typeof EST_PROFIT_MAX !== "undefined" && EST_PROFIT_MAX) || 300;
   while (rates.length < rowCount) rates.push(def);
   let changed = 0;
   (Array.isArray(advice) ? advice : []).forEach((a) => {
@@ -37645,7 +37734,7 @@ function estPriceAdviceToRates(rowRates, advice, rowCount) {
     if (!Number.isInteger(i) || i < 0 || i >= rowCount || !pct) return;
     const cur = Number(rates[i]) || 0;
     const nr = ((1 + cur / 100) * (1 + pct / 100) - 1) * 100;
-    rates[i] = Math.min(100, Math.max(0, Math.round(nr * 10) / 10));
+    rates[i] = Math.min(cap, Math.max(0, Math.round(nr * 10) / 10));
     changed++;
   });
   return { rates, changed };
@@ -37659,22 +37748,47 @@ function estApplyPriceAdvice() {
   const n = estCustomerQuoteRows().length;
   const out = estPriceAdviceToRates(cq.rowRates, advice, n);
   if (!out.changed) { toast("改价方案里没有需要调整的行"); return; }
-  estOpenCustomerQuote(cq.raw, cq.src === "local", out.rates, cq.refPrices);
+  // 记录本次真正应用了哪几行的哪个方向/幅度，供再次复核时跳过同方向重复提示
+  const applied = (Array.isArray(cq.applied) ? cq.applied : []).slice();
+  advice.forEach((a) => {
+    const i = Number(a && a.i);
+    const pct = Number(a && a.pct) || 0;
+    if (!Number.isInteger(i) || i < 0 || i >= n || !pct) return;
+    const old = applied.find((x) => x && x.i === i);
+    if (old) { old.dir = a.dir; old.pct = pct; }
+    else applied.push({ i, dir: a.dir, pct });
+  });
+  estOpenCustomerQuote(cq.raw, cq.src === "local", out.rates, cq.refPrices, applied);
   toast("已按改价方案调整 " + out.changed + " 项，客户价已更新（未写工程金额）");
 }
+let _estAiCheckBusy = false;
 async function estAiQuoteCheck() {
+  if (_estAiCheckBusy) return;
   // 用户可能改了利润率/参考价但没点应用，先静默重绘让复核基于最新数字
   estCollectCustomerQuoteEdits(true);
   const body0 = estAiQuoteCheckPayload();
   if (!body0) { toast("先生成客户报价单，再让 AI 复核"); return; }
+  const btn = document.getElementById("estAiCheckBtn");
+  const tip = document.getElementById("estAiCheckTip");
+  _estAiCheckBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ 复核中，请稍候…"; }
+  if (tip) { tip.textContent = "AI 正在逐行分析（DeepSeek 主审，通常 10–30 秒），请勿重复点击"; tip.style.display = "block"; }
   try {
     const { data, error } = await estAiInvoke(body0, 35000);
     if (error || !data || !data.ok) {
-      toast(estAiErrTip(error, "AI 报价复核失败，报价单未改动"));
+      toast(estAiErrTip(error, "AI 报价复核失败，已保留你改好的单价（未应用改价建议）", data));
       return;
     }
     estOpenQuoteReview(data);
-  } catch (e) { toast("AI 报价复核失败，报价单未改动"); }
+  } catch (e) { toast("AI 报价复核失败，已保留你改好的单价（未应用改价建议）"); }
+  finally {
+    _estAiCheckBusy = false;
+    // 复核报告打开后按钮已换层，下面只在失败仍停留报价单时生效
+    const b2 = document.getElementById("estAiCheckBtn");
+    if (b2) { b2.disabled = false; b2.textContent = "🤖 AI 报价复核"; }
+    const t2 = document.getElementById("estAiCheckTip");
+    if (t2) t2.style.display = "none";
+  }
 }
 
 /* 客户报价单导出（2026-11-25）：只导出客户可见字段（项目/数量/客户单价/小计/合计），
