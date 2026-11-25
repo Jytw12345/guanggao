@@ -33301,9 +33301,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v3b24a362";
+  const APP_VERSION = "ve46b4389";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 49;
+  const BUILD_NO = 51;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -37626,10 +37626,12 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice
     + '<details class="cq-internal"><summary>利润率微调 / 加价依据（内部，勿展示给客户）</summary>'
     + '<div class="cq-rate-note">每行默认取 AI 建议率，可改 0–300%；超出常用区间标黄但仍生效。'
     + '「当地成交价」是定价锚：<b>填了它再点「🔄 重新加价」，AI 会按成交价反推利润率（可到 100%+）</b>，'
-    + '复核时也会逐行评价当前价相对成交价的高低；不填才按内置分项区间。它不显示给客户、不导出、不写工程金额。</div>'
+    + '复核时也会逐行评价当前价相对成交价的高低；不填才按内置分项区间。它不显示给客户、不导出、不写工程金额。'
+    + '<b>清单和锚没变时重复点「重新加价」会沿用当前利润率，金额不再跳动</b>；想让 AI 重新给一组，点下面的「🎲 换一组建议」。</div>'
     + '<table class="cq-rate-table"><thead><tr><th>项目</th><th>AI建议</th><th>利润率%</th><th>当地成交价¥（锚）</th><th>依据</th></tr></thead><tbody>'
     + (rateRows || '<tr><td colspan="5">清单为空</td></tr>') + '</tbody></table>'
-    + '<div><button class="btn outline" onclick="estApplyCustomerQuoteRates()">应用利润率与参考价</button></div>'
+    + '<div class="cq-rate-actions"><button class="btn outline" onclick="estApplyCustomerQuoteRates()">应用利润率与参考价</button>'
+    + '<button class="btn ghost" onclick="estAiPrice(true)" title="忽略缓存，让 AI 重新给一组逐行利润率建议">🎲 换一组建议</button></div>'
     + '<div class="cq-rate-floor">起步价补足按人工 ' + fmtRate(rates.labor) + '%、辅材按材料 '
     + fmtRate(rates.mat) + '% 加价。</div></details>'
     + '<div class="est-ai-check-tip" id="estAiCheckTip" style="display:none">AI 正在逐行分析，请稍候…</div>'
@@ -37664,18 +37666,31 @@ function estCollectCustomerQuoteEdits(silent) {
   if (!silent) toast("利润率与参考价已应用，报价单已更新");
 }
 function estApplyCustomerQuoteRates() { estCollectCustomerQuoteEdits(false); }
-async function estAiPrice() {
+async function estAiPrice(forceRefresh) {
   if (!_estUI || !(_estUI.work || []).length) { toast("先拆解出清单，再智能加利润"); return; }
+  const payload = estAiPricePayload();
+  const sig = JSON.stringify(payload);
+  const cached = _estUI.customerQuote;
+  // 同一份清单 / 原文 / 条件 / 成交价锚重复点「重新加价」：直接沿用当前利润率，不再重掷 AI。
+  // 否则同样输入每次都会因模型 temperature=0.2 给出略不同的逐行率，报价总额跟着跳。
+  // 要主动换一组建议，走内部区的「🎲 换一组建议」(forceRefresh=true)。
+  if (!forceRefresh && cached && _estUI.priceSig === sig) {
+    estOpenCustomerQuote(cached.raw, cached.src === "local", cached.rowRates, cached.refPrices, cached.applied);
+    toast("清单和成交价没变，已沿用当前利润率；想换一组请点「利润率微调」里的「换一组建议」");
+    return;
+  }
   const btn = document.getElementById("estPriceBtn");
   if (btn) { btn.disabled = true; btn.textContent = "⏳ 加价中…"; }
   try {
-    const { data, error } = await estAiInvoke(estAiPricePayload(), 35000);
+    const { data, error } = await estAiInvoke(payload, 35000);
     if (error || !data || !data.ok) {
       console.warn("[estimate-ai] 智能加价失败，走内置分项利润率：", error);
       estOpenCustomerQuote(null, true);
       toast(estAiErrTip(error, "AI 加价失败，已用内置分项利润率生成报价单"));
       return;
     }
+    // 只在成功后记签名；失败不记，下次点击仍会重试 AI，不把内置兜底价锁死。
+    _estUI.priceSig = sig;
     estOpenCustomerQuote(data, false);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "💰 智能加利润"; }

@@ -942,7 +942,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     return helpSrc.slice(i, helpSrc.indexOf('<div class="section" id="review">', i));
   })();
   ck('AA', '有 #estimate 章节且目录里可跳转', estSec.length > 4000 && /<li><a href="#estimate">施工费测算<\/a><\/li>/.test(helpSrc));
-  ck('AA', '说明书版本号已升到 v3.44', helpSrc.includes('使用说明书 v3.44'));
+  ck('AA', '说明书版本号已升到 v3.53', helpSrc.includes('使用说明书 v3.53'));
   ck('AA', '小节覆盖三步 / 明细 / 门头 / 填入 / 参数 / 反推 / 常见问题',
     ['三步出报价', '施工项清单的三种行', '门头：配方与工艺增项', '一键填入工程金额', '参数与单价（管理员）', '反推工时', '常见问题'].every((k) => estSec.includes(k)));
   ck('AA', '写明「测算不改金额链」与包工包料扣项', estSec.includes('测算不改金额链') && estSec.includes('材料费（测算）'));
@@ -960,8 +960,8 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
   // 起因 2026-11-22：说明书在 iframe 里一滚到底、回不去目录/系统；用户又问
   // 「自定义施工项是不是只能显示在自定义区，不能加进内置定额项」。
   console.log('\n=== AB. 帮助页导航 / 施工项存入定额库 ===');
-  ck('AB', '说明书版本升到 v3.44（顶部与页脚一致）',
-    helpSrc.includes('使用说明书 v3.44') && helpSrc.includes('文档版本：v3.44'));
+  ck('AB', '说明书版本升到 v3.53（顶部与页脚一致）',
+    helpSrc.includes('使用说明书 v3.53') && helpSrc.includes('文档版本：v3.53'));
   ck('AB', 'sticky 导航条：章节下拉 / 目录 / 上下节 / 顶部 / 返回系统',
     /\.help-nav \{[^}]*position: sticky/.test(helpSrc)
     && ['id="helpJump"', 'helpGoToc()', 'helpStep(-1)', 'helpStep(1)', 'helpGoTop()', 'helpBack()'].every((k) => helpSrc.includes(k)));
@@ -2366,7 +2366,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       cssSrc.includes('.est-ai-review-item.is-high') && cssSrc.includes('.est-ai-review-item.is-mid')
       && cssSrc.includes('.est-ai-review-top'));
     ck('BL', '说明书说明复核范围与只读边界',
-      helpBL.includes('AI 深度复核（可选）') && helpBL.includes('只作建议')
+      helpBL.includes('AI 方案复核（可选）') && helpBL.includes('只作建议')
       && helpBL.includes('不修改清单'));
 
     // 运行时：真实函数切片 + 最小 mock，验证 payload 字段与报告渲染
@@ -2374,6 +2374,8 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     const rvParts = [
       'let _estUI = null;',
       escFn,
+      slice('function estCostScope(', 'function estItemCat('),
+      slice('function estItemCat(', '/* 纯计算：内部成本行'),
       slice('function estAiReviewPayload()', 'async function estAiReview()'),
       slice('async function estAiReview()', '/* 重复拆解选择'),
     ].join('\n');
@@ -2389,7 +2391,8 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       estAiInvoke: async (body) => {
         rc.__body = body;
         return { data: { ok: true, verdict: 'check', summary: '<img src=x onerror=1>建议核对',
-          suggestions: [{ level: 'high', cat: '重复', title: '<b>包边重复</b>', why: '侧包已含', action: '取消勾选' }] }, error: null };
+          reviewChecks: [{ group: '拆解', text: '原文没写字高' }, { group: '组合', text: '高处作业无脚手架' }],
+          suggestions: [{ level: 'high', cat: '拆解', title: '<b>包边重复</b>', why: '侧包已含', action: '取消勾选' }] }, error: null };
       },
     };
     vm.createContext(rc);
@@ -2400,15 +2403,18 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       rc.__body && rc.__body.mode === 'review'
       && /门头 6米×2米/.test(rc.__body.text)
       && rc.__body.items.length === 1 && rc.__body.items[0].h === 9.6
+      && rc.__body.items[0].cat === 'labor' && rc.__body.items[0].scope === 'labor'
       && rc.__body.totals.grand === 1200 && rc.__body.cond.wall === 'flat'
       && rc.__body.params.rateNormal === 36 && !('projectAmount' in rc.__body));
-    ck('BL', '报告弹窗展示总评/严重度/依据/动作',
-      !!rc.__modal && rc.__modal.t === 'AI 合理性复核'
+    ck('BL', '报告弹窗展示总评/严重度/依据/动作，并按拆解/组合分组',
+      !!rc.__modal && rc.__modal.t === 'AI 方案复核'
       && rc.__modal.b.includes('建议核对') && rc.__modal.b.includes('高')
-      && rc.__modal.b.includes('依据：侧包已含') && rc.__modal.b.includes('建议：取消勾选'));
+      && rc.__modal.b.includes('依据：侧包已含') && rc.__modal.b.includes('建议：取消勾选')
+      && rc.__modal.b.includes('① 拆解合理性') && rc.__modal.b.includes('② 施工组合合理性')
+      && rc.__modal.b.includes('原文没写字高') && rc.__modal.b.includes('高处作业无脚手架'));
     ck('BL', 'AI 文本里的 HTML 被转义，按钮状态复位',
       rc.__modal.b.includes('&lt;b&gt;包边重复&lt;/b&gt;') && !rc.__modal.b.includes('<img src=x')
-      && btn.disabled === false && btn.textContent === '🤖 AI 深度复核');
+      && btn.disabled === false && btn.textContent === '🤖 AI 方案复核');
     rc.__modal = null; rc.__toast = '';
     rc.estAiInvoke = async () => ({ data: null, error: new Error('AI_NOT_CONFIGURED') });
     await rc.estAiReview();
@@ -2417,32 +2423,48 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && rc.__body.mode === 'review' && btn.disabled === false);
   }
 
-  // ===== BM：深度复核（内置审计线索 + 可选联网行情）=====
+  // ===== BM：方案复核（拆解合理性 + 施工组合合理性，不再做价格/成本对照）=====
   {
     const fnPath = path.join(ROOT, 'supabase/functions/estimate-ai/index.ts');
     const aiSrc = fs.existsSync(fnPath) ? fs.readFileSync(fnPath, 'utf8') : '';
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
     const reviewFn = appSrc.slice(appSrc.indexOf('async function estAiReview()'), appSrc.indexOf('/* 重复拆解选择', appSrc.indexOf('async function estAiReview()')));
+    const openFn = appSrc.slice(appSrc.indexOf('function estOpenAiReview(data)'), appSrc.indexOf('async function estAiReview()'));
+    const reviewBranch = aiSrc.slice(aiSrc.indexOf('} else if (mode === "review")'), aiSrc.indexOf('} else if (mode === "price")'));
     ck('BM', '提示词强制至少 3 条具体疑点，禁止空话',
       aiSrc.includes('至少 3 条 suggestions') && aiSrc.includes('严禁输出「未见明显问题」')
-      && aiSrc.includes('必须逐条回应') && !aiSrc.includes('summary 写「清单与施工内容基本对应」'));
-    ck('BM', '内置审计规则覆盖尺寸/重复/漏项/单价口径',
-      /function reviewClues\(/.test(aiSrc) && aiSrc.includes('离地高度')
-      && aiSrc.includes('包边') && aiSrc.includes('运输费为0') && aiSrc.includes('同口径')
-      && aiSrc.includes('起步价占合计比例偏高'));
-    ck('BM', '内置规则补足 AI 偷懒漏掉的条目',
-      /if \(suggestions\.length < 3\)/.test(aiSrc) && aiSrc.includes('cat: "线索"'));
-    ck('BM', '联网行情可选、失败静默降级，不假称查过',
-      /function reviewWebRefs\(/.test(aiSrc) && aiSrc.includes('REVIEW_SEARCH_PROVIDER')
-      && aiSrc.includes('REVIEW_SEARCH_KEY') && aiSrc.includes('未配置联网搜索或未取到结果')
-      && aiSrc.includes('webRefs: reviewWebCount'));
-    ck('BM', '报告注明来源与联网参考条数，超时放宽到 35 秒',
-      appSrc.includes('est-ai-review-cnt') && appSrc.includes('data.webRefs')
-      && appSrc.includes('未配置联网行情源') && reviewFn.includes('estAiInvoke(estAiReviewPayload(), 35000)'));
-    ck('BM', '说明书写明深度复核与联网密钥配置',
-      helpSrc.includes('内置审计规则') && helpSrc.includes('REVIEW_SEARCH_PROVIDER')
+      && aiSrc.includes('必须逐条回应') && aiSrc.includes('【拆解合理性】') && aiSrc.includes('【施工组合合理性】'));
+    ck('BM', '内置规则按拆解/组合覆盖尺寸/重复/漏项/工序措施',
+      /function reviewClues\(/.test(aiSrc) && aiSrc.includes('【拆解】') && aiSrc.includes('【组合】')
+      && aiSrc.includes('离地高度') && aiSrc.includes('包边') && aiSrc.includes('运输费为0')
+      && aiSrc.includes('工序链') && !aiSrc.includes('起步价占合计比例偏高'));
+    ck('BM', '内置规则补足 AI 偷懒漏掉的条目，且归入对应组',
+      /if \(suggestions\.length < 3\)/.test(aiSrc)
+      && aiSrc.includes('cat: c.indexOf("【组合】") === 0 ? "组合" : "拆解"')
+      && aiSrc.includes('/组|施工|工序|工艺|措施/.test(rawCat)'));
+    ck('BM', 'review 分支不再注入行业成本区间、不发联网行情请求',
+      !reviewBranch.includes('industryPriceCheck') && !reviewBranch.includes('reviewWebRefs')
+      && !reviewBranch.includes('内置行业成本价对照') && reviewBranch.includes('reviewChecks')
+      && reviewBranch.includes('不评价单价/成本高低'));
+    ck('BM', '报告按两组展示内置核对与 AI 建议，不再出现成本价对照表/联网态',
+      openFn.includes('reviewChecks') && openFn.includes('① 拆解合理性') && openFn.includes('② 施工组合合理性')
+      && openFn.includes('est-ai-review-checks') && !openFn.includes('industryCheck')
+      && !openFn.includes('data.webRefs') && !openFn.includes('成本价行业对照')
+      && reviewFn.includes('estAiInvoke(estAiReviewPayload(), 35000)'));
+    ck('BM', '说明书写明方案复核与联网密钥只用于客户报价复核',
+      helpSrc.includes('AI 方案复核（可选）') && helpSrc.includes('拆解合理性')
+      && helpSrc.includes('施工组合合理性') && helpSrc.includes('REVIEW_SEARCH_PROVIDER')
       && helpSrc.includes('REVIEW_SEARCH_KEY') && helpSrc.includes('supabase functions deploy estimate-ai'));
-    ck('BM', '按钮改为「AI 深度复核」，仍只出建议不碰清单',
-      appSrc.includes('>🤖 AI 深度复核</button>') && !/_estUI\.work\s*=/.test(reviewFn));
+    ck('BM', '按钮改为「AI 方案复核」，仍只出建议不碰清单',
+      appSrc.includes('>🤖 AI 方案复核</button>') && !/_estUI\.work\s*=/.test(reviewFn));
+    ck('BM', '方案复核弹窗加宽且不启用预约表单拖动/最小化',
+      appSrc.includes('reportWide: true') && appSrc.includes('modal--report')
+      && cssSrc.includes('.modal--report { width: min(94vw, 900px); max-width: 900px; }')
+      && cssSrc.includes('.est-ai-review-sec-head'));
+    ck('BM', '客户报价复核明确写「客户报价口径」并指向方案复核入口',
+      appSrc.includes('行业价格对照（客户报价口径，内部参考）')
+      && appSrc.includes('这里比的是<b>当前客户单价</b>，不是内部成本价')
+      && appSrc.includes('请到测算结果页点「AI 方案复核」'));
   }
 
   // ===== BN：智能加利润与客户报价单 =====
@@ -2451,7 +2473,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     const aiSrc = fs.existsSync(fnPath) ? fs.readFileSync(fnPath, 'utf8') : '';
     const cssSrc = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
     const calcSrc = slice('function estCustomerQuoteCalc(', 'function estCustomerQuoteRows()');
-    const quoteFn = slice('function estOpenCustomerQuote(', 'async function estAiPrice()');
+    const quoteFn = slice('function estOpenCustomerQuote(', 'async function estAiPrice(forceRefresh)');
     ck('BN', 'Edge Function 有 price/quotecheck 两模式与分项利润护栏',
       aiSrc.includes('mode === "price"') && aiSrc.includes('mode === "quotecheck"')
       && /const PROFIT_GUARD/.test(aiSrc) && aiSrc.includes('clampProfitRate')
@@ -2473,8 +2495,17 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     ck('BN', '说明书写明分项加价与客户价边界',
       helpSrc.includes('智能加利润（客户报价）') && helpSrc.includes('不是整单统一乘一个百分比')
       && helpSrc.includes('不显示成本和利润率'));
-    ck('BN', 'CSS 有客户报价单与内部折叠样式',
-      cssSrc.includes('.cq-table') && cssSrc.includes('.cq-total') && cssSrc.includes('.cq-internal'));
+    ck('BN', 'CSS 有客户报价单与内部折叠样式，单价/小计表头与数字同右对齐',
+      cssSrc.includes('.cq-table') && cssSrc.includes('.cq-total') && cssSrc.includes('.cq-internal')
+      && /\.cq-table th:nth-child\(3\), \.cq-table th:nth-child\(4\)/.test(cssSrc)
+      && /\.cq-table td:nth-child\(3\), \.cq-table td:nth-child\(4\)/.test(cssSrc));
+    ck('BN', '重复加价按清单/锚签名缓存，内部区提供主动重掷入口',
+      /async function estAiPrice\(forceRefresh\)/.test(appSrc)
+      && appSrc.includes('const sig = JSON.stringify(payload);')
+      && appSrc.includes('_estUI.priceSig === sig')
+      && appSrc.includes('onclick="estAiPrice(true)"') && appSrc.includes('🎲 换一组建议')
+      && helpSrc.includes('重复点「重新加价」金额会跳吗')
+      && cssSrc.includes('.cq-rate-actions'));
     // 运行时：真实纯函数验证分项加价与起步价/辅材口径
     const cqCtx = { console };
     vm.createContext(cqCtx);
@@ -2494,6 +2525,56 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     ck('BN', '起步价按人工率、辅材按材料率，合计同口径',
       cq.floor === 25 && cq.aux === 33.6 && cq.construction === 734.2
       && cq.material === 1936.03 && cq.grand === 2670.23);
+  }
+
+  // ===== CD：重复加价稳定性（同签名沿用，主动重掷才重新请求 AI）=====
+  {
+    const priceParts = [
+      'let _estUI = null;',
+      slice('function estCostScope(', '/* 纯计算：内部成本行'),
+      slice('function estCustomerQuoteRows()', 'function estAiPricePayload()'),
+      slice('function estAiPricePayload()', 'function estOpenCustomerQuote('),
+      slice('async function estAiPrice(forceRefresh)', 'function estAiQuoteCheckPayload()'),
+    ].join('\n');
+    const rc = {
+      console,
+      document: { getElementById: (id) => id === 'estInput' ? { value: '门头 6米×2米 发光字5个' } : null },
+      estAiErrTip: (e, f) => f,
+      toast: (m) => { rc.__toasts.push(m); },
+      estOpenCustomerQuote: (data, fallback, rowRates, refPrices, applied) => {
+        rc.__opens.push({ data, fallback, rowRates, refPrices });
+        vm.runInContext('_estUI.customerQuote = { raw: ' + JSON.stringify(data)
+          + ', src: ' + JSON.stringify(fallback ? 'local' : 'ai')
+          + ', rowRates: ' + JSON.stringify(rowRates || null)
+          + ', refPrices: ' + JSON.stringify(refPrices || null)
+          + ', applied: ' + JSON.stringify(applied || []) + ' };', rc);
+      },
+      estAiInvoke: async (body) => {
+        rc.__calls++; rc.__bodies.push(body);
+        return { data: { ok: true, rates: [{ rate: 25 }, { rate: 12 }], summary: 'AI 加价' }, error: null };
+      },
+    };
+    rc.__calls = 0; rc.__bodies = []; rc.__opens = []; rc.__toasts = [];
+    vm.createContext(rc);
+    vm.runInContext(priceParts, rc);
+    vm.runInContext("_estUI = { work: [{ id: 'w1' }], height: 'low', wall: 'flat', result: { rows: [{ n: '钢架焊接', u: '㎡', q: 12, fee: 360, note: '' }, { n: '铝塑板', u: '㎡', q: 17.88, fee: 1698.6, note: '' }], floor: 0, auxFee: 0, labor: 360, matFee: 1698.6, equip: 0, transportFee: 0, grand: 2058.6, distanceKm: 0, roundTrip: false } };", rc);
+    await rc.estAiPrice();
+    ck('CD', '首次加价调用 AI 一次并记下签名',
+      rc.__calls === 1 && !!vm.runInContext('_estUI.priceSig', rc)
+      && rc.__opens.length === 1 && rc.__opens[0].fallback === false);
+    await rc.estAiPrice();
+    ck('CD', '清单/锚未变重复点重新加价不再请求 AI，沿用上次结果并提示',
+      rc.__calls === 1 && rc.__opens.length === 2
+      && JSON.stringify(rc.__opens[1].data) === JSON.stringify(rc.__opens[0].data)
+      && /沿用当前利润率/.test(rc.__toasts[rc.__toasts.length - 1] || ''));
+    await rc.estAiPrice(true);
+    ck('CD', '「换一组建议」强制重掷 AI，旧缓存被新结果替换',
+      rc.__calls === 2 && rc.__opens.length === 3
+      && rc.__opens[2].data !== rc.__opens[1].data);
+    vm.runInContext('_estUI.customerQuote.refPrices = [88, 0];', rc);
+    await rc.estAiPrice();
+    ck('CD', '成交价锚改动后自动重新请求 AI，锚进入 payload',
+      rc.__calls === 3 && rc.__bodies[2].items[0].refPrice === 88);
   }
 
   // ===== BO：客户报价单导出（图片 / 打印PDF / 文本）=====
@@ -2539,7 +2620,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     const fnPath = path.join(ROOT, 'supabase/functions/estimate-ai/index.ts');
     const aiSrc = fs.existsSync(fnPath) ? fs.readFileSync(fnPath, 'utf8') : '';
     const cssSrc = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
-    const quoteFn = slice('function estOpenCustomerQuote(', 'async function estAiPrice()');
+    const quoteFn = slice('function estOpenCustomerQuote(', 'async function estAiPrice(forceRefresh)');
     const calcSrc = slice('function estCustomerQuoteCalc(', 'function estCustomerQuoteRows()');
     ck('BP', '逐行 AI 率真正参与计算，不再被类别率抹平',
       appSrc.includes('const over = Array.isArray(rowRates) ? rowRates : null;')
@@ -2637,7 +2718,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && checkFn.includes('b2.disabled = false') && checkFn.includes('finally'));
     ck('BR', '复核有可见进度条，文案说明主审与等待时长',
       appSrc.includes('id="estAiCheckTip"') && checkFn.includes('tip.style.display = "block"')
-      && checkFn.includes('DeepSeek 主审') && checkFn.includes('10–30 秒'));
+      && checkFn.includes('DeepSeek 主审') && checkFn.includes('60 秒'));
     ck('BR', '联网文案说明未配置/未取到结果/已取到三种状态，不再像故障提示',
       appSrc.includes('未配置联网行情源，按内置行业价与清单分析')
       && appSrc.includes('行情源已配但未取到结果')
@@ -2676,7 +2757,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     const cssSrc = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
     const pricePayload = slice('function estAiPricePayload()', 'function estOpenCustomerQuote(');
     const reportFn = slice('function estOpenQuoteReview(', '/* modal.open 是替换同一层弹窗');
-    const quoteFn = slice('function estOpenCustomerQuote(', 'async function estAiPrice()');
+    const quoteFn = slice('function estOpenCustomerQuote(', 'async function estAiPrice(forceRefresh)');
     ck('BS', '有当地成交价时服务端允许突破类别上限（含 100%+），无锚定仍走护栏',
       aiSrc.includes('const ANCHOR_MAX_RATE = 200;')
       && aiSrc.includes('function clampProfitRate(cat: string, v: any, anchored = false, level: OpacityLevel = "low")')
@@ -2729,7 +2810,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && !aiSrc.includes('-30 到 30') && !aiSrc.includes('Math.max(-30, Math.min(30, pv))')
       && aiSrc.includes('function priceAdviceTarget('));
     ck('BT', '服务端按成交价/不透明度/成本线校正，并返回依据与调后利润率',
-      aiSrc.includes('basis: "refPrice"') && aiSrc.includes('basis = "opaque"')
+      aiSrc.includes('basis: "refPrice"') && aiSrc.includes('basis = rateBasis')
       && aiSrc.includes('basis = "floor"') && aiSrc.includes('newRate }')
       && aiSrc.includes('再降将跌破成本线'));
     ck('BT', '报告显示依据标签与调后利润，说明书讲清 200% 与成本底线',
@@ -2745,17 +2826,22 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     const stripTs = (s) => s
       .replace(/function quoteOpacity\(x: any\): \{[^}]+\} \{/, 'function quoteOpacity(x) {')
       .replace(/function priceAdviceTarget\([^)]*\):\s*\{[^}]+\} \{/, 'function priceAdviceTarget(x, aiDir, aiPct, anchor) {')
+      .replace(/function unitCost\(x: any, key = "cost"\): number/, 'function unitCost(x, key = "cost")')
       .replace(/\(rate: number\)/g, '(rate)');
     const opFn = stripTs(aiSlice('function quoteOpacity(', '// 内置行业价参考库'));
     const targetFn = stripTs(aiSlice('function priceAdviceTarget(', '/** 统一的 OpenAI'));
+    // unitCost 是模块级依赖，必须和 priceAdviceTarget 一起进沙箱（不能靠注入桩掩盖作用域问题）。
+    const unitCostFn = stripTs(aiSlice('function unitCost(', '// 分项利润护栏'));
     const btCtx = {
       console,
       num: (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; },
       OPAQUE_RATE: { high: { min: 35, def: 80, max: 200 }, mid: { min: 20, def: 45, max: 100 }, low: { min: 8, def: 20, max: 45 } },
       OPAQUE_MAX_UP: { high: 200, mid: 100, low: 45 },
+      PROFIT_GUARD: { labor: { min: 15, max: 35, def: 25 }, laborHigh: { min: 25, max: 50, def: 35 },
+        mat: { min: 6, max: 20, def: 12 }, equip: { min: 15, max: 40, def: 28 }, transport: { min: 8, max: 25, def: 15 } },
     };
     vm.createContext(btCtx);
-    vm.runInContext(opFn + '\n' + targetFn, btCtx);
+    vm.runInContext(unitCostFn + '\n' + opFn + '\n' + targetFn, btCtx);
     const bthi = vm.runInContext('quoteOpacity({n:"接线调试",cat:"labor",note:""})', btCtx);
     const btlow = vm.runInContext('quoteOpacity({n:"铝塑板",cat:"mat",note:""})', btCtx);
     ck('BT', '运行时：调试/接线判为难比价 high，铝塑板材料判为易比价 low',
@@ -2785,9 +2871,9 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && aiSrc.includes('内置行业价对照')
       && aiSrc.includes('行业价参考：'));
     const reportFn = slice('function estOpenQuoteReview(', '/* modal.open 是替换同一层弹窗');
-    ck('BU', '报告渲染行业价格对照表与三种联网状态',
+    ck('BU', '报告渲染客户报价口径的行业价格对照表与三种联网状态',
       reportFn.includes('cq-industry')
-      && reportFn.includes('行业价格对照（内部，不导出）')
+      && reportFn.includes('行业价格对照（客户报价口径，内部参考）')
       && reportFn.includes('未配置联网行情源，按内置行业价与清单分析')
       && reportFn.includes('行情源已配但未取到结果'));
     ck('BU', '说明书讲清不联网也判断行业规则、经验区间非当地实时成交价',
@@ -2802,6 +2888,8 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     const stripInd = (s) => s
       .replace(/type IndRule = \{[^}]*\};/, '')
       .replace(/const INDUSTRY_PRICE: IndRule\[\] =/, 'const INDUSTRY_PRICE =')
+      .replace(/const COST_SCOPE_LABEL: Record<string, string> =/, 'const COST_SCOPE_LABEL =')
+      .replace(/function itemScope\(x: any, cat: string\): string/, 'function itemScope(x, cat)')
       .replace(/function normPriceUnit\(u: any\): string/, 'function normPriceUnit(u)')
       .replace(/function industryPriceCheck\(items: any\[\]\): any\[\]/, 'function industryPriceCheck(items)')
       .replace(/\(x: any, i: number\)/, '(x, i)')
@@ -2822,7 +2910,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && buRows[1].verdict === '高于行业区间'
       && buRows[2].verdict === '低于行业区间'
       && buRows[3].label === '桁架租赁'
-      && buRows[4].label === '铝塑板板材' && buRows[4].verdict === '接近行业区间',
+      && buRows[4].label === '铝塑板板材进价' && buRows[4].verdict === '接近行业区间',
       JSON.stringify(buRows));
     const buUnknown = vm.runInContext(`industryPriceCheck([{ n: '随便什么项', u: '㎡', cat: 'mat', price: 123 }])`, buCtx);
     ck('BU', '运行时：匹配不到行业口径就不列，不编造行业价', buUnknown.length === 0);
@@ -2846,10 +2934,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       r4.includes('某种未知原因') && r4.includes('未应用改价建议'), r4);
     const r5 = run(`estAiErrTip(null, ${fb}, {error:"Failed to send a request to the Edge Function"})`);
     ck('BV', '网络层失败翻成人话，不再误判成函数未部署',
-      r5.includes('连不上 AI 服务') && r5.includes('智能加利润能用'), r5);
-    ck('BV', 'estAiInvoke 把底层 cause 拼进错误，便于定位网络原因',
-      appSrc.includes('Failed to send a request|fetch/i.test(msg) && cause')
-      && appSrc.includes('new Error(msg + "（" + cause.slice(0, 80) + "）")'));
+      r5.includes('连不上 AI 服务') && r5.includes('重试与原生直连两条通道都失败'), r5);
     ck('BV', 'fetch 网络层失败自动重试一次（只读 AI 请求，不写库不改金额）',
       /async function estAiInvoke\(body, timeoutMs = 16000, _retry = true\)/.test(appSrc)
       && appSrc.includes('return estAiInvoke(body, timeoutMs, false);')
@@ -2858,6 +2943,378 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       appSrc.includes('estAiErrTip(error, "AI 报价复核失败，已保留你改好的单价（未应用改价建议）", data)')
       && appSrc.includes('estAiErrTip(error, "AI 复核失败，已保留当前清单和金额（未应用建议）", data)')
       && appSrc.includes('catch (e) { toast("AI 报价复核失败，已保留你改好的单价（未应用改价建议）"); }'));
+  }
+
+  console.log('\n=== BW. 报价复核 DeepSeek 主审可观测：诊断/失败码/超时 ===');
+  {
+    const errFn = slice('function estAiErrTip(', '/* 提示词优化：AI 补全尺寸');
+    const bwCtx = {}; vm.createContext(bwCtx); vm.runInContext(errFn, bwCtx);
+    const run = (expr) => vm.runInContext(expr, bwCtx);
+    const fb = '"AI 报价复核失败，已保留你改好的单价（未应用改价建议）"';
+    // 后端 error 文案点名 DeepSeek 主备不可用，必须显示具体失败码，不再吞掉。
+    const d1 = run(`estAiErrTip({message:"AI 主模型与备用模型均不可用（DeepSeek：DEEPSEEK_LLM_HTTP_402；智谱：GLM_LLM_HTTP_401）"}, ${fb}, null)`);
+    ck('BW', 'DeepSeek 失败码不再误报成智谱密钥问题，显示 DeepSeek 主审失败',
+      d1.includes('DeepSeek 主审失败') && !d1.includes('智谱密钥无效'), d1);
+    // body.code 形态（HTTP 200 ok:false）也能识别 DeepSeek。
+    const d2 = run(`estAiErrTip(null, ${fb}, {code:"DEEPSEEK_LLM_FAILED", error:"AI 主备均不可用"})`);
+    ck('BW', 'data.code 里的 DEEPSEEK_ 前缀被识别，不落到通用 LLM_FAILED 分支',
+      d2.includes('DeepSeek 主审失败'), d2);
+    // engineDetail 判断：配了 DeepSeek 且只有智谱报错 → 明确报智谱兜底失败。
+    const d3 = run(`estAiErrTip({message:"AI 主模型与备用模型均不可用", body:{error:"AI 主备均不可用", engineDetail:{deepseekConfigured:true,deepseekTried:true,deepseekErr:"",glmErr:"GLM_LLM_HTTP_401"}}}, ${fb}, null)`);
+    ck('BW', 'engineDetail 能区分「DeepSeek 主审过但智谱兜底失败」',
+      d3.includes('智谱兜底失败') && d3.includes('GLM_LLM_HTTP_401'), d3);
+    ck('BW', 'estAiInvoke 透传后端完整 body（engineDetail 靠它出来）',
+      appSrc.includes('e1.body = j;'));
+    // 复核超时必须 >= 服务端主备最长耗时（DeepSeek 15×2 + 智谱 15×2）。
+    const qcFn = slice('async function estAiQuoteCheck()', '/* 客户报价单导出');
+    ck('BW', '报价复核超时提到 60 秒，匹配 DeepSeek 主审+智谱兜底最长耗时',
+      qcFn.includes('estAiInvoke(body0, 60000)') && qcFn.includes('主备都失败最长约 60 秒'));
+    // 报告引擎诊断：未配/主审成功/兜底 三态文案。
+    ck('BW', '报告按 engineDetail 显示 DeepSeek 配置与主审状态，不再只写引擎名',
+      appSrc.includes('未配置 DeepSeek')
+      && appSrc.includes('DeepSeek 主审成功')
+      && appSrc.includes('DeepSeek 主审失败')
+      && appSrc.includes('cq-engine-note'));
+    // 服务端：engineDetail 成功与失败两条返回路径都带，失败码加 DEEPSEEK_/GLM_ 前缀。
+    const aiSrc = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', 'estimate-ai', 'index.ts'), 'utf8');
+    ck('BW', '服务端 engineDetail 含 deepseekConfigured/Tried/Err 与 finalEngine',
+      aiSrc.includes('deepseekConfigured: !!deepCfg')
+      && aiSrc.includes('deepseekTried: deepFirst')
+      && aiSrc.includes('finalEngine: engine'));
+    ck('BW', '服务端 DeepSeek 与智谱失败码分别加 DEEPSEEK_/GLM_ 前缀，不再混为一谈',
+      aiSrc.includes('"DEEPSEEK_" + primary.code') || aiSrc.includes('(mainCfg === deepCfg ? "DEEPSEEK_" : "GLM_") + primary.code')
+      && aiSrc.includes('"DEEPSEEK_" : "GLM_"'));
+    ck('BW', '服务端失败响应 error 点名 DeepSeek、带 engineDetail；成功响应也带',
+      aiSrc.includes('DeepSeek：${engineDetail.deepseekErr')
+      && aiSrc.includes('code: errCode || "LLM_FAILED", engineDetail')
+      && aiSrc.includes('industryCount: industryCheck.length, engine, engineDetail'),
+      '失败文案片段/失败返回/成功返回三项');
+  }
+
+  console.log('\n=== BX. 报价复核双通道：原生 fetch 兜底 + 服务端提速 ===');
+  {
+    const aiSrc = fs.readFileSync(path.join(ROOT, 'supabase', 'functions', 'estimate-ai', 'index.ts'), 'utf8');
+    // 服务端：LlmCfg 支持 per-call 超时，quotecheck 压缩到主审 9s / 兜底 11s，避开链路断连。
+    ck('BX', 'LlmCfg 增加可选 timeoutMs，llmChat 用它替代固定 15s',
+      aiSrc.includes('timeoutMs?: number;')
+      && aiSrc.includes('setTimeout(() => ctrl.abort(), cfg.timeoutMs || 15000)'));
+    ck('BX', 'quotecheck 压缩单次超时（deepseek 9s / glm 11s）',
+      aiSrc.includes('if (mode === "quotecheck") {')
+      && aiSrc.includes('glmCfg.timeoutMs = 11000;')
+      && aiSrc.includes('deepCfg.timeoutMs = 9000;'));
+    // 前端：原生 fetch 直连函数存在，且带 JWT + apikey + 超时 AbortController。
+    ck('BX', '新增 estAiInvokeDirect 原生直连函数，带 Authorization/apikey/AbortController',
+      appSrc.includes('async function estAiInvokeDirect(body, timeoutMs)')
+      && appSrc.includes('/functions/v1/estimate-ai"')
+      && appSrc.includes('"Authorization": "Bearer " + token')
+      && appSrc.includes('"apikey": String(cfg.SUPABASE_ANON_KEY')
+      && appSrc.includes('setTimeout(() => ctrl.abort(), timeoutMs)'));
+    ck('BX', '直连复用多路径 token（_getSupabaseAccessToken），WebView/file 下也能取到登录态',
+      appSrc.includes('const token = await _getSupabaseAccessToken();'));
+    // 双通道策略：supabase-js 网络层失败先重试一次，再切原生直连；两通道原因都带出。
+    ck('BX', '网络层失败重试一次后切原生直连，两通道失败原因合并透传',
+      appSrc.includes('const direct = await estAiInvokeDirect(body, timeoutMs);')
+      && appSrc.includes('if (!direct.error) return direct;')
+      && appSrc.includes('"supabase-js：" + msg.slice(0, 50)')
+      && appSrc.includes('"；直连：" + dmsg.slice(0, 80)'));
+    ck('BX', '直连底层 cause（net::ERR/CORS）拼进错误，错误提示引导换 HTTPS 地址',
+      appSrc.includes('"（直连底层：" + cause.slice(0, 80) + "）"')
+      && appSrc.includes('原生直连两条通道都失败')
+      && appSrc.includes('本地 file:// 的 Origin:null'));
+  }
+
+  console.log('\n=== BY. 顶层 num 作用域：quotecheck 不再 500（num is not defined） ===');
+  {
+    const fnPath = path.join(ROOT, 'supabase', 'functions', 'estimate-ai', 'index.ts');
+    const aiSrc = fs.readFileSync(fnPath, 'utf8');
+    // 1) num 必须定义在模块顶层（Deno.serve 之前），不能在 handler 内部；否则顶层函数访问不到。
+    const serveAt = aiSrc.indexOf('Deno.serve(');
+    const numAt = aiSrc.indexOf('function num(');
+    ck('BY', 'num 提升为模块级函数，定义在 Deno.serve 之前（不再藏在 handler 内部）',
+      numAt >= 0 && serveAt > numAt
+      && !/const num = \(v: any\) =>/.test(aiSrc),
+      JSON.stringify({ numAt, serveAt }));
+    ck('BY', '说明书记录 num is not defined 导致 500 的排查方法（看 Logs + 重新部署）',
+      helpSrc.includes('num is not defined')
+      && helpSrc.includes('用量却不增长')
+      && helpSrc.includes('supabase functions deploy estimate-ai'));
+    // 2) 关键回归：不注入 num 桩，直接从源码切出 num 定义 + 顶层函数在同一作用域运行。
+    //    旧版 num 藏在 handler 里，这里会抛 ReferenceError: num is not defined（正是线上 500 的原因）。
+    const aiSlice = (a, b) => {
+      const i = aiSrc.indexOf(a); if (i < 0) throw new Error('ai 切片起点未找到: ' + a);
+      const j = aiSrc.indexOf(b, i); if (j < 0) throw new Error('ai 切片终点未找到: ' + b);
+      return aiSrc.slice(i, j);
+    };
+    const numDef = aiSlice('function num(', '// 分项利润护栏')
+      .replace('function num(v: any): number', 'function num(v)')
+      .replace('function unitCost(x: any, key = "cost"): number', 'function unitCost(x, key = "cost")');
+    const stripTs = (s) => s
+      .replace(/const COST_SCOPE_LABEL: Record<string, string> =/, 'const COST_SCOPE_LABEL =')
+      .replace(/function itemScope\(x: any, cat: string\): string/, 'function itemScope(x, cat)')
+      .replace(/function industryPriceCheck\(items: any\[\]\): any\[\]/, 'function industryPriceCheck(items)')
+      .replace(/\(x: any, i: number\)/, '(x, i)')
+      .replace(/const out: any\[\] = \[\];/g, 'const out = [];');
+    const indSrc = stripTs(aiSlice('type IndRule =', '// 有当地成交价锚定时'))
+      .replace(/type IndRule = \{[^}]*\};/, '')
+      .replace(/const INDUSTRY_PRICE: IndRule\[\] =/, 'const INDUSTRY_PRICE =')
+      .replace(/function normPriceUnit\(u: any\): string/, 'function normPriceUnit(u)');
+    const byCtx = { console }; // 故意不提供 num 桩
+    vm.createContext(byCtx);
+    let threw = null;
+    try {
+      vm.runInContext(numDef + '\n' + indSrc, byCtx);
+    } catch (e) { threw = String(e && e.message || e); }
+    ck('BY', '无 num 桩时加载 num + 行业价校验不抛 ReferenceError',
+      threw === null, String(threw));
+    if (!threw) {
+      const rows = vm.runInContext(`industryPriceCheck([
+        { n: '发光字', u: '㎡', cat: 'mat', price: 597, note: '' },
+        { n: '接线调试', u: '组', cat: 'labor', price: 80, note: '' }
+      ])`, byCtx);
+      ck('BY', '运行时：不注入桩也能正确算行业价对照（复用模块级 num）',
+        rows.length === 2 && rows[0].verdict === '接近行业区间' && rows[1].verdict === '低于行业区间',
+        JSON.stringify(rows));
+      // priceAdviceTarget 同样依赖 num，确认它在无桩作用域也能调用。
+      const opConsts = `const OPAQUE_RATE={high:{min:35,def:80,max:200},mid:{min:20,def:45,max:100},low:{min:8,def:20,max:45}};const OPAQUE_MAX_UP={high:200,mid:100,low:45};`;
+      const opFn = aiSlice('function quoteOpacity(', '// 内置行业价参考库')
+        .replace(/function quoteOpacity\(x: any\): \{[^}]*\} \{/, 'function quoteOpacity(x) {');
+      const targetFn = aiSlice('function priceAdviceTarget(', '/** 统一的 OpenAI')
+        .replace(/function priceAdviceTarget\([^)]*\):\s*\{[^}]+\} \{/, 'function priceAdviceTarget(x, aiDir, aiPct, anchor) {')
+        .replace(/\(rate: number\)/g, '(rate)');
+    const unitCostFn = aiSlice('function unitCost(', '// 分项利润护栏')
+      .replace(/function unitCost\(x: any, key = "cost"\): number/, 'function unitCost(x, key = "cost")');
+    const guardConsts = `const PROFIT_GUARD={labor:{min:15,max:35,def:25},laborHigh:{min:25,max:50,def:35},mat:{min:6,max:20,def:12},equip:{min:15,max:40,def:28},transport:{min:8,max:25,def:15}};`;
+      vm.runInContext(guardConsts + '\n' + unitCostFn + '\n' + opConsts + '\n' + opFn + '\n' + targetFn, byCtx);
+      const t = vm.runInContext(`priceAdviceTarget({n:"接线调试",cat:"labor",cost:220,price:297},"down",-5,null)`, byCtx);
+      ck('BY', '运行时：priceAdviceTarget 无 num 桩也能调用并纠正难比价项',
+        t && t.dir === 'up' && t.pct > 30, JSON.stringify(t));
+    }
+  }
+
+  console.log('\n=== BZ. 成本量纲：整行总费用不得当单价，消除 -97% 假亏损与 +45% 乱加价 ===');
+  {
+    const fnPath = path.join(ROOT, 'supabase', 'functions', 'estimate-ai', 'index.ts');
+    const aiSrc = fs.readFileSync(fnPath, 'utf8');
+    ck('BZ', 'unitCost 按 q 折算单价，且所有利润率计算点统一调用（含发给 AI 的 items）',
+      aiSrc.includes('function unitCost(x: any, key = "cost"): number')
+      && (aiSrc.match(/unitCost\(x\)/g) || []).length >= 3
+      && aiSrc.includes('cost: unitCost(x), costTotal')
+      && aiSrc.includes('const fee = unitCost(x, "fee"), refPrice = num(x?.refPrice)')
+      && aiSrc.includes('const cost = unitCost(srcItems[i]), price = num(srcItems[i]?.price)')
+      && !/const cost = num\(x\?\.cost\), price = num\(x\?\.price\)/.test(aiSrc));
+    ck('BZ', '提示词禁止拿 costTotal 算利润率，用户消息写明 cost 是单位成本',
+      aiSrc.includes('严禁拿它和单价相比') && aiSrc.includes('cost=【单位成本，已按 q 折算'));
+    ck('BZ', '说明书讲清假亏损 bug 的成因与「重新加价」恢复方法',
+      helpSrc.includes('整行成本总额') && helpSrc.includes('单位成本')
+      && helpSrc.includes('重新加价') && helpSrc.includes('高于/低于行业区间'));
+    ck('BZ', '易比价材料 basis=guard 与理由一致，前端有「类别区间」标签映射',
+      aiSrc.includes('const rateBasis = op.level === "low" ? "guard" : "opaque"')
+      && appSrc.includes('a.basis === "guard" ? "类别区间"'));
+    // 运行时：用截图真实数字复现。热镀锌方管 52米 总价¥1040、客户单价¥22.40。
+    const aiSlice = (a, b) => {
+      const i = aiSrc.indexOf(a); if (i < 0) throw new Error('ai 切片起点未找到: ' + a);
+      const j = aiSrc.indexOf(b, i); if (j < 0) throw new Error('ai 切片终点未找到: ' + b);
+      return aiSrc.slice(i, j);
+    };
+    const numDef = aiSlice('function num(', '// 分项利润护栏')
+      .replace('function num(v: any): number', 'function num(v)')
+      .replace('function unitCost(x: any, key = "cost"): number', 'function unitCost(x, key = "cost")');
+    const stripTs = (s) => s
+      .replace(/function quoteOpacity\(x: any\): \{[^}]+\} \{/, 'function quoteOpacity(x) {')
+      .replace(/function priceAdviceTarget\([^)]*\):\s*\{[^}]+\} \{/, 'function priceAdviceTarget(x, aiDir, aiPct, anchor) {')
+      .replace(/\(rate: number\)/g, '(rate)');
+    const opFn = stripTs(aiSlice('function quoteOpacity(', '// 内置行业价参考库'));
+    const targetFn = stripTs(aiSlice('function priceAdviceTarget(', '/** 统一的 OpenAI'));
+    const bzCtx = {
+      console,
+      OPAQUE_RATE: { high: { min: 35, def: 80, max: 200 }, mid: { min: 20, def: 45, max: 100 }, low: { min: 8, def: 20, max: 45 } },
+      OPAQUE_MAX_UP: { high: 200, mid: 100, low: 45 },
+      PROFIT_GUARD: { labor: { min: 15, max: 35, def: 25 }, laborHigh: { min: 25, max: 50, def: 35 },
+        mat: { min: 6, max: 20, def: 12 }, equip: { min: 15, max: 40, def: 28 }, transport: { min: 8, max: 25, def: 15 } },
+    };
+    vm.createContext(bzCtx);
+    vm.runInContext(numDef + '\n' + opFn + '\n' + targetFn, bzCtx);
+    // 截图行：热镀锌方管 52米 成本¥1040 单价¥22.4 → 单位成本¥20、当前利润 12%（正常区间）。
+    const bzTube = vm.runInContext(`unitCost({q:52,cost:1040})`, bzCtx);
+    ck('BZ', '运行时：热镀锌方管 ¥1040/52米 归一为单价 ¥20，不再是 ¥1040', bzTube === 20, String(bzTube));
+    const bzAdvice = vm.runInContext(
+      `priceAdviceTarget({n:"热镀锌方管",cat:"mat",q:52,cost:1040,price:22.4,note:""},"up",45,null)`, bzCtx);
+    ck('BZ', '运行时：该行按单价算 12% 利润属正常区间，不再触发 +45% 乱加价，依据标类别区间',
+      bzAdvice.pct < 12 && bzAdvice.basis === 'guard', JSON.stringify(bzAdvice));
+    const bzNewRate = vm.runInContext(`(() => { const cost=unitCost({q:52,cost:1040}), price=22.4, pct=0;
+      return Math.round((price*(1+pct/100)-cost)/cost*1000)/10; })()`, bzCtx);
+    ck('BZ', '运行时：调后利润率按单价算是 +12%，不再是截图里的 -96.9%', bzNewRate === 12, String(bzNewRate));
+    // 铝塑板 17.88㎡ 成本¥1698.6、单价¥104.5 → 单位成本¥95、利润约10%。
+    const bzAlu = vm.runInContext(`unitCost({q:17.88,cost:1698.6})`, bzCtx);
+    ck('BZ', '运行时：铝塑板 ¥1698.6/17.88㎡ 归一为单价 ¥95，利润回到 +10% 正常区间',
+      bzAlu === 95, String(bzAlu));
+    // 行业价评价收紧：钢架 ¥264 超上限 250 约 5.6%，应判高于而非接近。
+    const indSrc = stripTs(aiSlice('type IndRule =', '// 有当地成交价锚定时'))
+      .replace(/type IndRule = \{[^}]*\};/, '')
+      .replace(/const INDUSTRY_PRICE: IndRule\[\] =/, 'const INDUSTRY_PRICE =')
+      .replace(/const COST_SCOPE_LABEL: Record<string, string> =/, 'const COST_SCOPE_LABEL =')
+      .replace(/function itemScope\(x: any, cat: string\): string/, 'function itemScope(x, cat)')
+      .replace(/function normPriceUnit\(u: any\): string/, 'function normPriceUnit(u)')
+      .replace(/function industryPriceCheck\(items: any\[\]\): any\[\]/, 'function industryPriceCheck(items)')
+      .replace(/\(x: any, i: number\)/, '(x, i)')
+      .replace(/const out: any\[\] = \[\];/g, 'const out = [];');
+    const bzIndCtx = { console };
+    vm.createContext(bzIndCtx);
+    vm.runInContext(numDef + '\n' + indSrc, bzIndCtx);
+    const bzInd = vm.runInContext(`industryPriceCheck([{n:"门头钢架焊接/加固",u:"㎡",cat:"mat",price:264,note:""}])`, bzIndCtx);
+    ck('BZ', '运行时：钢架 ¥264 超行业上限 ¥250，判「高于行业区间」不再笼统说接近',
+      bzInd.length === 1 && bzInd[0].verdict === '高于行业区间', JSON.stringify(bzInd));
+  }
+
+  console.log('\n=== CA. 联网行情源：国内博查 bocha 可配置、可解析 ===');
+  {
+    const fnPath = path.join(ROOT, 'supabase/functions/estimate-ai/index.ts');
+    const aiSrc = fs.readFileSync(fnPath, 'utf8');
+    ck('CA', '三种搜索源共用一个配置判定，webConfigured 与真实请求同口径',
+      aiSrc.includes('const SEARCH_PROVIDERS = ["tavily", "serper", "bocha"]')
+      && aiSrc.includes('function searchConfigured(): boolean')
+      && aiSrc.includes('webConfigured = searchConfigured()')
+      && aiSrc.includes('api.bochaai.com/v1/web-search'));
+    ck('CA', '说明书推荐 bocha 并给出 secrets set + deploy 命令',
+      helpSrc.includes('REVIEW_SEARCH_PROVIDER')
+      && helpSrc.includes('bocha')
+      && helpSrc.includes('supabase secrets set REVIEW_SEARCH_PROVIDER=bocha')
+      && helpSrc.includes('supabase functions deploy estimate-ai'));
+    const aiSlice = (a, b) => {
+      const i = aiSrc.indexOf(a); if (i < 0) throw new Error('ai 切片起点未找到: ' + a);
+      const j = aiSrc.indexOf(b, i); if (j < 0) throw new Error('ai 切片终点未找到: ' + b);
+      return aiSrc.slice(i, j);
+    };
+    const webSrc = aiSlice('const SEARCH_PROVIDERS =', '// review 模式：')
+      .replace('function searchConfigured(): boolean', 'function searchConfigured()')
+      .replace('async function reviewWebRefs(text: string, items: any[]): Promise<string[]>', 'async function reviewWebRefs(text, items)')
+      .replace(/const queries: string\[\] = \[\];/, 'const queries = [];')
+      .replace(/const refs: string\[\] = \[\];/, 'const refs = [];')
+      .replace(/let rows: any\[\] = \[\];/g, 'let rows = [];')
+      .replace(/\(r: any\)/g, '(r)');
+    const calls = [];
+    const env = { REVIEW_SEARCH_PROVIDER: 'bocha', REVIEW_SEARCH_KEY: 'bk_test' };
+    const caCtx = {
+      console, setTimeout, clearTimeout, AbortController, URL,
+      Deno: { env: { get: (k) => env[k] || '' } },
+      fetch: async (url, opt) => {
+        calls.push({ url, opt });
+        return { ok: true, json: async () => ({ data: { webPages: { value: [
+          { name: '门头安装人工费行情', url: 'https://example.com/price', snippet: '当地门头安装 120-250 元/平方米' },
+        ] } } }) };
+      },
+    };
+    vm.createContext(caCtx);
+    vm.runInContext(webSrc, caCtx);
+    const refs = await vm.runInContext('reviewWebRefs("门头招牌", [])', caCtx);
+    const sent = calls[0] ? JSON.parse(calls[0].opt.body) : {};
+    ck('CA', '运行时：bocha 走国内接口并解析 data.webPages.value，报告拿到行情摘要',
+      calls.length === 1 && calls[0].url === 'https://api.bochaai.com/v1/web-search'
+      && calls[0].opt.headers.Authorization === 'Bearer bk_test'
+      && sent.count === 3 && sent.freshness === 'oneYear'
+      && refs.length === 1 && refs[0].includes('example.com') && refs[0].includes('120-250'),
+      JSON.stringify({ calls: calls.map((c) => ({ url: c.url, headers: c.opt.headers, body: sent })), refs }));
+    env.REVIEW_SEARCH_PROVIDER = 'unknown';
+    const refs2 = await vm.runInContext('reviewWebRefs("门头", [])', caCtx);
+    ck('CA', '运行时：未知 provider 不发请求、不假称联网',
+      calls.length === 1 && refs2.length === 0, JSON.stringify(refs2));
+  }
+
+  console.log('\n=== CB. 成本复核按费用口径拆分：纯施工费 / 材料 / 含料 ===');
+  {
+    const aiSrc = fs.readFileSync(path.join(ROOT, 'supabase/functions/estimate-ai/index.ts'), 'utf8');
+    ck('CB', '前端给每条测算行打费用口径标签，含料只在写明时才认',
+      appSrc.includes('function estCostScope(x)') && appSrc.includes('if (x && x.isMat) return "material";')
+      && appSrc.includes('/包工包料|成品|含材料|全包/.test(s)') && appSrc.includes('scope: estCostScope(x)'));
+    {
+      const scopeFn = slice('function estCostScope(', 'function estItemCat(');
+      const ctx = { console };
+      vm.createContext(ctx);
+      vm.runInContext(scopeFn, ctx);
+      const got = vm.runInContext(`[
+        estCostScope({n:'门头钢架焊接/加固',note:'标准 1.1 工时/㎡ · 焊工 60元/时',hours:9.6,fee:345.6}),
+        estCostScope({n:'热镀锌方管(骨架)',isMat:true}),
+        estCostScope({n:'门头钢架',note:'包工包料',fee:1800}),
+        estCostScope({n:'桁架租赁',isEquip:true})
+      ]`, ctx);
+      ck('CB', '运行时：焊接人工=纯施工费、方管=材料、包工包料=含料、租赁=设备',
+        JSON.stringify(got) === JSON.stringify(['labor', 'material', 'combined', 'equip']), JSON.stringify(got));
+    }
+    ck('CB', '行业库仍保留同口径比对（仅客户报价复核使用）',
+      aiSrc.includes('const COST_SCOPE_LABEL') && aiSrc.includes('r.scopes.indexOf(scope) >= 0')
+      && aiSrc.includes('scopeLabel: COST_SCOPE_LABEL[scope]')
+      && aiSrc.includes('industryCheck = industryPriceCheck(items)'));
+    {
+      const aiSlice = (a, b) => {
+        const i = aiSrc.indexOf(a); if (i < 0) throw new Error('ai 切片起点未找到: ' + a);
+        const j = aiSrc.indexOf(b, i); if (j < 0) throw new Error('ai 切片终点未找到: ' + b);
+        return aiSrc.slice(i, j);
+      };
+      const indSrc = aiSlice('type IndRule =', '// 有当地成交价锚定时')
+        .replace(/type IndRule = \{[^}]*\};/, '')
+        .replace(/const INDUSTRY_PRICE: IndRule\[\] =/, 'const INDUSTRY_PRICE =')
+        .replace(/const COST_SCOPE_LABEL: Record<string, string> =/, 'const COST_SCOPE_LABEL =')
+        .replace(/function itemScope\(x: any, cat: string\): string/, 'function itemScope(x, cat)')
+        .replace(/function normPriceUnit\(u: any\): string/, 'function normPriceUnit(u)')
+        .replace(/function industryPriceCheck\(items: any\[\]\): any\[\]/, 'function industryPriceCheck(items)')
+        .replace(/\(x: any, i: number\)/, '(x, i)')
+        .replace(/const out: any\[\] = \[\];/g, 'const out = [];');
+      const ctx = { console, num: (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; } };
+      vm.createContext(ctx);
+      vm.runInContext(indSrc, ctx);
+      const rows = vm.runInContext(`industryPriceCheck([
+        { n:'门头钢架焊接/加固', u:'㎡', q:12, fee:792, cat:'labor', scope:'labor', note:'焊工60元/时' },
+        { n:'门头面板/铝塑板安装', u:'㎡', q:12, fee:403.2, cat:'labor', scope:'labor', note:'裁切打胶' },
+        { n:'热镀锌方管(骨架)', u:'㎡', q:12, fee:1800, cat:'mat', scope:'material', note:'' },
+        { n:'门头钢架', u:'㎡', q:12, fee:3168, cat:'mat', scope:'material', note:'含料' },
+        { n:'铝塑板', u:'㎡', q:12, fee:1140, cat:'mat', scope:'material', note:'' }
+      ].map(x => ({ ...x, price: x.fee / x.q })))`, ctx);
+      ck('CB', '运行时：¥66/㎡ 纯焊接人工只比人工区间，不再误判低于含料钢架 ¥120–250',
+        rows[0] && rows[0].label === '钢架焊接人工' && rows[0].verdict === '接近行业区间'
+        && rows[0].scope === 'labor' && rows[0].scopeLabel === '纯施工费', JSON.stringify(rows[0]));
+      ck('CB', '运行时：¥33.6/㎡ 面板安装按纯安装人工区间，不再套 60–120 含辅材区间',
+        rows[1] && rows[1].label === '门头面板安装人工' && rows[1].verdict === '接近行业区间', JSON.stringify(rows[1]));
+      ck('CB', '运行时：含料钢架 ¥240/㎡ 仍按含料区间判接近，材料 ¥150/㎡ 不套成品区间',
+        rows[2] && rows[2].label === '钢架材料/成品（含料）' && rows[2].verdict === '接近行业区间'
+        && rows[3] && rows[3].label === '钢架材料/成品（含料）' && rows[3].verdict === '高于行业区间'
+        && rows[4] && rows[4].label === '铝塑板板材进价' && rows[4].verdict === '接近行业区间', JSON.stringify(rows));
+      const legacy = vm.runInContext(`industryPriceCheck([{ n:'门头钢架焊接/加固', u:'㎡', cat:'labor', price:66 }])`, ctx);
+      ck('CB', '运行时：老客户端不传 scope 时按 cat 兜底为纯施工费',
+        legacy.length === 1 && legacy[0].scope === 'labor' && legacy[0].verdict === '接近行业区间', JSON.stringify(legacy));
+    }
+  }
+
+  // ===== CC：方案复核运行时——内置核对按拆解/组合分组、不再给价格结论 =====
+  {
+    const aiSrc = fs.readFileSync(path.join(ROOT, 'supabase/functions/estimate-ai/index.ts'), 'utf8');
+    const clueSrc = aiSrc.slice(aiSrc.indexOf('function reviewClues('), aiSrc.indexOf('const SEARCH_PROVIDERS'))
+      .replace(/function reviewClues\([^)]*\): string\[\]/, 'function reviewClues(text, items, totals, cond, params)')
+      .replace(/const out: string\[\] = \[\];/, 'const out = [];')
+      .replace(/const push([DC]) = \(s: string\) =>/g, 'const push$1 = (s) =>')
+      .replace(/const hasItem = \(re: RegExp\)/, 'const hasItem = (re)')
+      .replace(/const toM = \(v: any, u: any\)/, 'const toM = (v, u)')
+      .replace(/const short = \(s: any\)/, 'const short = (s)')
+      .replace(/const seen: Record<string, boolean> = \{\};/, 'const seen = {};')
+      .replace(/const units: Record<string, string> = \{\};/, 'const units = {};');
+    const ctx = { console };
+    vm.createContext(ctx);
+    vm.runInContext(clueSrc, ctx);
+    const clues = vm.runInContext(`reviewClues(
+      '门头 6米×2米 离地4米 发光字 桁架4.6×3米 喷绘布',
+      [{n:'钢架焊接/加固',u:'㎡',q:12,h:9.6,fee:345.6,note:'焊工60元/时'},
+       {n:'喷绘布',u:'㎡',q:20,fee:240,note:'画面'},
+       {n:'灯箱布',u:'㎡',q:20,fee:600,note:'内打光'}],
+      {transportFee:0}, {height:'high',distanceKm:0},
+      {rateNormal:36,rateHigh:75,rateAz:48,rateJz:60})`, ctx);
+    ck('CC', '运行时：内置核对同时给出拆解与组合两组线索',
+      clues.some((c) => c.indexOf('【拆解】') === 0) && clues.some((c) => c.indexOf('【组合】') === 0),
+      JSON.stringify(clues));
+    ck('CC', '运行时：喷绘布+灯箱布被判组合重复，高空有对应措施提示',
+      clues.some((c) => c.includes('喷绘布与内打光灯箱布'))
+      && clues.some((c) => c.includes('登高') || c.includes('施工条件为高空')),
+      JSON.stringify(clues));
+    ck('CC', '运行时：¥28.8/㎡ 纯焊工只查结构口径，不再输出行业成本高低结论',
+      !clues.some((c) => /行业区间|成本偏高|成本偏低|利润/.test(c)), JSON.stringify(clues));
   }
 
   console.log(`\n=== 汇总：${PASS} 通过 / ${FAIL} 失败 ===`);

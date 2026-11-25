@@ -16932,6 +16932,7 @@ table.data.project-hours-diff thead th {
 .cq-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .cq-table th, .cq-table td { padding: 6px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; color: #374151; }
 .cq-table th { font-size: 11px; color: #6b7280; background: #f9fafb; }
+.cq-table th:nth-child(3), .cq-table th:nth-child(4),
 .cq-table td:nth-child(3), .cq-table td:nth-child(4) { text-align: right; white-space: nowrap; }
 .cq-total { display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: flex-end; margin-top: 10px; font-size: 12px; color: #4b5563; }
 .cq-total b { color: #111827; }
@@ -16952,6 +16953,7 @@ table.data.project-hours-diff thead th {
 .cq-rate-table .input { width: 72px; padding: 4px 6px; font-size: 11px; }
 .cq-rate-table .cq-ref-input { width: 84px; }
 .cq-rate-table .cq-rate-warn { border: 1px solid #f59e0b; background: #fffbeb; }
+.cq-rate-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .cq-rate-floor { margin-top: 8px; font-size: 11px; color: #6b7280; }
 .cq-advice { margin: 10px 0; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 6px; background: #eef2ff; font-size: 12px; color: #3730a3; }
 .cq-advice-item { padding: 5px 0; border-bottom: 1px dashed #c7d2fe; line-height: 1.6; }
