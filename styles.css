@@ -16971,6 +16971,12 @@ table.data.project-hours-diff thead th {
 .cq-rate-table .cq-rate-warn { border: 1px solid #f59e0b; background: #fffbeb; }
 .cq-rate-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .cq-rate-floor { margin-top: 8px; font-size: 11px; color: #6b7280; }
+.cq-flat { margin-top: 10px; padding: 8px 10px; border: 1px solid #c7d2fe; border-radius: 6px; background: #f5f7ff; }
+.cq-flat-on { margin-bottom: 6px; font-size: 11px; line-height: 1.6; color: #3730a3; font-weight: 500; }
+.cq-flat-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11px; color: #4b5563; }
+.cq-flat-row label { display: inline-flex; align-items: center; gap: 4px; }
+.cq-flat-num { width: 82px; }
+.cq-flat-note { margin-top: 6px; font-size: 11px; line-height: 1.6; color: #6b7280; }
 .cq-advice { margin: 10px 0; padding: 9px 10px; border: 1px solid #c7d2fe; border-radius: 6px; background: #eef2ff; font-size: 12px; color: #3730a3; }
 .cq-advice-item { padding: 5px 0; border-bottom: 1px dashed #c7d2fe; line-height: 1.6; }
 .cq-advice-item:last-child { border-bottom: 0; }

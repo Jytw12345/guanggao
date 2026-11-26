@@ -986,7 +986,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     return helpSrc.slice(i, helpSrc.indexOf('<div class="section" id="review">', i));
   })();
   ck('AA', '有 #estimate 章节且目录里可跳转', estSec.length > 4000 && /<li><a href="#estimate">施工费测算<\/a><\/li>/.test(helpSrc));
-  ck('AA', '说明书版本号已升到 v3.56', helpSrc.includes('使用说明书 v3.56'));
+  ck('AA', '说明书版本号已升到 v3.57', helpSrc.includes("使用说明书 v3.57"));
   ck('AA', '小节覆盖三步 / 明细 / 门头 / 填入 / 参数 / 反推 / 常见问题',
     ['三步出报价', '施工项清单的三种行', '门头：配方与工艺增项', '一键填入工程金额', '参数与单价（管理员）', '反推工时', '常见问题'].every((k) => estSec.includes(k)));
   ck('AA', '写明「测算不改金额链」与包工包料扣项', estSec.includes('测算不改金额链') && estSec.includes('材料费（测算）'));
@@ -1004,8 +1004,8 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
   // 起因 2026-11-22：说明书在 iframe 里一滚到底、回不去目录/系统；用户又问
   // 「自定义施工项是不是只能显示在自定义区，不能加进内置定额项」。
   console.log('\n=== AB. 帮助页导航 / 施工项存入定额库 ===');
-  ck('AB', '说明书版本升到 v3.56（顶部与页脚一致）',
-    helpSrc.includes('使用说明书 v3.56') && helpSrc.includes('文档版本：v3.56'));
+  ck('AB', '说明书版本升到 v3.57（顶部与页脚一致）',
+    helpSrc.includes("使用说明书 v3.57") && helpSrc.includes("文档版本：v3.57"));
   ck('AB', 'sticky 导航条：章节下拉 / 目录 / 上下节 / 顶部 / 返回系统',
     /\.help-nav \{[^}]*position: sticky/.test(helpSrc)
     && ['id="helpJump"', 'helpGoToc()', 'helpStep(-1)', 'helpStep(1)', 'helpGoTop()', 'helpBack()'].every((k) => helpSrc.includes(k)));
@@ -2512,7 +2512,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && appSrc.includes('请到测算结果页点「AI 方案复核」'));
   }
 
-  // ===== BN：智能加利润与客户报价单 =====
+  // ===== BN：智能加价与客户报价单 =====
   {
     const fnPath = path.join(ROOT, 'supabase/functions/estimate-ai/index.ts');
     const aiSrc = fs.existsSync(fnPath) ? fs.readFileSync(fnPath, 'utf8') : '';
@@ -2533,14 +2533,14 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && aiSrc.includes('EMPTY_QUOTE_REVIEW') && aiSrc.includes('mode === "quotecheck"'));
     ck('BN', '结果页两个 AI 按钮分工明确',
       appSrc.includes('id="estPriceBtn"') && appSrc.includes('onclick="estAiPrice()"')
-      && appSrc.includes('onclick="estAiQuoteCheck()"') && appSrc.includes('>💰 智能加利润</button>')
+      && appSrc.includes('onclick="estAiQuoteCheck()"') && appSrc.includes('>💰 智能加价</button>')
       && appSrc.includes('function estReopenCustomerQuote()'));
     ck('BN', '客户报价单只显示客户价，不写金额链',
       appSrc.includes('客户报价单（不含税）') && appSrc.includes('cq-internal')
       && !/cost_estimate\s*=/.test(quoteFn) && !/projectAmount\s*=/.test(quoteFn)
       && !/estRecalc\(/.test(quoteFn));
     ck('BN', '说明书写明分项加价与客户价边界',
-      helpSrc.includes('智能加利润（客户报价）') && helpSrc.includes('不是整单统一乘一个百分比')
+      helpSrc.includes('智能加价（客户报价）') && helpSrc.includes('不是整单统一乘一个百分比')
       && helpSrc.includes('不显示成本和利润率'));
     ck('BN', 'CSS 有客户报价单与内部折叠样式，单价/小计表头与数字同右对齐',
       cssSrc.includes('.cq-table') && cssSrc.includes('.cq-total') && cssSrc.includes('.cq-internal')
@@ -2592,6 +2592,39 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     ck('BN', '起步价按人工率、辅材按材料率，合计同口径',
       cq.floor === 25 && cq.aux === 33.6 && cq.construction === 734.2
       && cq.material === 1936.03 && cq.grand === 2670.23);
+
+    // 整单加价（成本加成）：内部成本 = 各行 fee + floor + auxFee = 2300.6
+    const intCost = 360 + 1698.6 + 192 + 20 + 30;
+    const flat = vm.runInContext('estCustomerQuoteCalc(' + JSON.stringify(cqRows) + ','
+      + JSON.stringify(cqRates) + ',{floor:20,auxFee:30},null,30)', cqCtx);
+    ck('BN', '整单 +30%：所有行统一率，起步价/辅材也按 30%',
+      flat.rows.every((x) => x.rate === 30) && flat.floor === 26 && flat.aux === 39,
+      JSON.stringify({ rate: flat.rows[0].rate, floor: flat.floor, aux: flat.aux }));
+    ck('BN', '整单 +30%：合计精确 = 内部成本 ×(1+30%)，不漏算起步价/辅材',
+      Math.abs(flat.grand - Math.round(intCost * 1.3 * 100) / 100) < 0.02,
+      flat.grand + ' vs ' + Math.round(intCost * 1.3 * 100) / 100);
+    const flat0 = vm.runInContext('estCustomerQuoteCalc(' + JSON.stringify(cqRows) + ','
+      + JSON.stringify(cqRates) + ',{floor:20,auxFee:30},null,0)', cqCtx);
+    ck('BN', '整单 0% 不被当成「未传率」回退默认（flat=0 生效）',
+      flat0.rows.every((x) => x.rate === 0) && flat0.floor === 20 && flat0.aux === 30
+      && flat0.grand === intCost, JSON.stringify(flat0.grand));
+    ck('BN', '不传 flatRate 时仍走原分项加价（无回归）', cq.grand === 2670.23 && cq.rows[0].rate === 25);
+    // 源码层：整单加价入口、成本加成、金额反推、状态贯穿、不碰金额链
+    ck('BN', '整单加价 UI 与函数存在（成本加成 + 目标利润二选一）',
+      appSrc.includes('function estApplyFlatMarkup()') && appSrc.includes('function estCustomerInternalCost()')
+      && quoteFn.includes('id="cqFlatPct"') && quoteFn.includes('id="cqFlatAmt"')
+      && quoteFn.includes('estApplyFlatMarkup()') && appSrc.includes('整单加价（成本加成'));
+    ck('BN', '整单加价按内部成本反推利润金额，且夹到 0–300%',
+      appSrc.includes('rate = Math.round(v / cost * 10000) / 100')
+      && appSrc.includes('rate = Math.min(EST_PROFIT_MAX'));
+    ck('BN', 'flatRate 存进 cq 并贯穿重绘，不写库不碰金额链',
+      quoteFn.includes('flatRate: flat') && quoteFn.includes('useRates, flat)')
+      && quoteFn.includes('if (flat != null) return flat')
+      && !/cost_estimate|projectAmount|laborFee/.test(slice('function estApplyFlatMarkup()', 'async function estAiPrice')));
+    ck('BN', 'CSS 有整单加价栏样式', cssSrc.includes('.cq-flat-row') && cssSrc.includes('.cq-flat-on'));
+    ck('BN', '整单模式顶部明确标注非逐行 AI，不误导',
+      quoteFn.includes('整单加价 ') && quoteFn.includes('非逐行 AI 建议')
+      && quoteFn.includes('改下方任意单行的率即回到逐行模式'));
   }
 
   // ===== CD：重复加价稳定性（同签名沿用，主动重掷才重新请求 AI）=====
@@ -2759,7 +2792,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     ck('BP', '逐行 AI 率真正参与计算，不再被类别率抹平',
       appSrc.includes('const over = Array.isArray(rowRates) ? rowRates : null;')
       && /over && over\[i\] != null/.test(appSrc)
-      && quoteFn.includes('estCustomerQuoteCalc(rows0, rates, r, useRates)'));
+      && quoteFn.includes('estCustomerQuoteCalc(rows0, rates, r, useRates, flat)'));
     ck('BP', '客户报价单可逐行改利润率并填参考成交价',
       quoteFn.includes('data-cq-rate=') && quoteFn.includes('data-cq-ref=')
       && appSrc.includes('function estApplyCustomerQuoteRates()')
@@ -2897,7 +2930,7 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
       && aiSrc.includes('function clampProfitRate(cat: string, v: any, anchored = false, level: OpacityLevel = "low")')
       && aiSrc.includes('const hi = level === "low" ? g.max : rule.max;')
       && aiSrc.includes('clampProfitRate(cat, pick, true)'));
-    ck('BS', '智能加利润把当地成交价带入 payload，并按锚定反推逐行率/标依据',
+    ck('BS', '智能加价把当地成交价带入 payload，并按锚定反推逐行率/标依据',
       pricePayload.includes('refPrice: Number((cq && cq.refPrices && cq.refPrices[i]) || 0) || 0')
       && aiSrc.includes('refPrice: num(x?.refPrice),')
       && aiSrc.includes('basis: "refPrice"') && aiSrc.includes('anchorCount: anchorN')

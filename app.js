@@ -33305,9 +33305,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v4c8cedd2";
+  const APP_VERSION = "vc1c35edc";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 57;
+  const BUILD_NO = 58;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -37502,7 +37502,7 @@ async function estAiReview() {
   }
 }
 
-/* ============ 智能加利润 → 客户报价单（2026-11-25）============
+/* ============ 智能加价 → 客户报价单（2026-11-25）============
    AI 只按分项给加价率，前端按率算客户价；客户弹窗只显示客户价，不含税。
    不写库、不回写 cost_estimate / projectAmount / laborFee（金额链隔离铁律）。 */
 const EST_PROFIT_DEFAULT = { labor: 25, laborHigh: 35, mat: 12, equip: 28, transport: 15 };
@@ -37532,12 +37532,18 @@ function estItemCat(x, cond) {
 }
 /* 纯计算：内部成本行 + 加价率 → 客户价行。rowRates 为逐行率（AI 建议或用户改过），
    优先于类别率——否则 AI 按行给的差异会被抹平成「每个类别一个数」。floor/辅材仍按类别率。 */
-function estCustomerQuoteCalc(rows, rates, totals, rowRates) {
+function estCustomerQuoteCalc(rows, rates, totals, rowRates, flatRate) {
   const r = rates || {};
   const over = Array.isArray(rowRates) ? rowRates : null;
+  // 整单加价：flatRate 传入时，起步价(floor)与辅材(aux)也按同一个率加，
+  // 保证「报价合计 = 内部成本合计 ×(1+率)」精确命中总利润率/金额，不留两块按默认率漏算。
+  // 注意 null 会被 Number() 转成 0，必须先排除 null/undefined，否则非整单模式会被当成 0% 覆盖。
+  const hasFlat = flatRate !== null && flatRate !== undefined && Number.isFinite(Number(flatRate));
+  const fr = hasFlat ? Number(flatRate) : 0;
   const list = (rows || []).map((x, i) => {
     const cat = x.cat || "labor";
-    const got = over && over[i] != null ? Number(over[i]) : Number(r[cat]);
+    // 整单模式：逐行率统一取 flat；否则优先逐行率、再退回类别率。
+    const got = hasFlat ? fr : (over && over[i] != null ? Number(over[i]) : Number(r[cat]));
     const rate = Number.isFinite(got) ? got : 0;
     const q = Number(x.q) || 0, fee = Number(x.fee) || 0;
     return {
@@ -37547,8 +37553,10 @@ function estCustomerQuoteCalc(rows, rates, totals, rowRates) {
       note: String(x.note || "")
     };
   });
-  const floor = Math.round((Number(totals && totals.floor) || 0) * (1 + (Number(r.labor) || 0) / 100) * 100) / 100;
-  const aux = Math.round((Number(totals && totals.auxFee) || 0) * (1 + (Number(r.mat) || 0) / 100) * 100) / 100;
+  const floorRate = hasFlat ? fr : (Number(r.labor) || 0);
+  const auxRate = hasFlat ? fr : (Number(r.mat) || 0);
+  const floor = Math.round((Number(totals && totals.floor) || 0) * (1 + floorRate / 100) * 100) / 100;
+  const aux = Math.round((Number(totals && totals.auxFee) || 0) * (1 + auxRate / 100) * 100) / 100;
   let construction = floor, material = aux;
   list.forEach((x) => { if (x.cat === "mat") material += x.amount; else construction += x.amount; });
   construction = Math.round(construction * 100) / 100;
@@ -37571,7 +37579,7 @@ function estAiPricePayload() {
   const items = estCustomerQuoteRows().map((x, i) => ({
     n: String(x.n || "").slice(0, 40), u: String(x.u || "").slice(0, 12),
     q: Number(x.q) || 0, fee: Number(x.fee) || 0, cat: x.cat,
-    // 用户填的当地成交价是定价锚，必须进入智能加利润，否则 AI 只能按类别区间猜。
+    // 用户填的当地成交价是定价锚，必须进入智能加价，否则 AI 只能按类别区间猜。
     refPrice: Number((cq && cq.refPrices && cq.refPrices[i]) || 0) || 0,
     note: String(x.note || "").slice(0, 60)
   }));
@@ -37652,9 +37660,12 @@ function estToggleCompareDetail() {
   d.style.display = open ? "none" : "";
   t.textContent = open ? "逐行 ▾" : "收起 ▴";
 }
-function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice) {
+function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice, flatRate) {
   const prevCq = (_estUI && _estUI.customerQuote) || null;
   const rows0 = estCustomerQuoteRows();
+  // 整单加价：flatRate（成本加成率）有效时所有行统一用这一个率，覆盖 AI 逐行建议；
+  // 起步价/辅材在 calc 里也按它加，保证合计精确 = 内部成本 ×(1+率)。不写库、不碰金额链。
+  const flat = flatRate !== null && flatRate !== undefined && Number.isFinite(Number(flatRate)) ? Number(flatRate) : null;
   const rates = {};
   Object.keys(EST_PROFIT_DEFAULT).forEach((k) => { rates[k] = EST_PROFIT_DEFAULT[k]; });
   const got = (data && Array.isArray(data.rates)) ? data.rates : [];
@@ -37666,6 +37677,7 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice
       basis: String(g.basis || ""), why: String(g.why || "") };
   });
   const useRates = rows0.map((x, i) => {
+    if (flat != null) return flat; // 整单模式：忽略逐行 AI 率，统一费率
     const v = (Array.isArray(rowRates) && rowRates[i] != null) ? Number(rowRates[i]) : suggested[i].rate;
     return Number.isFinite(v) ? v : (rates[x.cat] || 0);
   });
@@ -37675,12 +37687,12 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice
     return v !== "" && Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : "";
   });
   const r = (_estUI && _estUI.result) || {};
-  const q = estCustomerQuoteCalc(rows0, rates, r, useRates);
+  const q = estCustomerQuoteCalc(rows0, rates, r, useRates, flat);
   const src = fallback ? "local" : "ai";
   // 与上一次报价对比：金额真变了才生成，重绘/返回沿用上次结果；只读、不进导出。
   const compare = estQuoteCompare(prevCq, q);
   if (_estUI) _estUI.customerQuote = { rows: q.rows, totals: q, rates, rowRates: useRates,
-    suggested, refPrices: refs, src, raw: data, compare,
+    suggested, refPrices: refs, src, raw: data, compare, flatRate: flat,
     applied: Array.isArray(appliedAdvice) ? appliedAdvice : ((_estUI.customerQuote && _estUI.customerQuote.applied) || []),
     summary: (data && data.summary) || "", why: suggested.map((s) => s.why) };
   const lines = q.rows.map((x) => '<tr><td>' + esc(x.n) + '</td><td>' + esc(String(x.q) + (x.u || ""))
@@ -37706,8 +37718,11 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice
       + '<td>' + esc(suggested[i].why || "—") + '</td></tr>';
   }).join("");
   const body = '<div class="cq-meta">客户报价单 · 不含税 · 仅本次查看</div>'
-    + '<div class="cq-tip">' + (fallback ? 'AI 未配置或失败，已用内置分项利润率生成：' : '')
-    + esc((data && data.summary) || '按施工项分别加价，材料低、风险高的活高。') + '</div>'
+    + (flat != null
+      ? '<div class="cq-tip">整单加价 ' + flat.toFixed(2) + '%（成本加成，非逐行 AI 建议）：各行统一费率，'
+        + '合计 ¥' + q.grand.toFixed(2) + '。改下方任意单行的率即回到逐行模式。</div>'
+      : '<div class="cq-tip">' + (fallback ? 'AI 未配置或失败，已用内置分项利润率生成：' : '')
+        + esc((data && data.summary) || '按施工项分别加价，材料低、风险高的活高。') + '</div>')
     + '<table class="cq-table"><thead><tr><th>项目</th><th>数量</th><th>报价单价</th><th>小计</th></tr></thead><tbody>'
     + (lines || '<tr><td colspan="4">清单为空</td></tr>') + '</tbody></table>'
     + '<div class="cq-total"><span>施工费 <b>¥' + q.construction.toFixed(2) + '</b></span>'
@@ -37724,7 +37739,18 @@ function estOpenCustomerQuote(data, fallback, rowRates, refPrices, appliedAdvice
     + '<div class="cq-rate-actions"><button class="btn outline" onclick="estApplyCustomerQuoteRates()">应用利润率与参考价</button>'
     + '<button class="btn ghost" onclick="estAiPrice(true)" title="忽略缓存，让 AI 重新给一组逐行利润率建议">🎲 换一组建议</button></div>'
     + '<div class="cq-rate-floor">起步价补足按人工 ' + fmtRate(rates.labor) + '%、辅材按材料 '
-    + fmtRate(rates.mat) + '% 加价。</div></details>'
+    + fmtRate(rates.mat) + '% 加价。</div>'
+    + '<div class="cq-flat">' + (flat != null ? '<div class="cq-flat-on">当前为整单加价 ' + flat.toFixed(2)
+      + '%（成本加成）：合计 ¥' + q.grand.toFixed(2) + ' = 内部成本 ¥' + estCustomerInternalCost().toFixed(2)
+      + ' ×(1+' + flat.toFixed(2) + '%)。逐行率已统一，改下面任意单行的率即回到逐行模式。</div>' : '')
+    + '<div class="cq-flat-row"><span>整单加价（成本加成，二选一）：</span>'
+    + '<label>总利润率 <input class="input cq-flat-num" id="cqFlatPct" type="number" min="0" max="300" step="1"'
+    + ' placeholder="如 30" value="' + (flat != null ? flat.toFixed(2) : '') + '"/> %</label>'
+    + '<label>或 目标利润 ¥ <input class="input cq-flat-num" id="cqFlatAmt" type="number" min="0" step="0.01"'
+    + ' placeholder="如 2000"/></label>'
+    + '<button class="btn outline" onclick="estApplyFlatMarkup()">应用整单加价</button></div>'
+    + '<div class="cq-flat-note">老口径提醒：这里填的是成本加成率，不是占售价的毛利率；目标利润按各行内部成本占比摊到每行。'
+    + '只改本次客户价，不写库、不改工程金额与工费池。</div></div></details>'
     + '<div class="est-ai-check-tip" id="estAiCheckTip" style="display:none">AI 正在逐行分析，请稍候…</div>'
     + '<div class="cq-btns"><button class="btn primary" id="estAiCheckBtn" onclick="estAiQuoteCheck()">🤖 AI 报价复核</button>'
     + '<button class="btn outline" onclick="estOpenCustomerQuoteExport()">⬇ 导出报价单</button>'
@@ -37757,8 +37783,49 @@ function estCollectCustomerQuoteEdits(silent) {
   if (!silent) toast("利润率与参考价已应用，报价单已更新");
 }
 function estApplyCustomerQuoteRates() { estCollectCustomerQuoteEdits(false); }
+/* 整单加价（成本加成口径，2026-11-26）：内部区两个输入二选一——
+   ① 总利润率 X%：客户价 = 内部成本 ×(1+X%)，X 直接就是加价率；
+   ② 目标利润金额 Y：X = Y ÷ 内部成本合计 ×100。
+   内部成本合计必须与报价单口径一致：各行 fee + 起步价 floor + 辅材 auxFee。
+   反推后所有行统一用 X（含起步价/辅材），保证「实际合计 = 目标合计」精确命中。
+   只改内存里的报价单，不写库、不回写工程金额/工费池。 */
+function estCustomerInternalCost() {
+  const rows = estCustomerQuoteRows();
+  const r = (_estUI && _estUI.result) || {};
+  const sum = rows.reduce((s, x) => s + (Number(x.fee) || 0), 0)
+    + (Number(r.floor) || 0) + (Number(r.auxFee) || 0);
+  return Math.round(sum * 100) / 100;
+}
+function estApplyFlatMarkup() {
+  const cq = (_estUI && _estUI.customerQuote) || null;
+  if (!cq || !cq.rows || !cq.rows.length) { toast("先生成客户报价单"); return; }
+  const pctEl = document.getElementById("cqFlatPct");
+  const amtEl = document.getElementById("cqFlatAmt");
+  const pctTxt = pctEl ? String(pctEl.value || "").trim() : "";
+  const amtTxt = amtEl ? String(amtEl.value || "").trim() : "";
+  if (!pctTxt && !amtTxt) { toast("填总利润率或目标利润金额再应用"); return; }
+  const cost = estCustomerInternalCost();
+  if (!(cost > 0)) { toast("内部成本为 0，无法按成本加成整单加价"); return; }
+  let rate;
+  if (pctTxt) {
+    const v = Number(pctTxt);
+    if (!Number.isFinite(v) || v < 0) { toast("总利润率填 0 或正数"); return; }
+    rate = v;
+  } else {
+    const v = Number(amtTxt);
+    if (!Number.isFinite(v) || v < 0) { toast("目标利润金额填 0 或正数"); return; }
+    rate = Math.round(v / cost * 10000) / 100; // 成本加成反推，保留两位小数
+  }
+  rate = Math.min(EST_PROFIT_MAX, Math.round(rate * 100) / 100);
+  if (rate === 0) {
+    // 0% 用 null 会退回 AI 率，这里显式传 0 但 calc 用 flat 判定；estOpenCustomerQuote 里 Number(0) 有限 → flat=0，正确。
+  }
+  estOpenCustomerQuote(cq.raw, cq.src === "local", null, cq.refPrices, cq.applied, rate);
+  const q = (_estUI && _estUI.customerQuote && _estUI.customerQuote.totals) || {};
+  toast(`整单加价 ${rate.toFixed(2)}%（成本加成）· 报价合计 ¥${Number(q.grand || 0).toFixed(2)}，不写工程金额`);
+}
 async function estAiPrice(forceRefresh) {
-  if (!_estUI || !(_estUI.work || []).length) { toast("先拆解出清单，再智能加利润"); return; }
+  if (!_estUI || !(_estUI.work || []).length) { toast("先拆解出清单，再智能加价"); return; }
   const payload = estAiPricePayload();
   // 前端版本也进签名：升级后即使清单没变，也要重新向服务端要一次新规则下的利润率。
   const appVer = (typeof window !== "undefined" && window.__APP_VERSION__) || "";
@@ -37790,7 +37857,7 @@ async function estAiPrice(forceRefresh) {
     _estUI.priceSig = sig;
     estOpenCustomerQuote(data, false, null, prevRefs);
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "💰 智能加利润"; }
+    if (btn) { btn.disabled = false; btn.textContent = "💰 智能加价"; }
   }
 }
 function estAiQuoteCheckPayload() {
@@ -39002,7 +39069,7 @@ function renderEstimateResult(r, ctx) {
       if (estCanManage()) btns.push(`<button class="btn outline" onclick="estOpenCfgHub()">⚙️ 配置管理</button>`);
     }
     if (MODE === "cloud") btns.push(`<button class="btn outline" id="estAiReviewBtn" onclick="estAiReview()" title="方案复核：核对拆解是否漏项/重复/口径齐全，施工组合是否工序完整、措施配套；只给建议，不改金额">🤖 AI 方案复核</button>`);
-    if (MODE === "cloud") btns.push(`<button class="btn primary" id="estPriceBtn" onclick="estAiPrice()" title="AI 按人工/材料/设备/运输分项智能加利润，生成只显示客户价的不含税报价单；不写库、不改工程金额">💰 智能加利润</button>`);
+    if (MODE === "cloud") btns.push(`<button class="btn primary" id="estPriceBtn" onclick="estAiPrice()" title="AI 按人工/材料/设备/运输分项智能加价，生成只显示客户价的不含税报价单；不写库、不改工程金额">💰 智能加价</button>`);
     btns.push(`<button class="btn secondary" onclick="closeEstimateModal()">关闭</button>`);
     foot.innerHTML = btns.join("");
   }
