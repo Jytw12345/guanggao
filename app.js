@@ -11647,17 +11647,21 @@ function mergeEstimateRowsIntoItems(items, rows) {
     if (!r || !r.n) return;
     const q = Math.max(0, Number(r.q) || 0);
     const h = Math.round(Math.max(0, Number(r.hours) || 0) * 10) / 10;
-    const idx = out.findIndex((x) => x.n === r.n);
+    // 同名但材料/施工不同口径的行不能合并：「铝塑板」既可能是材料行、也可能是安装施工行，
+    // 只按名称匹配会把两行盖成一行 → 清单与明细行数对不上、材料工时被施工覆盖（2026-11-26 口径统一）。
+    const rMat = !!r.isMat;
+    // 非材料行之间按名称合并；材料行只认 note==="材料" 的既有行（老快照 note 为空时新建，不去覆盖施工行）。
+    const idx = out.findIndex((x) => x.n === r.n && (rMat ? x.note === "材料" : x.note !== "材料"));
     if (idx >= 0) {
       out[idx].q = q || out[idx].q;
       out[idx].h = h;
       if (r.u) out[idx].u = String(r.u).slice(0, 12);
-      if (r.isMat) out[idx].note = "材料";
+      if (rMat) out[idx].note = "材料";
     } else {
       out.push({
         id: "wi_" + Date.now().toString(36) + "_" + out.length,
         n: String(r.n).slice(0, 80), u: String(r.u || "").slice(0, 12),
-        q, h, note: r.isMat ? "材料" : String(r.note || "").slice(0, 120),
+        q, h, note: rMat ? "材料" : String(r.note || "").slice(0, 120),
       });
     }
   });
@@ -33301,9 +33305,9 @@ if ("serviceWorker" in navigator && window.location.protocol !== "file:") {
   }, true);
 
   // 当前前端版本号，由 release.js 按源文件内容自动计算并与 sw.js 的 VERSION 保持同步。
-  const APP_VERSION = "v0d756c5e";
+  const APP_VERSION = "v4c8cedd2";
   // 展示用发布序号（每次内容变化 +1）；只给界面看，缓存/更新判断仍用上面的内容指纹。
-  const BUILD_NO = 56;
+  const BUILD_NO = 57;
   // 暴露给全局（「我的」页版本块 / 关于弹窗 / 版本状态查询使用）
   window.__APP_VERSION__ = APP_VERSION;
   window.__BUILD_NO__ = BUILD_NO;
@@ -36437,6 +36441,9 @@ function buildCostEstimate(work, result, ctx, items) {
     distanceKm: ctx ? (Number(ctx.distanceKm) || 0) : 0,
     roundTrip: ctx ? !!ctx.roundTrip : false,
     matFee: result ? Math.round(result.matFee * 100) / 100 : 0,
+    // 材料+辅材合计：包工包料「填入工程金额」据此写材料扣项（wcAmountPlan 读 ce.matTotal）。
+    // 漏写会让扣项记 0 → laborFee/分成池按含料全额算，务必与内核 matTotal 同口径。
+    matTotal: result ? Math.round((Number(result.matTotal) || 0) * 100) / 100 : 0,
     auxFee: result ? Math.round((result.auxFee || 0) * 100) / 100 : 0,
     auxRatio: result ? (result.auxRatio || 0) : 0,
     construction: result ? Math.round(result.construction * 100) / 100 : 0,
@@ -37757,6 +37764,10 @@ async function estAiPrice(forceRefresh) {
   const appVer = (typeof window !== "undefined" && window.__APP_VERSION__) || "";
   const sig = JSON.stringify({ appVer, payload });
   const cached = _estUI.customerQuote;
+  // 本次请求实际带上去的当地成交价锚，重绘报价单时必须原样带回：
+  // estOpenCustomerQuote 的 refs 只从入参取，不传就会清空 cq.refPrices →
+  // 下次 estAiPricePayload 读到空锚 → sig 变化 → 缓存永不命中 → 金额反复跳。
+  const prevRefs = (cached && cached.refPrices) ? cached.refPrices.slice() : [];
   // 同一份清单 / 原文 / 条件 / 成交价锚重复点「重新加价」：直接沿用当前利润率，不再重掷 AI。
   // 否则同样输入每次都会因模型 temperature=0.2 给出略不同的逐行率，报价总额跟着跳。
   // 要主动换一组建议，走内部区的「🎲 换一组建议」(forceRefresh=true)。
@@ -37771,13 +37782,13 @@ async function estAiPrice(forceRefresh) {
     const { data, error } = await estAiInvoke(payload, 35000);
     if (error || !data || !data.ok) {
       console.warn("[estimate-ai] 智能加价失败，走内置分项利润率：", error);
-      estOpenCustomerQuote(null, true);
+      estOpenCustomerQuote(null, true, null, prevRefs);
       toast(estAiErrTip(error, "AI 加价失败，已用内置分项利润率生成报价单"));
       return;
     }
     // 只在成功后记签名；失败不记，下次点击仍会重试 AI，不把内置兜底价锁死。
     _estUI.priceSig = sig;
-    estOpenCustomerQuote(data, false);
+    estOpenCustomerQuote(data, false, null, prevRefs);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "💰 智能加利润"; }
   }
@@ -38479,7 +38490,10 @@ function estAddWork(w) {
   const isMat = !!(w.isMat || w.type === "mat" || w.kind === "mat");
   const ident = w.cid || w.id || ("x_" + w.n);
   const key = (isMat ? "mat_" : "") + ident;
-  const exist = w.extraKey ? null : _estUI.work.find((x) => ((x.kind === "mat" ? "mat_" : "") + (x.cid || x.id || ("x_" + x.n))) === key);
+  // 既有项的材料判定必须与新增项同口径：历史上既有项只认 kind，而新增认 isMat/type/kind 三种，
+  // 导致「先按 isMat 加进来的材料行」再遇到同名项时匹配不上、重复计价（2026-11-26 口径统一）。
+  const xIsMat = (x) => !!(x.isMat || x.type === "mat" || x.kind === "mat");
+  const exist = w.extraKey ? null : _estUI.work.find((x) => ((xIsMat(x) ? "mat_" : "") + (x.cid || x.id || ("x_" + x.n))) === key);
   if (exist) {
     exist.q = (Number(exist.q) || 0) + (Number(w.q) || 0);
   } else {

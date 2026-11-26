@@ -778,6 +778,40 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
   ck('V', '明细编辑器只显示工时（不显示金额）',
     appSrc.indexOf('wcSummaryHtml("wcEdit", { canFill: false, money: false') >= 0);
 
+  // A：测算快照必须写 matTotal，包工包料「填入工程金额」才能记材料扣项
+  ck('V', 'A 快照写入 matTotal（内核 matTotal → cost_estimate）',
+    /matTotal: result \? Math\.round\(\(Number\(result\.matTotal\)/.test(appSrc));
+  ck('V', 'A wcAmountPlan 读 matTotal 决定材料扣项',
+    /const matTotal = Number\(ce\.matTotal\) \|\| 0/.test(appSrc)
+    && /plan\.isMat && plan\.mat > 0/.test(appSrc));
+
+  // B：清单/明细合并口径统一（运行时验证）
+  {
+    const mergeParts = [
+      'let _estUI = null;',
+      slice('function costEstimateObject(ce)', '/* 单条明细字段归一化'),
+      slice('function wcNormalizeItem(x, i)', '/* 落库/合计用'),
+      slice('function normalizeWorkItems(raw)', 'function mergeEstimateRowsIntoItems('),
+      slice('function mergeEstimateRowsIntoItems(', 'function workItemsHoursText('),
+    ].join('\n');
+    const mb = { console, Date, safeJsonParse: (s, d) => { try { return JSON.parse(s); } catch (_) { return d; } } };
+    vm.createContext(mb); vm.runInContext(mergeParts, mb);
+    // 同名「铝塑板」：材料行 + 施工行应各占一行，不被盖成一行
+    const merged = vm.runInContext('mergeEstimateRowsIntoItems('
+      + JSON.stringify([]) + ', '
+      + JSON.stringify([
+        { n: '铝塑板', u: '㎡', q: 10, hours: 0, isMat: true, note: '' },
+        { n: '铝塑板', u: '㎡', q: 10, hours: 3, isMat: false, note: '' },
+      ]) + ')', mb);
+    ck('V', 'B 同名材料行与施工行不互相覆盖（行数一致）',
+      merged.length === 2 && merged.some((x) => x.note === '材料') && merged.some((x) => x.h === 3),
+      JSON.stringify(merged));
+    // estAddWork 既有项材料判定与新增项同口径（isMat 也算材料）
+    const addParts = slice('function estAddWork(w)', '/* 拆解结果中可补材料的画面/板材项');
+    ck('V', 'B estAddWork 既有项 isMat 判定与新增同口径',
+      addParts.includes('x.isMat || x.type === "mat" || x.kind === "mat"'));
+  }
+
   // ---------- W. 配置持久化可诊断性（改了存不住 / 存哪了） ----------
   console.log('\n=== W. 测算配置持久化（云端 app_settings · 未保存保护）===');
   ck('W', '读取时带 updated_at 与 updated_by 记来源和保存人', appSrc.includes('select("value, updated_at, updated_by").eq("key", "estimate_config")'));
@@ -2608,6 +2642,15 @@ console.log('\n=== D. 同义词绑定：写入→立即可识别→删除回退 
     await rc.estAiPrice();
     ck('CD', '成交价锚改动后自动重新请求 AI，锚进入 payload',
       rc.__calls === 3 && rc.__bodies[2].items[0].refPrice === 88);
+    // C：加价成功后重绘报价单必须把本次实际使用的锚带回，否则 cq.refPrices 被清空 →
+    // 下次签名变化 → 缓存永不命中 → 金额反复跳。
+    ck('CD', '加价成功后重绘报价单带回成交价锚（不被清空）',
+      Array.isArray(rc.__opens[rc.__opens.length - 1].refPrices)
+      && rc.__opens[rc.__opens.length - 1].refPrices[0] === 88,
+      JSON.stringify(rc.__opens[rc.__opens.length - 1].refPrices));
+    ck('CD', '源码：成功/兜底重绘都传 prevRefs',
+      /estOpenCustomerQuote\(data, false, null, prevRefs\)/.test(appSrc)
+      && /estOpenCustomerQuote\(null, true, null, prevRefs\)/.test(appSrc));
   }
 
   // ===== CE：新旧加价金额对比（纯函数运行时验证）=====
